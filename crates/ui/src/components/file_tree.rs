@@ -1385,3 +1385,237 @@ mod tests {
         assert_eq!(state.cursor(), 4);
     }
 }
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use crate::components::search_field::SEARCH_DEBOUNCE_MS;
+    use gpui::{Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    type Events = Rc<RefCell<Vec<FileTreeEvent>>>;
+
+    /// Two files in the root and two in `src/`. Closed, the tree shows three rows.
+    fn files() -> FileTreeState {
+        FileTreeState::new(vec![
+            FileEntry::file("README.md"),
+            FileEntry::file("src/main.rs").git(GitStatus::Modified),
+            FileEntry::file("src/lib.rs"),
+            FileEntry::file("notes.txt").ignored(),
+        ])
+    }
+
+    /// A file tree in a window, with the events it emits recorded and its first frame drawn.
+    fn tree(
+        cx: &mut TestAppContext,
+        state: FileTreeState,
+    ) -> (Entity<FileTreeView>, Events, &mut VisualTestContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| FileTreeView::new("files", "Files", state, cx));
+        let events: Events = Rc::default();
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &FileTreeEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+        draw(cx);
+        (view, events, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    fn centre(cx: &mut VisualTestContext, selector: &'static str) -> Point<Pixels> {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center()
+    }
+
+    fn cursor(view: &Entity<FileTreeView>, cx: &VisualTestContext) -> usize {
+        view.read_with(cx, |tree, _| tree.state().cursor())
+    }
+
+    fn rows(view: &Entity<FileTreeView>, cx: &VisualTestContext) -> Vec<String> {
+        view.read_with(cx, |tree, _| {
+            tree.state()
+                .visible()
+                .iter()
+                .map(|row| row.name.to_string())
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn a_click_on_a_file_opens_it(cx: &mut TestAppContext) {
+        let (view, events, cx) = tree(cx, files());
+        let readme = centre(cx, "file-row-2");
+        cx.simulate_click(readme, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            *events.borrow(),
+            vec![FileTreeEvent::Opened("README.md".into())]
+        );
+        assert_eq!(
+            view.read_with(cx, |tree, _| tree.state().active().cloned()),
+            Some("README.md".into())
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_on_a_folder_opens_and_closes_it(cx: &mut TestAppContext) {
+        let (view, events, cx) = tree(cx, files());
+        let folder = centre(cx, "file-row-0");
+        cx.simulate_click(folder, Modifiers::none());
+        cx.run_until_parked();
+        draw(cx);
+        assert!(
+            cx.debug_bounds("file-row-1").is_some(),
+            "the folder's first child shows"
+        );
+        assert_eq!(
+            *events.borrow(),
+            vec![FileTreeEvent::Toggled {
+                path: "src".into(),
+                expanded: true,
+            }]
+        );
+        let folder = centre(cx, "file-row-0");
+        cx.simulate_click(folder, Modifiers::none());
+        cx.run_until_parked();
+        assert!(!rows(&view, cx).contains(&"lib.rs".to_string()));
+    }
+
+    #[gpui::test]
+    fn enter_opens_the_file_that_the_arrows_moved_to(cx: &mut TestAppContext) {
+        let (view, events, cx) = tree(cx, files());
+        let focus = view.read_with(cx, |tree, _| tree.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "down");
+        assert_eq!(cursor(&view, cx), 1);
+        press_key(cx, "enter");
+        assert_eq!(
+            *events.borrow(),
+            vec![FileTreeEvent::Opened("notes.txt".into())]
+        );
+    }
+
+    #[gpui::test]
+    fn right_and_left_open_a_folder_and_move_into_and_out_of_it(cx: &mut TestAppContext) {
+        let (view, _events, cx) = tree(cx, files());
+        let focus = view.read_with(cx, |tree, _| tree.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "right");
+        assert_eq!(rows(&view, cx).len(), 5, "src opens");
+        press_key(cx, "right");
+        assert_eq!(cursor(&view, cx), 1, "the first child is lib.rs");
+        press_key(cx, "left");
+        assert_eq!(cursor(&view, cx), 0, "left goes back to src");
+        press_key(cx, "left");
+        assert_eq!(rows(&view, cx).len(), 3, "left closes an opened folder");
+    }
+
+    #[gpui::test]
+    fn a_right_click_asks_for_the_row_menu(cx: &mut TestAppContext) {
+        let (_view, events, cx) = tree(cx, files());
+        let readme = centre(cx, "file-row-2");
+        cx.simulate_mouse_down(readme, MouseButton::Right, Modifiers::none());
+        assert_eq!(
+            *events.borrow(),
+            vec![FileTreeEvent::ContextMenu("README.md".into())]
+        );
+    }
+
+    #[gpui::test]
+    fn typing_a_letter_jumps_to_the_next_name_that_starts_with_it(cx: &mut TestAppContext) {
+        let (view, _events, cx) = tree(cx, files());
+        let focus = view.read_with(cx, |tree, _| tree.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "n");
+        assert_eq!(cursor(&view, cx), 1, "notes.txt");
+        press_key(cx, "r");
+        assert_eq!(cursor(&view, cx), 2, "README.md");
+    }
+
+    #[gpui::test]
+    fn typing_in_the_search_field_filters_the_tree_after_the_pause(cx: &mut TestAppContext) {
+        let clock = cx.executor();
+        let (view, events, cx) = tree(cx, files());
+        let search = view.read_with(cx, |tree, _| tree.search_field());
+        search.update_in(cx, |search, window, cx| {
+            let handle = search.focus_handle(cx);
+            window.focus(&handle, cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+        cx.simulate_input("main");
+        clock.advance_clock(Duration::from_millis(SEARCH_DEBOUNCE_MS));
+        cx.run_until_parked();
+        assert_eq!(rows(&view, cx), ["src", "main.rs"].map(String::from));
+        assert!(
+            events
+                .borrow()
+                .contains(&FileTreeEvent::Query("main".into()))
+        );
+    }
+
+    #[gpui::test]
+    fn loading_shows_placeholders_and_no_rows(cx: &mut TestAppContext) {
+        let (view, _events, cx) = tree(cx, files());
+        view.update(cx, |tree, cx| tree.set_status(FileTreeStatus::Loading, cx));
+        draw(cx);
+        assert!(cx.debug_bounds("file-tree-loading").is_some());
+        assert!(cx.debug_bounds("file-row-0").is_none());
+    }
+
+    #[gpui::test]
+    fn an_empty_folder_says_so(cx: &mut TestAppContext) {
+        let (view, _events, cx) = tree(cx, files());
+        view.update(cx, |tree, cx| tree.set_entries(Vec::new(), cx));
+        draw(cx);
+        assert!(cx.debug_bounds("file-tree-empty").is_some());
+    }
+
+    #[gpui::test]
+    fn an_error_keeps_the_rows_and_retry_reports_retry(cx: &mut TestAppContext) {
+        let (view, events, cx) = tree(cx, files());
+        view.update(cx, |tree, cx| tree.set_status(FileTreeStatus::Error, cx));
+        draw(cx);
+        assert!(
+            cx.debug_bounds("file-row-0").is_some(),
+            "the last rows stay visible"
+        );
+        let retry = centre(cx, "error-retry");
+        cx.simulate_click(retry, Modifiers::none());
+        assert_eq!(*events.borrow(), vec![FileTreeEvent::Retry]);
+    }
+
+    #[gpui::test]
+    fn content_matches_list_and_a_click_opens_the_match_file(cx: &mut TestAppContext) {
+        let (view, events, cx) = tree(cx, files());
+        view.update(cx, |tree, cx| {
+            tree.set_scope(1, cx);
+            tree.set_content(
+                vec![ContentMatch {
+                    path: "src/main.rs".into(),
+                    line: 2,
+                    text: "fn main() {}".into(),
+                }],
+                cx,
+            );
+        });
+        draw(cx);
+        let first = centre(cx, "match-row-0");
+        cx.simulate_click(first, Modifiers::none());
+        assert_eq!(
+            events.borrow().last(),
+            Some(&FileTreeEvent::Opened("src/main.rs".into()))
+        );
+    }
+}

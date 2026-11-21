@@ -1,9 +1,12 @@
-//! Stories of the data components: Table, and later FileTree and Picker. A stateful
+//! Stories of the data components: Table and file tree, and later Picker. A stateful
 //! component keeps its entity across frames under a key of its own.
 
 use super::{Story, variant};
 use crate::components::agent_icon::AgentKind;
 use crate::components::agent_status::AgentState;
+use crate::components::file_tree::{
+    ContentMatch, FileEntry, FileTreeState, FileTreeStatus, FileTreeView, GitStatus, SearchScope,
+};
 use crate::components::table::{
     SortDirection, TableCell, TableColumn, TableDensity, TableRow, TableState, TableStatus,
     TableView,
@@ -16,11 +19,18 @@ use gpui::{AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled,
 const FRAME_HEIGHT: f32 = 180.0;
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Table",
-        spec: "Table.md",
-        render: table,
-    }]
+    vec![
+        Story {
+            name: "Table",
+            spec: "Table.md",
+            render: table,
+        },
+        Story {
+            name: "File tree",
+            spec: "FileTree.md",
+            render: file_tree,
+        },
+    ]
 }
 
 fn table(window: &mut Window, cx: &mut App) -> AnyElement {
@@ -167,4 +177,100 @@ fn check(
             },
         ],
     )
+}
+
+/// Height of a gallery frame around a file tree, which has a search field above its rows.
+const TREE_FRAME_HEIGHT: f32 = 300.0;
+
+fn file_tree(window: &mut Window, cx: &mut App) -> AnyElement {
+    let default = keyed_tree(window, cx, "tree-default", |cx| {
+        let mut state = files();
+        state.toggle(&"src".into());
+        state.open_path(&"src/main.rs".into());
+        FileTreeView::new("tree-default", "Files", state, cx)
+    });
+    let filtered = keyed_tree(window, cx, "tree-filtered", |cx| {
+        let mut state = files();
+        state.set_query("main");
+        FileTreeView::new("tree-filtered", "Files", state, cx)
+    });
+    let content = keyed_tree(window, cx, "tree-content", |cx| {
+        let mut state = files();
+        state.set_scope(SearchScope::Content);
+        state.set_content(vec![ContentMatch {
+            path: "src/main.rs".into(),
+            line: 2,
+            text: "fn main() {}".into(),
+        }]);
+        FileTreeView::new("tree-content", "Files", state, cx)
+    });
+    let loading = keyed_tree(window, cx, "tree-loading", |cx| {
+        let mut state = files();
+        state.set_status(FileTreeStatus::Loading);
+        FileTreeView::new("tree-loading", "Files", state, cx)
+    });
+    let empty = keyed_tree(window, cx, "tree-empty", |cx| {
+        FileTreeView::new("tree-empty", "Files", FileTreeState::new(Vec::new()), cx)
+    });
+    let error = keyed_tree(window, cx, "tree-error", |cx| {
+        let mut state = files();
+        state.set_status(FileTreeStatus::Error);
+        FileTreeView::new("tree-error", "Files", state, cx)
+    });
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Folders, with the open file",
+            tree_frame(default),
+            cx,
+        ))
+        .child(variant(
+            "Names filter: matches and the folders above them",
+            tree_frame(filtered),
+            cx,
+        ))
+        .child(variant(
+            "Content scope: matching lines with their paths",
+            tree_frame(content),
+            cx,
+        ))
+        .child(variant(
+            "Loading: tree-shaped placeholders",
+            tree_frame(loading),
+            cx,
+        ))
+        .child(variant("Empty folder", tree_frame(empty), cx))
+        .child(variant(
+            "Error, with the last rows and Retry",
+            tree_frame(error),
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// The file tree of one variant, kept across frames under its own key.
+fn keyed_tree(
+    window: &mut Window,
+    cx: &mut App,
+    key: &'static str,
+    build: fn(&mut Context<FileTreeView>) -> FileTreeView,
+) -> Entity<FileTreeView> {
+    window.use_keyed_state(key, cx, |_, cx| build(cx))
+}
+
+fn tree_frame(tree: Entity<FileTreeView>) -> impl IntoElement {
+    div().h(px(TREE_FRAME_HEIGHT)).child(tree)
+}
+
+/// Files of a small project: two in `src/`, two in the root, one ignored.
+fn files() -> FileTreeState {
+    FileTreeState::new(vec![
+        FileEntry::file("README.md"),
+        FileEntry::file("src/main.rs").git(GitStatus::Modified),
+        FileEntry::file("src/lib.rs"),
+        FileEntry::file("notes.txt").ignored(),
+    ])
 }
