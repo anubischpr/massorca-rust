@@ -1,17 +1,28 @@
-//! `massorca terminal ...`: starting, listing and showing terminals through the service.
+//! `massorca terminal ...`: starting, reading, typing into, resizing and stopping terminals through the service.
+//!
+//! `screen` reads one snapshot and prints it as text.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
+use std::time::Duration;
 
 use clap::{Args, Subcommand};
+use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
+use massorca_core_terminal::screen::SCROLLBACK_ROWS;
 use massorca_profile::Profile;
 use massorca_protocol::methods::terminals::{
-    ExitReason, ShellSpec, Terminal, TerminalCreateParams, TerminalExit, TerminalState,
+    ExitReason, ShellSpec, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
+    TerminalResizeParams, TerminalState,
 };
+use serde::Serialize;
 
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::workspace_text;
+
+/// How long `screen` waits for the service to send the terminal's snapshot.
+const SNAPSHOT_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Subcommand)]
 pub enum TerminalCommand {
@@ -21,6 +32,19 @@ pub enum TerminalCommand {
     List(TerminalListArgs),
     /// Shows one terminal, selected by id.
     Show {
+        /// Terminal id.
+        terminal: String,
+    },
+    /// Types text into a terminal. The arguments are joined with spaces; Enter follows unless --no-enter.
+    Send(TerminalSendArgs),
+    /// Prints the terminal's visible screen as text.
+    Screen(TerminalScreenArgs),
+    /// Sets the terminal's size.
+    Resize(TerminalResizeArgs),
+    /// Ends the terminal's processes. The terminal stays listed as exited until closed.
+    Kill(TerminalKillArgs),
+    /// Ends the terminal's processes and forgets the terminal.
+    Close {
         /// Terminal id.
         terminal: String,
     },
@@ -65,6 +89,55 @@ pub struct TerminalListArgs {
     pub workspace: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct TerminalSendArgs {
+    /// Terminal id.
+    pub terminal: String,
+    /// Text to type, joined with single spaces. Use `--` before text that starts with a dash.
+    #[arg(required = true, num_args = 1..)]
+    pub text: Vec<String>,
+    /// Do not press Enter after the text.
+    #[arg(long)]
+    pub no_enter: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalScreenArgs {
+    /// Terminal id.
+    pub terminal: String,
+    /// Print the history above the visible screen first.
+    #[arg(long)]
+    pub scrollback: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalResizeArgs {
+    /// Terminal id.
+    pub terminal: String,
+    /// Columns.
+    #[arg(long)]
+    pub cols: u16,
+    /// Rows.
+    #[arg(long)]
+    pub rows: u16,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalKillArgs {
+    /// Terminal id.
+    pub terminal: String,
+    /// Skip the grace period and end the processes at once.
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// The `screen` result: the terminal and its visible rows as plain text.
+#[derive(Debug, Serialize)]
+struct ScreenDocument {
+    terminal: Terminal,
+    lines: Vec<String>,
+}
+
 /// Runs one `terminal` subcommand against the service of `profile`.
 pub async fn execute(
     profile: &Profile,
@@ -91,6 +164,33 @@ pub async fn execute(
         TerminalCommand::Show { terminal } => {
             let shown = client.terminal_show(&terminal).await?;
             output.success(&shown, &terminal_details(&shown));
+        }
+        TerminalCommand::Send(args) => {
+            let bytes = typed_bytes(&args.text, args.no_enter);
+            client.terminal_input(&args.terminal, &bytes).await?;
+            output.success(&(), &[]);
+        }
+        TerminalCommand::Screen(args) => {
+            let document = read_screen(&client, &args.terminal, args.scrollback).await?;
+            output.success(&document, &document.lines);
+        }
+        TerminalCommand::Resize(args) => {
+            let resized = client
+                .terminal_resize(&TerminalResizeParams {
+                    terminal: args.terminal,
+                    cols: args.cols,
+                    rows: args.rows,
+                })
+                .await?;
+            output.success(&resized, &terminal_details(&resized));
+        }
+        TerminalCommand::Kill(args) => {
+            let killed = client.terminal_kill(&args.terminal, args.force).await?;
+            output.success(&killed, &terminal_details(&killed));
+        }
+        TerminalCommand::Close { terminal } => {
+            let closed = client.terminal_close(&terminal).await?;
+            output.success(&closed, &[format!("closed terminal {}", closed.id)]);
         }
     }
     Ok(())
@@ -127,6 +227,111 @@ fn parse_env(entries: Vec<String>) -> Result<BTreeMap<String, String>, CliError>
             )),
         })
         .collect()
+}
+
+/// The bytes `send` types: the text, then a carriage return (Enter for ConPTY and Unix line disciplines) unless `no_enter`.
+fn typed_bytes(text: &[String], no_enter: bool) -> Vec<u8> {
+    let mut bytes = text.join(" ").into_bytes();
+    if !no_enter {
+        bytes.push(b'\r');
+    }
+    bytes
+}
+
+/// The terminal's current screen, read from the snapshot that its attach sends first.
+async fn read_screen(
+    client: &Client,
+    terminal: &str,
+    scrollback: bool,
+) -> Result<ScreenDocument, CliError> {
+    let mut attachment = client
+        .terminal_attach(&TerminalAttachParams {
+            terminal: terminal.to_owned(),
+            since: None,
+            cols: None,
+            rows: None,
+        })
+        .await?;
+    let snapshot = tokio::time::timeout(SNAPSHOT_WAIT, take_snapshot(&mut attachment))
+        .await
+        .map_err(|_| {
+            CliError::new(
+                "terminal.snapshot_timeout",
+                "the terminal did not send its screen in time",
+                exit::ERROR,
+            )
+        })??;
+    drop(attachment);
+    Ok(ScreenDocument {
+        lines: screen_lines(&snapshot, scrollback),
+        terminal: snapshot.terminal,
+    })
+}
+
+/// A snapshot as the attach stream delivered it.
+struct Snapshot {
+    terminal: Terminal,
+    cols: u16,
+    rows: u16,
+    bytes: Vec<u8>,
+}
+
+async fn take_snapshot(attachment: &mut TerminalAttachment) -> Result<Snapshot, CliError> {
+    let mut attached = None;
+    loop {
+        let Some(update) = attachment.next().await else {
+            return Err(ClientError::Disconnected.into());
+        };
+        match update? {
+            AttachUpdate::Attached { terminal, .. } => attached = Some(terminal),
+            AttachUpdate::Snapshot {
+                cols, rows, bytes, ..
+            } => {
+                let terminal = attached.ok_or_else(|| {
+                    CliError::from(ClientError::Protocol("snapshot before attached".to_owned()))
+                })?;
+                return Ok(Snapshot {
+                    terminal,
+                    cols,
+                    rows,
+                    bytes,
+                });
+            }
+            AttachUpdate::Output { .. }
+            | AttachUpdate::Resized { .. }
+            | AttachUpdate::Exited { .. } => {}
+        }
+    }
+}
+
+/// Replays the snapshot into a parser of its size and reads the rows as text, with trailing spaces and blank rows removed.
+/// The parser is `vt100` directly: `core_terminal::screen::Screen` has no text accessor.
+fn screen_lines(snapshot: &Snapshot, scrollback: bool) -> Vec<String> {
+    let rows = NonZeroU16::new(snapshot.rows).unwrap_or(NonZeroU16::MIN);
+    let cols = NonZeroU16::new(snapshot.cols).unwrap_or(NonZeroU16::MIN);
+    let mut parser = vt100::Parser::new(rows, cols, SCROLLBACK_ROWS);
+    parser.process(&snapshot.bytes);
+    let screen = parser.screen_mut();
+    let width = screen.size().1.get();
+    let mut lines = Vec::new();
+    if scrollback {
+        // With the view `history - index` rows up, its first row is history row `index`, oldest first.
+        let history = screen.scrollback_len();
+        for index in 0..history {
+            screen.set_scrollback(history - index);
+            lines.extend(screen.rows(0, width).next());
+        }
+        screen.set_scrollback(0);
+    }
+    lines.extend(screen.rows(0, width));
+    let mut lines: Vec<String> = lines
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
 }
 
 /// The fields of one terminal, one per line.

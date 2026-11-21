@@ -2,7 +2,7 @@
 
 mod harness;
 
-use harness::{Sandbox, single_document, stdout_text, with_json};
+use harness::{Sandbox, eventually, single_document, stdout_text, with_json};
 use predicates::str::contains;
 use serde_json::Value;
 
@@ -80,6 +80,104 @@ fn the_json_envelope_holds_the_terminal_record_and_text_mode_has_no_envelope() {
         !stdout_text(&text).contains("\"ok\""),
         "text mode prints no JSON envelope: {}",
         stdout_text(&text)
+    );
+}
+
+#[test]
+fn text_sent_to_a_terminal_appears_on_its_screen() {
+    let sandbox = Sandbox::new();
+    folder_workspace(&sandbox);
+    let id = create_terminal(&sandbox)["id"]
+        .as_str()
+        .expect("terminal id")
+        .to_owned();
+
+    sandbox
+        .run(
+            "default",
+            &["terminal", "send", &id, "echo", "terminal-test-marker"],
+        )
+        .success();
+    // The shell echoes the command and then prints the marker alone on its own line.
+    let screen = eventually("the marker on the screen", || {
+        let text = stdout_text(
+            &sandbox
+                .run("default", &["terminal", "screen", &id])
+                .success(),
+        );
+        text.lines()
+            .any(|line| line.trim() == "terminal-test-marker")
+            .then_some(text)
+    });
+    assert!(screen.contains("terminal-test-marker"));
+
+    let document = sandbox.json_ok("default", &["terminal", "screen", &id]);
+    assert_eq!(document["terminal"]["id"], id);
+    assert!(
+        document["lines"]
+            .as_array()
+            .is_some_and(|lines| lines.iter().any(|line| line == "terminal-test-marker")),
+        "the JSON screen holds the marker line: {document}"
+    );
+}
+
+#[test]
+fn a_resize_changes_the_size_the_terminal_reports() {
+    let sandbox = Sandbox::new();
+    folder_workspace(&sandbox);
+    let id = create_terminal(&sandbox)["id"]
+        .as_str()
+        .expect("terminal id")
+        .to_owned();
+
+    sandbox
+        .run(
+            "default",
+            &["terminal", "resize", &id, "--cols", "100", "--rows", "30"],
+        )
+        .success();
+    let shown = show(&sandbox, &id);
+    assert_eq!(shown["cols"], 100);
+    assert_eq!(shown["rows"], 30);
+}
+
+#[test]
+fn a_killed_terminal_stays_listed_as_exited_and_closing_it_forgets_it() {
+    let sandbox = Sandbox::new();
+    folder_workspace(&sandbox);
+    let id = create_terminal(&sandbox)["id"]
+        .as_str()
+        .expect("terminal id")
+        .to_owned();
+
+    sandbox.json_ok("default", &["terminal", "kill", &id, "--force"]);
+    let exited = eventually("the killed terminal to exit", || {
+        let shown = show(&sandbox, &id);
+        (shown["state"] == "exited").then_some(shown)
+    });
+    assert_eq!(exited["exit"]["reason"], "killed");
+
+    sandbox.json_ok("default", &["terminal", "close", &id]);
+    sandbox
+        .run("default", &["terminal", "show", &id])
+        .code(1)
+        .stderr(contains("terminal.not_found"));
+}
+
+#[test]
+fn a_terminal_that_does_not_exist_is_reported_with_exit_code_1() {
+    let sandbox = Sandbox::new();
+    folder_workspace(&sandbox);
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["terminal", "send", "no-such-terminal", "x"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "terminal.not_found"
     );
 }
 

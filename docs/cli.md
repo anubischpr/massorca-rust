@@ -43,6 +43,11 @@ letters, digits, `-` or `_`.
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
 | `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
+| `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
+| `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
+| `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
+| `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
+| `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -76,12 +81,16 @@ project) at the time the project is added.
 ### Terminals
 
 A terminal belongs to one workspace and runs in the service, so it keeps running after
-the command that started it exits. `terminal list` and `show` each connect and
-disconnect on their own.
+the command that started it exits. `terminal list`, `show`, `send` and `screen` each
+connect and disconnect on their own.
 
 - `--cwd` is relative to the workspace root, or absolute. Unlike the paths above, a
   relative `--cwd` is not taken from the directory the command runs in.
-- `--shell` names the program the terminal runs.
+- `--shell` names the program the terminal runs. Text typed into a shell is `terminal send`.
+- `terminal screen` waits up to 5 seconds for the terminal's screen. It replays the screen
+  in a local emulator, so colours and cursor movement are not printed, only the text.
+- `terminal kill` and `terminal close` end the processes; stopping the service ends every
+  terminal and nothing is restored on the next start.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the
