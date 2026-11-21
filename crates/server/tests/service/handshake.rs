@@ -29,7 +29,9 @@ async fn welcome_offers_the_registered_capabilities() {
         [
             capabilities::BINARY_FRAMES,
             capabilities::CONFIG,
+            capabilities::DEVICES,
             capabilities::EVENTS,
+            capabilities::NETWORK,
             capabilities::PROJECTS,
             capabilities::SERVICE,
             capabilities::TERMINALS,

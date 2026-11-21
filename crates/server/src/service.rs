@@ -18,7 +18,7 @@ use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::service::ServiceInfo;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep};
 
 use crate::accept_loop;
@@ -28,6 +28,7 @@ use crate::error::ServiceError;
 use crate::event_bus::EventBus;
 use crate::features;
 use crate::instance_lock;
+use crate::network::NetworkState;
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
 
@@ -79,6 +80,7 @@ impl Service {
             registries,
             workspaces,
             terminals: terminals.clone(),
+            network: NetworkState::new(None, &[]),
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
@@ -96,7 +98,15 @@ impl Service {
         });
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
-            accept_loop::run(listener, accept_state, signal, lock, registrations).await;
+            accept_loop::run(
+                listener,
+                JoinSet::new(),
+                accept_state,
+                signal,
+                lock,
+                registrations,
+            )
+            .await;
             let _ = terminals_stop.await;
         });
         Ok(RunningService {

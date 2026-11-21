@@ -1,6 +1,7 @@
 //! Core features. Each registers its capabilities, methods, commands and settings through the registries, and the service keeps the handles for its lifetime.
 
 mod config;
+mod devices;
 mod events;
 mod projects;
 mod service;
@@ -30,6 +31,7 @@ pub(crate) fn register_core(
     handles.extend(events::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
+    handles.extend(devices::register(registries)?);
     handles.extend(workspaces::register(registries)?);
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);

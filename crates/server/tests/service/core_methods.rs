@@ -33,6 +33,14 @@ const PHASE1_METHODS: [&str; 14] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
+const DEVICE_METHODS: [&str; 5] = [
+    "device.list",
+    "device.revoke",
+    "device.whoami",
+    "pairing.create",
+    "network.status",
+];
+
 const TERMINAL_METHODS: [&str; 8] = [
     "terminal.create",
     "terminal.list",
@@ -205,7 +213,11 @@ async fn every_core_method_has_a_command_descriptor() {
             info.method
         );
     }
-    for method in PHASE1_METHODS.iter().chain(&TERMINAL_METHODS) {
+    for method in PHASE1_METHODS
+        .iter()
+        .chain(&TERMINAL_METHODS)
+        .chain(&DEVICE_METHODS)
+    {
         assert!(
             commands.iter().any(|command| command.method == *method),
             "no command runs {method}"
@@ -215,7 +227,8 @@ async fn every_core_method_has_a_command_descriptor() {
         commands
             .iter()
             .all(|command| PHASE1_METHODS.contains(&command.method.as_str())
-                || TERMINAL_METHODS.contains(&command.method.as_str())),
+                || TERMINAL_METHODS.contains(&command.method.as_str())
+                || DEVICE_METHODS.contains(&command.method.as_str())),
         "every command runs a known core method"
     );
     stop(running).await;

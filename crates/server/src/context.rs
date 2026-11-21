@@ -14,6 +14,7 @@ use crate::capability::CapabilityRegistry;
 use crate::commands::CommandRegistry;
 use crate::event_bus::EventBus;
 use crate::method::MethodRegistry;
+use crate::network::NetworkState;
 use crate::permission::Principal;
 use crate::settings::SettingsRegistry;
 use crate::shutdown::ShutdownHandle;
@@ -40,6 +41,8 @@ pub struct AppState {
     /// The service's terminals (decision 0033); they end with the service.
     pub terminals: TerminalManager,
     pub server: PeerInfo,
+    /// Listeners, pairing offers and open device connections; empty when the service is local only.
+    pub network: NetworkState,
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
     pub(crate) activity: Activity,
