@@ -9,4 +9,5 @@ pub mod regions;
 pub mod roving;
 pub mod shell;
 pub mod shell_state;
+pub mod sidebar;
 pub mod title_bar;

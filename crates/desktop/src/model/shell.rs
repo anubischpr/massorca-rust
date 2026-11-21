@@ -135,6 +135,10 @@ pub struct ShellSnapshot {
     pub status: StatusBarModel,
     /// Title of the open session, if any.
     pub session_title: Option<String>,
+    /// Id of the open session, which the Sidebar marks as selected.
+    pub active_session: Option<String>,
+    /// How many prototypes the Workspaces navigation counts (D-SH-01).
+    pub prototypes: u32,
 }
 
 #[cfg(test)]

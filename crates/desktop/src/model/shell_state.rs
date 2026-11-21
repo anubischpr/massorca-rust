@@ -5,6 +5,7 @@ use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
 use super::regions::{Placement, Region, RegionState};
 use super::shell::ShellSnapshot;
+use super::sidebar::{SidebarContent, sidebar_content};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -96,6 +97,21 @@ impl ShellModel {
         self.regions.close_overlay();
     }
 
+    /// The Sidebar beside the Canvas, when the window is wide enough and it is open.
+    pub fn sidebar_inline(&self) -> bool {
+        self.region_visible(Region::Sidebar) && self.placement(Region::Sidebar) == Placement::Inline
+    }
+
+    /// The Sidebar as the overlay over the Canvas, when the window is narrow.
+    pub fn sidebar_overlay(&self) -> bool {
+        self.overlay() == Some(Region::Sidebar)
+    }
+
+    /// What the Sidebar lists in the current mode.
+    pub fn sidebar(&self) -> SidebarContent {
+        sidebar_content(&self.snapshot, self.navigation.mode)
+    }
+
     /// The Sidebar toggle: shows or hides the Sidebar, inline or as the overlay.
     pub fn toggle_sidebar(&mut self) {
         self.toggle_region(Region::Sidebar);
@@ -159,6 +175,27 @@ mod tests {
         model.navigation.open(Page::Tasks);
         assert!(!model.region_visible(Region::Sidebar));
         assert!(model.regions().is_open(Region::Sidebar));
+    }
+
+    #[test]
+    fn the_sidebar_is_inline_when_wide_and_an_overlay_when_narrow() {
+        let mut wide = shell(1440.0);
+        assert!(wide.sidebar_inline() && !wide.sidebar_overlay());
+        wide.toggle_sidebar();
+        assert!(!wide.sidebar_inline());
+
+        let mut narrow = shell(900.0);
+        assert!(!narrow.sidebar_inline() && !narrow.sidebar_overlay());
+        narrow.toggle_sidebar();
+        assert!(narrow.sidebar_overlay() && !narrow.sidebar_inline());
+    }
+
+    #[test]
+    fn the_sidebar_lists_the_content_of_the_current_mode() {
+        let mut model = shell(1440.0);
+        assert!(matches!(model.sidebar(), SidebarContent::Workspaces { .. }));
+        assert!(model.press_mode_switch());
+        assert!(matches!(model.sidebar(), SidebarContent::BotTeams { .. }));
     }
 
     #[test]

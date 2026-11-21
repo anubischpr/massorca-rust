@@ -132,6 +132,8 @@ impl DataSource for SampleDataSource {
                 hosts_unreachable: 1,
             },
             session_title: Some("Implementation of master catalogs".into()),
+            active_session: Some("s1".into()),
+            prototypes: 3,
         }
     }
 }
