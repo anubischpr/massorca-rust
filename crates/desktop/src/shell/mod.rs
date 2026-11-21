@@ -1,10 +1,13 @@
 //! The desktop shell: the window frame, its regions, and the command palette (D-SH-01).
 
+mod actions;
+mod canvas;
+
 use crate::data::DataSource;
 use crate::model::shell_state::ShellModel;
-use gpui::{App, Context, IntoElement, Render, Window, div, prelude::*};
+use actions::CloseOverlay;
+use gpui::{App, Context, FocusHandle, IntoElement, Render, Window, div, prelude::*};
 use massorca_ui::components::text_field;
-use massorca_ui::tokens::TYPE_HEADING;
 use massorca_ui::{ActiveTheme, TextStyled};
 
 #[cfg(test)]
@@ -14,14 +17,19 @@ mod tests;
 #[derive(Debug)]
 pub struct Shell {
     model: ShellModel,
+    /// Holds keyboard focus when no control does, so shell keys reach the root.
+    focus: FocusHandle,
 }
 
 impl Shell {
     /// Fills the view model from the data source; the window width is read once here.
-    pub fn new(data: &impl DataSource, window: &Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(data: &impl DataSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let width = f32::from(window.viewport_size().width);
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
         Self {
             model: ShellModel::new(data.snapshot(), width),
+            focus,
         }
     }
 
@@ -33,6 +41,7 @@ impl Shell {
 /// Registers the key bindings of the shell and of the widgets it uses.
 pub fn bind_keys(cx: &mut App) {
     text_field::bind_keys(cx);
+    actions::bind_keys(cx);
 }
 
 impl Render for Shell {
@@ -40,18 +49,19 @@ impl Render for Shell {
         let theme = *cx.theme();
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
+        let canvas = canvas::canvas(&self.model, cx);
         div()
             .size_full()
             .flex()
-            .items_center()
-            .justify_center()
+            .flex_row()
             .bg(theme.palette.surface.frame)
             .text_color(theme.palette.text.primary)
             .text_body()
-            .child(
-                div()
-                    .text_style(TYPE_HEADING)
-                    .child("What should we work on?"),
-            )
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|shell, _: &CloseOverlay, _, cx| {
+                shell.model.close_overlay();
+                cx.notify();
+            }))
+            .child(canvas)
     }
 }

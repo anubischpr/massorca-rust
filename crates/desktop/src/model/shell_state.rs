@@ -1,9 +1,17 @@
 //! The shell's state without GPUI: the page the user is on, the regions they opened
 //! and the snapshot the views draw. Actions change it through plain methods.
 
+use super::canvas::Canvas;
 use super::navigation::Navigation;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::ShellSnapshot;
+
+/// The regions that sit inline beside the Conversation, in the order A5 gives them.
+const INLINE_ORDER: [Region; 3] = [
+    Region::SessionSummary,
+    Region::WorkPanel,
+    Region::ProjectSidebar,
+];
 
 /// What the shell shows and what the user has changed by acting on it.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,13 +69,48 @@ impl ShellModel {
             Placement::Closed => false,
         }
     }
+
+    /// Opens or closes a region. A collapsed region toggles the overlay instead (X1).
+    pub fn toggle_region(&mut self, region: Region) {
+        self.regions.toggle(region, self.window_width);
+    }
+
+    /// The regions shown inline beside the Conversation, left to right.
+    pub fn inline_regions(&self) -> Vec<Region> {
+        INLINE_ORDER
+            .into_iter()
+            .filter(|region| {
+                self.region_visible(*region) && self.placement(*region) == Placement::Inline
+            })
+            .collect()
+    }
+
+    /// The region open as an overlay, if one is open and on screen.
+    pub fn overlay(&self) -> Option<Region> {
+        self.regions
+            .overlay()
+            .filter(|region| self.region_visible(*region))
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.regions.close_overlay();
+    }
+
+    /// The Canvas content for the current page, mode and open session.
+    pub fn canvas(&self) -> Canvas {
+        Canvas::of(
+            self.navigation.page,
+            self.navigation.mode,
+            self.snapshot.session_title.as_deref(),
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
-    use crate::model::navigation::Page;
+    use crate::model::navigation::{Mode, Page};
 
     fn shell(width: f32) -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), width)
@@ -94,5 +137,46 @@ mod tests {
         model.navigation.open(Page::Tasks);
         assert!(!model.region_visible(Region::Sidebar));
         assert!(model.regions().is_open(Region::Sidebar));
+    }
+
+    #[test]
+    fn inline_regions_keep_the_glossary_order_when_wide() {
+        let mut model = shell(1600.0);
+        model.toggle_region(Region::WorkPanel);
+        model.toggle_region(Region::SessionSummary);
+        assert_eq!(
+            model.inline_regions(),
+            vec![Region::SessionSummary, Region::WorkPanel]
+        );
+    }
+
+    #[test]
+    fn a_collapsed_region_is_the_overlay_until_it_is_closed() {
+        let mut model = shell(900.0);
+        assert_eq!(model.overlay(), None);
+        model.toggle_region(Region::Sidebar);
+        assert_eq!(model.overlay(), Some(Region::Sidebar));
+        model.close_overlay();
+        assert_eq!(model.overlay(), None);
+        assert!(model.regions().is_open(Region::Sidebar));
+    }
+
+    #[test]
+    fn the_canvas_shows_the_session_then_the_full_page_over_the_home() {
+        let mut model = shell(1440.0);
+        assert_eq!(
+            model.canvas(),
+            Canvas::Session("Implementation of master catalogs".into())
+        );
+        model.navigation.open(Page::Tasks);
+        assert_eq!(model.canvas(), Canvas::Page(Page::Tasks));
+    }
+
+    #[test]
+    fn with_no_open_session_the_canvas_is_the_mode_home() {
+        let mut snapshot = SampleDataSource.snapshot();
+        snapshot.session_title = None;
+        let model = ShellModel::new(snapshot, 1440.0);
+        assert_eq!(model.canvas(), Canvas::Home(Mode::Workspaces));
     }
 }
