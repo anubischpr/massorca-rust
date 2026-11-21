@@ -373,6 +373,7 @@ impl TerminalManager {
                 kill_reason: None,
                 attachments: Vec::new(),
                 query_match: 0,
+                unanswered: VecDeque::new(),
             }),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
@@ -433,6 +434,12 @@ impl TerminalManager {
         let terminal = self.inner.find(id)?;
         if terminal.is_exited() {
             return Err(TerminalError::Exited);
+        }
+        let answered = count_cursor_reports(bytes);
+        if answered > 0 {
+            let mut core = lock(&terminal.core);
+            let left = core.unanswered.len().saturating_sub(answered);
+            core.unanswered.truncate(left);
         }
         terminal.master.write_all(bytes).map_err(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe || terminal.is_exited() {
@@ -674,6 +681,10 @@ struct Core {
     attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
+    /// Answers to cursor queries that arrived while a client was attached. A client's reply
+    /// takes one off; the rest are written when the last client detaches, so a client that
+    /// never answers (a one-off screen read) cannot leave ConPTY waiting for good.
+    unanswered: VecDeque<Vec<u8>>,
 }
 
 impl Core {
@@ -716,11 +727,12 @@ impl Core {
                 // The answer is the cursor as of the query, not as of the end of the read.
                 self.screen.process(&chunk[fed..=index]);
                 fed = index + 1;
+                let (row, col) = self.screen.cursor_position();
+                let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
                 if self.attachments.is_empty() {
-                    let (row, col) = self.screen.cursor_position();
-                    replies.extend_from_slice(
-                        format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
-                    );
+                    replies.extend_from_slice(reply.as_bytes());
+                } else {
+                    self.unanswered.push_back(reply.into_bytes());
                 }
             }
         }
@@ -942,10 +954,39 @@ impl Terminal {
     }
 
     pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
-        lock(&self.core)
-            .attachments
-            .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+        let replies: Vec<u8> = {
+            let mut core = lock(&self.core);
+            core.attachments
+                .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+            if core.attachments.is_empty() {
+                core.unanswered.drain(..).flatten().collect()
+            } else {
+                Vec::new()
+            }
+        };
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = self.master.write_all(&replies);
+        }
     }
+}
+
+/// Counts cursor position reports (`ESC [ row ; col R`) in a client's input.
+fn count_cursor_reports(bytes: &[u8]) -> usize {
+    let mut count = 0;
+    let mut rest = bytes;
+    while let Some(start) = rest.windows(2).position(|pair| pair == b"\x1b[") {
+        rest = &rest[start + 2..];
+        let body = rest
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
+            .count();
+        let separators = rest[..body].iter().filter(|byte| **byte == b';').count();
+        if rest.get(body) == Some(&b'R') && separators == 1 {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<()>) {
@@ -1001,6 +1042,15 @@ mod tests {
 
     fn is_send<T: Send>() {}
     fn is_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn counts_only_cursor_position_reports() {
+        use super::count_cursor_reports;
+        assert_eq!(count_cursor_reports(b"\x1b[12;40R"), 1);
+        assert_eq!(count_cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), 2);
+        // Arrow keys, a bare `R` and a report without a column are not answers.
+        assert_eq!(count_cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R"), 0);
+    }
 
     #[test]
     fn handles_cross_threads_and_tasks() {

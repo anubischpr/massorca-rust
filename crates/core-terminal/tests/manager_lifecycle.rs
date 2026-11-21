@@ -544,3 +544,74 @@ async fn a_terminal_without_attachments_still_renders_output() {
         thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// Polls one-off snapshots, each a client that never answers a cursor query, until the
+/// screen shows `expected`.
+async fn wait_for_screen(manager: &Managed, id: &str, expected: &str) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let mut attachment = manager.attach(id, None).expect("attach");
+        let mut seen = String::new();
+        for _ in 0..2 {
+            if let Ok(Some(AttachItem::Snapshot { bytes, .. })) =
+                tokio::time::timeout(TIMEOUT, attachment.next()).await
+            {
+                seen = visible(&bytes).as_string();
+            }
+        }
+        drop(attachment);
+        if seen.contains(expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the screen never showed {expected:?}: {seen:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[tokio::test]
+async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    let expected = if cfg!(windows) {
+        // ConPTY asks at start and renders nothing until it is answered.
+        String::new()
+    } else {
+        // Asks only once the test is attached, then waits for the reply (`ESC [ 1 ; 1 R`).
+        create.shell = Some(script_shell(
+            "read go; stty -icanon -echo; printf '\\033[6n'; \
+             dd bs=1 count=6 of=/dev/null 2>/dev/null; echo replied-$((6*7)); sleep 60",
+        ));
+        "replied-42".to_owned()
+    };
+    let info = manager.create(create).expect("create");
+
+    // A client that reads raw output from the start and never answers.
+    let mut silent = manager.attach(&info.id, Some(0)).expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+    }
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !raw.windows(4).any(|window| window == b"\x1b[6n") {
+        assert!(Instant::now() < deadline, "no cursor query in {raw:?}");
+        match tokio::time::timeout(TIMEOUT, silent.next()).await {
+            Ok(Some(AttachItem::Output { bytes, .. })) => raw.extend_from_slice(&bytes),
+            Ok(Some(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    drop(silent);
+
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("answered");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        expected
+    };
+    wait_for_screen(&manager, &info.id, &expected).await;
+}
