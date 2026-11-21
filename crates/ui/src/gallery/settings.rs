@@ -81,7 +81,7 @@ fn theme_options() -> Vec<RadioOption> {
 fn radio_story(_: &mut Window, cx: &mut App) -> AnyElement {
     let with_helpers = vec![
         RadioOption::new("This PC").helper("Runs on this computer."),
-        RadioOption::new("VPS").helper("Runs on the server while it is reachable."),
+        RadioOption::new("Remote host").helper("Runs on the server while it is reachable."),
     ];
     let one_disabled = vec![
         RadioOption::new("This PC"),

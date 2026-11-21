@@ -22,9 +22,9 @@ const STORED: &str = if cfg!(windows) {
     "/srv/stored"
 };
 const DEFAULT: &str = if cfg!(windows) {
-    r"D:\home\massorca\workspaces"
+    r"C:\Users\me\MassOrca\workspaces"
 } else {
-    "/home/massorca/workspaces"
+    "/home/me/massorca/workspaces"
 };
 const NEXT: &str = if cfg!(windows) {
     r"D:\srv\next"

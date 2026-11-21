@@ -182,7 +182,7 @@ pub struct SettingsModel {
 mod tests {
     use super::*;
 
-    const DEFAULT: &str = "/home/user/massorca/workspaces";
+    const DEFAULT: &str = "/home/me/massorca/workspaces";
 
     fn value(path: &str, is_default: bool) -> FolderValue {
         FolderValue {
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn a_folder_is_trimmed_and_must_be_a_full_path() {
         let absolute = if cfg!(windows) {
-            r"  D:\projects\massorca  "
+            r"  C:\Users\me\MassOrca\workspaces  "
         } else {
             "  /srv/massorca  "
         };
