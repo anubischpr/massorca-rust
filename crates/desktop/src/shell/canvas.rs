@@ -1,13 +1,17 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::teams;
 use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
 use crate::model::navigation::Mode;
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
-use gpui::{Context, Div, FocusHandle, IntoElement, MouseButton, div, img, prelude::*, px};
+use gpui::{
+    AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, div, img,
+    prelude::*, px,
+};
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
@@ -19,6 +23,7 @@ use massorca_ui::{ActiveTheme, TextStyled, Theme};
 pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<Shell>) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
+    let shell = cx.entity().downgrade();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
@@ -31,7 +36,7 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(&model.canvas(), &theme))
+        .child(conversation(model, &shell, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -42,14 +47,17 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
     )
 }
 
-fn conversation(canvas: &Canvas, theme: &Theme) -> impl IntoElement {
-    let body = match canvas {
+fn conversation(
+    model: &ShellModel,
+    shell: &WeakEntity<Shell>,
+    cx: &mut App,
+    theme: &Theme,
+) -> impl IntoElement {
+    let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
-        Canvas::Home(Mode::BotTeams) => {
-            placeholder("Bot Teams", "The team list is not built yet.", theme).into_any_element()
-        }
+        Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
         Canvas::Session(title) => {
-            placeholder(title, "The conversation is not built yet.", theme).into_any_element()
+            placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
         }
         Canvas::Team(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()

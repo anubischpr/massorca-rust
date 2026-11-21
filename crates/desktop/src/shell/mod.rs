@@ -68,6 +68,8 @@ pub struct Shell {
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
     dialogs: WorkspaceDialogs,
+    /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
+    team_dialog: Option<teams::TeamDialog>,
 }
 
 impl Shell {
@@ -138,6 +140,7 @@ impl Shell {
             _bridge: bridge,
             _store_changes: store_changes,
             dialogs: WorkspaceDialogs::default(),
+            team_dialog: None,
         }
     }
 
@@ -367,6 +370,10 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let team_dialog = self
+            .team_dialog
+            .as_ref()
+            .map(|dialog| teams::team_dialog_view(dialog, self.model.teams().hosts(), &shell, cx));
         div()
             .size_full()
             .flex()
@@ -420,5 +427,6 @@ impl Render for Shell {
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
+            .when_some(team_dialog, |el, dialog| el.child(dialog))
     }
 }
