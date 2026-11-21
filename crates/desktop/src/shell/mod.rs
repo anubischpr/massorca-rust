@@ -45,6 +45,8 @@ use zones::ZoneFocus;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod settings_tests;
+#[cfg(test)]
 mod tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).
