@@ -2,3 +2,4 @@
 //! stream (docs/design/components/TerminalSurface.md; docs/architecture/terminals.md).
 
 pub mod feed;
+pub mod keys;
