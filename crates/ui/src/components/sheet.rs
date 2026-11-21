@@ -582,3 +582,192 @@ mod tests {
         assert_eq!(SheetVariant::default(), SheetVariant::Action);
     }
 }
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::Button;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use gpui::{
+        Context, Entity, Modifiers, MouseButton, Pixels, Point, Render, TestAppContext,
+        VisualTestContext, point, px,
+    };
+    use std::cell::Cell;
+
+    /// Hosts an opener and one sheet whose open state the test drives. The sheet holds a spacer
+    /// and two buttons; its first button takes the initial focus.
+    struct Harness {
+        opener: FocusHandle,
+        first: FocusHandle,
+        second: FocusHandle,
+        open: bool,
+        busy: bool,
+        dismissals: Rc<Cell<u32>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let dismissals = self.dismissals.clone();
+            div()
+                .child(Button::new("sheet-opener", "Open").focus_handle(self.opener.clone()))
+                .child(
+                    Sheet::new("sheet-under-test")
+                        .title("Workspace actions")
+                        .open(self.open)
+                        .busy(self.busy)
+                        .initial_focus(self.first.clone())
+                        .on_dismiss(move |_, _| dismissals.set(dismissals.get() + 1))
+                        .child(div().h(px(280.)))
+                        .child(
+                            Button::new("sheet-first", "Rename").focus_handle(self.first.clone()),
+                        )
+                        .child(
+                            Button::new("sheet-second", "Delete").focus_handle(self.second.clone()),
+                        ),
+                )
+        }
+    }
+
+    /// Opens the harness with the opener focused, and returns the view, the dismissal count, the
+    /// opener and the first control.
+    fn open_window(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Harness>,
+        &mut VisualTestContext,
+        Rc<Cell<u32>>,
+        FocusHandle,
+        FocusHandle,
+        FocusHandle,
+    ) {
+        let dismissals: Rc<Cell<u32>> = Rc::default();
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            first: cx.focus_handle(),
+            second: cx.focus_handle(),
+            open: false,
+            busy: false,
+            dismissals: Rc::clone(&dismissals),
+        });
+        cx.run_until_parked();
+        let (opener, first, second) = view.read_with(cx, |h, _| {
+            (h.opener.clone(), h.first.clone(), h.second.clone())
+        });
+        focus_and_draw(cx, &opener);
+        (view, cx, dismissals, opener, first, second)
+    }
+
+    /// Opens or closes the sheet and runs its motion to the end, so positions are final.
+    fn set_open(view: &Entity<Harness>, cx: &mut VisualTestContext, open: bool) {
+        view.update(cx, |harness, cx| {
+            harness.open = open;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.executor().advance_clock(DURATION_SLOW);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// Presses at `from`, moves down by `dy` and releases. The first move past the drag threshold
+    /// starts the drag, so a later move carries the travel.
+    fn drag_down(cx: &mut VisualTestContext, from: Point<Pixels>, dy: Pixels) {
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        for step in [px(1.), dy / 2.0, dy] {
+            cx.simulate_mouse_move(
+                from + point(px(0.), step),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+        }
+        cx.simulate_mouse_up(
+            from + point(px(0.), dy),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_and_is_ignored_while_busy(cx: &mut TestAppContext) {
+        let (view, cx, dismissals, _opener, _first, _second) = open_window(cx);
+        set_open(&view, cx, true);
+        press_key(cx, "escape");
+        assert_eq!(dismissals.get(), 1);
+
+        view.update(cx, |harness, cx| {
+            harness.busy = true;
+            cx.notify();
+        });
+        press_key(cx, "escape");
+        assert_eq!(dismissals.get(), 1, "Escape does nothing while busy");
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_scrim_dismisses_and_a_press_on_the_panel_does_not(cx: &mut TestAppContext) {
+        let (view, cx, dismissals, _opener, _first, _second) = open_window(cx);
+        set_open(&view, cx, true);
+        let panel = cx.debug_bounds("sheet-panel").expect("the panel is drawn");
+        cx.simulate_click(panel.origin + point(px(12.), px(12.)), Modifiers::none());
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "a press on the panel is not outside it"
+        );
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+        assert_eq!(dismissals.get(), 1, "a press on the scrim dismisses");
+    }
+
+    #[gpui::test]
+    fn opening_moves_focus_into_the_sheet_and_closing_returns_it_to_the_opener(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx, _dismissals, opener, first, _second) = open_window(cx);
+        set_open(&view, cx, true);
+        cx.update(|window, _| assert!(first.is_focused(window), "the first control has the focus"));
+        set_open(&view, cx, false);
+        cx.update(|window, _| assert!(opener.is_focused(window), "focus is back on the opener"));
+    }
+
+    #[gpui::test]
+    fn tab_keeps_the_focus_inside_the_sheet(cx: &mut TestAppContext) {
+        let (view, cx, _dismissals, opener, first, second) = open_window(cx);
+        set_open(&view, cx, true);
+        for _ in 0..4 {
+            press_key(cx, "tab");
+            cx.update(|window, _| {
+                assert!(!opener.is_focused(window), "Tab never reaches the opener");
+                assert!(
+                    first.is_focused(window) || second.is_focused(window),
+                    "focus stays on the sheet's controls"
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn a_handle_drag_past_a_third_closes_and_a_short_one_snaps_back(cx: &mut TestAppContext) {
+        let (view, cx, dismissals, _opener, _first, _second) = open_window(cx);
+        set_open(&view, cx, true);
+        let handle = cx
+            .debug_bounds("sheet-handle")
+            .expect("the handle is drawn")
+            .center();
+        let height = cx
+            .debug_bounds("sheet-panel")
+            .expect("the panel is drawn")
+            .size
+            .height;
+
+        drag_down(cx, handle, px(10.));
+        assert_eq!(dismissals.get(), 0, "a short drag snaps back");
+
+        drag_down(cx, handle, height * (1.0 / 3.0) + px(10.));
+        assert_eq!(
+            dismissals.get(),
+            1,
+            "a drag past a third of the sheet closes it"
+        );
+    }
+}
