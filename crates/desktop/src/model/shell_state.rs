@@ -43,6 +43,21 @@ impl ShellModel {
         &self.snapshot
     }
 
+    /// Swaps in a new snapshot from the store. The open session stays open while it still exists.
+    pub fn set_snapshot(&mut self, mut snapshot: ShellSnapshot) {
+        let open = self
+            .snapshot
+            .active_session
+            .as_deref()
+            .and_then(|id| find_session(&snapshot.projects, id))
+            .map(|session| (session.title.clone(), session.id.clone()));
+        if let Some((title, id)) = open {
+            snapshot.session_title = Some(title);
+            snapshot.active_session = Some(id);
+        }
+        self.snapshot = snapshot;
+    }
+
     pub fn navigation(&self) -> &Navigation {
         &self.navigation
     }
@@ -360,6 +375,21 @@ mod tests {
                 Zone::StatusBar
             ]
         );
+    }
+
+    #[test]
+    fn a_new_snapshot_keeps_the_open_session_while_it_still_exists() {
+        let mut model = shell(1440.0);
+        model.open_session("s1a");
+        let mut fresh = SampleDataSource.snapshot();
+        fresh.session_title = None;
+        fresh.active_session = None;
+        model.set_snapshot(fresh.clone());
+        assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
+        fresh.projects.clear();
+        model.set_snapshot(fresh);
+        assert_eq!(model.snapshot().active_session, None, "the session is gone");
+        assert!(model.snapshot().projects.is_empty());
     }
 
     #[test]

@@ -4,3 +4,4 @@ pub mod data;
 pub mod model;
 pub mod service;
 pub mod shell;
+pub mod store;

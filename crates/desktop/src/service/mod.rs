@@ -16,3 +16,6 @@ pub use connection::{
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 pub use update::{StoreState, StoreUpdate};
+
+#[cfg(test)]
+pub(crate) use update::fixtures;

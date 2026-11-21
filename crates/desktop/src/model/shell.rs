@@ -169,6 +169,34 @@ fn find_in<'a>(session: &'a SessionRow, id: &str) -> Option<&'a SessionRow> {
     session.children.iter().find_map(|child| find_in(child, id))
 }
 
+/// How the link to the service looks, which sets the colour of its status item and notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceTone {
+    Ok,
+    Busy,
+    Warning,
+    Unreachable,
+}
+
+/// The Status bar's service item (decision 0028).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceStatus {
+    pub tone: ServiceTone,
+    pub text: String,
+    pub tooltip: String,
+}
+
+/// The banner above the Canvas while the service is not connected (X-CN-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceNotice {
+    pub tone: ServiceTone,
+    pub message: String,
+    /// The reason or the retry timer, behind the banner's Details.
+    pub detail: Option<String>,
+    /// Whether the banner offers "Retry now".
+    pub retry: bool,
+}
+
 /// Everything the shell shows at one moment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellSnapshot {
@@ -181,6 +209,9 @@ pub struct ShellSnapshot {
     pub active_session: Option<String>,
     /// How many prototypes the Workspaces navigation counts (D-SH-01).
     pub prototypes: u32,
+    /// The service link, when the data comes from a service. Sample data has none.
+    pub service_status: Option<ServiceStatus>,
+    pub service_notice: Option<ServiceNotice>,
 }
 
 #[cfg(test)]

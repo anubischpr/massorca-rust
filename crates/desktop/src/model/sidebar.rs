@@ -37,6 +37,8 @@ pub enum TreeRow {
         reach: HostReach,
     },
     Workspace {
+        /// The workspace's id, for actions on the row.
+        id: String,
         name: String,
         branch: Option<String>,
         usage_slot: u8,
@@ -127,6 +129,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
             });
             for workspace in &host.workspaces {
                 rows.push(TreeRow::Workspace {
+                    id: workspace.id.clone(),
                     name: workspace.name.clone(),
                     branch: workspace.branch.clone(),
                     usage_slot: workspace.usage_slot,
