@@ -215,9 +215,9 @@ fn label(text: impl Into<SharedString>) -> impl IntoElement {
 /// bundled icon: Prototypes (`layers`) and Automations (`calendar-clock`).
 fn nav_icon(kind: NavKind) -> IconName {
     match kind {
-        NavKind::Prototypes => IconName::Palette,
+        NavKind::Prototypes => IconName::Layers,
         NavKind::Tasks => IconName::ListChecks,
-        NavKind::Automations => IconName::Workflow,
+        NavKind::Automations => IconName::CalendarClock,
         NavKind::Mobile => IconName::Smartphone,
         NavKind::ConferenceRoom => IconName::Users,
         NavKind::Board => IconName::Kanban,
