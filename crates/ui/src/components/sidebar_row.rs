@@ -243,8 +243,12 @@ impl RenderOnce for SidebarRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
     use crate::components::list_row::TREE_INDENT;
     use crate::tokens::Palette;
+    use gpui::{InteractiveElement, Modifiers, ParentElement, Render, Styled, div, px};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// Where the agent mark of a session row starts: padding, status glyph and a gap.
     fn agent_x(indent: f32) -> f32 {
@@ -283,5 +287,56 @@ mod tests {
             IconName::GitBranch
         ));
         assert!(matches!(WorkspaceKind::Folder.icon(), IconName::Folder));
+    }
+
+    /// Hosts one session row that logs its click and its toggles.
+    struct Harness {
+        focus: FocusHandle,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let (clicks, toggles) = (self.log.clone(), self.log.clone());
+            let row = SidebarRow::session(
+                "session",
+                "Feed endpoints",
+                AgentState::Idle,
+                AgentKind::Claude,
+            )
+            .expanded(false)
+            .focus_handle(self.focus.clone())
+            .on_click(move |_, _, _| clicks.borrow_mut().push("click"))
+            .on_toggle(move |open, _, _| {
+                toggles
+                    .borrow_mut()
+                    .push(if open { "open" } else { "close" })
+            });
+            div().child(
+                div()
+                    .absolute()
+                    .top(px(0.))
+                    .left(px(0.))
+                    .debug_selector(|| "row".into())
+                    .child(row),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_session_row_opens_on_click_and_opens_its_children_on_right(cx: &mut gpui::TestAppContext) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let shared = log.clone();
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            focus: cx.focus_handle(),
+            log: shared,
+        });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("row").expect("row is drawn");
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "right");
+        assert_eq!(*log.borrow(), vec!["click", "open"]);
     }
 }

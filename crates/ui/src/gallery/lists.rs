@@ -6,17 +6,27 @@ use crate::components::agent_status::{AgentState, AgentStatusSize};
 use crate::components::badge::Badge;
 use crate::components::button::StatePreview;
 use crate::components::icon_button::IconButton;
-use crate::components::list_row::{ListRow, RowLeading, RowLines};
+use crate::components::list_row::{ListRow, RowLeading, RowLines, TREE_INDENT};
+use crate::components::sidebar_row::{HostConnection, SidebarRow, WorkspaceKind};
+use crate::components::usage_ring::UsageSlot;
 use crate::icon::IconName;
-use crate::tokens::SPACE_4;
+use crate::theme::ActiveTheme;
+use crate::tokens::{SPACE_2, SPACE_4};
 use gpui::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "List row",
-        spec: "ListRow.md",
-        render: list_row,
-    }]
+    vec![
+        Story {
+            name: "List row",
+            spec: "ListRow.md",
+            render: list_row,
+        },
+        Story {
+            name: "Sidebar row",
+            spec: "SidebarRow.md",
+            render: sidebar_row,
+        },
+    ]
 }
 
 /// A column of rows, 300 px wide, so truncation shows.
@@ -24,8 +34,172 @@ fn list() -> Div {
     div().flex().flex_col().w(px(300.)).gap(px(2.))
 }
 
+/// A Sidebar-width column on the Frame surface, where sidebar rows sit.
+fn sidebar(cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w(px(256.))
+        .p(px(SPACE_2))
+        .gap(px(2.))
+        .bg(cx.theme().palette.surface.frame)
+}
+
 fn column() -> Div {
     div().flex().flex_col().gap(px(SPACE_4))
+}
+
+fn slot(index: u8) -> UsageSlot {
+    UsageSlot::new(index).unwrap_or_default()
+}
+
+fn sidebar_row(_: &mut Window, cx: &mut App) -> AnyElement {
+    let session_indent = 3.0 * TREE_INDENT;
+    column()
+        .child(variant(
+            "Navigation entries: a count and a chevron when they have children",
+            sidebar(cx)
+                .child(
+                    SidebarRow::nav("sb-proto", IconName::LayoutGrid, "Prototypes")
+                        .count(2)
+                        .expanded(false),
+                )
+                .child(SidebarRow::nav(
+                    "sb-tasks",
+                    IconName::ListChecks,
+                    "Tasks",
+                ))
+                .child(SidebarRow::nav(
+                    "sb-auto",
+                    IconName::Workflow,
+                    "Automations",
+                ))
+                .child(SidebarRow::nav(
+                    "sb-mobile",
+                    IconName::Smartphone,
+                    "MassOrca Mobile",
+                )),
+            cx,
+        ))
+        .child(variant(
+            "Project, hosts and a workspace: a reachable host, then one that cannot be reached",
+            sidebar(cx)
+                .child(
+                    SidebarRow::project("sb-project", IconName::Folder, "massorca")
+                        .secondary("acme-labs"),
+                )
+                .child(
+                    SidebarRow::host("sb-host-a", "This PC", HostConnection::Connected).level(1),
+                )
+                .child(
+                    SidebarRow::host("sb-host-b", "oppm-api", HostConnection::Unreachable)
+                        .level(1),
+                )
+                .child(
+                    SidebarRow::workspace(
+                        "sb-ws-a",
+                        "feature/lists",
+                        WorkspaceKind::Worktree,
+                        slot(1),
+                    )
+                    .level(2),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Workspace labels take the six usage colours (P29)",
+            sidebar(cx)
+                .child(
+                    SidebarRow::workspace("sb-u1", "usage 1", WorkspaceKind::Worktree, slot(1))
+                        .level(2),
+                )
+                .child(
+                    SidebarRow::workspace("sb-u2", "usage 2", WorkspaceKind::Folder, slot(2))
+                        .level(2),
+                )
+                .child(
+                    SidebarRow::workspace("sb-u3", "usage 3", WorkspaceKind::Worktree, slot(3))
+                        .level(2),
+                )
+                .child(
+                    SidebarRow::workspace("sb-u4", "usage 4", WorkspaceKind::Worktree, slot(4))
+                        .level(2),
+                )
+                .child(
+                    SidebarRow::workspace("sb-u5", "usage 5", WorkspaceKind::Folder, slot(5))
+                        .level(2),
+                )
+                .child(
+                    SidebarRow::workspace("sb-u6", "usage 6", WorkspaceKind::Worktree, slot(6))
+                        .level(2),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Sessions: status glyph, agent mark, then title; the child's mark lines up with the parent's title",
+            sidebar(cx)
+                .child(
+                    SidebarRow::session(
+                        "sb-s1",
+                        "Feed endpoints",
+                        AgentState::Running,
+                        AgentKind::Claude,
+                    )
+                    .level(3)
+                    .hover_action(IconButton::new(
+                        "sb-s1-more",
+                        IconName::Ellipsis,
+                        "Session actions",
+                    )),
+                )
+                .child(
+                    SidebarRow::session(
+                        "sb-s2",
+                        "Review the diff",
+                        AgentState::Waiting,
+                        AgentKind::Codex,
+                    )
+                    .child_of(session_indent),
+                )
+                .child(
+                    SidebarRow::session(
+                        "sb-s3",
+                        "Could not start",
+                        AgentState::Error,
+                        AgentKind::Gemini,
+                    )
+                    .level(3)
+                    .error("Failed to start"),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "States: selected, hover, pressed, focus, loading and a count",
+            sidebar(cx)
+                .child(
+                    SidebarRow::nav("sb-selected", IconName::ListChecks, "Tasks")
+                        .selected(true),
+                )
+                .child(
+                    SidebarRow::nav("sb-hover", IconName::Workflow, "Hover")
+                        .preview(StatePreview::Hover),
+                )
+                .child(
+                    SidebarRow::nav("sb-pressed", IconName::Workflow, "Pressed")
+                        .preview(StatePreview::Pressed),
+                )
+                .child(
+                    SidebarRow::nav("sb-focus", IconName::Workflow, "Focus, from the keyboard")
+                        .preview(StatePreview::Focus),
+                )
+                .child(SidebarRow::new("sb-loading", "Loading").loading(true))
+                .child(
+                    SidebarRow::nav("sb-count", IconName::Inbox, "Inbox")
+                        .count(12),
+                ),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn list_row(_: &mut Window, cx: &mut App) -> AnyElement {
