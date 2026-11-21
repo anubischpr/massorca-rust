@@ -49,6 +49,8 @@ pub struct WorkspaceRow {
     pub id: String,
     pub name: String,
     pub branch: Option<String>,
+    /// Label colour, one of the six usage colours (1 to 6), never a status colour (P29).
+    pub usage_slot: u8,
     pub sessions: Vec<SessionRow>,
 }
 

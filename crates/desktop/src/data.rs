@@ -51,12 +51,14 @@ impl DataSource for SampleDataSource {
                                     id: "w1".into(),
                                     name: "desktop-shell".into(),
                                     branch: Some("desktop/shell".into()),
+                                    usage_slot: 1,
                                     sessions: vec![lead],
                                 },
                                 WorkspaceRow {
                                     id: "w2".into(),
                                     name: "core-store".into(),
                                     branch: Some("pr/store".into()),
+                                    usage_slot: 2,
                                     sessions: vec![session(
                                         "s2",
                                         "SQLite migrations",
@@ -73,6 +75,7 @@ impl DataSource for SampleDataSource {
                                 id: "w3".into(),
                                 name: "server-deploy".into(),
                                 branch: Some("main".into()),
+                                usage_slot: 3,
                                 sessions: vec![session(
                                     "s3",
                                     "Headless server smoke test",
@@ -92,6 +95,7 @@ impl DataSource for SampleDataSource {
                             id: "w4".into(),
                             name: "gold-layer".into(),
                             branch: Some("feat/gold".into()),
+                            usage_slot: 4,
                             sessions: vec![session(
                                 "s4",
                                 "Serve the gold tables",
@@ -168,5 +172,16 @@ mod tests {
             assert!(states.contains(&s), "{s:?}");
         }
         assert_eq!(snap.usage.len(), 3, "three rings as in every artboard");
+        let slots: Vec<u8> = snap
+            .projects
+            .iter()
+            .flat_map(|p| &p.hosts)
+            .flat_map(|h| &h.workspaces)
+            .map(|w| w.usage_slot)
+            .collect();
+        assert!(
+            slots.iter().all(|s| (1..=6).contains(s)),
+            "usage colours only (P29)"
+        );
     }
 }

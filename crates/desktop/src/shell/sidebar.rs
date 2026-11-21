@@ -60,15 +60,13 @@ pub(super) fn sidebar(
     match model.sidebar() {
         SidebarContent::Workspaces { nav, tree } => {
             let column = column.child(create_button()).child(search.clone());
-            let column = nav_rows(column, &nav, "nav", &shell, window, cx, &theme);
+            let column = nav_rows(column, &nav, "nav", &shell, window, cx);
             column
                 .child(projects_header(&theme))
                 .child(tree_list(&tree, window, cx, &theme))
                 .child(footer())
         }
-        SidebarContent::BotTeams { rows } => {
-            nav_rows(column, &rows, "team", &shell, window, cx, &theme)
-        }
+        SidebarContent::BotTeams { rows } => nav_rows(column, &rows, "team", &shell, window, cx),
     }
 }
 
@@ -79,12 +77,11 @@ fn nav_rows(
     shell: &gpui::WeakEntity<Shell>,
     window: &mut Window,
     cx: &mut App,
-    theme: &Theme,
 ) -> Div {
     let mut column = column;
     for (index, row) in rows.iter().enumerate() {
         let focus = row_focus(window, cx, format!("{key}-{index}"));
-        column = column.child(nav_row(row, &focus, shell, theme));
+        column = column.child(nav_row(row, &focus, shell));
     }
     column
 }
@@ -178,7 +175,7 @@ fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme)
     }
     for (index, row) in tree.iter().enumerate() {
         let focus = row_focus(window, cx, format!("tree-{index}"));
-        list = list.child(tree_row(row, index, &focus, theme));
+        list = list.child(tree_row(row, index, &focus));
     }
     list
 }
