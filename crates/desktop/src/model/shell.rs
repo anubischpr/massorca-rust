@@ -70,8 +70,11 @@ pub struct ProjectGroup {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageModel {
     pub agent: Agent,
+    /// The arc colour slot, 1 to 6, that the core assigns in order of first use.
+    pub slot: u8,
     /// 0 to 100; `None` while unknown.
     pub percent: Option<u8>,
+    /// Time until the window resets, such as "2 days".
     pub resets_in: String,
 }
 
