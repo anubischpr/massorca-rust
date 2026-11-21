@@ -18,15 +18,19 @@ parts fit; each choice has a record in `docs/decisions/` (0020 to 0029).
                                                            │
  crates/desktop  (massorca-desktop)                        ▼
    shell      Frame and Canvas, Title bar, Activity rail, Sidebar,
-              Status bar, command palette
-   model      view models (ShellModel, SidebarModel, StatusBarModel, PaletteModel)
-   data       DataSource trait: SampleDataSource now, ClientDataSource later (0023)
+              Status bar, command palette, service notice, workspace dialogs
+   model      view models (ShellModel, sidebar tree, status bar, palette) and
+              pure derivations: service_view, workspace_flow
+   service    ServiceBridge (tokio thread), connection states, StoreUpdate
+              reducer, typed Refusal, launch options (0028)
+   store      ServiceStore entity, ClientDataSource
+   data       DataSource trait: SampleDataSource, ClientDataSource (0023, 0028)
    bin        massorca-desktop
 ```
 
 GPUI comes from one pinned Zed commit (0020). `crates/ui` never depends on
-the protocol or the client; `crates/desktop` will, through its data source
-only.
+the protocol or the client; `crates/desktop` does, through `service` and
+`store` only.
 
 ## Theme and tokens
 
@@ -49,14 +53,31 @@ child, so no border can appear between frame parts.
 ## Data flow
 
 ```
- DataSource ──snapshot / changes──> view model entity ──notify──> views
-     ▲                                     │
-     └──────────── actions (later: client requests) ◄──── user input
+ service <-> ServiceBridge (own tokio thread) --StoreUpdate--> ServiceStore --notify--> Shell
+                  ^                                                 |                     |
+                  +---- commands (create, remove, retry now) <------ +---- dialogs <---- input
 ```
 
-Views read view models only. With sample data the actions update the view
-model directly; with the client they become requests and the view model
-changes when the service reports the new state.
+Views read view models only, derived from the store by plain functions.
+`--sample` fills the same store once from `SampleDataSource`; by default the
+store follows a service through the bridge (0028).
+
+- **Bridge.** One tokio runtime on the `massorca-service` thread owns the
+  connection. States: `Connecting`, `Connected`, `Reconnecting {attempt,
+  retry_at}` after a loss, and `Unreachable {reason}` after a failed first
+  attempt. Backoff runs 250 ms doubling to 5 s; "Retry now" resets it.
+- **Updates.** After each connect it subscribes to events, then lists
+  projects and workspaces. Each event refetches its item (or drops it on
+  `*.removed`); `stream.overflow` or a reconnect resyncs in full. Unknown
+  topics are ignored. The UI applies updates in batches and notifies once.
+- **Changes.** Create and remove stay busy until the call answers. The store
+  changes only through the resulting event. A refusal picks the dialog:
+  `workspace.dirty` asks to discard changes, `workspace.ignored_files` and
+  `workspace.orphan` have their own waivers, each retrying with exactly one
+  more flag; `workspace.locked` and `workspace.main_worktree` only inform.
+- **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
+  [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
+  service is started from the `massorca` executable next to the desktop.
 
 ## Testing
 

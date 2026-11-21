@@ -13,3 +13,4 @@ pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
 pub mod title_bar;
+pub mod workspace_flow;

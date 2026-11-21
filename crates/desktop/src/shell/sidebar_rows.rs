@@ -38,7 +38,12 @@ pub(super) fn nav_row(row: &NavRow, focus: &FocusHandle, shell: &WeakEntity<Shel
 }
 
 /// One row of the project tree, identified by its position in the list.
-pub(super) fn tree_row(row: &TreeRow, index: usize, focus: &FocusHandle) -> SidebarRow {
+pub(super) fn tree_row(
+    row: &TreeRow,
+    index: usize,
+    focus: &FocusHandle,
+    shell: &WeakEntity<Shell>,
+) -> SidebarRow {
     let id = SharedString::from(format!("tree-row-{index}"));
     let item = match row {
         TreeRow::Project { name } => SidebarRow::project(id, IconName::Folder, name.clone()),
@@ -46,7 +51,7 @@ pub(super) fn tree_row(row: &TreeRow, index: usize, focus: &FocusHandle) -> Side
         TreeRow::Workspace {
             name,
             branch,
-            id: _,
+            id: workspace_id,
             usage_slot,
         } => {
             let mut item = SidebarRow::workspace(
@@ -59,7 +64,12 @@ pub(super) fn tree_row(row: &TreeRow, index: usize, focus: &FocusHandle) -> Side
             if let Some(branch) = branch {
                 item = item.secondary(branch.clone());
             }
-            item
+            // Right click, or Shift+F10: the row's menu offers to remove the workspace.
+            let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
+            item.on_context_menu(move |window, cx| {
+                let id = workspace_id.clone();
+                let _ = shell.update(cx, |shell, cx| shell.open_workspace_menu(id, window, cx));
+            })
         }
         TreeRow::Session {
             title,

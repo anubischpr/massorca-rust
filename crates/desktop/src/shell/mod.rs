@@ -4,11 +4,14 @@ mod actions;
 mod canvas;
 mod palette;
 mod rail;
+mod service_banner;
 mod sidebar;
 mod sidebar_rows;
 mod status_bar;
 mod title_bar;
 mod tooltip;
+mod workspace_dialog_views;
+mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
@@ -16,6 +19,8 @@ use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction};
 use crate::model::region_cycle::Zone;
 use crate::model::shell_state::ShellModel;
+use crate::service::{ServiceBridge, ServiceHandle};
+use crate::store::{ClientDataSource, ServiceStore};
 use actions::{
     CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenSettings, ToggleCommandPalette,
 };
@@ -23,12 +28,17 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
     Subscription, WeakEntity, Window, div, prelude::*,
 };
+use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use std::time::Instant;
+use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
+#[cfg(test)]
+mod service_tests;
 #[cfg(test)]
 mod tests;
 
@@ -47,15 +57,51 @@ pub struct Shell {
     /// The control that had focus when the palette opened; focus returns to it.
     palette_restore: Option<FocusHandle>,
     palette_events: Option<Subscription>,
+    /// What the Sidebar, status bar and dialogs derive from (decision 0028).
+    store: Entity<ServiceStore>,
+    /// The way to ask the service for something. None on sample data.
+    service: Option<ServiceHandle>,
+    /// Keeps the bridge's runtime alive for as long as the shell lives.
+    _bridge: Option<ServiceBridge>,
+    _store_changes: Subscription,
+    dialogs: WorkspaceDialogs,
 }
 
 impl Shell {
-    /// Fills the view model from the data source; the window width is read once here.
+    /// Fills the store from sample data, once; nothing changes it afterwards.
     pub fn new(data: &impl DataSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let store = cx.new(|_| ServiceStore::sample(data));
+        Self::with_store(store, None, None, window, cx)
+    }
+
+    /// Follows a running service through the bridge of `source`.
+    pub fn with_client(
+        source: ClientDataSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let handle = source.handle();
+        let (bridge, updates) = source.into_parts();
+        let store = cx.new(|cx| ServiceStore::following(updates, cx));
+        Self::with_store(store, Some(handle), Some(bridge), window, cx)
+    }
+
+    fn with_store(
+        store: Entity<ServiceStore>,
+        service: Option<ServiceHandle>,
+        bridge: Option<ServiceBridge>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let width = f32::from(window.viewport_size().width);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let snapshot = data.snapshot();
+        let snapshot = store.read(cx).snapshot(Instant::now());
+        let store_changes = cx.observe(&store, |shell, store, cx| {
+            let snapshot = store.read(cx).snapshot(Instant::now());
+            shell.model.set_snapshot(snapshot);
+            cx.notify();
+        });
         let rail = RailState::new(snapshot.usage.len(), cx);
         let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
@@ -68,11 +114,23 @@ impl Shell {
             palette_input: None,
             palette_restore: None,
             palette_events: None,
+            store,
+            service,
+            _bridge: bridge,
+            _store_changes: store_changes,
+            dialogs: WorkspaceDialogs::default(),
         }
     }
 
     pub fn model(&self) -> &ShellModel {
         &self.model
+    }
+
+    /// "Retry now" on the service banner: resets the backoff and connects at once.
+    fn retry_service_now(&self) {
+        if let Some(handle) = &self.service {
+            handle.retry_now();
+        }
     }
 
     /// Mod+K: opens the palette, or closes it when it is open.
@@ -168,8 +226,18 @@ impl Render for Shell {
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         let canvas = canvas::canvas(&self.model, &self.zones, cx);
-        let status = status_bar::status_bar(&self.model.snapshot().status, &theme)
-            .track_focus(self.zones.get(Zone::StatusBar));
+        let status = status_bar::status_bar(
+            &self.model.snapshot().status,
+            self.model.snapshot().service_status.as_ref(),
+            &theme,
+        )
+        .track_focus(self.zones.get(Zone::StatusBar));
+        let banner = self
+            .model
+            .snapshot()
+            .service_notice
+            .as_ref()
+            .map(|notice| service_banner::service_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -191,6 +259,7 @@ impl Render for Shell {
                     .h_full()
                     .flex()
                     .flex_col()
+                    .when_some(banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),
             )
@@ -213,6 +282,22 @@ impl Render for Shell {
             (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
             _ => None,
         };
+        let projects = self.store.read(cx).state().projects.clone();
+        let create = self
+            .dialogs
+            .create
+            .as_ref()
+            .map(|dialog| workspace_dialog_views::create_dialog(dialog, &projects, &shell, cx));
+        let remove = self
+            .dialogs
+            .remove
+            .as_ref()
+            .map(|flow| workspace_dialog_views::remove_dialog(flow, &shell, cx));
+        let menu = self
+            .dialogs
+            .menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         div()
             .size_full()
             .flex()
@@ -256,5 +341,8 @@ impl Render for Shell {
                     .child(body),
             )
             .when_some(palette, |el, palette| el.child(palette))
+            .when_some(create, |el, dialog| el.child(dialog))
+            .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(menu, |el, menu| el.child(menu))
     }
 }
