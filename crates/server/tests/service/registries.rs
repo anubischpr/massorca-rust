@@ -1,8 +1,10 @@
 //! Registries and permissions: duplicate keys, drop handles, owners, sorted names and the local owner's permissions.
 
 use massorca_server::{
-    CapabilityRegistry, Owner, Permission, Principal, RegistrationError, Registry, authorize,
+    CapabilityRegistry, Owner, Permission, Principal, RegistrationError, Registry, SettingDecl,
+    SettingKind, SettingsRegistry, authorize,
 };
+use serde_json::Value;
 
 #[test]
 fn a_registry_refuses_duplicate_keys_and_unregisters_on_drop() {
@@ -99,4 +101,56 @@ fn capability_names_are_sorted_and_dropping_a_handle_withdraws_it() {
 
     drop(events);
     assert_eq!(capabilities.names(), vec!["service/1".to_owned()]);
+}
+
+#[test]
+fn two_owners_may_declare_the_same_setting_key_and_each_finds_its_own() {
+    let settings = SettingsRegistry::default();
+    let extension = Owner::Extension("demo".to_owned());
+    let core = settings
+        .register(SettingDecl {
+            owner: Owner::Core,
+            key: "shared.key".to_owned(),
+            kind: SettingKind::Bool,
+            default: Value::Bool(false),
+            description: "core".to_owned(),
+        })
+        .expect("core declares the key");
+    let _extension = settings
+        .register(SettingDecl {
+            owner: extension.clone(),
+            key: "shared.key".to_owned(),
+            kind: SettingKind::String,
+            default: Value::String("x".to_owned()),
+            description: "extension".to_owned(),
+        })
+        .expect("the extension declares the same key");
+
+    assert_eq!(
+        settings
+            .find(&Owner::Core, "shared.key")
+            .map(|decl| decl.kind),
+        Some(SettingKind::Bool)
+    );
+    assert_eq!(
+        settings
+            .find(&extension, "shared.key")
+            .map(|decl| decl.kind),
+        Some(SettingKind::String)
+    );
+
+    let duplicate = settings
+        .register(SettingDecl {
+            owner: Owner::Core,
+            key: "shared.key".to_owned(),
+            kind: SettingKind::Integer,
+            default: Value::from(1),
+            description: "again".to_owned(),
+        })
+        .expect_err("one owner may not declare a key twice");
+    assert!(matches!(duplicate, RegistrationError::Duplicate { .. }));
+
+    drop(core);
+    assert!(settings.find(&Owner::Core, "shared.key").is_none());
+    assert!(settings.find(&extension, "shared.key").is_some());
 }

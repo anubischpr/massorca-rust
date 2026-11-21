@@ -28,7 +28,7 @@ impl SettingKind {
     }
 }
 
-/// One declared setting. Its key is unique across owners: extensions prefix their keys with their id.
+/// One declared setting. Its key is unique per owner, so two owners may declare the same key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingDecl {
     pub owner: Owner,
@@ -53,24 +53,28 @@ impl SettingDecl {
     }
 }
 
-/// The settings the service declares. Clones share one table.
+/// The settings the service declares, keyed by owner and key. Clones share one table.
 #[derive(Clone, Debug, Default)]
 pub struct SettingsRegistry {
     entries: Registry<SettingDecl>,
 }
 
+/// The registry key of a declaration. The unit separator cannot occur in an owner's wire form, so the pair is unambiguous.
+fn slot(owner: &Owner, key: &str) -> String {
+    format!("{owner}\u{1f}{key}")
+}
+
 impl SettingsRegistry {
     pub fn register(&self, decl: SettingDecl) -> Result<RegistrationHandle, RegistrationError> {
-        let key = decl.key.clone();
+        let slot = slot(&decl.owner, &decl.key);
         let owner = decl.owner.clone();
-        self.entries.register(owner, key, decl)
+        self.entries.register(owner, slot, decl)
     }
 
-    /// The declaration of `key`, when `owner` declared it.
+    /// The declaration `owner` made for `key`.
     pub fn find(&self, owner: &Owner, key: &str) -> Option<SettingDecl> {
         self.entries
-            .get(key)
-            .filter(|entry| &entry.owner == owner)
+            .get(&slot(owner, key))
             .map(|entry| entry.value.clone())
     }
 

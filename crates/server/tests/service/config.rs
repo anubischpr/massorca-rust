@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use massorca_protocol::codes;
-use massorca_protocol::methods::config::{ConfigKey, ConfigSet};
+use massorca_protocol::methods::config::{self, ConfigKey, ConfigSet, ConfigValue};
+use massorca_server::{Owner, SettingDecl, SettingKind};
 use serde_json::{Value, json};
 
 use super::common::{connect, remote_code, start, stop, temp_home};
@@ -199,4 +200,38 @@ async fn a_stored_value_survives_a_restart() {
         .expect("config.get answers after the restart");
     assert_eq!(read.value, json!(chosen));
     stop(second).await;
+}
+
+#[tokio::test]
+async fn each_owner_reads_its_own_value_for_a_shared_key() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let _extension = running
+        .registries()
+        .settings
+        .register(SettingDecl {
+            owner: Owner::Extension("demo".to_owned()),
+            key: WORKSPACES_ROOT.to_owned(),
+            kind: SettingKind::String,
+            default: Value::String("from demo".to_owned()),
+            description: "declared by the demo extension".to_owned(),
+        })
+        .expect("the extension declares the key");
+    let client = connect(home.path(), "default").await;
+
+    let demo: ConfigValue = client
+        .call(config::GET, &key(Some("ext:demo")))
+        .await
+        .expect("the extension's setting is readable");
+    assert_eq!(demo.owner, "ext:demo");
+    assert_eq!(demo.value, Value::String("from demo".to_owned()));
+
+    // Core declares the same key with its own default; reading it must not return the extension's value.
+    let core: ConfigValue = client
+        .call(config::GET, &key(None))
+        .await
+        .expect("core's setting is readable");
+    assert_eq!(core.owner, "core");
+    assert_ne!(core.value, Value::String("from demo".to_owned()));
+    stop(running).await;
 }
