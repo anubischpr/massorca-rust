@@ -2,20 +2,22 @@
 //!
 //! `FileTreeState` holds the rules without a window: the tree built from a flat listing,
 //! the folders the user opened, the name filter and its matches, the cursor and the open
-//! file. `FileTreeView` draws them: the search field and the rows. Paths use `/` and carry no leading slash.
+//! file. `FileTreeView` draws them: the search field with its Names and Content scope, and
+//! the rows. Paths use `/` and carry no leading slash.
 
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::list_row::{
     ListMove, RowDensity, RowLines, TREE_INDENT, list_move, move_index, row_height,
 };
 use crate::components::search_field::{SearchField, SearchFieldEvent};
+use crate::components::segmented_control::{Segment, SegmentedControl};
 use crate::components::tooltip::{Tooltip, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
-    BORDER_WIDTH_THICK, Color, Palette, RADIUS_MD, RADIUS_XS, SIZE_ICON_SM, SIZE_ICON_XS, SPACE_1,
-    SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_LABEL,
+    BORDER_WIDTH_THICK, Color, Palette, RADIUS_MD, RADIUS_XS, SIZE_ICON_SM, SIZE_ICON_XS,
+    SIZE_ROW_TWO_LINE, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_LABEL, TYPE_MONO_SM,
 };
 use gpui::{
     AnyElement, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, HighlightStyle,
@@ -629,8 +631,10 @@ pub enum FileTreeEvent {
     Opened(SharedString),
     /// A folder was opened or closed.
     Toggled { path: SharedString, expanded: bool },
-    /// The query changed.
+    /// The query changed. In the Content scope the owner runs the search and sets the results.
     Query(SharedString),
+    /// The search scope changed between Names and Content.
+    Scope(SearchScope),
     /// A row asked for its menu: a right click, Shift+F10 or the Menu key.
     ContextMenu(SharedString),
 }
@@ -638,7 +642,7 @@ pub enum FileTreeEvent {
 /// Fully transparent: no fill at rest, and no focus ring unless the row has the cursor.
 const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
 
-/// The file tree: a search field above the rows. The
+/// The file tree: a search field with its Names and Content scope, above the rows. The
 /// entity owns its [`FileTreeState`] and emits [`FileTreeEvent`]s.
 pub struct FileTreeView {
     id: ElementId,
@@ -721,10 +725,29 @@ impl FileTreeView {
         cx.notify();
     }
 
+    /// The matching lines of the Content scope, from the owner's search.
+    pub fn set_content(&mut self, matches: Vec<ContentMatch>, cx: &mut Context<Self>) {
+        self.state.set_content(matches);
+        cx.notify();
+    }
+
     fn on_search(&mut self, event: &SearchFieldEvent, cx: &mut Context<Self>) {
         if let SearchFieldEvent::Search(query) = event {
             self.state.set_query(query);
             cx.emit(FileTreeEvent::Query(query.clone()));
+            cx.notify();
+        }
+    }
+
+    fn set_scope(&mut self, index: usize, cx: &mut Context<Self>) {
+        let scope = if index == 0 {
+            SearchScope::Names
+        } else {
+            SearchScope::Content
+        };
+        if self.state.scope() != scope {
+            self.state.set_scope(scope);
+            cx.emit(FileTreeEvent::Scope(scope));
             cx.notify();
         }
     }
@@ -758,6 +781,12 @@ impl FileTreeView {
         self.activate(cx);
     }
 
+    fn open_match(&mut self, path: &SharedString, cx: &mut Context<Self>) {
+        self.state.open_path(path);
+        cx.emit(FileTreeEvent::Opened(path.clone()));
+        cx.notify();
+    }
+
     fn context_menu(&mut self, path: &SharedString, cx: &mut Context<Self>) {
         self.state.focus_path(path);
         cx.emit(FileTreeEvent::ContextMenu(path.clone()));
@@ -771,7 +800,7 @@ impl FileTreeView {
         }
     }
 
-    /// Tree keys work in the Names scope only.
+    /// Tree keys work in the Names scope only; the Content list is driven by the pointer.
     fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         if self.state.scope() == SearchScope::Content {
             return;
@@ -834,18 +863,37 @@ impl FileTreeView {
         true
     }
 
-    /// The rows of the visible tree.
+    /// The rows of the current scope.
     fn list(&self, context: RowContext) -> AnyElement {
-        let rows = self.state.visible();
-        uniform_list((self.id.clone(), "rows"), rows.len(), move |range, _, _| {
-            range
-                .map(|index| render_row(&context, index, &rows[index]))
-                .collect()
-        })
-        .track_scroll(&self.scroll)
-        .flex_1()
-        .min_h_0()
-        .into_any_element()
+        match self.state.scope() {
+            SearchScope::Names => {
+                let rows = self.state.visible();
+                uniform_list((self.id.clone(), "rows"), rows.len(), move |range, _, _| {
+                    range
+                        .map(|index| render_row(&context, index, &rows[index]))
+                        .collect()
+                })
+                .track_scroll(&self.scroll)
+                .flex_1()
+                .min_h_0()
+                .into_any_element()
+            }
+            SearchScope::Content => {
+                let matches = self.state.content().to_vec();
+                uniform_list(
+                    (self.id.clone(), "matches"),
+                    matches.len(),
+                    move |range, _, _| {
+                        range
+                            .map(|index| render_match(&context, index, &matches[index]))
+                            .collect()
+                    },
+                )
+                .flex_1()
+                .min_h_0()
+                .into_any_element()
+            }
+        }
     }
 }
 
@@ -975,12 +1023,56 @@ fn render_row(context: &RowContext, index: usize, row: &VisibleRow) -> AnyElemen
     line.into_any_element()
 }
 
+/// A content match: its path in mono-sm above the matching line.
+fn render_match(context: &RowContext, index: usize, found: &ContentMatch) -> AnyElement {
+    let p = context.theme.palette;
+    let hover = context.surface.fills(&context.theme).hover;
+    let (entity, path) = (context.entity.clone(), found.path.clone());
+    div()
+        .id(("match-row", index))
+        .debug_selector(move || format!("match-row-{index}"))
+        .role(Role::ListItem)
+        .aria_label(format!(
+            "{}, line {}: {}",
+            found.path, found.line, found.text
+        ))
+        .flex()
+        .flex_col()
+        .justify_center()
+        .h(px(SIZE_ROW_TWO_LINE))
+        .px(px(SPACE_2))
+        .rounded(px(RADIUS_MD))
+        .hover(move |s| s.bg(hover))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            entity.update(cx, |tree, cx| tree.open_match(&path, cx));
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_MONO_SM)
+                .text_color(p.text.tertiary)
+                .child(found.path.clone()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_BODY)
+                .text_color(p.text.primary)
+                .child(found.text.clone()),
+        )
+        .into_any_element()
+}
+
 impl Render for FileTreeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let p = theme.palette;
+        let entity = cx.entity();
         let context = RowContext {
-            entity: cx.entity(),
+            entity: entity.clone(),
             theme,
             surface: self.surface,
             height: row_height(RowLines::One, self.density),
@@ -988,6 +1080,19 @@ impl Render for FileTreeView {
             cursor: self.state.cursor(),
             active: self.state.active().cloned(),
         };
+        let scope = match self.state.scope() {
+            SearchScope::Names => 0,
+            SearchScope::Content => 1,
+        };
+        let scope_control = SegmentedControl::new(
+            (self.id.clone(), "scope"),
+            "Search in",
+            vec![Segment::text("Names"), Segment::text("Content")],
+        )
+        .selected(scope)
+        .on_change(move |index, _, cx| {
+            entity.update(cx, |tree, cx| tree.set_scope(index, cx));
+        });
 
         let body = self.list(context);
 
@@ -1005,7 +1110,8 @@ impl Render for FileTreeView {
                     .flex_col()
                     .gap(px(SPACE_2))
                     .p(px(SPACE_2))
-                    .child(self.search.clone()),
+                    .child(self.search.clone())
+                    .child(scope_control),
             )
             .child(
                 div()
