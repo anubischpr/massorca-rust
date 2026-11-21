@@ -8,8 +8,13 @@ use crate::components::diff_view::{
     DiffLine, DiffModel, DiffStatus, DiffView, FileDiff, FileStatus, Hunk,
 };
 use crate::components::plan_view::{Plan, PlanStatus, PlanStep, PlanVariant, PlanView, StepStatus};
+use crate::components::session_summary_card::{
+    BackgroundTask, CardKind, ChecklistItem, Connector, ContextUse, Environment, QaServer,
+    ResultItem, SessionSummary, Subagent, summary_column,
+};
 use crate::tokens::SPACE_4;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
+use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -29,6 +34,16 @@ pub fn stories() -> Vec<Story> {
             name: "Delegation tree",
             spec: "DelegationTree.md",
             render: delegation_tree,
+        },
+        Story {
+            name: "Session summary",
+            spec: "SessionSummaryCard.md",
+            render: session_summary,
+        },
+        Story {
+            name: "Session summary, host unreachable",
+            spec: "SessionSummaryCard.md",
+            render: session_summary_stale,
         },
     ]
 }
@@ -388,4 +403,108 @@ fn delegation_tree(_: &mut Window, cx: &mut App) -> AnyElement {
             cx,
         ))
         .into_any_element()
+}
+
+/// One session that reports every core card, with the plan and the results expanded.
+fn summary_sample(stale: bool) -> SessionSummary {
+    SessionSummary {
+        environment: Some(Environment {
+            host: "VPS".into(),
+            host_state: if stale {
+                AgentState::Unreachable
+            } else {
+                AgentState::Running
+            },
+            last_known: Some("5 min ago".into()),
+            account: Some("ada".into()),
+            repository: Some("massorca".into()),
+            branch: Some("main".into()),
+            pipeline: Some("ci / build".into()),
+        }),
+        plan: Some(Plan {
+            steps: vec![
+                PlanStep::new("Read the spec", StepStatus::Done),
+                PlanStep::new("Write the parser", StepStatus::InProgress),
+                PlanStep::new("Ship", StepStatus::Pending),
+            ],
+            document: None,
+        }),
+        checklist: vec![
+            ChecklistItem {
+                text: "Tokens defined".into(),
+                done: true,
+            },
+            ChecklistItem {
+                text: "Grammar reviewed".into(),
+                done: false,
+            },
+        ],
+        context: Some(ContextUse {
+            used: 35_000,
+            total: 100_000,
+        }),
+        results: vec![
+            ResultItem::Url {
+                url: "http://localhost:3000/preview".into(),
+                remote: false,
+            },
+            ResultItem::Url {
+                url: "http://10.0.0.5:8080/docs".into(),
+                remote: true,
+            },
+            ResultItem::File {
+                path: "src/parser.rs".into(),
+            },
+            ResultItem::Artifact {
+                name: "Parser notes".into(),
+                kind: "Document".into(),
+            },
+        ],
+        child_sessions: delegation_sample(),
+        subagents: vec![Subagent {
+            name: "Explore".into(),
+            task: "Find the tokenizer".into(),
+            state: AgentState::Running,
+        }],
+        connectors: vec![
+            Connector {
+                name: "Issue tracker".into(),
+                connected: true,
+                reason: None,
+            },
+            Connector {
+                name: "Chat".into(),
+                connected: false,
+                reason: Some("Token expired".into()),
+            },
+        ],
+        background: vec![BackgroundTask {
+            name: "Watch build".into(),
+            state: AgentState::Running,
+            duration: Some("3 min".into()),
+        }],
+        qa_servers: vec![QaServer {
+            name: "web".into(),
+            port: 3000,
+            url: "http://localhost:3000".into(),
+            state: AgentState::Running,
+        }],
+        stale,
+    }
+}
+
+/// The Session summary column at its default width, with the plan and the results expanded.
+fn summary_story(stale: bool) -> AnyElement {
+    let expanded: HashSet<CardKind> = [CardKind::Plan, CardKind::Results].into_iter().collect();
+    let fresh: HashSet<CardKind> = [CardKind::Checklist].into_iter().collect();
+    let column = summary_column(Rc::new(summary_sample(stale)), &expanded, &fresh, None);
+    div().w(px(288.)).child(column).into_any_element()
+}
+
+fn session_summary(_: &mut Window, _: &mut App) -> AnyElement {
+    summary_story(false)
+}
+
+fn session_summary_stale(_: &mut Window, _: &mut App) -> AnyElement {
+    summary_story(true)
 }
