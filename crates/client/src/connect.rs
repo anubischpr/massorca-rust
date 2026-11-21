@@ -34,6 +34,10 @@ pub(crate) async fn connect(
             }
             None => return Err(ClientError::Unavailable(error)),
         },
+        // The endpoint is still held by a service that is letting go of it, so wait for it as a start would.
+        Err(error) if options.autostart.is_some() && is_busy(&error) => {
+            wait_for_listener(name, options.connect_timeout).await?
+        }
         Err(error) => return Err(ClientError::Unavailable(error)),
     };
     ensure_trusted_endpoint(&stream)?;
@@ -82,7 +86,7 @@ async fn wait_for_listener(name: Name<'static>, timeout: Duration) -> Result<Str
     loop {
         match Stream::connect(name.clone()).await {
             Ok(stream) => return Ok(stream),
-            Err(error) if nobody_listens(&error) || error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if nobody_listens(&error) || is_busy(&error) => {}
             Err(error) => return Err(ClientError::Unavailable(error)),
         }
         if Instant::now() >= deadline {
@@ -99,5 +103,13 @@ fn nobody_listens(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
+}
+
+/// A busy pipe, or one a service has not yet released for its successor (Windows reports access denied for that).
+fn is_busy(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied
     )
 }

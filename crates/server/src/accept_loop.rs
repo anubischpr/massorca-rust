@@ -47,6 +47,7 @@ pub(crate) async fn run(
     }
 
     drop(listener);
+    signal.mark_listener_closed();
     let drained = tokio::time::timeout(SHUTDOWN_GRACE, async {
         while connections.join_next().await.is_some() {}
     })

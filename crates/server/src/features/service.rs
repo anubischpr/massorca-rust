@@ -1,7 +1,10 @@
 //! `service.info` and `service.shutdown` (capability `service/1`).
 
+use std::time::Duration;
+
 use massorca_protocol::methods::service::{self, ServiceInfo};
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities};
+use tokio::time::timeout;
 
 use crate::context::{AppState, Registries, RequestCtx};
 use crate::error::ServiceError;
@@ -48,8 +51,11 @@ async fn info(ctx: RequestCtx, _params: NoParams) -> Result<ServiceInfo, ErrorBo
     Ok(info_of(&ctx.state))
 }
 
-/// Requests shutdown and returns; the connection answers first, then the service winds down.
+/// Requests shutdown and answers once the service has stopped listening, so a client that connects right after the answer
+/// cannot reach the old service. The service then winds down.
 async fn shutdown(ctx: RequestCtx, _params: NoParams) -> Result<(), ErrorBody> {
     ctx.state.shutdown.shutdown();
+    // Bounded, so a listener that never closes cannot leave this request unanswered.
+    let _ = timeout(Duration::from_secs(5), ctx.state.shutdown.listener_closed()).await;
     Ok(())
 }
