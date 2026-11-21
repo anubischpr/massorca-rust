@@ -23,9 +23,27 @@ fn branch_exists_sees_local_branches_but_not_remote_tracking_refs() {
 }
 
 #[test]
-fn remote_branch_exists_matches_a_branch_under_any_remote() {
+fn remote_branch_exists_matches_a_branch_under_any_configured_remote() {
     let fixture = Fixture::new();
     let repo = fixture.repo();
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://example.invalid/upstream.git",
+        ],
+    );
     run_git(&repo, &["update-ref", "refs/remotes/origin/x", "HEAD"]);
     run_git(
         &repo,
@@ -36,6 +54,32 @@ fn remote_branch_exists_matches_a_branch_under_any_remote() {
     assert!(git.remote_branch_exists(&repo, "feature/y").expect("check"));
     assert!(!git.remote_branch_exists(&repo, "y").expect("check"));
     assert!(!git.remote_branch_exists(&repo, "missing").expect("check"));
+}
+
+#[test]
+fn remote_branch_exists_finds_a_branch_under_a_remote_whose_name_has_a_slash() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    run_git(
+        &repo,
+        &["remote", "add", "a/b", "https://example.invalid/repo.git"],
+    );
+    run_git(&repo, &["update-ref", "refs/remotes/a/b/feature/y", "HEAD"]);
+    let git = git();
+    assert!(git.remote_branch_exists(&repo, "feature/y").expect("check"));
+    assert!(!git.remote_branch_exists(&repo, "y").expect("check"));
+    assert!(
+        !git.remote_branch_exists(&repo, "b/feature/y")
+            .expect("check")
+    );
+}
+
+#[test]
+fn remote_branch_exists_ignores_refs_of_a_remote_that_is_not_configured() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    run_git(&repo, &["update-ref", "refs/remotes/stale/x", "HEAD"]);
+    assert!(!git().remote_branch_exists(&repo, "x").expect("check"));
 }
 
 #[test]

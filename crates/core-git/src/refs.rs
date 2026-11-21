@@ -17,17 +17,22 @@ impl Git {
         exit_code_answer(&captured)
     }
 
-    /// Whether any remote-tracking ref `refs/remotes/<remote>/<branch>` exists.
+    /// Whether `refs/remotes/<remote>/<branch>` exists for a remote configured in `repo`.
+    /// Each remote name is matched whole, so a remote whose name contains `/` works.
     pub fn remote_branch_exists(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
-        let captured = self.run(
-            Some(repo),
-            ["for-each-ref", "--format=%(refname)", "refs/remotes/"],
-        )?;
-        captured.require_success()?;
-        Ok(captured
-            .text()?
-            .lines()
-            .any(|reference| remote_branch_of(reference) == Some(branch)))
+        let remotes = self.run(Some(repo), ["remote"])?;
+        remotes.require_success()?;
+        for remote in remotes.text()?.lines() {
+            let reference = format!("refs/remotes/{remote}/{branch}");
+            let captured = self.run(
+                Some(repo),
+                ["show-ref", "--verify", "--quiet", reference.as_str()],
+            )?;
+            if exit_code_answer(&captured)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Whether `rev` resolves to a commit in `repo`.
@@ -108,36 +113,11 @@ impl Git {
     }
 }
 
-/// The branch part of `refs/remotes/<remote>/<branch>`. The remote is the first
-/// path segment, which matches how git names remotes in practice.
-fn remote_branch_of(reference: &str) -> Option<&str> {
-    let rest = reference.strip_prefix("refs/remotes/")?;
-    let (remote, branch) = rest.split_once('/')?;
-    (!remote.is_empty()).then_some(branch)
-}
-
 /// Maps a yes/no query's exit status: 0 is yes, 1 is no, anything else is a failure.
 fn exit_code_answer(captured: &Captured) -> Result<bool, GitError> {
     match captured.exit_code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         _ => Err(captured.failure()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::remote_branch_of;
-
-    #[test]
-    fn the_branch_is_everything_after_the_remote_segment() {
-        assert_eq!(
-            remote_branch_of("refs/remotes/origin/feature/x"),
-            Some("feature/x")
-        );
-        assert_eq!(remote_branch_of("refs/remotes/origin/main"), Some("main"));
-        assert_eq!(remote_branch_of("refs/remotes/origin"), None);
-        assert_eq!(remote_branch_of("refs/heads/main"), None);
-        assert_eq!(remote_branch_of("refs/remotes//x"), None);
     }
 }
