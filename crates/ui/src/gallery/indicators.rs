@@ -2,11 +2,12 @@
 
 use super::{Story, variant};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::progress::{ProgressBar, ProgressState, Spinner};
 use crate::components::skeleton::{LineWidth, Skeleton, SkeletonShape};
 use crate::icon::IconSize;
-use crate::theme::TextStyled;
-use crate::tokens::{SPACE_2, SPACE_4};
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{RADIUS_MD, SPACE_2, SPACE_4};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
@@ -15,6 +16,11 @@ pub fn stories() -> Vec<Story> {
             name: "Agent icon",
             spec: "AgentIcon.md",
             render: agent_icon,
+        },
+        Story {
+            name: "Agent status",
+            spec: "AgentStatus.md",
+            render: agent_status,
         },
         Story {
             name: "Progress",
@@ -60,6 +66,70 @@ fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Every agent", marks, cx))
         .child(variant("Sizes, 12 to 24 px", sizes, cx))
         .child(variant("Icon beside a name", beside_name, cx))
+        .into_any_element()
+}
+
+fn agent_status(_: &mut Window, cx: &mut App) -> AnyElement {
+    let palette = cx.theme().palette;
+    let states_at = |size: AgentStatusSize| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_4))
+            .children(AgentState::ALL.map(|state| AgentStatus::new(state).size(size)))
+    };
+    let row = |state: AgentState, name: &'static str| {
+        let text = if state == AgentState::Unreachable {
+            palette.text.tertiary
+        } else {
+            palette.text.primary
+        };
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .p(px(SPACE_2))
+            .rounded(px(RADIUS_MD))
+            .text_body()
+            .text_color(text)
+            .child(AgentStatus::new(state))
+            .child(name);
+        if let Some(tint) = state.row_tint(&palette) {
+            row = row.bg(tint);
+        }
+        row
+    };
+    let tinted = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .child(row(AgentState::Waiting, "Session needs an answer"))
+        .child(row(AgentState::Error, "Build failed"));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Six states, 20 px",
+            states_at(AgentStatusSize::Medium),
+            cx,
+        ))
+        .child(variant(
+            "Six states, 16 px",
+            states_at(AgentStatusSize::Small),
+            cx,
+        ))
+        .child(variant(
+            "Six states, 12 px",
+            states_at(AgentStatusSize::XSmall),
+            cx,
+        ))
+        .child(variant("Waiting and error tint the row", tinted, cx))
+        .child(variant(
+            "Unreachable dims the row by text colour",
+            row(AgentState::Unreachable, "Last known running, 5 min ago"),
+            cx,
+        ))
         .into_any_element()
 }
 

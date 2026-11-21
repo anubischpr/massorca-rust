@@ -1,7 +1,16 @@
 //! AgentStatus: the one status glyph for an agent or session, with six states and one shape each.
 
-use crate::components::progress::arc_points;
-use crate::tokens::{Color, Palette, SIZE_ICON_MD, SIZE_ICON_SM, SIZE_ICON_XS};
+use crate::components::agent_icon::NameTooltip;
+use crate::components::progress::{arc_points, spin_angle_now, stroke_polyline};
+use crate::theme::ActiveTheme;
+use crate::tokens::{
+    Color, DURATION_TOOLTIP_DELAY, Palette, SIZE_ICON_MD, SIZE_ICON_SM, SIZE_ICON_XS,
+};
+use gpui::{
+    App, AppContext, Bounds, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, canvas,
+    div, point, px,
+};
 
 /// Edge of the grid every glyph is drawn on.
 const GRID: f32 = 24.0;
@@ -219,6 +228,127 @@ pub fn glyph_parts(state: AgentState, angle: f32) -> Vec<Part> {
             parts.push(stroke(vec![(4.9, 4.9), (19.1, 19.1)], false, Ink::State));
             parts
         }
+    }
+}
+
+/// The two colours a glyph paints with.
+#[derive(Clone, Copy, Debug)]
+struct Colours {
+    state: Hsla,
+    knockout: Hsla,
+}
+
+impl Colours {
+    fn of(self, ink: Ink) -> Hsla {
+        match ink {
+            Ink::State => self.state,
+            Ink::Knockout => self.knockout,
+        }
+    }
+}
+
+fn fill_polygon(window: &mut Window, points: &[(f32, f32)], color: Hsla) {
+    let mut points = points.iter().map(|&(x, y)| point(px(x), px(y)));
+    let Some(first) = points.next() else {
+        return;
+    };
+    let mut path = PathBuilder::fill();
+    path.move_to(first);
+    for next in points {
+        path.line_to(next);
+    }
+    path.close();
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// Paints the parts into `bounds`, scaling grid units to the box.
+fn paint_glyph(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    parts: &[Part],
+    colours: Colours,
+    stroke_px: f32,
+) {
+    let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let scale = f32::from(bounds.size.width) / GRID;
+    let map = |points: &[(f32, f32)]| -> Vec<(f32, f32)> {
+        points
+            .iter()
+            .map(|&(x, y)| (left + x * scale, top + y * scale))
+            .collect()
+    };
+    for part in parts {
+        match part {
+            Part::Stroke {
+                points,
+                closed,
+                ink,
+            } => stroke_polyline(window, &map(points), stroke_px, colours.of(*ink), *closed),
+            Part::Fill { points, ink } => fill_polygon(window, &map(points), colours.of(*ink)),
+        }
+    }
+}
+
+/// The status glyph of an agent or session. It is not a stop: the containing row takes focus,
+/// and the state word is its accessible name and tooltip.
+#[derive(Debug, IntoElement)]
+pub struct AgentStatus {
+    state: AgentState,
+    size: AgentStatusSize,
+}
+
+impl AgentStatus {
+    pub fn new(state: AgentState) -> Self {
+        Self {
+            state,
+            size: AgentStatusSize::default(),
+        }
+    }
+
+    pub fn size(mut self, size: AgentStatusSize) -> Self {
+        self.size = size;
+        self
+    }
+}
+
+impl RenderOnce for AgentStatus {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let palette = cx.theme().palette;
+        let turns = self.state.turns();
+        if turns {
+            window.request_animation_frame();
+        }
+        let angle = if turns { spin_angle_now() } else { 0.0 };
+        let parts = glyph_parts(self.state, angle);
+        let colours = Colours {
+            state: self.state.color(&palette).into(),
+            knockout: palette.surface.canvas.into(),
+        };
+        let stroke_px = self.size.stroke_px();
+        let label = SharedString::from(self.state.label());
+        let tooltip = label.clone();
+        div()
+            .id(SharedString::from(format!(
+                "agent-status-{}",
+                self.state.label()
+            )))
+            .flex_none()
+            .size(px(self.size.px()))
+            .role(Role::Image)
+            .aria_label(label)
+            .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
+            .tooltip(move |_, cx| cx.new(|_| NameTooltip(tooltip.clone())).into())
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, (), window, _| {
+                        paint_glyph(window, bounds, &parts, colours, stroke_px);
+                    },
+                )
+                .size_full(),
+            )
     }
 }
 
