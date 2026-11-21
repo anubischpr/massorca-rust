@@ -1,4 +1,4 @@
-//! Removing workspaces (ADR 0008): refusals first, then git, then the row.
+//! Removing workspaces (ADR 0008): refusals first, then git, then the row, then the branch.
 
 use std::path::Path;
 
@@ -29,7 +29,8 @@ impl Workspaces {
 
     /// Second half of removing workspace `id`. Runs the checks again, since the tree may have
     /// changed since [`Workspaces::begin_remove`], then removes the worktree (`--force` only
-    /// when `force`) and deletes the row. A folder workspace is forgotten and its files stay.
+    /// when `force`), deletes the row, and deletes the branch the workspace created when git
+    /// proves it merged. A folder workspace is forgotten and its files stay.
     ///
     /// A failure after the row is marked `removing` leaves it that way; calling
     /// [`Workspaces::begin_remove`] again finishes the job.
@@ -48,7 +49,8 @@ impl Workspaces {
             StoreWorkspaceKind::Worktree => {
                 let directory_kept = self.remove_worktree(&project, &row, force)?;
                 self.store.delete_workspace(&row.id)?;
-                (false, None, directory_kept)
+                let (deleted, reason) = self.delete_created_branch(&project, &row);
+                (deleted, reason, directory_kept)
             }
             StoreWorkspaceKind::Folder => {
                 self.store.delete_workspace(&row.id)?;
@@ -169,6 +171,28 @@ impl Workspaces {
             return Err(error.into());
         }
         Ok(false)
+    }
+
+    /// Deletes the branch a workspace created. Returns whether it was deleted and, when it was
+    /// kept, why. A branch this workspace did not create is never touched.
+    fn delete_created_branch(
+        &self,
+        project: &ProjectRow,
+        row: &WorkspaceRow,
+    ) -> (bool, Option<String>) {
+        match row.branch.as_deref() {
+            Some(branch) if row.created_branch => {
+                match self
+                    .git
+                    .delete_branch_if_merged(Path::new(&project.path), branch)
+                {
+                    Ok(true) => (true, None),
+                    Ok(false) => (false, Some("not merged".to_owned())),
+                    Err(error) => (false, Some(format!("git could not delete it: {error}"))),
+                }
+            }
+            _ => (false, None),
+        }
     }
 
     fn project_of(&self, row: &WorkspaceRow) -> Result<ProjectRow, DomainError> {

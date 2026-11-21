@@ -11,7 +11,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::WorkspaceState;
 
 use crate::fixture::{
-    Fixture, create_params, entries, expect_code, run_git,
+    Fixture, branch_exists, commit_file, create_params, entries, expect_code, run_git,
     worktree_count,
 };
 
@@ -40,8 +40,10 @@ fn removing_a_clean_worktree_deletes_its_directory_row_and_created_branch() {
         .expect("finish removal");
 
     assert_eq!(removed.workspace.id, ws.id);
+    assert!(removed.branch_deleted);
     assert_eq!(removed.branch_kept_reason, None);
     assert!(!Path::new(&ws.path).exists());
+    assert!(!branch_exists(&fx.repo(), "feature"));
     assert_eq!(worktree_count(&fx.repo()), 1);
     expect_code(
         fx.workspaces.show_workspace(&ws.id),
@@ -80,12 +82,14 @@ fn force_removes_a_dirty_worktree_after_the_refusal() {
         .workspaces
         .begin_remove("forced", true)
         .expect("begin with force");
-    let _removed = fx
+    let removed = fx
         .workspaces
         .finish_remove(&begun.id, true)
         .expect("finish with force");
 
+    assert!(removed.branch_deleted);
     assert!(!Path::new(&ws.path).exists());
+    assert!(!branch_exists(&fx.repo(), "forced"));
 }
 
 #[test]
@@ -154,12 +158,14 @@ fn a_missing_directory_is_removed_from_git_and_the_store() {
         .workspaces
         .begin_remove("ghost", false)
         .expect("begin removal of a missing workspace");
-    let _removed = fx
+    let removed = fx
         .workspaces
         .finish_remove(&begun.id, false)
         .expect("finish removal");
 
+    assert!(removed.branch_deleted);
     assert_eq!(worktree_count(&fx.repo()), 1);
+    assert!(!branch_exists(&fx.repo(), "ghost"));
     expect_code(
         fx.workspaces.show_workspace(&ghost.id),
         codes::WORKSPACE_NOT_FOUND,
@@ -177,12 +183,34 @@ fn a_missing_directory_is_also_removed_from_git_when_forced() {
         .workspaces
         .begin_remove("forced-ghost", true)
         .expect("begin with force");
-    let _removed = fx
+    let removed = fx
         .workspaces
         .finish_remove(&begun.id, true)
         .expect("finish with force");
 
+    assert!(removed.branch_deleted);
     assert_eq!(worktree_count(&fx.repo()), 1);
+    assert!(!branch_exists(&fx.repo(), "forced-ghost"));
+}
+
+#[test]
+fn a_branch_with_commits_outside_its_base_is_kept_as_not_merged() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = fx.create(&project.name, "unmerged");
+    commit_file(
+        Path::new(&ws.path),
+        "work.txt",
+        "work\n",
+        "work on unmerged",
+    );
+
+    let removed = fx.remove("unmerged");
+
+    assert!(!removed.branch_deleted);
+    assert_eq!(removed.branch_kept_reason.as_deref(), Some("not merged"));
+    assert!(branch_exists(&fx.repo(), "unmerged"));
+    assert!(!Path::new(&ws.path).exists());
 }
 
 #[test]
@@ -199,7 +227,9 @@ fn an_existing_branch_is_never_deleted() {
 
     let removed = fx.remove("keep-wt");
 
+    assert!(!removed.branch_deleted);
     assert_eq!(removed.branch_kept_reason, None);
+    assert!(branch_exists(&fx.repo(), "keep-me"));
 }
 
 #[test]
@@ -210,6 +240,7 @@ fn a_folder_workspace_is_forgotten_and_its_files_stay() {
 
     let removed = fx.remove("main");
 
+    assert!(!removed.branch_deleted);
     assert_eq!(removed.branch_kept_reason, None);
     assert!(removed.directory_kept);
     assert!(
@@ -237,11 +268,12 @@ fn an_interrupted_removal_resumes_when_removed_again() {
         .begin_remove("resume", false)
         .expect("begin again on a removing workspace");
     assert_eq!(again.state, WorkspaceState::Removing);
-    let _removed = fx
+    let removed = fx
         .workspaces
         .finish_remove(&ws.id, false)
         .expect("finish the interrupted removal");
 
+    assert!(removed.branch_deleted);
     assert!(!Path::new(&ws.path).exists());
 }
 
@@ -251,11 +283,12 @@ fn finish_alone_marks_and_removes_a_ready_workspace() {
     let project = fx.repo_project();
     let ws = fx.create(&project.name, "direct");
 
-    let _removed = fx
+    let removed = fx
         .workspaces
         .finish_remove(&ws.id, false)
         .expect("finish without begin");
 
+    assert!(removed.branch_deleted);
     assert!(!Path::new(&ws.path).exists());
     assert_eq!(worktree_count(&fx.repo()), 1);
 }
