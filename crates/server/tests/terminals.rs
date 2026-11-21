@@ -1,5 +1,5 @@
 //! Terminals over the wire: an in-process service on a temporary home, driven through the client crate. Terminals outlive
-//! their clients and end with the service.
+//! their clients, resume from offsets, and end with the service.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::traits::tokio::Stream as _;
-use massorca_client::{Client, ClientError, ConnectOptions};
+use massorca_client::{AttachUpdate, Client, ClientError, ConnectOptions, TerminalAttachment};
 use massorca_profile::{Profile, local_socket_name};
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::{
-    MAX_INPUT_BYTES, Terminal, TerminalCreateParams, TerminalState,
+    AttachMode, MAX_INPUT_BYTES, Terminal, TerminalAttachParams, TerminalCreateParams,
+    TerminalResizeParams, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{
@@ -136,6 +137,94 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
         rows: None,
         title: None,
         request_id: None,
+    }
+}
+
+fn attach_params(terminal: &str) -> TerminalAttachParams {
+    TerminalAttachParams {
+        terminal: terminal.to_owned(),
+        since: None,
+        cols: None,
+        rows: None,
+    }
+}
+
+/// A shell command that prints `left` followed by `right`, without the joined word in the typed text.
+fn joined_echo(left: &str, right: &str) -> String {
+    if cfg!(windows) {
+        format!("echo ('{left}'+'{right}')")
+    } else {
+        format!("echo {left}''{right}")
+    }
+}
+
+fn newline() -> &'static [u8] {
+    if cfg!(windows) { b"\r" } else { b"\n" }
+}
+
+/// Cursor position query (DSR 6) that ConPTY sends and waits on.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+
+fn count_occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+/// Reads the attachment's output until `needle` appears in it, and returns everything read. While a client is attached
+/// the service leaves cursor-position queries to it, so this answers each one, as a terminal emulator would.
+async fn read_until(
+    client: &Client,
+    terminal: &str,
+    attachment: &mut TerminalAttachment,
+    needle: &str,
+) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut seen = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let update = timeout(remaining, attachment.next())
+            .await
+            .unwrap_or_else(|_| panic!("{needle:?} did not appear in time"))
+            .expect("the attach stays open")
+            .expect("the attach reports no error");
+        match update {
+            AttachUpdate::Snapshot { bytes, .. } => seen.extend(bytes),
+            AttachUpdate::Output { bytes, .. } => {
+                for _ in 0..count_occurrences(&bytes, CURSOR_QUERY) {
+                    client
+                        .terminal_input(terminal, b"\x1b[1;1R")
+                        .await
+                        .expect("the cursor position answer is written");
+                }
+                seen.extend(bytes);
+            }
+            AttachUpdate::Exited { .. } => panic!("the terminal exited before {needle:?} appeared"),
+            AttachUpdate::Attached { .. } | AttachUpdate::Resized { .. } => {}
+        }
+        if contains(&seen, needle) {
+            return seen;
+        }
+    }
+}
+
+/// Reads the attach's first item, which announces how the attach started.
+async fn attached(attachment: &mut TerminalAttachment) -> (AttachMode, u64) {
+    match timeout(Duration::from_secs(10), attachment.next())
+        .await
+        .expect("the attach is announced")
+        .expect("the stream is open")
+        .expect("no error")
+    {
+        AttachUpdate::Attached { mode, offset, .. } => (mode, offset),
+        other => panic!("the first item is not attached: {other:?}"),
     }
 }
 
@@ -290,6 +379,164 @@ async fn attach_is_refused_when_the_client_did_not_offer_binary_frames() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn input_reaches_the_shell_and_the_attach_shows_its_output() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let mut attachment = client
+        .terminal_attach(&attach_params(&created.id))
+        .await
+        .expect("the attach opens");
+    attached(&mut attachment).await;
+    let mut command = joined_echo("ma", "rker").into_bytes();
+    command.extend_from_slice(newline());
+    client
+        .terminal_input(&created.id, &command)
+        .await
+        .expect("the input is written");
+
+    read_until(&client, &created.id, &mut attachment, "marker").await;
+    drop(attachment);
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_terminal_outlives_its_client_and_a_new_client_resumes_it() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let first = connect(home.path()).await;
+    let workspace = workspace(&first, home.path()).await;
+    let created = first
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let mut attachment = first
+        .terminal_attach(&attach_params(&created.id))
+        .await
+        .expect("the attach opens");
+    attached(&mut attachment).await;
+    let mut command = joined_echo("ma", "rker").into_bytes();
+    command.extend_from_slice(newline());
+    first
+        .terminal_input(&created.id, &command)
+        .await
+        .expect("the input is written");
+    read_until(&first, &created.id, &mut attachment, "marker").await;
+    let read_up_to = attachment.next_offset();
+    drop(attachment);
+    drop(first);
+
+    let second = connect(home.path()).await;
+    let still_live = second
+        .terminal_show(&created.id)
+        .await
+        .expect("the terminal is still listed");
+    assert_eq!(still_live.state, TerminalState::Live);
+
+    let mut fresh = second
+        .terminal_attach(&attach_params(&created.id))
+        .await
+        .expect("the attach opens");
+    let (mode, _) = attached(&mut fresh).await;
+    assert_eq!(mode, AttachMode::Snapshot);
+    read_until(&second, &created.id, &mut fresh, "marker").await;
+    drop(fresh);
+
+    let mut resumed = second
+        .terminal_attach(&TerminalAttachParams {
+            since: Some(read_up_to),
+            ..attach_params(&created.id)
+        })
+        .await
+        .expect("the resumed attach opens");
+    let (mode, offset) = attached(&mut resumed).await;
+    assert_eq!(mode, AttachMode::Resume);
+    assert_eq!(
+        offset, read_up_to,
+        "output resumes exactly where the client stopped"
+    );
+
+    let mut next_command = joined_echo("wor", "ld").into_bytes();
+    next_command.extend_from_slice(newline());
+    second
+        .terminal_input(&created.id, &next_command)
+        .await
+        .expect("the input is written");
+    read_until(&second, &created.id, &mut resumed, "world").await;
+
+    drop(resumed);
+    second
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_resize_reaches_every_attachment_and_the_terminal_keeps_one_size() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+    assert_eq!((created.cols, created.rows), (120, 40));
+
+    let mut attachment = client
+        .terminal_attach(&attach_params(&created.id))
+        .await
+        .expect("the attach opens");
+    attached(&mut attachment).await;
+    let resized = client
+        .terminal_resize(&TerminalResizeParams {
+            terminal: created.id.clone(),
+            cols: 100,
+            rows: 30,
+        })
+        .await
+        .expect("the resize is accepted");
+    assert_eq!((resized.cols, resized.rows), (100, 30));
+
+    let heard = timeout(Duration::from_secs(10), async {
+        loop {
+            match attachment.next().await {
+                Some(Ok(AttachUpdate::Resized { cols, rows })) => return (cols, rows),
+                Some(Ok(_)) => {}
+                other => panic!("the attach ended before the resize: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the resize is announced");
+    assert_eq!(heard, (100, 30));
+
+    let shown = client
+        .terminal_show(&created.id)
+        .await
+        .expect("the terminal is shown");
+    assert_eq!((shown.cols, shown.rows), (100, 30));
+    drop(attachment);
     client
         .terminal_close(&created.id)
         .await
