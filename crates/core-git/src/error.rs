@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 
 /// Why a git command did not produce the answer its caller asked for.
 #[derive(Debug, thiserror::Error)]
@@ -22,4 +23,8 @@ pub enum GitError {
     /// The command succeeded but its output did not have the expected shape.
     #[error("unexpected output from git {}: {reason}", .args.join(" "))]
     InvalidOutput { args: Vec<String>, reason: String },
+    /// The path has a line break, which `git worktree list --porcelain` cannot report
+    /// back unambiguously before Git 2.36.
+    #[error("unsupported worktree path {path:?}: it contains a line break")]
+    UnsupportedPath { path: PathBuf },
 }

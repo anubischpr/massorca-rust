@@ -157,6 +157,30 @@ fn add_with_a_missing_existing_branch_fails() {
 }
 
 #[test]
+fn add_refuses_a_path_with_a_line_break_before_git_runs() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    for name in ["line\nbreak", "carriage\rreturn"] {
+        let error = git()
+            .worktree_add(
+                &repo,
+                &fixture.sibling(name),
+                WorktreeAdd::NewBranch {
+                    branch: "never",
+                    base: None,
+                },
+            )
+            .expect_err("a line break in the path");
+        assert!(
+            matches!(error, GitError::UnsupportedPath { .. }),
+            "{error:?}"
+        );
+    }
+    assert!(!git().branch_exists(&repo, "never").expect("branch check"));
+    assert_eq!(git().worktree_list(&repo).expect("list").len(), 1);
+}
+
+#[test]
 fn list_of_a_fresh_repository_is_the_main_worktree_alone() {
     let fixture = Fixture::new();
     let repo = fixture.repo();

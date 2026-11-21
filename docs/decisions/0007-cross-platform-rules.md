@@ -28,7 +28,8 @@ Status: accepted, 2026-11-20.
   `branch -d` and `show-ref`, all older than 2.25.
   Output fields newer than 2.25 are absent on it: `locked` and `prunable` in
   `worktree list --porcelain` appear from Git 2.31, so a missing workspace is
-  found by its directory, never by `prunable`.
+  found by its directory, never by `prunable`. `worktree list` has no `-z` before
+  Git 2.36, so `worktree_add` refuses a path with a line break.
 
 **Windows specifics.**
 
