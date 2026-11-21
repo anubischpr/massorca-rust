@@ -1,7 +1,9 @@
-//! Creating workspaces (ADR 0008): a registration of an existing directory in a folder project.
+//! Creating workspaces (ADR 0008): a new worktree and branch in a git project, or a
+//! registration of an existing directory in a folder project.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use massorca_core_git::WorktreeAdd;
 use massorca_core_store::{
     ProjectKind as StoreKind, ProjectRow, StoreError, WorkspaceKind as StoreWorkspaceKind,
     WorkspaceRow, WorkspaceState as StoreWorkspaceState, new_id, now_ms,
@@ -47,9 +49,91 @@ impl Workspaces {
             ));
         }
         match project.kind {
-            StoreKind::Git => Err(not_yet("worktree")),
+            StoreKind::Git => self.create_worktree(&project, &params),
             StoreKind::Folder => self.create_folder(&project, &params),
         }
+    }
+
+    /// A new branch checked out in a new worktree, or an existing local branch when asked.
+    fn create_worktree(
+        &self,
+        project: &ProjectRow,
+        params: &WorkspaceCreateParams,
+    ) -> Result<Workspace, DomainError> {
+        let repo = Path::new(&project.path);
+        let branch = params.branch.as_deref().unwrap_or(params.name.as_str());
+        if !self.git.check_branch_name(repo, branch)? {
+            return Err(DomainError::new(
+                codes::WORKSPACE_NAME_INVALID,
+                format!("branch {branch:?} is not a valid git branch name"),
+            ));
+        }
+        let target = match params.path.as_deref() {
+            Some(text) => paths::absolute(text)?,
+            None => PathBuf::from(&project.workspaces_root).join(&params.name),
+        };
+        self.ensure_path_free(&target)?;
+        let base = params.base.as_deref().unwrap_or("HEAD");
+        if params.existing_branch {
+            if params.base.is_some() {
+                return Err(invalid(
+                    "base does not apply when an existing branch is checked out",
+                ));
+            }
+            if !self.git.branch_exists(repo, branch)? {
+                return Err(DomainError::new(
+                    codes::BRANCH_NOT_FOUND,
+                    format!("there is no local branch {branch:?}"),
+                ));
+            }
+        } else {
+            if self.git.branch_exists(repo, branch)?
+                || self.git.remote_branch_exists(repo, branch)?
+            {
+                return Err(DomainError::new(
+                    codes::BRANCH_EXISTS,
+                    format!("branch {branch:?} already exists"),
+                ));
+            }
+            if !self.git.ref_exists(repo, base)? {
+                return Err(DomainError::new(
+                    codes::BASE_NOT_FOUND,
+                    format!("base {base:?} does not resolve to a commit"),
+                ));
+            }
+        }
+
+        // Everything the row needs is computed before git runs, so nothing after the
+        // worktree exists can fail except the insert, which has its own rollback.
+        let created_branch = !params.existing_branch;
+        let stored_path = paths::path_text(&paths::canonical(&target))?;
+        let path_key = paths::path_key(&target);
+        let add = if params.existing_branch {
+            WorktreeAdd::ExistingBranch { branch }
+        } else {
+            WorktreeAdd::NewBranch {
+                branch,
+                base: Some(base),
+            }
+        };
+        self.git.worktree_add(repo, &target, add)?;
+
+        let row = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id.clone(),
+            kind: StoreWorkspaceKind::Worktree,
+            name: params.name.clone(),
+            path: stored_path,
+            path_key,
+            branch: Some(branch.to_owned()),
+            base_ref: created_branch.then(|| base.to_owned()),
+            created_branch,
+            state: StoreWorkspaceState::Ready,
+            request_id: params.request_id.clone(),
+            created_at: now_ms(),
+        };
+        self.store.insert_workspace(&row).map_err(refused_insert)?;
+        Ok(views::workspace(&row))
     }
 
     /// Registers an existing directory: the project's by default. Creates no files.
@@ -84,10 +168,38 @@ impl Workspaces {
         self.store.insert_workspace(&row).map_err(refused_insert)?;
         Ok(views::workspace(&row))
     }
+
+    /// `target` must be absent or an empty directory, and no workspace may own its path key.
+    fn ensure_path_free(&self, target: &Path) -> Result<(), DomainError> {
+        let claimed = self
+            .store
+            .find_workspace_by_path_key(&paths::path_key(target))?
+            .is_some();
+        if claimed || is_occupied(target) {
+            return Err(DomainError::new(
+                codes::WORKSPACE_PATH_TAKEN,
+                format!("{} is already in use", target.display()),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn invalid(message: &str) -> DomainError {
     DomainError::new(codes::REQUEST_INVALID_PARAMS, message)
+}
+
+/// A file, a link or a non-empty directory occupies a path; an absent path or an empty
+/// directory does not.
+fn is_occupied(target: &Path) -> bool {
+    match std::fs::symlink_metadata(target) {
+        Err(_) => false,
+        Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(target) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(_) => true,
+        },
+        Ok(_) => true,
+    }
 }
 
 /// The domain meaning of a row insert that the store refused.
@@ -103,12 +215,4 @@ fn refused_insert(error: StoreError) -> DomainError {
         ),
         other => other.into(),
     }
-}
-
-/// Refuses a kind of workspace whose creation has not landed yet.
-fn not_yet(kind: &str) -> DomainError {
-    DomainError::new(
-        codes::REQUEST_INVALID_PARAMS,
-        format!("{kind} workspaces are not available yet"),
-    )
 }
