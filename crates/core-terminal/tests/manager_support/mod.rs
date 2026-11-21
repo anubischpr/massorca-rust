@@ -383,3 +383,43 @@ impl Watch {
         }
     }
 }
+
+/// Whether the process `pid` has ended.
+#[cfg(target_os = "linux")]
+pub fn is_gone(pid: u32) -> bool {
+    // A zombie has ended; its parent just has not reaped it yet.
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit(')')
+            .next()
+            .and_then(|rest| rest.split_whitespace().next())
+            .is_some_and(|state| state == "Z" || state == "X"),
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn is_gone(pid: u32) -> bool {
+    use rustix::io::Errno;
+    use rustix::process::{Pid, test_kill_process};
+
+    let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return true;
+    };
+    test_kill_process(pid).is_err_and(|error| error == Errno::SRCH)
+}
+
+#[cfg(windows)]
+pub fn is_gone(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .stdin(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .expect("run tasklist");
+    !String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+}

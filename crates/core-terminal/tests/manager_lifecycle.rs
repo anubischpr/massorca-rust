@@ -5,7 +5,9 @@ mod manager_support;
 
 use std::time::{Duration, Instant};
 
-use manager_support::{Managed, SIZE, marker_command, script_shell, spec, wait_until, watch};
+use manager_support::{
+    Managed, SIZE, is_gone, line, marker_command, script_shell, spec, wait_until, watch,
+};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{ExitReason, ShellChoice, TerminalError, TerminalState};
 
@@ -74,6 +76,74 @@ async fn input_reaches_the_shell() {
 }
 
 #[tokio::test]
+async fn resize_updates_the_info_and_the_screen() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut first = watch(&manager, &info.id, None).await;
+
+    let size = PtySize {
+        cols: 100,
+        rows: 30,
+    };
+    let resized = manager.resize(&info.id, size).expect("resize");
+
+    assert_eq!((resized.cols, resized.rows), (100, 30));
+    let shown = manager.get(&info.id).expect("get");
+    assert_eq!((shown.cols, shown.rows), (100, 30));
+    while first.resized.is_empty() {
+        first.step().await;
+    }
+    assert_eq!(first.resized, vec![(100, 30)]);
+    let second = watch(&manager, &info.id, None).await;
+    assert_eq!(second.snapshot_size, (100, 30));
+}
+
+#[tokio::test]
+async fn a_shell_that_exits_by_itself_is_exited_with_its_code() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_output().await;
+
+    manager.input(&info.id, &line("exit 7")).expect("input");
+
+    let exited = watch.wait_for_exit().await;
+    assert_eq!(exited.state, TerminalState::Exited);
+    let exit = exited.exit.expect("an exit record");
+    assert_eq!(exit.code, Some(7));
+    assert_eq!(exit.reason, ExitReason::Exited);
+    assert!(exit.at_ms >= info.created_at_ms);
+    assert_eq!(
+        manager.get(&info.id).expect("get").state,
+        TerminalState::Exited
+    );
+    assert_eq!(manager.live_count(), 0);
+}
+
+#[tokio::test]
+async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_output().await;
+
+    let started = Instant::now();
+    let killed = manager.kill(&info.id, false).expect("kill");
+
+    assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
+    assert_eq!(killed.state, TerminalState::Exited);
+    assert_eq!(
+        killed.exit.expect("an exit record").reason,
+        ExitReason::Killed
+    );
+    let seen = watch.wait_for_exit().await;
+    assert_eq!(seen.state, TerminalState::Exited);
+}
+
+#[tokio::test]
 async fn force_kill_ends_the_shell_at_once() {
     let dir = temp_dir();
     let manager = Managed::new();
@@ -93,6 +163,98 @@ async fn force_kill_ends_the_shell_at_once() {
         ExitReason::Killed
     );
     assert_eq!(manager.live_count(), 0);
+}
+
+/// The pid a `child=<pid>` line names.
+fn child_pid(text: &str) -> Option<u32> {
+    let start = text.find("child=")? + "child=".len();
+    let digits: String = text[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    // The line is complete once something follows the digits.
+    if text[start + digits.len()..].is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+#[tokio::test]
+async fn kill_ends_a_background_grandchild() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    create.shell = Some(if cfg!(windows) {
+        ShellChoice {
+            program: "powershell.exe".to_owned(),
+            args: [
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','120','127.0.0.1' \
+                 -NoNewWindow -PassThru; Write-Output ('child=' + $p.Id + ';'); Start-Sleep 120",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }
+    } else {
+        ShellChoice {
+            program: "sh".to_owned(),
+            args: ["-c", "sleep 120 & echo \"child=$!;\"; sleep 120"]
+                .map(str::to_owned)
+                .to_vec(),
+        }
+    });
+    let info = manager.create(create).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_text(";").await;
+    let pid = loop {
+        if let Some(pid) = child_pid(&watch.visible.as_string()) {
+            break pid;
+        }
+        watch.step().await;
+    };
+    assert!(!is_gone(pid), "the grandchild {pid} runs before the kill");
+
+    manager.kill(&info.id, false).expect("kill");
+
+    wait_until("the grandchild to end", || is_gone(pid));
+}
+
+#[tokio::test]
+async fn close_kills_and_forgets() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+
+    let closed = manager.close(&info.id).expect("close");
+
+    assert_eq!(closed.state, TerminalState::Exited);
+    assert_eq!(
+        closed.exit.expect("an exit record").reason,
+        ExitReason::Killed
+    );
+    assert!(matches!(
+        manager.get(&info.id),
+        Err(TerminalError::NotFound)
+    ));
+    assert!(manager.list(None).is_empty());
+    assert!(matches!(
+        manager.input(&info.id, b"x"),
+        Err(TerminalError::NotFound)
+    ));
+    assert!(matches!(
+        manager.kill(&info.id, true),
+        Err(TerminalError::NotFound)
+    ));
+    assert!(matches!(
+        manager.close(&info.id),
+        Err(TerminalError::NotFound)
+    ));
+    assert!(matches!(
+        manager.attach(&info.id, None),
+        Err(TerminalError::NotFound)
+    ));
 }
 
 #[tokio::test]
