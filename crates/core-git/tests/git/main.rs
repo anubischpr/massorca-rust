@@ -8,6 +8,7 @@ mod fixture;
 mod index;
 mod log;
 mod refs;
+mod remote;
 mod repository;
 mod status;
 mod worktree_failures;
