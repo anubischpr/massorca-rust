@@ -66,6 +66,9 @@ fn conversation(
         Canvas::Team(TeamPage::Board(team)) => {
             teams::board_page(model, shell, BoardOwner::Team(team), window, cx)
         }
+        Canvas::Team(TeamPage::Project(team, project)) => {
+            teams::project_page(model, shell, team, project, window, cx)
+        }
         Canvas::Session(title) => {
             placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
         }

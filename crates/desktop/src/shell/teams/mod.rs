@@ -3,6 +3,7 @@
 mod board;
 mod dialogs;
 mod home;
+mod project;
 mod sidebar;
 
 use crate::model::teams::TeamId;
@@ -11,9 +12,10 @@ use massorca_ui::components::avatar::{Avatar, AvatarSize};
 use massorca_ui::tokens::{SPACE_1, TYPE_BODY_STRONG};
 use massorca_ui::{TextStyled, Theme};
 
-pub(super) use board::board_page;
-pub(super) use dialogs::{TeamDialog, team_dialog_view};
+pub(super) use board::{board_columns, board_page};
+pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
 pub(super) use home::bot_teams_home;
+pub(super) use project::project_page;
 pub(super) use sidebar::teams_list;
 
 /// The team pill of a team page: the team mark and its name (screens 4, A59).

@@ -33,28 +33,8 @@ pub(in crate::shell) fn board_page(
     let team = match owner {
         BoardOwner::Team(team) | BoardOwner::Project(team, _) => team,
     };
-    let Some(view) = state.board_view(owner) else {
-        return note("This Board is gone.", &theme).into_any_element();
-    };
     let team_name = state.team(team).map_or("", |team| team.name.as_str());
-    let mut columns = div()
-        .id("board-columns")
-        .flex()
-        .gap(px(SPACE_2))
-        .flex_1()
-        .min_h_0()
-        .overflow_x_scroll();
-    for column in view.columns {
-        let mut built = BoardColumn::new(
-            format!("board-column-{}", column.column.title()),
-            column.column.title(),
-        );
-        for card in column.cards {
-            let focus = row_focus(window, cx, format!("board-card-{}", card.id.0));
-            built = built.card(board_card(&card, column.column, owner, shell, focus));
-        }
-        columns = columns.child(built);
-    }
+    let columns = board_columns(model, shell, owner, window, cx);
     div()
         .flex()
         .flex_col()
@@ -77,6 +57,39 @@ pub(in crate::shell) fn board_page(
         .child(note("Tasks come from the Conference room", &theme))
         .child(columns)
         .into_any_element()
+}
+
+/// The four columns of a Board, each with its cards in order (4.3). A project's Board uses it too.
+pub(in crate::shell) fn board_columns(
+    model: &ShellModel,
+    shell: &WeakEntity<Shell>,
+    owner: BoardOwner,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let Some(view) = model.teams().board_view(owner) else {
+        return note("This Board is gone.", &theme).into_any_element();
+    };
+    let mut columns = div()
+        .id("board-columns")
+        .flex()
+        .gap(px(SPACE_2))
+        .flex_1()
+        .min_h_0()
+        .overflow_x_scroll();
+    for column in view.columns {
+        let mut built = BoardColumn::new(
+            format!("board-column-{}", column.column.title()),
+            column.column.title(),
+        );
+        for card in column.cards {
+            let focus = row_focus(window, cx, format!("board-card-{}", card.id.0));
+            built = built.card(board_card(&card, column.column, owner, shell, focus));
+        }
+        columns = columns.child(built);
+    }
+    columns.into_any_element()
 }
 
 /// One card: its status glyph and word, the bot (or Unassigned), the time, and its key handler.

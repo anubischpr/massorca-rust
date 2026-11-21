@@ -70,6 +70,8 @@ pub struct Shell {
     dialogs: WorkspaceDialogs,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
+    /// The confirm before a project is deleted, if one is open.
+    team_confirm: Option<teams::TeamConfirm>,
 }
 
 impl Shell {
@@ -141,6 +143,7 @@ impl Shell {
             _store_changes: store_changes,
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
+            team_confirm: None,
         }
     }
 
@@ -374,6 +377,10 @@ impl Render for Shell {
             .team_dialog
             .as_ref()
             .map(|dialog| teams::team_dialog_view(dialog, self.model.teams().hosts(), &shell, cx));
+        let team_confirm = self
+            .team_confirm
+            .as_ref()
+            .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
         div()
             .size_full()
             .flex()
@@ -428,5 +435,6 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
+            .when_some(team_confirm, |el, dialog| el.child(dialog))
     }
 }
