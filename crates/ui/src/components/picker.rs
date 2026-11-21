@@ -5,9 +5,30 @@
 //! and the rows it leaves, the active row, the chosen value and the folder being shown.
 //! `PickerView` draws it in an anchored popover and turns keys and clicks into events.
 
+use crate::components::button::{Button, ButtonVariant};
+use crate::components::empty_state::{EmptyState, EmptyStateVariant};
+use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::file_tree::matches_query;
 use crate::components::list_row::{ListMove, move_index};
-use gpui::SharedString;
+use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
+use crate::components::search_field::{SearchField, SearchFieldEvent};
+use crate::components::skeleton::{LineWidth, Skeleton};
+use crate::components::tooltip::{Tooltip, tooltip_view};
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::{FocusRing, StateFill, Surface};
+use crate::theme::{ActiveTheme, TextStyled, Theme};
+use crate::tokens::{
+    Color, RADIUS_MD, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY,
+    TYPE_CAPTION, TYPE_MONO_SM, TYPE_OVERLINE,
+};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, AppContext, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    HighlightStyle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, StyledText, Subscription,
+    UniformListScrollHandle, Window, div, px, uniform_list,
+};
+use std::fmt;
 use std::ops::Range;
 
 /// Folder crumbs shown in full; a longer path collapses its middle into "...".
@@ -80,6 +101,8 @@ pub enum PickerRow {
         active: bool,
         /// The current value.
         selected: bool,
+        /// A folder row, which shows the folder glyph in folder mode.
+        folder: bool,
     },
 }
 
@@ -261,8 +284,8 @@ impl PickerState {
         let mut rows = Vec::with_capacity(entries.len());
         let mut group: Option<&SharedString> = None;
         for (position, entry) in entries.iter().enumerate() {
-            let (label, matches, selected) = match entry {
-                PickerEntry::Parent => ("..".into(), Vec::new(), false),
+            let (label, matches, selected, folder) = match entry {
+                PickerEntry::Parent => ("..".into(), Vec::new(), false, true),
                 PickerEntry::Item(index) => {
                     let item = &self.items[*index];
                     if let Some(name) = &item.group
@@ -272,9 +295,10 @@ impl PickerState {
                     }
                     group = item.group.as_ref();
                     let selected = self.selected.as_ref() == Some(&item.key);
-                    (item.label.clone(), self.match_ranges(&item.label), selected)
+                    let matches = self.match_ranges(&item.label);
+                    (item.label.clone(), matches, selected, item.folder)
                 }
-                PickerEntry::Create(name) => (self.create_text(name), Vec::new(), false),
+                PickerEntry::Create(name) => (self.create_text(name), Vec::new(), false, false),
             };
             rows.push(PickerRow::Entry {
                 entry: entry.clone(),
@@ -282,6 +306,7 @@ impl PickerState {
                 matches,
                 active: position == self.active,
                 selected,
+                folder,
             });
         }
         rows
@@ -410,6 +435,565 @@ pub fn parent_location(location: &str) -> Option<String> {
     } else {
         head.to_owned()
     })
+}
+
+/// Rows the list shows before it scrolls.
+const MAX_VISIBLE_ROWS: usize = 8;
+/// Skeleton rows under the search field while the items load.
+const LOADING_ROWS: usize = 3;
+/// Fully transparent: no fill at rest, and no ring unless the row is active.
+const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
+
+/// What a picker reports to its owner. The picker has already moved its value or its folder
+/// by the time the owner hears of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickerEvent {
+    /// An item became the value. Read it with `state().selected_item()`.
+    Chosen(SharedString),
+    /// The Create row was chosen, with the typed name.
+    Created(SharedString),
+    /// Another folder is shown. The owner lists it and calls `set_location`.
+    Navigate(SharedString),
+    /// The query changed.
+    Query(SharedString),
+    /// The footer action was pressed.
+    Footer,
+    /// Retry was pressed in the error state.
+    Retry,
+}
+
+/// A field that opens a searchable panel in an anchored popover. The entity owns its
+/// [`PickerState`] and emits [`PickerEvent`]s.
+pub struct PickerView {
+    id: ElementId,
+    label: SharedString,
+    placeholder: SharedString,
+    state: PickerState,
+    footer: Option<SharedString>,
+    disabled: bool,
+    open: bool,
+    trigger_focus: FocusHandle,
+    search: Entity<SearchField>,
+    scroll: UniformListScrollHandle,
+    _search_events: Subscription,
+}
+
+impl EventEmitter<PickerEvent> for PickerView {}
+
+impl fmt::Debug for PickerView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PickerView")
+            .field("open", &self.open)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PickerView {
+    /// `label` is the field's accessible name, such as "Base branch". `placeholder` names the
+    /// choice in the trigger while nothing is chosen, such as "Choose a base branch".
+    pub fn new(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+        state: PickerState,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let query = state.query().to_owned();
+        let search_placeholder = format!("Search {}", state.noun());
+        let search = cx.new(|cx| SearchField::with_query(search_placeholder, &query, cx));
+        let search_events = cx.subscribe(&search, |this, _, event: &SearchFieldEvent, cx| {
+            this.on_search(event, cx);
+        });
+        Self {
+            id: id.into(),
+            label: label.into(),
+            placeholder: placeholder.into(),
+            state,
+            footer: None,
+            disabled: false,
+            open: false,
+            trigger_focus: cx.focus_handle(),
+            search,
+            scroll: UniformListScrollHandle::new(),
+            _search_events: search_events,
+        }
+    }
+
+    /// One ghost action under the list, for something outside it, such as "Browse folders".
+    pub fn footer(mut self, label: impl Into<SharedString>) -> Self {
+        self.footer = Some(label.into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn state(&self) -> &PickerState {
+        &self.state
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn set_items(&mut self, items: Vec<PickerItem>, cx: &mut Context<Self>) {
+        self.state.set_items(items);
+        cx.notify();
+    }
+
+    pub fn set_status(&mut self, status: PickerStatus, cx: &mut Context<Self>) {
+        self.state.set_status(status);
+        cx.notify();
+    }
+
+    /// Folder mode: shows `location`. The owner lists its items and calls `set_items`.
+    pub fn set_location(&mut self, location: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.state.set_location(location);
+        cx.notify();
+    }
+
+    fn on_search(&mut self, event: &SearchFieldEvent, cx: &mut Context<Self>) {
+        if let SearchFieldEvent::Search(query) = event {
+            self.state.set_query(query);
+            cx.emit(PickerEvent::Query(query.clone()));
+            cx.notify();
+        }
+    }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search
+            .update(cx, |search, cx| search.set_query("", window, cx));
+    }
+
+    fn open_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.disabled && !self.open {
+            self.open = true;
+            cx.notify();
+        }
+    }
+
+    /// Hides the panel. The popover has already returned focus to the trigger.
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+            cx.notify();
+        }
+    }
+
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss(cx);
+        window.focus(&self.trigger_focus, cx);
+    }
+
+    fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open {
+            self.close(window, cx);
+        } else {
+            self.open_panel(cx);
+        }
+    }
+
+    /// A value or a creation closes the panel; a folder change keeps it open.
+    fn commit(&mut self, choice: PickerChoice, window: &mut Window, cx: &mut Context<Self>) {
+        match choice {
+            PickerChoice::Item(key) => {
+                cx.emit(PickerEvent::Chosen(key));
+                self.close(window, cx);
+            }
+            PickerChoice::Create(name) => {
+                cx.emit(PickerEvent::Created(name));
+                self.close(window, cx);
+            }
+            PickerChoice::Navigate(path) => {
+                self.clear_search(window, cx);
+                cx.emit(PickerEvent::Navigate(path));
+                cx.notify();
+            }
+        }
+    }
+
+    fn choose_entry(&mut self, entry: &PickerEntry, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(choice) = self.state.choose(entry) {
+            self.commit(choice, window, cx);
+        }
+    }
+
+    fn reveal_active(&self) {
+        let row = self
+            .state
+            .rows()
+            .iter()
+            .position(|row| matches!(row, PickerRow::Entry { active: true, .. }));
+        if let Some(row) = row {
+            self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Keys of the open panel, caught before the search field so that Escape closes the
+    /// panel even with a query. Left, Right and Backspace act on folders only while the
+    /// search is empty; otherwise they move the caret.
+    fn on_panel_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let free = self.state.query().is_empty() && self.state.is_folder();
+        let handled = match key {
+            "down" | "up" => {
+                let movement = if key == "down" {
+                    ListMove::Next
+                } else {
+                    ListMove::Previous
+                };
+                self.state.move_active(movement);
+                self.reveal_active();
+                true
+            }
+            "enter" => {
+                if let Some(choice) = self.state.choose_active() {
+                    self.commit(choice, window, cx);
+                }
+                true
+            }
+            "escape" => {
+                self.close(window, cx);
+                true
+            }
+            "right" if free => {
+                if let Some(choice) = self.state.enter_folder() {
+                    self.commit(choice, window, cx);
+                }
+                true
+            }
+            "left" | "backspace" if free => {
+                if let Some(choice) = self.state.leave_folder() {
+                    self.commit(choice, window, cx);
+                }
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    fn on_trigger_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if event.keystroke.key == "down" {
+            self.open_panel(cx);
+            cx.stop_propagation();
+        }
+    }
+
+    fn panel(&self, entity: &Entity<Self>, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme.palette;
+        let mut panel = div()
+            .id((self.id.clone(), "panel"))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.on_panel_key(event, window, cx);
+            }))
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1))
+            .p(px(SPACE_2))
+            .text_style(TYPE_BODY)
+            .text_color(p.text.primary);
+        if let Some(note) = self.state.header_note() {
+            panel = panel.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.tertiary)
+                    .child(note.clone()),
+            );
+        }
+        panel = panel.child(self.search.clone());
+        if self.state.is_folder() {
+            let crumbs = self
+                .state
+                .crumbs()
+                .iter()
+                .map(|crumb| crumb.to_string())
+                .collect::<Vec<_>>()
+                .join(" / ");
+            panel = panel.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_style(TYPE_MONO_SM)
+                    .text_color(p.text.tertiary)
+                    .child(crumbs),
+            );
+        }
+        panel = panel.child(self.body(entity, theme));
+        if let Some(label) = self.footer.clone() {
+            panel = panel.child(self.footer_button(entity, label));
+        }
+        panel.into_any_element()
+    }
+
+    fn body(&self, entity: &Entity<Self>, theme: &Theme) -> AnyElement {
+        let status = self.state.status();
+        if status == PickerStatus::Loading {
+            return self.loading();
+        }
+        let mut body = div().flex().flex_col().min_h_0();
+        if status == PickerStatus::Error {
+            body = body.child(self.error(entity));
+        }
+        let rows = self.state.rows();
+        if !rows.is_empty() {
+            body = body.child(self.list(entity, theme, rows));
+        }
+        if status == PickerStatus::Ready && self.state.is_empty() {
+            body = body.child(self.empty());
+        }
+        body.into_any_element()
+    }
+
+    fn loading(&self) -> AnyElement {
+        div()
+            .id((self.id.clone(), "loading"))
+            .debug_selector(|| "picker-loading".into())
+            .role(Role::Status)
+            .aria_label(self.state.loading_text())
+            .flex()
+            .flex_col()
+            .children((0..LOADING_ROWS).map(|_| {
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(SIZE_CONTROL_COMPACT))
+                    .px(px(SPACE_2))
+                    .child(Skeleton::line(LineWidth::Most))
+            }))
+            .into_any_element()
+    }
+
+    fn error(&self, entity: &Entity<Self>) -> AnyElement {
+        let retry = entity.clone();
+        ErrorState::new((self.id.clone(), "error"), self.state.error_title())
+            .variant(ErrorStateVariant::Section)
+            .on_retry(move |_, cx| retry.update(cx, |_, cx| cx.emit(PickerEvent::Retry)))
+            .into_any_element()
+    }
+
+    fn empty(&self) -> AnyElement {
+        div()
+            .debug_selector(|| "picker-empty".into())
+            .p(px(SPACE_2))
+            .child(
+                EmptyState::new((self.id.clone(), "empty"), self.state.empty_title())
+                    .variant(EmptyStateVariant::Compact),
+            )
+            .into_any_element()
+    }
+
+    fn list(&self, entity: &Entity<Self>, theme: &Theme, rows: Vec<PickerRow>) -> AnyElement {
+        let count = rows.len();
+        let height = count.min(MAX_VISIBLE_ROWS) as f32 * SIZE_CONTROL_COMPACT;
+        let (view, theme) = (entity.clone(), *theme);
+        div()
+            .id((self.id.clone(), "listbox"))
+            .role(Role::ListBox)
+            .aria_label(self.label.clone())
+            .h(px(height))
+            .child(
+                uniform_list((self.id.clone(), "rows"), count, move |range, _, _| {
+                    range
+                        .map(|index| render_row(&view, &theme, index, &rows[index]))
+                        .collect()
+                })
+                .track_scroll(&self.scroll)
+                .size_full(),
+            )
+            .into_any_element()
+    }
+
+    fn footer_button(&self, entity: &Entity<Self>, label: SharedString) -> AnyElement {
+        let entity = entity.clone();
+        Button::new((self.id.clone(), "footer"), label)
+            .variant(ButtonVariant::Ghost)
+            .on_click(move |_, cx| entity.update(cx, |_, cx| cx.emit(PickerEvent::Footer)))
+            .into_any_element()
+    }
+}
+
+impl Render for PickerView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let entity = cx.entity();
+        let value = self.state.selected_item().map(|item| item.label.clone());
+        let shown = value.clone().unwrap_or_else(|| self.placeholder.clone());
+        let (fill, ink, edge) = if self.disabled {
+            (p.fill.disabled, p.text.disabled, p.border.disabled)
+        } else {
+            let ink = if value.is_some() {
+                p.text.primary
+            } else {
+                p.text.tertiary
+            };
+            let edge = if self.open {
+                p.border.focus
+            } else {
+                p.border.strong
+            };
+            (p.surface.sunken, ink, edge)
+        };
+        let mut trigger = div()
+            .id((self.id.clone(), "trigger"))
+            .track_focus(&self.trigger_focus)
+            .tab_stop(!self.disabled)
+            .focus_ring(&theme)
+            .role(Role::ComboBox)
+            .aria_label(self.label.clone())
+            .aria_expanded(self.open)
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(SPACE_2))
+            .h(px(SIZE_CONTROL_DEFAULT))
+            .px(px(SPACE_2))
+            .rounded(px(RADIUS_MD))
+            .bg(fill)
+            .border_color(edge)
+            .when(self.open, |el| el.border_2())
+            .when(!self.open, |el| el.border_1())
+            .text_style(TYPE_BODY)
+            .text_color(ink)
+            .child(div().flex_1().min_w_0().truncate().child(shown))
+            .child(
+                Icon::new(IconName::ChevronsUpDown)
+                    .size(IconSize::Small)
+                    .color(if self.open {
+                        p.accent.fg
+                    } else {
+                        p.text.secondary
+                    }),
+            );
+        if !self.disabled {
+            trigger = trigger
+                .cursor_pointer()
+                .state_fills(&theme, Surface::Raised)
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.toggle(window, cx);
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    this.on_trigger_key(event, cx);
+                }));
+        }
+        let dismiss = entity.clone();
+        let panel = self.panel(&entity, &theme, cx);
+        Popover::new((self.id.clone(), "popover"), trigger)
+            .open(self.open)
+            .variant(PopoverVariant::Picker)
+            .width(PopoverWidth::Medium)
+            .trigger_focus(self.trigger_focus.clone())
+            .initial_focus(self.search.read(cx).focus_handle(cx))
+            .on_dismiss(move |_, cx| dismiss.update(cx, |this, cx| this.dismiss(cx)))
+            .child(panel)
+    }
+}
+
+/// One row of the list: an overline, or an entry with its highlights and its glyph.
+fn render_row(
+    view: &Entity<PickerView>,
+    theme: &Theme,
+    index: usize,
+    row: &PickerRow,
+) -> AnyElement {
+    let p = theme.palette;
+    match row {
+        PickerRow::Group(name) => div()
+            .id(("picker-group", index))
+            .h(px(SIZE_CONTROL_COMPACT))
+            .px(px(SPACE_2))
+            .flex()
+            .items_center()
+            .text_style(TYPE_OVERLINE)
+            .text_color(p.text.tertiary)
+            .child(name.clone())
+            .into_any_element(),
+        PickerRow::Entry {
+            entry,
+            label,
+            matches,
+            active,
+            selected,
+            folder,
+        } => {
+            let fills = Surface::Overlay.fills(theme);
+            let rest = if *selected { fills.selected } else { CLEAR };
+            let highlight = if *active {
+                p.r#match.active_bg
+            } else {
+                p.r#match.bg
+            };
+            let highlights = matches.iter().map(|range| {
+                (
+                    range.clone(),
+                    HighlightStyle {
+                        background_color: Some(highlight.into()),
+                        ..Default::default()
+                    },
+                )
+            });
+            let (click_view, chosen) = (view.clone(), entry.clone());
+            let mut line = div()
+                .id(("picker-row", index))
+                .debug_selector(move || format!("picker-row-{index}"))
+                .role(Role::ListBoxOption)
+                .aria_label(label.clone())
+                .aria_selected(*selected)
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .h(px(SIZE_CONTROL_COMPACT))
+                .px(px(SPACE_2))
+                .rounded(px(RADIUS_MD))
+                .border_2()
+                .border_color(if *active { p.border.focus } else { CLEAR })
+                .bg(rest)
+                .hover(move |s| s.bg(fills.hover))
+                .active(move |s| s.bg(fills.pressed))
+                .cursor_pointer()
+                .tooltip(tooltip_view(Tooltip::new(label.clone())))
+                .on_click(move |_, window, cx| {
+                    click_view.update(cx, |this, cx| this.choose_entry(&chosen, window, cx));
+                });
+            let glyph = match entry {
+                PickerEntry::Parent => Some(IconName::ArrowLeft),
+                PickerEntry::Item(_) if *folder => Some(IconName::Folder),
+                PickerEntry::Item(_) => None,
+                PickerEntry::Create(_) => Some(IconName::Plus),
+            };
+            if let Some(glyph) = glyph {
+                line = line.child(
+                    Icon::new(glyph)
+                        .size(IconSize::Small)
+                        .color(p.text.secondary),
+                );
+            }
+            line = line.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(p.text.primary)
+                    .child(StyledText::new(label.clone()).with_highlights(highlights)),
+            );
+            if *selected {
+                line = line.child(
+                    Icon::new(IconName::Check)
+                        .size(IconSize::XSmall)
+                        .color(p.accent.fg),
+                );
+            }
+            line.into_any_element()
+        }
+    }
 }
 
 #[cfg(test)]
