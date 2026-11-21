@@ -157,7 +157,10 @@ mod tests {
         state.apply(
             StoreUpdate::Resync {
                 projects: vec![project("p2", "zeta"), project("p1", "alpha")],
-                workspaces: vec![workspace("w2", "p1", "later", 20), workspace("w1", "p1", "first", 10)],
+                workspaces: vec![
+                    workspace("w2", "p1", "later", 20),
+                    workspace("w1", "p1", "first", 10),
+                ],
             },
             Instant::now(),
         );
@@ -246,7 +249,11 @@ mod tests {
         state.apply(StoreUpdate::Connection(down.clone()), t0);
         let later = t0 + std::time::Duration::from_secs(3);
         state.apply(StoreUpdate::Connection(down), later);
-        assert_eq!(state.down_since, Some(t0), "a second down state keeps the first stamp");
+        assert_eq!(
+            state.down_since,
+            Some(t0),
+            "a second down state keeps the first stamp"
+        );
         state.apply(StoreUpdate::Connection(up), later);
         assert_eq!(state.down_since, None);
     }
