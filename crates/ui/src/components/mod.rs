@@ -10,6 +10,7 @@ pub mod checkbox;
 pub mod dialog;
 pub mod empty_state;
 pub mod error_state;
+pub mod extension_card;
 pub mod icon_button;
 pub mod kbd;
 pub mod list_row;
