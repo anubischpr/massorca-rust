@@ -6,8 +6,9 @@
 use crate::components::agent_icon::AgentKind;
 use crate::components::agent_status::AgentState;
 use crate::tokens::{SIZE_ICON_MD, SPACE_2};
-use gpui::SharedString;
+use gpui::{App, SharedString, Window};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 /// Children one parent lists before the rest are cut behind "Show N more".
 pub const CHILD_LIMIT: usize = 12;
@@ -332,6 +333,215 @@ pub fn next_matching(count: usize, from: usize, matches: impl Fn(usize) -> bool)
     (1..=count)
         .map(|step| (from + step) % count)
         .find(|index| matches(*index))
+}
+
+/// Where the tree sits. Workspaces rows show the model, branch and commits; Bot Teams shows the
+/// competence chips; the card form is one line per child.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TreeVariant {
+    #[default]
+    Workspaces,
+    BotTeams,
+    Card,
+}
+
+/// What the reader asked for. The owner keeps the collapsed set and acts on the rest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TreeAction {
+    /// Expand or collapse a node.
+    Toggle(SharedString),
+    /// Select a child: its thread opens in place of the transcript.
+    Select(SharedString),
+    /// Open a child's thread or session.
+    Open(SharedString),
+    /// Review the commits a child has ready.
+    Review(SharedString),
+    /// Show the rest of a long list under a node.
+    ShowMore(SharedString),
+    /// Open the subtree that folds below the depth limit.
+    Deeper(SharedString),
+}
+
+/// Receives the actions of a DelegationTree.
+pub type TreeActionHandler = Rc<dyn Fn(TreeAction, &mut Window, &mut App)>;
+
+/// The node at a path of child indexes.
+pub fn node_at<'a>(roots: &'a [DelegationNode], path: &[usize]) -> Option<&'a DelegationNode> {
+    let (first, rest) = path.split_first()?;
+    let mut node = roots.get(*first)?;
+    for index in rest {
+        node = node.children.get(*index)?;
+    }
+    Some(node)
+}
+
+/// The id of the node a row is about: the node itself, or the parent of a folded or cut list.
+pub fn row_id(roots: &[DelegationNode], row: &Row) -> Option<SharedString> {
+    match row {
+        Row::Node { path, .. } | Row::Deeper { path, .. } | Row::ShowMore { path, .. } => {
+            node_at(roots, path).map(|node| node.id.clone())
+        }
+        Row::Caption { .. } => None,
+    }
+}
+
+/// The title of a node row, for the typeahead.
+pub fn row_title(roots: &[DelegationNode], row: &Row) -> Option<SharedString> {
+    match row {
+        Row::Node { path, .. } => node_at(roots, path).map(|node| node.title.clone()),
+        _ => None,
+    }
+}
+
+/// Applies a key to the tree, moving `cursor` over the visible rows. Returns whether the key was
+/// used, and the action it asks for.
+pub fn handle_key(
+    roots: &[DelegationNode],
+    rows: &[Row],
+    cursor: &mut usize,
+    key: &str,
+) -> (bool, Option<TreeAction>) {
+    let last = rows.len().saturating_sub(1);
+    let current = *cursor;
+    let Some(row) = rows.get(current) else {
+        return (false, None);
+    };
+    let id = row_id(roots, row);
+    let node = matches!(row, Row::Node { .. });
+    let expanded = match row {
+        Row::Node { expanded, .. } => *expanded,
+        _ => None,
+    };
+    let typed = key
+        .chars()
+        .next()
+        .filter(|_| key.chars().count() == 1)
+        .map(|letter| letter.to_ascii_lowercase());
+    let action = match key {
+        "down" => {
+            *cursor = (current + 1).min(last);
+            None
+        }
+        "up" => {
+            *cursor = current.saturating_sub(1);
+            None
+        }
+        "home" => {
+            *cursor = 0;
+            None
+        }
+        "end" => {
+            *cursor = last;
+            None
+        }
+        "enter" if node => id.map(TreeAction::Open),
+        "right" if expanded == Some(false) => id.map(TreeAction::Toggle),
+        "left" if expanded == Some(true) => id.map(TreeAction::Toggle),
+        "right" if expanded == Some(true) => {
+            *cursor = (current + 1).min(last);
+            None
+        }
+        "left" => {
+            if let Some(parent) = parent_of(rows, current) {
+                *cursor = parent;
+            }
+            None
+        }
+        _ => match typed {
+            Some(letter) => {
+                let hit = next_matching(rows.len(), current, |index| {
+                    row_title(roots, &rows[index])
+                        .is_some_and(|title| title.to_lowercase().starts_with(letter))
+                });
+                if let Some(index) = hit {
+                    *cursor = index;
+                }
+                None
+            }
+            None => return (false, None),
+        },
+    };
+    (true, action)
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    /// A lead with two children; the first has one child of its own.
+    fn tree() -> Vec<DelegationNode> {
+        vec![
+            DelegationNode::new("lead", AgentKind::Claude, AgentState::Running, "Plan").children(
+                vec![
+                    DelegationNode::new("alpha", AgentKind::Codex, AgentState::Done, "Alpha")
+                        .children(vec![DelegationNode::new(
+                            "leaf",
+                            AgentKind::Gemini,
+                            AgentState::Done,
+                            "Leaf",
+                        )]),
+                    DelegationNode::new("write", AgentKind::Codex, AgentState::Waiting, "Write"),
+                ],
+            ),
+        ]
+    }
+
+    fn visible(roots: &[DelegationNode], collapsed: &[&str]) -> Vec<Row> {
+        let collapsed: HashSet<SharedString> =
+            collapsed.iter().map(|id| SharedString::from(*id)).collect();
+        rows(roots, &collapsed, &HashSet::new(), DEPTH_LIMIT)
+    }
+
+    #[test]
+    fn arrows_move_the_cursor_within_the_visible_rows() {
+        let roots = tree();
+        let rows = visible(&roots, &[]);
+        let mut cursor = 0;
+        assert_eq!(handle_key(&roots, &rows, &mut cursor, "down"), (true, None));
+        assert_eq!(cursor, 1);
+        handle_key(&roots, &rows, &mut cursor, "end");
+        assert_eq!(cursor, rows.len() - 1);
+        handle_key(&roots, &rows, &mut cursor, "down");
+        assert_eq!(cursor, rows.len() - 1);
+        handle_key(&roots, &rows, &mut cursor, "home");
+        assert_eq!(cursor, 0);
+        assert_eq!(handle_key(&roots, &rows, &mut cursor, "f5"), (false, None));
+    }
+
+    #[test]
+    fn right_and_left_fold_and_walk_the_tree() {
+        let roots = tree();
+        let folded = visible(&roots, &["alpha"]);
+        let mut cursor = 1;
+        assert_eq!(
+            handle_key(&roots, &folded, &mut cursor, "right"),
+            (true, Some(TreeAction::Toggle("alpha".into())))
+        );
+        let open = visible(&roots, &[]);
+        handle_key(&roots, &open, &mut cursor, "right");
+        assert_eq!(cursor, 2);
+        handle_key(&roots, &open, &mut cursor, "left");
+        assert_eq!(cursor, 1);
+        assert_eq!(
+            handle_key(&roots, &open, &mut cursor, "left"),
+            (true, Some(TreeAction::Toggle("alpha".into())))
+        );
+    }
+
+    #[test]
+    fn enter_opens_the_row_and_a_letter_jumps_to_the_next_title() {
+        let roots = tree();
+        let rows = visible(&roots, &[]);
+        let mut cursor = 3;
+        assert_eq!(
+            handle_key(&roots, &rows, &mut cursor, "enter"),
+            (true, Some(TreeAction::Open("write".into())))
+        );
+        handle_key(&roots, &rows, &mut cursor, "a");
+        assert_eq!(cursor, 1);
+        handle_key(&roots, &rows, &mut cursor, "w");
+        assert_eq!(cursor, 3);
+    }
 }
 
 #[cfg(test)]
