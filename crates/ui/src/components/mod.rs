@@ -38,6 +38,7 @@ pub mod segmented_control;
 pub mod select;
 pub mod session_summary_card;
 pub mod sheet;
+pub mod settings_row;
 pub mod sidebar_row;
 pub mod skeleton;
 pub mod splitter;

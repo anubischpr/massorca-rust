@@ -4,14 +4,70 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px}
 
 use super::{Story, variant};
 use crate::components::radio::{RadioGroup, RadioOption};
-use crate::tokens::SPACE_4;
+use crate::components::settings_row::{RowStatus, SettingsRow, SettingsSection};
+use crate::components::switch::Switch;
+use crate::tokens::{SPACE_4, SPACE_8};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Radio group",
-        spec: "Radio.md",
-        render: radio_story,
-    }]
+    vec![
+        Story {
+            name: "Radio group",
+            spec: "Radio.md",
+            render: radio_story,
+        },
+        Story {
+            name: "Settings row",
+            spec: "SettingsRow.md",
+            render: settings_row_story,
+        },
+    ]
+}
+
+fn settings_row_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let section = SettingsSection::new("gallery-section", "Notifications")
+        .description("Choose what reaches you while you are away from the app.")
+        .row(
+            SettingsRow::new("row-plain", "Agent finished")
+                .helper("When an agent ends a run that you started.")
+                .control(Switch::new("row-plain-switch", true))
+                .reset(|_, _| {}),
+        )
+        .row(
+            SettingsRow::new("row-saving", "Waiting for you")
+                .control(Switch::new("row-saving-switch", false))
+                .status(RowStatus::Saving),
+        )
+        .row(
+            SettingsRow::new("row-saved", "Errors")
+                .control(Switch::new("row-saved-switch", true))
+                .status(RowStatus::Saved),
+        )
+        .row(
+            SettingsRow::new("row-error", "App updates")
+                .helper("Ask before installing.")
+                .control(Switch::new("row-error-switch", false))
+                .status(RowStatus::Error(
+                    "Could not save. The previous value is kept.".into(),
+                )),
+        )
+        .row(
+            SettingsRow::new("row-disabled", "Usage data")
+                .disabled_reason("Not available yet")
+                .control(Switch::new("row-disabled-switch", false).disabled(true)),
+        );
+    let stacked = SettingsSection::new("gallery-stacked", "Narrow page").row(
+        SettingsRow::new("row-stacked", "Conversations folder")
+            .helper("Saved in ~/MassOrca/Conversations on this PC.")
+            .control(Switch::new("row-stacked-switch", true))
+            .stacked(true),
+    );
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_8))
+        .child(variant("Section with each status", section, cx))
+        .child(variant("Stacked below 560 px", stacked, cx))
+        .into_any_element()
 }
 
 fn theme_options() -> Vec<RadioOption> {
