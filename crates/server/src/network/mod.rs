@@ -15,7 +15,7 @@ use massorca_profile::Profile;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
-pub(crate) use auth::authenticate;
+pub(crate) use auth::{Authenticated, authenticate};
 pub use listen::{ListenSpec, ListenSpecError, NetworkConfig};
 pub(crate) use live::LiveGuard;
 pub(crate) use pairing::{DEFAULT_TTL, MAX_TTL};

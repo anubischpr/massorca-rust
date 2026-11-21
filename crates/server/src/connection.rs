@@ -53,10 +53,7 @@ pub(crate) async fn serve(
             handshake::accept(&mut inbound, &outbound, &state, max_frame_len, &origin).await
         {
             // Revoking the device closes this connection at once (decision 0041).
-            let mut live = negotiated
-                .principal
-                .device_id()
-                .map(|device| state.network.live.register(device));
+            let mut live = negotiated.live;
             let session = Arc::new(Session {
                 state,
                 connection_id: negotiated.connection_id,
