@@ -2,6 +2,7 @@
 //! theme, with a toggle to the other theme (decision 0025). Opened only by a
 //! person; automated runs shoot every story headlessly (`crates/ui/tests/screenshots.rs`).
 
+mod composer;
 mod controls;
 mod feedback;
 mod fields;
@@ -41,6 +42,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(layout::stories());
     all.extend(panels::stories());
     all.extend(session::stories());
+    all.extend(composer::stories());
     all
 }
 
