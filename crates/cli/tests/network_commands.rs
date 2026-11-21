@@ -291,3 +291,28 @@ fn host_commands_refuse_bad_input_before_they_contact_anything() {
     let discovery = home.json_ok("default", &["host", "discover"]);
     assert!(discovery["peers"].is_array());
 }
+
+#[test]
+fn paths_for_a_host_are_sent_as_typed_not_resolved_on_this_computer() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let _service = start_server(&server);
+    accept_ok(&client, &pair_offer(&server, &["--admin"]), "srv", "laptop");
+
+    // A relative path means nothing on the host, so the service refuses it as typed.
+    let refused = client
+        .run(
+            "client",
+            &with_json(&["--host", "srv", "project", "add", "some/dir", "--folder"]),
+        )
+        .code(1);
+    let error = &single_document(&refused)["error"];
+    assert_eq!(error["code"], "request.invalid_params");
+    let message = error["message"].as_str().expect("a message");
+    assert!(message.contains("some"), "{message}");
+    let here = std::env::current_dir().expect("the working directory");
+    assert!(
+        !message.contains(here.to_str().expect("utf-8")),
+        "the host saw a path of this computer: {message}"
+    );
+}
