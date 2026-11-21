@@ -2,9 +2,11 @@
 //! No GPUI types here, so the rules test as Rust.
 
 mod page;
+mod state;
 mod types;
 
 pub use page::TeamPage;
+pub use state::{NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
 pub use types::{
     AddressId, BoardOwner, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId,
     MemoryTab, Pick, Project, ProjectId, Routine, RoutineId, RunOutcome, Task, TaskId, Team,
