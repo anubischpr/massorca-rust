@@ -30,9 +30,14 @@ fn a_resize_reaches_the_shell_while_it_runs() {
         .expect("resize the terminal");
     if cfg!(windows) {
         type_text(&running.master, "mode con\r\n");
-        running.output.wait_until("the console size", |text| {
-            numbers_after_colons(text).contains(&40) && numbers_after_colons(text).contains(&120)
-        });
+        // Wait for the prompt after the report too: input typed while `mode con` runs is lost.
+        running
+            .output
+            .wait_until("the console size, then the prompt", |text| {
+                numbers_after_colons(text).contains(&40)
+                    && numbers_after_colons(text).contains(&120)
+                    && text.trim_end().ends_with('>')
+            });
         type_text(&running.master, "exit\r\n");
     } else {
         type_text(&running.master, "stty size\n");
