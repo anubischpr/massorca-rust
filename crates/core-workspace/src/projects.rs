@@ -102,6 +102,30 @@ impl Workspaces {
             .collect())
     }
 
+    /// The project `selector` names: id, then exact name, then path.
+    pub fn show_project(&self, selector: &str) -> Result<Project, DomainError> {
+        Ok(views::project(&self.resolve_project(selector)?))
+    }
+
+    /// Unregisters a project. Refused while it has workspaces, and never deletes its files.
+    pub fn remove_project(&self, selector: &str) -> Result<Project, DomainError> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_project(selector)?;
+        if self.store.count_workspaces(&row.id)? > 0 {
+            return Err(has_workspaces(&row.name));
+        }
+        match self.store.delete_project(&row.id) {
+            Ok(true) => Ok(views::project(&row)),
+            Ok(false) => Err(DomainError::new(
+                codes::PROJECT_NOT_FOUND,
+                format!("no project named {:?}", row.name),
+            )),
+            // A workspace inserted after the count is still referenced; the foreign key refuses.
+            Err(StoreError::Constraint { .. }) => Err(has_workspaces(&row.name)),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// The canonical toplevel of the repository containing `dir`, or `None` outside one.
     fn repository_root(&self, dir: &Path) -> Result<Option<PathBuf>, DomainError> {
         Ok(self.git.toplevel(dir)?.map(|top| paths::canonical(&top)))
@@ -115,3 +139,9 @@ fn not_git(dir: &Path) -> DomainError {
     )
 }
 
+fn has_workspaces(name: &str) -> DomainError {
+    DomainError::new(
+        codes::PROJECT_HAS_WORKSPACES,
+        format!("project {name:?} still has workspaces; remove them first"),
+    )
+}

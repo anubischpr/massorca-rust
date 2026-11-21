@@ -103,6 +103,21 @@ fn a_file_is_not_a_directory() {
 }
 
 #[test]
+fn an_explicit_name_replaces_the_directory_name() {
+    let fx = Fixture::new();
+    let mut params = project_add(&fx.repo());
+    params.name = Some("Alpha".into());
+
+    let project = fx.workspaces.add_project(params).expect("add project");
+
+    assert_eq!(project.name, "Alpha");
+    assert_eq!(
+        fx.workspaces.show_project("Alpha").expect("show").id,
+        project.id
+    );
+}
+
+#[test]
 fn the_same_path_cannot_be_registered_twice_under_another_name() {
     let fx = Fixture::new();
     fx.repo_project();
@@ -184,6 +199,32 @@ fn projects_are_listed_by_name() {
     assert_eq!(names, ["alpha", "zeta"]);
 }
 
+#[test]
+fn removing_a_project_never_deletes_its_files() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("notes");
+
+    let removed = fx
+        .workspaces
+        .remove_project(&project.id)
+        .expect("remove project");
+
+    assert_eq!(removed.id, project.id);
+    assert!(fx.path("notes").join("notes.txt").exists());
+    assert!(fx.workspaces.list_projects().expect("list").is_empty());
+}
+
+#[test]
+fn removing_an_unknown_project_is_not_found() {
+    let fx = Fixture::new();
+
+    expect_code(
+        fx.workspaces.remove_project("no-such-project"),
+        codes::PROJECT_NOT_FOUND,
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn a_path_that_differs_only_in_case_is_the_same_project() {
     let fx = Fixture::new();

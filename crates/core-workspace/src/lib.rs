@@ -9,6 +9,7 @@ mod error;
 mod names;
 mod paths;
 mod projects;
+mod selectors;
 mod views;
 mod workspaces;
 
