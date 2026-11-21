@@ -23,7 +23,6 @@ const MAX_REQUESTS_IN_FLIGHT: usize = 64;
 
 /// Where a connection came from, which decides how its principal is found.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // The network listener constructs `Network` in the next change.
 pub(crate) enum Origin {
     /// The owner-only local socket: the owner of the profile.
     Local,

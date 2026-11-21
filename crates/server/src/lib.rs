@@ -37,7 +37,7 @@ pub use event_bus::{EventBus, EventSubscription};
 pub use method::{
     ByteStreamSource, MethodError, MethodInfo, MethodRegistry, StreamItem, StreamSource,
 };
-pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState};
+pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, identity_paths};
 pub use owner::Owner;
 pub use permission::{Permission, Principal, Scopes, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};

@@ -12,7 +12,6 @@ use crate::network::pairing::Pairing;
 
 /// What one listener is doing now.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Set by the network listener in the next change.
 pub(crate) enum ListenerState {
     Starting,
     Waiting {
@@ -81,7 +80,6 @@ impl NetworkState {
         }
     }
 
-    #[allow(dead_code)] // Called by the network listener in the next change.
     pub(crate) fn set_listener(&self, index: usize, state: ListenerState) {
         if let Some(entry) = self.lock().get_mut(index) {
             entry.1 = state;

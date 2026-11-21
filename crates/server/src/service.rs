@@ -18,7 +18,7 @@ use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::service::ServiceInfo;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
 use crate::accept_loop;
@@ -28,7 +28,7 @@ use crate::error::ServiceError;
 use crate::event_bus::EventBus;
 use crate::features;
 use crate::instance_lock;
-use crate::network::NetworkState;
+use crate::network::{self, NetworkConfig};
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
 
@@ -47,6 +47,14 @@ pub struct Service;
 impl Service {
     /// Takes the profile lock, opens the store, binds the endpoint and starts serving. Fails with `AlreadyRunning` while another service holds the lock.
     pub async fn start(config: ServiceConfig) -> Result<RunningService, ServiceError> {
+        Self::start_with_network(config, NetworkConfig::default()).await
+    }
+
+    /// As `start`, and also listens on the network as `network` says (decision 0045).
+    pub async fn start_with_network(
+        config: ServiceConfig,
+        network: NetworkConfig,
+    ) -> Result<RunningService, ServiceError> {
         let ServiceConfig {
             profile,
             server_name,
@@ -59,6 +67,7 @@ impl Service {
         let store = open_store(profile.store_path()).await?;
         let listener = bind_endpoint_when_released(&profile).await?;
 
+        let (network_state, acceptor) = network::prepare(&profile, &network, &server_name)?;
         let registries = Registries::default();
         let registrations = features::register_core(&registries)?;
         let (shutdown, signal) = shutdown::channel();
@@ -80,7 +89,7 @@ impl Service {
             registries,
             workspaces,
             terminals: terminals.clone(),
-            network: NetworkState::new(None, &[]),
+            network: network_state,
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
@@ -96,11 +105,12 @@ impl Service {
             terminals_signal.wait().await;
             let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
         });
+        let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
             accept_loop::run(
                 listener,
-                JoinSet::new(),
+                listeners,
                 accept_state,
                 signal,
                 lock,
