@@ -446,3 +446,22 @@ fn ignored_files_refuse_removal_until_their_own_waiver_is_given() {
         .expect("finish with both waivers");
     assert!(!Path::new(&ws.path).exists());
 }
+
+#[test]
+fn a_check_that_git_cannot_run_returns_the_row_to_ready() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = fx.create(&project.name, "broken");
+    // A .git file that points nowhere leaves git unable to read the worktree at all.
+    fs::write(
+        Path::new(&ws.path).join(".git"),
+        "gitdir: /no/such/git/dir
+",
+    )
+    .expect("break the .git file");
+
+    let outcome = fx.workspaces.begin_remove("broken", RemovalWaivers::NONE);
+
+    assert!(outcome.is_err(), "git cannot read the worktree");
+    assert_eq!(state_of(&fx, &ws.id), WorkspaceState::Ready);
+}

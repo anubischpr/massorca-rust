@@ -110,8 +110,8 @@ impl Workspaces {
         Ok(row)
     }
 
-    /// Runs the checks. A refusal puts the row back to `ready`, because no file was touched;
-    /// any other failure leaves it `removing` so the removal can be resumed.
+    /// Runs the checks. The checks touch no file, so any failure, a refusal or git unable to run,
+    /// puts the row back to `ready`. Only a failure after git has acted leaves it `removing`.
     fn check_or_restore(
         &self,
         row: &WorkspaceRow,
@@ -119,12 +119,11 @@ impl Workspaces {
     ) -> Result<(), DomainError> {
         match self.check_removable(row, waivers) {
             Ok(()) => Ok(()),
-            Err(error) if is_refusal(error.code()) => {
+            Err(error) => {
                 self.store
                     .set_workspace_state(&row.id, StoreWorkspaceState::Ready)?;
                 Err(error)
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -261,15 +260,4 @@ impl Workspaces {
             )
         })
     }
-}
-
-/// The refusals, which leave the workspace as it was before the removal began.
-fn is_refusal(code: &str) -> bool {
-    matches!(
-        code,
-        codes::WORKSPACE_DIRTY
-            | codes::WORKSPACE_IGNORED_FILES
-            | codes::WORKSPACE_LOCKED
-            | codes::WORKSPACE_MAIN_WORKTREE
-    )
 }
