@@ -4,6 +4,7 @@ pub mod canvas;
 pub mod morph;
 pub mod navigation;
 pub mod palette;
+pub mod palette_recent;
 pub mod rail;
 pub mod region_cycle;
 pub mod regions;

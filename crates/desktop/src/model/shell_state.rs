@@ -4,6 +4,7 @@
 use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
+use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
@@ -30,6 +31,8 @@ pub struct ShellModel {
     usage_popover: Option<usize>,
     /// The Status bar items this window hides.
     status_items: StatusItemVisibility,
+    /// The commands and workspaces the palette ran last, for its Recent rows.
+    recent: RecentActions,
 }
 
 impl ShellModel {
@@ -43,6 +46,7 @@ impl ShellModel {
             palette: None,
             usage_popover: None,
             status_items: StatusItemVisibility::default(),
+            recent: RecentActions::default(),
         }
     }
 
@@ -233,7 +237,10 @@ impl ShellModel {
         if self.palette.is_some() {
             self.palette = None;
         } else {
-            self.palette = Some(PaletteModel::new(palette_items(&self.snapshot)));
+            let all = palette_items(&self.snapshot);
+            let mut items = self.recent.rows(&all);
+            items.extend(all);
+            self.palette = Some(PaletteModel::new(items));
         }
     }
 
@@ -263,6 +270,7 @@ impl ShellModel {
     /// palette open and returns nothing.
     pub fn confirm_palette(&mut self) -> Option<PaletteAction> {
         let action = self.palette.as_ref()?.confirm()?.clone();
+        self.recent.record(&action);
         self.palette = None;
         Some(action)
     }

@@ -4,6 +4,7 @@ use super::workspace_dialogs::MenuTarget;
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
 use crate::model::navigation::{Mode, Page};
+use crate::model::palette::PaletteGroup;
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
@@ -237,6 +238,8 @@ fn the_arrow_keys_move_the_active_palette_row(cx: &mut TestAppContext) {
     draw(cx);
     cx.simulate_keystrokes(palette_key());
     draw(cx);
+    cx.simulate_input("t");
+    draw(cx);
     cx.simulate_keystrokes("down");
     let active = shell.read_with(cx, |shell, _| {
         shell
@@ -423,4 +426,26 @@ fn the_menu_key_on_the_status_bar_opens_the_visibility_menu(cx: &mut TestAppCont
     cx.simulate_keystrokes("menu");
     draw(cx);
     assert!(!status_menu_rows(&shell, cx).is_empty());
+}
+
+#[gpui::test]
+fn a_command_run_from_the_palette_comes_back_under_recent(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    cx.simulate_input("theme");
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    let first = shell.read_with(cx, |shell, _| {
+        let palette = shell.model().palette().expect("the palette is open");
+        let found = palette.matches().first().expect("a recent row is listed");
+        let item = &palette.items()[found.item];
+        (item.group, item.title.clone())
+    });
+    assert_eq!(first, (PaletteGroup::Recent, "Toggle theme".to_owned()));
 }

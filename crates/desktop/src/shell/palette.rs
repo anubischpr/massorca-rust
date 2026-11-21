@@ -6,7 +6,7 @@ use super::actions::{PaletteDown, PaletteUp};
 use super::rail::agent_kind;
 use super::sidebar_rows::glyph_state;
 use crate::model::palette::{
-    PaletteGroup, PaletteItem, PaletteMatch, PaletteModel, highlight_ranges,
+    PaletteAction, PaletteGroup, PaletteItem, PaletteMatch, PaletteModel, highlight_ranges,
 };
 use gpui::{
     AnyElement, Context, Div, Entity, HighlightStyle, IntoElement, MouseButton, MouseDownEvent,
@@ -82,7 +82,7 @@ fn panel(
         let active = index == palette.active_index();
         results = results.child(row(index, item, found, active, shell, theme));
     }
-    if let Some(text) = palette.no_match_text() {
+    if let Some(text) = palette.no_match_text().or_else(|| palette.empty_text()) {
         results = results.child(
             div()
                 .px(px(SPACE_2))
@@ -194,10 +194,10 @@ fn leading(item: &PaletteItem, theme: &Theme) -> AnyElement {
             .size(AgentIconSize::Small)
             .into_any_element();
     }
-    let name = match item.group {
-        PaletteGroup::Workspaces => IconName::Folder,
-        PaletteGroup::Commands => IconName::Command,
-        PaletteGroup::Sessions | PaletteGroup::Tabs => IconName::Square,
+    let name = match &item.action {
+        PaletteAction::OpenWorkspace(_) => IconName::Folder,
+        PaletteAction::Command(_) => IconName::Command,
+        PaletteAction::OpenSession(_) => IconName::Square,
     };
     Icon::new(name)
         .size(IconSize::Small)
