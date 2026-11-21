@@ -6,15 +6,19 @@
 
 pub mod policy;
 
+mod chrome;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, KeyBinding, SharedString, Subscription, Task,
-    Window, actions,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, KeyBinding, SharedString,
+    Subscription, Task, Window, actions,
 };
 
+use crate::components::menu::MenuView;
 use crate::components::model_picker::{Choice, ModelPicker, ModelPickerEvent, PickerState};
+use crate::components::popover::TriggerBounds;
 use crate::components::text_editing::text_area::{TextArea, TextAreaEvent, TextAreaKey};
 use crate::icon::IconName;
 use crate::tokens::{SIZE_COMPOSER_MAX_HEIGHT, SIZE_COMPOSER_MIN_HEIGHT};
@@ -85,14 +89,26 @@ pub enum ComposerEvent {
 pub struct Composer {
     text: Entity<TextArea>,
     picker: Entity<ModelPicker>,
+    attachments: Vec<Attachment>,
+    access: Vec<AccessMode>,
+    access_index: usize,
+    agent_name: SharedString,
+    voice: bool,
+    primary_focus: FocusHandle,
+    access_focus: FocusHandle,
     agent_busy: bool,
     host_confirmed: bool,
     disabled_reason: Option<SharedString>,
+    error: Option<SharedString>,
     enter_inserts_newline: bool,
     hint_shown: bool,
     /// Keeps the escape hint's timer alive; clearing the hint drops it and cancels the timer.
     _hint_timer: Option<Task<()>>,
     history: SentHistory,
+    access_trigger: TriggerBounds,
+    access_menu: Option<(Entity<MenuView>, Subscription)>,
+    attach_trigger: TriggerBounds,
+    attach_menu: Option<(Entity<MenuView>, Subscription)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -109,7 +125,7 @@ impl std::fmt::Debug for Composer {
 impl EventEmitter<ComposerEvent> for Composer {}
 
 impl Composer {
-    pub fn new(picker: PickerState, cx: &mut Context<Self>) -> Self {
+    pub fn new(picker: PickerState, access: Vec<AccessMode>, cx: &mut Context<Self>) -> Self {
         let text = cx.new(|cx| {
             TextArea::new(cx)
                 .id("composer-text")
@@ -128,13 +144,25 @@ impl Composer {
         Self {
             text,
             picker,
+            attachments: Vec::new(),
+            access,
+            access_index: 0,
+            agent_name: "Claude".into(),
+            voice: true,
+            primary_focus: cx.focus_handle().tab_stop(true),
+            access_focus: cx.focus_handle().tab_stop(true),
             agent_busy: false,
             host_confirmed: true,
             disabled_reason: None,
+            error: None,
             enter_inserts_newline: false,
             hint_shown: false,
             _hint_timer: None,
             history: SentHistory::default(),
+            access_trigger: TriggerBounds::default(),
+            access_menu: None,
+            attach_trigger: TriggerBounds::default(),
+            attach_menu: None,
             _subscriptions: vec![text_events, picker_events],
         }
     }
@@ -238,6 +266,7 @@ impl Composer {
             return;
         }
         self.history.push(&text);
+        self.error = None;
         self.clear_hint();
         self.text.update(cx, |area, cx| area.clear(cx));
         let event = if queue {
