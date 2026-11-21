@@ -10,7 +10,9 @@ publish.workspace = true
 [dependencies]
 portable-pty.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
+uuid.workspace = true
 vt100.workspace = true
 
 [target.'cfg(unix)'.dependencies]
@@ -22,6 +24,7 @@ win32job.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true

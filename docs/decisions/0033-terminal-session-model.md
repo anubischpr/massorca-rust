@@ -26,9 +26,11 @@ proof that its work died.
 - **States.** `live` from spawn until the process is reaped, then `exited`
   with `exit { code?, signal?, reason, at_ms }`. `unverifiable` is reserved for
   hosts the service cannot currently reach (remote, Phase 3); a local
-  terminal never reports it, because the service is the parent of the
-  process and its wait is proof. A failed wait is reported as `unverifiable`,
-  never as `exited`.
+  terminal reports it only when its wait fails, because the service is the
+  parent of the process and its wait is proof. A failed wait is reported as
+  `unverifiable`, never as `exited`: the terminal stays listed, counted as
+  live, attachable, and accepts input, resize and kill, until a later wait
+  reaps it.
 - **Exited terminals stay listed** until `terminal.close`, so a client that
   reconnects sees how a terminal ended and can still attach to read its last
   screen. At most 64 exited terminals are kept; the oldest are forgotten
@@ -42,7 +44,8 @@ proof that its work died.
   request first, then forced after 5 s, or forced at once with `force`.
   `terminal.close` kills if needed and forgets the terminal.
 - **Service stop ends terminals.** `service.shutdown`, Ctrl+C or SIGTERM kill
-  every terminal (graceful, bounded by the service's 5 s shutdown budget) and
+  every terminal (graceful with a 2 s grace, so it fits the service's 5 s
+  shutdown budget) and
   nothing is restored on the next start. If the service process dies
   abruptly, the operating system ends the trees: the job object closes on
   Windows, the PTY hangs up on Unix (0031).
