@@ -3185,7 +3185,6 @@ name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
- "massorca-protocol",
  "tempfile",
  "thiserror 2.0.21",
  "win32job",
