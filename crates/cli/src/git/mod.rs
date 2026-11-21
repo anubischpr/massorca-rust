@@ -1,5 +1,6 @@
 //! `massorca git ...`: the `git/1` methods on a workspace, one module per command group (decision 0010).
 
+mod commit;
 mod diff;
 mod index;
 mod log;
@@ -23,6 +24,8 @@ pub enum GitCommand {
     Unstage(index::PathsArgs),
     /// Discards changes to files. Refuses to delete untracked files or drop staged changes unless told to.
     Discard(index::DiscardArgs),
+    /// Commits the staged changes, or amends HEAD; hooks run.
+    Commit(commit::CommitArgs),
     /// Lists the files a comparison changes, with line counts.
     Diff(diff::DiffArgs),
     /// Shows the history, newest first, a page at a time.
@@ -59,6 +62,7 @@ pub async fn execute(
         GitCommand::Stage(args) => index::run_stage(&client, args, output).await,
         GitCommand::Unstage(args) => index::run_unstage(&client, args, output).await,
         GitCommand::Discard(args) => index::run_discard(&client, args, output).await,
+        GitCommand::Commit(args) => commit::run(&client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,

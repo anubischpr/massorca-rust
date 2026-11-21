@@ -28,6 +28,10 @@ impl GitService {
         git(&repo, &["init", "-q"]);
         git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git(&repo, &["config", "core.autocrlf", "false"]);
+        // Commits the service makes use this identity, whatever the machine's global config holds.
+        git(&repo, &["config", "user.name", "t"]);
+        git(&repo, &["config", "user.email", "t@example.invalid"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
         std::fs::write(repo.join("README.md"), "hello\n").expect("write readme");
         git(&repo, &["add", "README.md"]);
         git(&repo, &["commit", "-q", "-m", "initial"]);

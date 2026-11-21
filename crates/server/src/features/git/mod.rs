@@ -1,5 +1,6 @@
 //! The `git/1` capability (decisions 0010-0015): one module per command group, sharing workspace resolution here.
 
+mod commit;
 mod diff;
 mod index;
 mod log;
@@ -29,6 +30,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(diff::register(registries)?);
     handles.extend(log::register(registries)?);
     handles.extend(index::register(registries)?);
+    handles.extend(commit::register(registries)?);
     Ok(handles)
 }
 

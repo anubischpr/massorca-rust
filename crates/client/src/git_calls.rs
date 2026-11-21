@@ -1,5 +1,6 @@
 //! Typed helpers over the `git/1` methods (decision 0010).
 
+use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{
     self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
 };
@@ -39,6 +40,11 @@ impl Client {
         params: &GitDiscardParams,
     ) -> Result<GitDiscarded, ClientError> {
         self.call(index::DISCARD, params).await
+    }
+
+    /// `git.commit`: commits the staged changes, or amends HEAD.
+    pub async fn git_commit(&self, params: &GitCommitParams) -> Result<GitCommitted, ClientError> {
+        self.call(commit::COMMIT, params).await
     }
 
     /// `git.log`: one page of history; pass `next_cursor` back for the next page.
