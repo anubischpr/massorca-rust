@@ -1,15 +1,32 @@
 //! Table: a data table of comparable rows (docs/design/components/Table.md).
 //!
 //! `TableState` holds the rules without a window: the sort cycle, the roving cursor,
-//! one selected row, row checkboxes and the loading, empty and error statuses. Rows
-//! carry their own keys, so selection and checkboxes survive a re-sort.
+//! one selected row, row checkboxes and the loading, empty and error statuses. `TableView`
+//! draws them and turns keys and clicks into events. Rows carry their own keys, so
+//! selection and checkboxes survive a re-sort.
 
-use crate::components::agent_icon::AgentKind;
-use crate::components::agent_status::AgentState;
-use crate::icon::IconName;
-use gpui::SharedString;
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
+use crate::components::button::ButtonSize;
+use crate::components::checkbox::Checkbox;
+use crate::components::icon_button::IconButton;
+use crate::components::tooltip::{Tooltip, tooltip_view};
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::Surface;
+use crate::theme::{ActiveTheme, TextStyled, Theme};
+use crate::tokens::{
+    BORDER_WIDTH_THICK, Color, Palette, SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_DEFAULT, SPACE_1,
+    SPACE_2, TYPE_BODY, TYPE_LABEL,
+};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
+    SharedString, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window, div, px,
+    uniform_list,
+};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fmt;
 
 /// Narrowest a column gets before the table scrolls sideways (Table.md, Responsive).
 const COLUMN_MIN_WIDTH: f32 = 96.0;
@@ -477,6 +494,501 @@ impl TableState {
     fn clamp_cursor(&mut self) {
         self.cursor.row = self.cursor.row.min(self.rows.len());
         self.cursor.column = self.cursor.column.min(self.columns.len().saturating_sub(1));
+    }
+}
+
+/// Row height of a table (Table.md, Variants and sizes).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TableDensity {
+    /// 28 px rows (`size.control.default`).
+    #[default]
+    Default,
+    /// 32 px rows (`size.control.comfortable`).
+    Comfortable,
+}
+
+impl TableDensity {
+    fn height(self) -> f32 {
+        match self {
+            Self::Default => SIZE_CONTROL_DEFAULT,
+            Self::Comfortable => SIZE_CONTROL_COMFORTABLE,
+        }
+    }
+}
+
+/// What a table reports to its owner. The table has already sorted, selected or toggled
+/// the row by the time the owner hears of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TableEvent {
+    /// The sort changed; `None` clears it.
+    Sorted(Option<TableSort>),
+    /// A body row was clicked and is now selected.
+    Selected(SharedString),
+    /// Enter opened a body row.
+    Opened(SharedString),
+    /// A row's checkbox changed.
+    Checked { row: SharedString, checked: bool },
+    /// A row's action button was pressed.
+    Action { row: SharedString, column: usize },
+}
+
+/// Fully transparent: no fill at rest, and no focus ring until the cell has the cursor.
+const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
+/// The selection column is one 28 px control wide.
+const SELECTION_WIDTH: f32 = SIZE_CONTROL_DEFAULT;
+
+/// A data table. The entity owns its [`TableState`] and emits [`TableEvent`]s; the owner
+/// subscribes with `cx.subscribe`.
+pub struct TableView {
+    id: ElementId,
+    label: SharedString,
+    state: TableState,
+    density: TableDensity,
+    focus: FocusHandle,
+    scroll: UniformListScrollHandle,
+}
+
+impl EventEmitter<TableEvent> for TableView {}
+
+impl fmt::Debug for TableView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TableView")
+            .field("id", &self.id)
+            .field("cursor", &self.state.cursor())
+            .field("status", self.state.status())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TableView {
+    /// `label` names the table for assistive tech, usually its view heading.
+    pub fn new(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        state: TableState,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            state,
+            density: TableDensity::default(),
+            focus: cx.focus_handle(),
+            scroll: UniformListScrollHandle::new(),
+        }
+    }
+
+    pub fn density(mut self, density: TableDensity) -> Self {
+        self.density = density;
+        self
+    }
+
+    pub fn state(&self) -> &TableState {
+        &self.state
+    }
+
+    /// The keyboard focus of the table, which is one Tab stop.
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    /// Replaces the rows. The sort, selection and checkboxes stay where their keys still exist.
+    pub fn set_rows(&mut self, rows: Vec<TableRow>, cx: &mut Context<Self>) {
+        self.state.set_rows(rows);
+        cx.notify();
+    }
+
+    fn sort_by(&mut self, column: usize, cx: &mut Context<Self>) {
+        if self.state.cycle_sort(column) {
+            cx.emit(TableEvent::Sorted(self.state.sort()));
+            cx.notify();
+        }
+    }
+
+    fn select_row(&mut self, key: &SharedString, cx: &mut Context<Self>) {
+        if self.state.select(key) {
+            self.state.focus_row(key);
+            cx.emit(TableEvent::Selected(key.clone()));
+            cx.notify();
+        }
+    }
+
+    fn toggle_check(&mut self, key: &SharedString, cx: &mut Context<Self>) {
+        if let Some(checked) = self.state.toggle_check(key) {
+            cx.emit(TableEvent::Checked {
+                row: key.clone(),
+                checked,
+            });
+            cx.notify();
+        }
+    }
+
+    fn press(&mut self, press: Press, cx: &mut Context<Self>) {
+        match self.state.activate(press) {
+            Some(Activation::Sort(column)) => self.sort_by(column, cx),
+            Some(Activation::Open(row)) => cx.emit(TableEvent::Opened(row)),
+            Some(Activation::Check(row)) => self.toggle_check(&row, cx),
+            None => {}
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let handled = match (cell_move(key), key) {
+            (Some(movement), _) => {
+                self.state.move_cursor(movement);
+                let row = self.state.cursor().row;
+                if row > 0 {
+                    self.scroll.scroll_to_item(row - 1, ScrollStrategy::Nearest);
+                }
+                true
+            }
+            (None, "enter") => {
+                self.press(Press::Enter, cx);
+                true
+            }
+            (None, "space") => {
+                self.press(Press::Space, cx);
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    fn header_cell(
+        &self,
+        index: usize,
+        column: &TableColumn,
+        focused: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = theme.palette;
+        let at_cursor = focused
+            && self.state.cursor()
+                == (Cursor {
+                    row: 0,
+                    column: index,
+                });
+        let direction = self
+            .state
+            .sort()
+            .filter(|sort| sort.column == index)
+            .map(|sort| sort.direction);
+        let label = match self.state.sort_word(index) {
+            Some(word) => format!("{}, sorted {word}", column.label),
+            None => column.label.to_string(),
+        };
+        let mut cell = div()
+            .id(("table-header", index))
+            .debug_selector(|| format!("table-header-{index}"))
+            .role(Role::ColumnHeader)
+            .aria_label(label)
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .flex_1()
+            .min_w(px(column.min_width))
+            .min_w_0()
+            .h_full()
+            .px(px(SPACE_2))
+            .border_2()
+            .border_color(if at_cursor { p.border.focus } else { CLEAR })
+            .text_style(TYPE_LABEL)
+            .text_color(p.text.secondary);
+        if column.align == TableAlign::End {
+            cell = cell.justify_end();
+        }
+        if column.sortable {
+            cell = cell
+                .cursor_pointer()
+                .hover(move |s| s.bg(p.fill.hover_canvas))
+                .active(move |s| s.bg(p.fill.pressed_canvas))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.sort_by(index, cx);
+                }));
+        }
+        let glyph = direction.map(|direction| match direction {
+            SortDirection::Ascending => IconName::ChevronUp,
+            SortDirection::Descending => IconName::ChevronDown,
+        });
+        cell.child(div().min_w_0().truncate().child(column.label.clone()))
+            .children(glyph.map(|glyph| {
+                Icon::new(glyph)
+                    .size(IconSize::XSmall)
+                    .color(p.text.secondary)
+            }))
+            .into_any_element()
+    }
+
+    fn render_row(
+        &self,
+        entity: &Entity<Self>,
+        index: usize,
+        focused: bool,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let Some(row) = self.state.row_at(index) else {
+            return div().into_any_element();
+        };
+        let key = row.key.clone();
+        let selected = self.state.selected() == Some(&key);
+        let fills = Surface::Canvas.fills(&theme);
+        let (rest, hover) = if selected {
+            (fills.selected, fills.selected)
+        } else {
+            (CLEAR, fills.hover)
+        };
+        let cursor = self.state.cursor();
+        let column_count = self.state.columns().len();
+        let mut line = div()
+            .id(("table-row", index))
+            .debug_selector(|| format!("table-row-{index}"))
+            .role(Role::Row)
+            .aria_row_index(index + 2)
+            .aria_selected(selected)
+            .flex()
+            .items_center()
+            .w_full()
+            .h(px(self.density.height()))
+            .border_b_1()
+            .border_color(p.border.subtle)
+            .bg(rest)
+            .hover(move |s| s.bg(hover))
+            .active(move |s| s.bg(fills.pressed))
+            .cursor_pointer()
+            .on_click({
+                let (entity, key) = (entity.clone(), key.clone());
+                move |_, _, cx| entity.update(cx, |table, cx| table.select_row(&key, cx))
+            });
+        if selected {
+            line = line.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(BORDER_WIDTH_THICK))
+                    .bg(p.accent.fg),
+            );
+        }
+        if self.state.is_selectable() {
+            line = line.child(self.check_cell(&key, index, entity));
+        }
+        for (column_index, column) in self.state.columns().iter().enumerate() {
+            let at_cursor = focused
+                && cursor
+                    == (Cursor {
+                        row: index + 1,
+                        column: column_index,
+                    });
+            let cell_id = index * column_count + column_index;
+            let mut cell = div()
+                .id(("table-cell", cell_id))
+                .role(Role::Cell)
+                .flex()
+                .items_center()
+                .flex_1()
+                .min_w(px(column.min_width))
+                .min_w_0()
+                .h_full()
+                .px(px(SPACE_2))
+                .border_2()
+                .border_color(if at_cursor { p.border.focus } else { CLEAR });
+            if column.align == TableAlign::End {
+                cell = cell.justify_end();
+            }
+            if let Some(content) = row.cells.get(column_index) {
+                cell = cell.child(Self::cell_content(
+                    content,
+                    &key,
+                    cell_id,
+                    column_index,
+                    entity,
+                    &p,
+                ));
+            }
+            line = line.child(cell);
+        }
+        line.into_any_element()
+    }
+
+    fn check_cell(&self, key: &SharedString, index: usize, entity: &Entity<Self>) -> AnyElement {
+        let (entity, row) = (entity.clone(), key.clone());
+        div()
+            .id(("table-check-slot", index))
+            .flex_none()
+            .w(px(SELECTION_WIDTH))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                Checkbox::new(("table-check", index), self.state.is_checked(key)).on_change(
+                    move |_, _, cx| entity.update(cx, |table, cx| table.toggle_check(&row, cx)),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn cell_content(
+        cell: &TableCell,
+        key: &SharedString,
+        cell_id: usize,
+        column: usize,
+        entity: &Entity<Self>,
+        p: &Palette,
+    ) -> AnyElement {
+        match cell {
+            TableCell::Text(text) => div()
+                .id(("table-value", cell_id))
+                .min_w_0()
+                .truncate()
+                .tooltip(tooltip_view(Tooltip::new(text.clone())))
+                .child(text.clone())
+                .into_any_element(),
+            TableCell::Numeric { text, .. } => div()
+                .id(("table-value", cell_id))
+                .min_w_0()
+                .truncate()
+                .tabular_figures()
+                .tooltip(tooltip_view(Tooltip::new(text.clone())))
+                .child(text.clone())
+                .into_any_element(),
+            TableCell::Status(state) => div()
+                .id(("table-value", cell_id))
+                .flex()
+                .items_center()
+                .gap(px(SPACE_1))
+                .min_w_0()
+                .text_color(p.text.primary)
+                .child(AgentStatus::new(*state).size(AgentStatusSize::XSmall))
+                .child(div().min_w_0().truncate().child(state.label()))
+                .into_any_element(),
+            TableCell::Agent(kind) => div()
+                .id(("table-value", cell_id))
+                .flex()
+                .items_center()
+                .child(AgentIcon::new(*kind).size(AgentIconSize::Small))
+                .tooltip(tooltip_view(Tooltip::new(kind.label())))
+                .into_any_element(),
+            TableCell::Action {
+                icon,
+                name,
+                disabled,
+            } => {
+                let (entity, row) = (entity.clone(), key.clone());
+                let button = IconButton::new(("table-action", cell_id), *icon, name.clone())
+                    .size(ButtonSize::Compact)
+                    .disabled(*disabled)
+                    .on_click(move |_, cx| {
+                        entity.update(cx, |_, cx| {
+                            cx.emit(TableEvent::Action {
+                                row: row.clone(),
+                                column,
+                            });
+                        });
+                    });
+                div()
+                    .id(("table-action-slot", cell_id))
+                    .flex_none()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(button)
+                    .into_any_element()
+            }
+            TableCell::Blank => div().into_any_element(),
+        }
+    }
+}
+
+impl Render for TableView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let focused = self.focus.is_focused(window);
+        let selectable = self.state.is_selectable();
+        let height = self.density.height();
+        let width = self
+            .state
+            .columns()
+            .iter()
+            .map(|column| column.min_width)
+            .sum::<f32>()
+            + if selectable { SELECTION_WIDTH } else { 0.0 };
+
+        let mut header = div()
+            .id((self.id.clone(), "header"))
+            .role(Role::Row)
+            .aria_row_index(1)
+            .flex()
+            .items_center()
+            .h(px(height))
+            .border_b_1()
+            .border_color(p.border.subtle);
+        if selectable {
+            header = header.child(div().flex_none().w(px(SELECTION_WIDTH)).h_full());
+        }
+        for (index, column) in self.state.columns().iter().enumerate() {
+            header = header.child(self.header_cell(index, column, focused, &theme, cx));
+        }
+
+        let entity = cx.entity();
+        let view = entity.clone();
+        let body = uniform_list(
+            (self.id.clone(), "body"),
+            self.state.row_count(),
+            move |range, _, cx| {
+                let table = view.read(cx);
+                range
+                    .map(|index| table.render_row(&view, index, focused, cx))
+                    .collect()
+            },
+        )
+        .track_scroll(&self.scroll)
+        .flex_1()
+        .min_h_0()
+        .into_any_element();
+
+        div()
+            .id(self.id.clone())
+            .track_focus(&self.focus)
+            .tab_stop(true)
+            .role(Role::Table)
+            .aria_label(self.label.clone())
+            .aria_row_count(self.state.row_count() + 1)
+            .aria_column_count(self.state.columns().len() + usize::from(selectable))
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .text_style(TYPE_BODY)
+            .text_color(p.text.primary)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                this.on_key(event, cx);
+            }))
+            .child(
+                div()
+                    .id((self.id.clone(), "grid"))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_x_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .min_w(px(width))
+                            .child(header)
+                            .child(body),
+                    ),
+            )
     }
 }
 
