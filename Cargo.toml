@@ -17,6 +17,7 @@ massorca-core-store = { path = "crates/core-store" }
 massorca-core-git = { path = "crates/core-git" }
 massorca-core-terminal = { path = "crates/core-terminal" }
 massorca-core-workspace = { path = "crates/core-workspace" }
+massorca-core-agents = { path = "crates/core-agents" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
 
