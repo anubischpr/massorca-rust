@@ -30,9 +30,9 @@ is the same protocol over a different transport (0002), not a different API.
 - **Notifications come from the host.** `git.watch` events come from the
   host's file system (0012), so a desktop client gets the same events from a
   remote service.
-- **Timeouts and cancellation are host-side.** Closing a connection cancels
-  the client's in-flight requests on the host (Phase 1, item 6), and that kills
-  the git process tree there.
+- **Timeouts are host-side.** Every git process on the host runs under a
+  timeout that kills its process tree there. Killing a running git command
+  when its client disconnects is deferred; until then the timeout bounds it.
 
 ### WSL and SSH relays
 

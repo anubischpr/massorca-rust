@@ -120,6 +120,32 @@ See 0025: state tests in plain Rust, element tests with GPUI's fake platform,
 layout checks with real text shaping in `HeadlessAppContext`, screenshots on
 Linux only. No automated run opens a visible window.
 
+## Settings, start page and setup
+
+- **Settings** is a full page (`Page::Settings`). Its twelve sections and their
+  rows are data in `model/settings_sections.rs`, and each row names what backs
+  it. Only the workspace folder (`workspaces.default_root`) is backed: the
+  bridge's `config.list` and `config.set` read and write it, and a refusal keeps
+  its service code. Every other row is drawn disabled with "Not available yet"
+  until its layer exists. The folder is read only while the page is open. It
+  applies on Enter or when the field loses focus; "Saved" appears only after the
+  service answers, Escape puts the stored value back, and a refusal keeps the
+  typed text with its reason (`model/settings.rs`).
+- **The workspace start page** (`Canvas::Workspace`) opens from a click on a
+  workspace in the Sidebar. It reads the workspace's record from the store:
+  name, project, path, branch, state and whether its folder is still on disk.
+  Actions that need sessions, terminals or git are drawn disabled with the
+  reason. The project in the heading opens the create form's project menu;
+  choosing a project opens its first workspace, and "No project" returns to the
+  start page with no workspace. The page creates nothing.
+- **Setup** (`Page::Setup`) is the checklist of D-OB-12, opened from Settings,
+  General and account. A step the core cannot satisfy says so instead of
+  claiming a result.
+- Not built yet: search highlighting and the outline after a jump
+  (SettingsRow.md), the Marketplace and vault pages, the first-run wizard, and
+  host rows beyond This PC. Sample data holds no workspace records, so the
+  start page shows "not listed by the service" in `--sample` mode.
+
 ## Browser pane
 
 Not built yet. Direction in 0026: a `wry` child web view first, with the rule
