@@ -34,6 +34,14 @@ pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
+/// A branch name git does not accept.
+pub const BRANCH_NAME_INVALID: &str = "branch.name_invalid";
+/// A branch is not merged into its upstream or HEAD; deleting it needs `force`.
+pub const BRANCH_UNMERGED: &str = "branch.unmerged";
+/// A branch is checked out in a worktree; it cannot be deleted, or switched to from another worktree.
+pub const BRANCH_CHECKED_OUT: &str = "branch.checked_out";
+/// A workspace was created on the branch; removing that workspace is the path that deletes it.
+pub const BRANCH_IN_USE: &str = "branch.in_use";
 pub const BASE_NOT_FOUND: &str = "base.not_found";
 pub const GIT_UNAVAILABLE: &str = "git.unavailable";
 pub const GIT_FAILED: &str = "git.failed";
@@ -65,6 +73,8 @@ pub const GIT_COMMIT_PUBLISHED: &str = "git.commit_published";
 pub const GIT_NO_COMMITS: &str = "git.no_commits";
 /// Git has no user name or email for the commit; set `user.name` and `user.email`.
 pub const GIT_IDENTITY_UNKNOWN: &str = "git.identity_unknown";
+/// A checkout would overwrite local changes or untracked files; `data.paths` lists them.
+pub const GIT_CHECKOUT_WOULD_OVERWRITE: &str = "git.checkout_would_overwrite";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

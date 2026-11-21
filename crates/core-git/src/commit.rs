@@ -131,15 +131,6 @@ impl Git {
         Ok(captured.text()?.trim().to_owned())
     }
 
-    /// The checked-out branch, or `None` when HEAD is detached.
-    fn current_branch(&self, dir: &Path) -> Result<Option<String>, GitError> {
-        let captured = self.run(Some(dir), ["symbolic-ref", "--short", "-q", "HEAD"])?;
-        captured
-            .succeeded()
-            .then(|| captured.text().map(|text| text.trim().to_owned()))
-            .transpose()
-    }
-
     fn head_subject(&self, dir: &Path) -> Result<String, GitError> {
         let captured = self.run(
             Some(dir),
