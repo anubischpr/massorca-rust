@@ -255,3 +255,23 @@ fn paths_that_differ_only_in_case_are_distinct_projects_on_a_case_sensitive_file
 
     assert_ne!(a.id, b.id);
 }
+
+#[test]
+fn a_handle_with_another_default_root_uses_it_for_the_workspaces_root_and_shares_the_store() {
+    let fx = Fixture::new();
+    let handle = fx.workspaces.with_default_root(fx.path("changed-defaults"));
+
+    let project = handle
+        .add_project(project_add(&fx.repo()))
+        .expect("add project");
+
+    assert_eq!(
+        project.workspaces_root,
+        text(&fx.path("changed-defaults").join("repo"))
+    );
+    let seen = fx
+        .workspaces
+        .show_project(&project.id)
+        .expect("the other handle sees the project");
+    assert_eq!(seen.id, project.id);
+}

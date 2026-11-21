@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use massorca_core_git::Git;
 use massorca_core_store::Store;
@@ -16,7 +16,7 @@ pub struct Workspaces {
     pub(crate) default_root: PathBuf,
     /// Serialises every mutation, so a name, path or branch checked before git runs
     /// cannot be taken by another call before the row is inserted.
-    mutations: Mutex<()>,
+    mutations: Arc<Mutex<()>>,
 }
 
 impl Workspaces {
@@ -26,7 +26,19 @@ impl Workspaces {
             store,
             git,
             default_root,
-            mutations: Mutex::new(()),
+            mutations: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// A handle over the same store and git that uses `default_root` for new workspaces roots.
+    /// It shares the mutation lock, so handles made this way serialise with each other. The
+    /// service makes one per call, so a changed `workspaces.default_root` applies at once.
+    pub fn with_default_root(&self, default_root: PathBuf) -> Self {
+        Self {
+            store: self.store.clone(),
+            git: self.git.clone(),
+            default_root,
+            mutations: Arc::clone(&self.mutations),
         }
     }
 
