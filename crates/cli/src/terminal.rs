@@ -1,6 +1,6 @@
 //! `massorca terminal ...`: starting, reading, typing into, resizing and stopping terminals through the service.
 //!
-//! `screen` reads one snapshot and prints it as text.
+//! `attach` is interactive and lives in `terminal_attach`; `screen` reads one snapshot and prints it as text.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU16;
@@ -19,6 +19,7 @@ use serde::Serialize;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::terminal_attach;
 use crate::workspace_text;
 
 /// How long `screen` waits for the service to send the terminal's snapshot.
@@ -39,6 +40,11 @@ pub enum TerminalCommand {
     Send(TerminalSendArgs),
     /// Prints the terminal's visible screen as text.
     Screen(TerminalScreenArgs),
+    /// Connects this terminal to the terminal's input and output. Ctrl+] detaches; the terminal keeps running.
+    Attach {
+        /// Terminal id.
+        terminal: String,
+    },
     /// Sets the terminal's size.
     Resize(TerminalResizeArgs),
     /// Ends the terminal's processes. The terminal stays listed as exited until closed.
@@ -144,7 +150,22 @@ pub async fn execute(
     autostart: bool,
     command: TerminalCommand,
     output: Output,
+    json: bool,
 ) -> Result<(), CliError> {
+    if let TerminalCommand::Attach { terminal } = &command {
+        if json {
+            return Err(CliError::new(
+                "usage.invalid_arguments",
+                "attach is interactive and has no --json form",
+                exit::USAGE,
+            ));
+        }
+        // Checked before connecting, so a refused attach never starts the service.
+        terminal_attach::require_terminal()?;
+        let client = connect(profile, autostart).await?;
+        return terminal_attach::attach(&client, terminal).await;
+    }
+
     let client = connect(profile, autostart).await?;
     match command {
         TerminalCommand::Create(args) => {
@@ -192,6 +213,7 @@ pub async fn execute(
             let closed = client.terminal_close(&terminal).await?;
             output.success(&closed, &[format!("closed terminal {}", closed.id)]);
         }
+        TerminalCommand::Attach { .. } => unreachable!("attach returned above"),
     }
     Ok(())
 }

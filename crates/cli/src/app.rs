@@ -45,8 +45,8 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         profile,
         home,
         no_autostart,
+        json,
         command,
-        ..
     } = cli;
     let autostart = !no_autostart;
     match command {
@@ -74,7 +74,9 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         }
         Commands::Terminal { command } => {
             let profile = Profile::resolve(home, profile)?;
-            block_on(terminal::execute(&profile, autostart, command, output))
+            block_on(terminal::execute(
+                &profile, autostart, command, output, json,
+            ))
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }

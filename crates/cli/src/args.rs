@@ -69,7 +69,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommand,
     },
-    /// Starts terminals in workspaces and works with them: type, read, resize and stop.
+    /// Starts terminals in workspaces and works with them: type, read, attach, resize and stop.
     Terminal {
         #[command(subcommand)]
         command: TerminalCommand,

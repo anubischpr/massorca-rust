@@ -1,4 +1,4 @@
-//! Terminals through the CLI: create, list, show, send, screen, resize, kill and close.
+//! Terminals through the CLI: create, list, show, send, screen, resize, kill, close, and attach refused without a terminal.
 
 mod harness;
 
@@ -207,4 +207,41 @@ fn a_create_with_a_missing_directory_or_a_malformed_env_is_refused_before_anythi
         .run("default", &["terminal", "list"])
         .success()
         .stdout(contains("no terminals"));
+}
+
+#[test]
+fn attach_without_a_terminal_on_stdin_and_stdout_exits_2_and_starts_nothing() {
+    let sandbox = Sandbox::new();
+    folder_workspace(&sandbox);
+    let id = create_terminal(&sandbox)["id"]
+        .as_str()
+        .expect("terminal id")
+        .to_owned();
+
+    sandbox
+        .run("default", &["terminal", "attach", &id])
+        .code(2)
+        .stderr(contains("attach needs a terminal"));
+
+    let json_attempt = sandbox
+        .run("default", &with_json(&["terminal", "attach", &id]))
+        .code(2);
+    assert_eq!(
+        single_document(&json_attempt)["error"]["code"],
+        "usage.invalid_arguments"
+    );
+}
+
+#[test]
+fn attach_refused_without_a_terminal_does_not_start_the_service() {
+    let sandbox = Sandbox::new();
+
+    sandbox
+        .run("default", &["terminal", "attach", "no-such-terminal"])
+        .code(2);
+    assert_eq!(
+        sandbox.status("default")["running"],
+        false,
+        "a refused attach never autostarts the service"
+    );
 }
