@@ -4,5 +4,7 @@
 //! the service maps requests onto this crate.
 
 pub mod event;
+pub mod kind;
 
 pub use event::{DoneOutcome, EventTarget};
+pub use kind::KindDecl;
