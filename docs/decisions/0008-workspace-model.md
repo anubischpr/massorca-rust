@@ -39,7 +39,11 @@ lineage) comes later; the model must not block it.
   is never deleted.
 - **Errors** are typed codes (`workspace.dirty`, `workspace.locked`,
   `workspace.not_found`, `workspace.name_taken`, `project.not_git`, ...), never
-  classified from git's message text.
+  classified from git's message text. One exception: `git rev-parse
+  --show-toplevel` exits 128 both outside every repository and on other
+  failures (checked on Git 2.25.5, 2.43 and 2.49), so `Git::toplevel` matches
+  "not a git repository" in the message. Every git call runs under `LC_ALL=C`
+  (ADR 0007), which keeps that text English.
 
 ## Deferred (recorded so it is not forgotten)
 

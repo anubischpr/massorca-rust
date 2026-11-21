@@ -1,5 +1,5 @@
-//! Branch and ref queries. Yes/no answers come from git's exit status. The one
-//! place that reads git's message text is `delete_branch_if_merged`.
+//! Branch and ref queries. Yes/no answers come from git's exit status, and deletion
+//! asks git's merge test directly, so nothing here reads git's message text.
 
 use std::path::Path;
 
@@ -44,19 +44,51 @@ impl Git {
         exit_code_answer(&captured)
     }
 
-    /// Deletes `branch` with `git branch -d`. Returns `false` when git refuses because
-    /// the branch is not fully merged; any other refusal is an error.
+    /// Deletes `branch` with `git branch -d`, once git's merge rule says it is merged:
+    /// contained in its upstream when that resolves, else in HEAD. Returns `false` for a
+    /// branch that is not merged; any other failure is an error.
     pub fn delete_branch_if_merged(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
-        let captured = self.run_mutation(Some(repo), ["branch", "-d", "--", branch])?;
-        if captured.succeeded() {
-            return Ok(true);
-        }
-        // Git exits 1 for this refusal and for other failures alike; only the
-        // message tells them apart, and LC_ALL=C keeps it in English.
-        if captured.stderr_contains("is not fully merged") {
+        let reference = format!("refs/heads/{branch}");
+        let target = self.merge_target(repo, branch)?;
+        if !self.is_ancestor(repo, &reference, &target)? {
             return Ok(false);
         }
-        Err(captured.failure())
+        self.run_mutation(Some(repo), ["branch", "-d", "--", branch])?
+            .require_success()?;
+        Ok(true)
+    }
+
+    /// The commit `git branch -d` tests `branch` against: its upstream when that commit
+    /// exists, else HEAD. A gone upstream therefore falls back to HEAD, as in git.
+    fn merge_target(&self, repo: &Path, branch: &str) -> Result<String, GitError> {
+        let listed = self.run_mutation(
+            Some(repo),
+            ["branch", "--list", "--format=%(upstream)", "--", branch],
+        )?;
+        listed.require_success()?;
+        let upstream = listed.text()?.trim();
+        if upstream.is_empty() {
+            return Ok("HEAD".to_owned());
+        }
+        let commit = format!("{upstream}^{{commit}}");
+        let captured = self.run_mutation(
+            Some(repo),
+            ["rev-parse", "--verify", "--quiet", commit.as_str()],
+        )?;
+        match captured.exit_code() {
+            Some(0) => Ok(upstream.to_owned()),
+            Some(1) => Ok("HEAD".to_owned()),
+            _ => Err(captured.failure()),
+        }
+    }
+
+    /// Whether `ancestor` is reachable from `descendant`, by `merge-base --is-ancestor`.
+    fn is_ancestor(&self, repo: &Path, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+        let captured = self.run_mutation(
+            Some(repo),
+            ["merge-base", "--is-ancestor", ancestor, descendant],
+        )?;
+        exit_code_answer(&captured)
     }
 
     /// Whether git accepts `name` as a branch name.

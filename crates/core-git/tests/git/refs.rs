@@ -1,6 +1,6 @@
 use massorca_core_git::{Git, GitError};
 
-use crate::fixture::{Fixture, commit_on_branch, run_git, text};
+use crate::fixture::{Fixture, commit_file, commit_on_branch, rev, run_git, text};
 
 fn git() -> Git {
     Git::discover().expect("git on PATH")
@@ -118,6 +118,88 @@ fn delete_branch_if_merged_keeps_a_branch_with_unmerged_commits() {
     let git = git();
     assert!(!git.delete_branch_if_merged(&repo, "wip").expect("delete"));
     assert!(git.branch_exists(&repo, "wip").expect("check"));
+}
+
+#[test]
+fn delete_branch_if_merged_keeps_a_branch_its_upstream_does_not_contain() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let base = rev(&repo, "HEAD");
+    commit_file(&repo, "second.txt", "second\n", "second commit");
+    run_git(&repo, &["branch", "up"]);
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/up", base.as_str()],
+    );
+    run_git(&repo, &["branch", "--set-upstream-to=origin/up", "up"]);
+    // Contained in HEAD but not in its upstream: `git branch -d` refuses, so it is kept.
+    assert!(!git().delete_branch_if_merged(&repo, "up").expect("delete"));
+    assert!(git().branch_exists(&repo, "up").expect("check"));
+}
+
+#[test]
+fn delete_branch_if_merged_deletes_a_branch_its_upstream_contains_even_when_head_does_not() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    commit_on_branch(&repo, "ahead", "ahead.txt");
+    let tip = rev(&repo, "ahead");
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/ahead", tip.as_str()],
+    );
+    run_git(
+        &repo,
+        &["branch", "--set-upstream-to=origin/ahead", "ahead"],
+    );
+    assert!(
+        git()
+            .delete_branch_if_merged(&repo, "ahead")
+            .expect("delete")
+    );
+    assert!(!git().branch_exists(&repo, "ahead").expect("check"));
+}
+
+#[test]
+fn delete_branch_if_merged_falls_back_to_head_when_the_upstream_is_gone() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    run_git(&repo, &["branch", "done"]);
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    run_git(&repo, &["update-ref", "refs/remotes/origin/done", "HEAD"]);
+    run_git(&repo, &["branch", "--set-upstream-to=origin/done", "done"]);
+    run_git(&repo, &["update-ref", "-d", "refs/remotes/origin/done"]);
+    assert!(
+        git()
+            .delete_branch_if_merged(&repo, "done")
+            .expect("delete")
+    );
+    assert!(!git().branch_exists(&repo, "done").expect("check"));
 }
 
 #[test]
