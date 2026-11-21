@@ -8,7 +8,8 @@ use crate::tokens::{
     Color, RADIUS_XS, SIZE_KBD_HEIGHT, SPACE_0, SPACE_1, SPACE_HALF, TYPE_MONO_SM,
 };
 use gpui::{
-    App, Empty, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+    App, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 /// Transparent: a disabled cap has no fill.
@@ -232,9 +233,7 @@ impl Kbd {
 impl RenderOnce for Kbd {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let caps = self.caps();
-        if caps.is_empty() {
-            return Empty.into_any_element();
-        }
+        let spoken = self.spoken();
         let theme = *cx.theme();
         let p = &theme.palette;
         let text = if self.disabled {
@@ -251,11 +250,15 @@ impl RenderOnce for Kbd {
         };
         let mac = self.os == ShortcutOs::MacOs;
         let mut chord = div()
+            .id(SharedString::from(format!("kbd-{spoken}")))
             .flex()
             .items_center()
             .gap(px(if mac { SPACE_HALF } else { SPACE_0 }))
             .text_style(TYPE_MONO_SM)
             .text_color(text);
+        if !caps.is_empty() {
+            chord = chord.role(Role::Label).aria_label(spoken.clone());
+        }
         for (index, cap) in caps.into_iter().enumerate() {
             if index > 0 && !mac {
                 chord = chord.child("+");
@@ -275,7 +278,7 @@ impl RenderOnce for Kbd {
                     .child(cap),
             );
         }
-        chord.into_any_element()
+        chord
     }
 }
 
@@ -370,5 +373,21 @@ mod tests {
             Kbd::new("Mod+Ctrl+K").os(ShortcutOs::WindowsLinux).caps(),
             vec!["Ctrl", "K"]
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_shortcut_is_named_by_its_spoken_words(cx: &mut TestAppContext) {
+        let kbd = Kbd::new("Mod+K").os(ShortcutOs::WindowsLinux);
+        let spoken = kbd.spoken();
+        let node = root(cx, move |window, cx| reported(kbd.render(window, cx))).expect("reported");
+        assert_eq!(node.role(), Role::Label);
+        assert_eq!(node.label(), Some(spoken.as_str()));
     }
 }
