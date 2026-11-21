@@ -3,20 +3,119 @@
 
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::extension_card::{ExtensionCard, ExtensionState};
 use crate::components::notification_card::{
     NotificationCard, NotificationKind, NotificationStack, UpdateState,
 };
+use crate::icon::IconName;
 use crate::tokens::{SPACE_3, SPACE_4};
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Notification card",
-        spec: "NotificationCard.md",
-        render: notification_story,
-    }]
+    vec![
+        Story {
+            name: "Notification card",
+            spec: "NotificationCard.md",
+            render: notification_story,
+        },
+        Story {
+            name: "Extension card",
+            spec: "ExtensionCard.md",
+            render: extension_story,
+        },
+    ]
+}
+
+fn extension_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let detail = |id: &'static str, state: ExtensionState| {
+        ExtensionCard::new(id, "Acme Metrics", state)
+            .publisher("Acme")
+            .source("Marketplace")
+            .version("1.4.2")
+            .description("Live charts for every workspace, with alerts when a metric drifts.")
+            .add(IconName::PanelLeft, "Rail item")
+            .add(IconName::SquareTerminal, "3 commands")
+            .on_action(|_, _, _| {})
+    };
+    let installed = ExtensionState::Installed {
+        enabled: true,
+        update: None,
+    };
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Catalog, on two hosts",
+            detail("ext-catalog", ExtensionState::Catalog).install_host("VPS"),
+            cx,
+        ))
+        .child(variant(
+            "Installed and enabled, with settings",
+            detail("ext-enabled", installed.clone()).settings(true),
+            cx,
+        ))
+        .child(variant(
+            "Installed and disabled",
+            detail(
+                "ext-disabled",
+                ExtensionState::Installed {
+                    enabled: false,
+                    update: None,
+                },
+            )
+            .settings(true),
+            cx,
+        ))
+        .child(variant(
+            "Update available",
+            detail(
+                "ext-update",
+                ExtensionState::Installed {
+                    enabled: true,
+                    update: Some("1.5.0".into()),
+                },
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Installing, 40%",
+            detail("ext-installing", ExtensionState::Installing { percent: 40 }),
+            cx,
+        ))
+        .child(variant(
+            "Failed to start",
+            detail(
+                "ext-failed",
+                ExtensionState::Failed {
+                    reason: "Exit code 1 during startup".into(),
+                },
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Needs a newer MassOrca",
+            detail(
+                "ext-incompatible",
+                ExtensionState::Incompatible {
+                    requires: "1.6".into(),
+                },
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Host unreachable: last known state",
+            detail("ext-unreachable", installed).last_known("5 min ago"),
+            cx,
+        ))
+        .child(variant(
+            "Loading",
+            detail("ext-loading", ExtensionState::Catalog).loading(true),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn notification_story(_: &mut Window, cx: &mut App) -> AnyElement {
