@@ -119,12 +119,33 @@ impl OpenTracker {
     }
 }
 
+/// Where a trigger was last painted, written by its wrapper and read by the overlay that
+/// attaches to it on the next frame.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TriggerBounds(Rc<Cell<Option<Bounds<Pixels>>>>);
+
+impl TriggerBounds {
+    /// Records the first child's bounds (the trigger) each time `host` is painted.
+    pub(crate) fn track(&self, host: Div) -> Div {
+        let cell = self.0.clone();
+        host.on_children_prepainted(move |children, _, _| {
+            if let Some(first) = children.first() {
+                cell.set(Some(*first));
+            }
+        })
+    }
+
+    /// The trigger's bounds from the last paint, if it has been painted.
+    pub(crate) fn get(&self) -> Option<Bounds<Pixels>> {
+        self.0.get()
+    }
+}
+
 /// Keeps what the popover needs between frames: the open edge and the trigger's bounds.
 #[derive(Debug, Default)]
 struct PopoverState {
     open: OpenTracker,
-    /// Written by the trigger's paint, read by the anchor on the next frame.
-    trigger_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    trigger_bounds: TriggerBounds,
 }
 
 /// An anchored panel next to its trigger. The consumer owns the open state and passes it in;
@@ -246,15 +267,7 @@ impl RenderOnce for Popover {
         }
 
         let escape = dismiss_with_focus(self.trigger_focus.clone(), self.on_dismiss.clone());
-        let measured = bounds.clone();
-        let mut host = div()
-            .relative()
-            .on_children_prepainted(move |children, _, _| {
-                if let Some(first) = children.first() {
-                    measured.set(Some(*first));
-                }
-            })
-            .child(self.trigger);
+        let mut host = bounds.track(div().relative()).child(self.trigger);
 
         if !self.open {
             return host;
