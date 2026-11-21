@@ -345,6 +345,7 @@ mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
     use crate::model::navigation::Mode;
+    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell(width: f32) -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), width)
@@ -384,6 +385,28 @@ mod tests {
         assert!(!narrow.sidebar_inline() && !narrow.sidebar_overlay());
         narrow.toggle_sidebar();
         assert!(narrow.sidebar_overlay() && !narrow.sidebar_inline());
+    }
+
+    #[test]
+    fn bot_teams_keeps_only_the_sidebar_and_shows_no_workspaces_session() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        assert!(model.press_mode_switch());
+        assert_eq!(model.canvas(), Canvas::Home(Mode::BotTeams));
+        assert!(model.region_visible(Region::Sidebar));
+        assert!(!model.region_visible(Region::WorkPanel));
+        assert!(model.inline_regions().is_empty());
+    }
+
+    #[test]
+    fn a_team_page_takes_the_canvas_selects_its_team_and_keeps_the_sidebar() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        assert_eq!(model.canvas(), Canvas::Team(TeamPage::Board(TeamId(1))));
+        assert!(model.sidebar_inline());
+        assert_eq!(model.teams().selected(), Some(TeamId(1)));
     }
 
     #[test]

@@ -3,14 +3,19 @@
 use super::workspace_dialogs::MenuTarget;
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
+use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::palette::{PaletteGroup, PaletteMode, PaletteModel};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
+use crate::model::sidebar::SidebarContent;
 use crate::model::status_items::StatusItem;
-use crate::model::teams::SampleTeamsSource;
-use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
+use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage};
+use gpui::{
+    Entity, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext,
+    VisualTestContext, point, px, size,
+};
 use massorca_ui::{ActiveTheme, Appearance, Theme};
 
 /// The sample data without an open session: the landing view.
@@ -42,6 +47,19 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("no element with selector {selector}"));
     cx.simulate_click(bounds.center(), Modifiers::default());
+}
+
+/// Presses and releases one key. GPUI turns the release of a focused Enter or Space into a click,
+/// so the release has to be sent too.
+fn press_key(cx: &mut VisualTestContext, key: &str) {
+    let os = cx.update(|_, cx| cx.platform_info().os);
+    let keystroke = Keystroke::parse_with_os(key, os).unwrap();
+    cx.simulate_event(KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(KeyUpEvent { keystroke });
 }
 
 fn navigation(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Mode, Page) {
@@ -518,4 +536,61 @@ fn mod_p_opens_the_palette_in_go_to_file_mode_and_escape_closes_it(cx: &mut Test
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(palette_query(&shell, cx), None);
+}
+
+#[gpui::test]
+fn the_mode_switch_shows_the_teams_sidebar_and_the_bot_teams_home(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    click(cx, "rail-mode");
+    assert_eq!(navigation(&shell, cx), (Mode::BotTeams, Page::Home));
+    shell.read_with(cx, |shell, _| {
+        assert!(matches!(shell.model().sidebar(), SidebarContent::BotTeams));
+        assert_eq!(shell.model().canvas(), Canvas::Home(Mode::BotTeams));
+        assert!(
+            shell.model().sidebar_inline(),
+            "the Sidebar stays for Bot Teams"
+        );
+    });
+    draw(cx);
+}
+
+#[gpui::test]
+fn the_mode_button_switches_from_the_keyboard_and_keeps_focus(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    let button = shell.read_with(cx, |shell, _| shell.rail.focus_target().clone());
+    cx.update(|window, cx| window.focus(&button, cx));
+    cx.run_until_parked();
+    draw(cx);
+    press_key(cx, "enter");
+    assert_eq!(navigation(&shell, cx).0, Mode::BotTeams);
+    assert!(cx.update(|window, _| button.is_focused(window)));
+    press_key(cx, "space");
+    assert_eq!(navigation(&shell, cx).0, Mode::Workspaces);
+}
+
+#[gpui::test]
+fn a_team_page_is_drawn_with_the_sidebar_open(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    click(cx, "rail-mode");
+    shell.update(cx, |shell, cx| {
+        shell.model.open_team_page(TeamPage::Board(TeamId(1)));
+        cx.notify();
+    });
+    draw(cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            shell.model().canvas(),
+            Canvas::Team(TeamPage::Board(TeamId(1)))
+        );
+        assert!(shell.model().sidebar_inline());
+    });
 }

@@ -105,6 +105,7 @@ fn team_page_title(model: &ShellModel, page: TeamPage) -> String {
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
+    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell() -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), 1440.0)
@@ -165,5 +166,18 @@ mod tests {
         let bar = title_bar(&model);
         assert!(!bar.sidebar_on);
         assert_eq!(bar.sidebar_label, "Show sidebar");
+    }
+
+    #[test]
+    fn a_bot_teams_page_is_named_by_its_page_and_has_no_region_toggles() {
+        let mut model = shell();
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        let bar = title_bar(&model);
+        assert_eq!(bar.title, BOT_TEAMS_TITLE);
+        assert!(bar.region_toggles.is_empty());
+        assert!(bar.sidebar_enabled);
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        assert_eq!(title_bar(&model).title, "Board");
     }
 }
