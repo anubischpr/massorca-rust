@@ -87,7 +87,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/opt/git-2.25.5
-          key: git-2.25.5-${{ runner.os }}-${{ runner.arch }}
+          key: git-2.25.5-gnu11-${{ runner.os }}-${{ runner.arch }}
       - name: Build Git 2.25.5 from the kernel.org tarball
         if: steps.git-2-25.outputs.cache-hit != 'true'
         run: |
@@ -99,8 +99,11 @@ jobs:
           echo "164dec6d31843a436c0db2acb79ce49a56f703f587e7c127cf421604d5570bba  git.tar.xz" | sha256sum -c -
           mkdir git-src
           tar -xJf git.tar.xz -C git-src --strip-components=1
+          # Newer compilers default to C23, where `thread_local` is a keyword that Git 2.25's
+          # index-pack.c uses as a struct name; gnu11 keeps the old meaning.
           make -C git-src prefix="$HOME/opt/git-2.25.5" NO_GETTEXT=1 NO_TCLTK=1 \
-            NO_CURL=1 NO_EXPAT=1 NO_OPENSSL=1 NO_PERL=1 NO_PYTHON=1 -j"$(nproc)" install
+            NO_CURL=1 NO_EXPAT=1 NO_OPENSSL=1 NO_PERL=1 NO_PYTHON=1 \
+            CFLAGS="-g -O2 -Wall -std=gnu11" -j"$(nproc)" install
       - name: Put Git 2.25.5 first on PATH for the tests
         run: |
           echo "$HOME/opt/git-2.25.5/bin" >> "$GITHUB_PATH"
