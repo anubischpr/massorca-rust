@@ -38,6 +38,7 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 uuid = { version = "1.29.3", features = ["v7"] }
 win32job = "2.1.0"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 # test only
 assert_cmd = "2.2.2"
@@ -45,7 +46,7 @@ predicates = "3.1.4"
 tempfile = "3.27.0"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]

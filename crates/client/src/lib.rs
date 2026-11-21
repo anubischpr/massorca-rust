@@ -11,6 +11,8 @@ mod spawn;
 mod subscription;
 mod transport;
 mod typed_calls;
+#[cfg(windows)]
+mod windows_handle_inheritance;
 
 pub use client::Client;
 pub use error::ClientError;
