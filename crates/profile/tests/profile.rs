@@ -215,7 +215,7 @@ fn pipe_name_is_stable_for_a_known_profile_directory() {
     #[cfg(windows)]
     let (home, expected) = (
         r"C:\massorca-test-home",
-        "massorca-default-df9aa463cd15c96b",
+        "massorca-default-2c917d05fb1ec5cb",
     );
     #[cfg(not(windows))]
     let (home, expected) = ("/massorca-test-home", "massorca-default-aeac31973ed16dc3");
@@ -233,6 +233,47 @@ fn different_homes_give_different_pipe_names() {
     assert_eq!(name_first, resolve_in(first.path(), None).pipe_name());
     assert!(name_first.starts_with("massorca-default-"));
     assert_eq!(name_first.len(), "massorca-default-".len() + 16);
+}
+
+/// The pipe name of a profile whose home is `home`, as given.
+fn pipe_name_in(home: &str) -> String {
+    Profile::resolve_with(Some(PathBuf::from(home)), None, no_env)
+        .unwrap()
+        .pipe_name()
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_pipe_name_ignores_case_and_separator_spelling() {
+    let spellings = [
+        r"C:\Users\Ana\AppData\Roaming\MassOrca",
+        r"c:\users\ana\appdata\roaming\massorca",
+        "C:/Users/Ana/AppData/Roaming/MassOrca",
+        "c:/USERS\\ana/AppData\\roaming/MassOrca/",
+        r"\\?\C:\Users\Ana\AppData\Roaming\MassOrca",
+        r"\\?\c:\users\ana\appdata\roaming\massorca",
+    ];
+    let expected = pipe_name_in(spellings[0]);
+    for spelling in spellings {
+        assert_eq!(pipe_name_in(spelling), expected, "spelling {spelling:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_pipe_name_treats_unc_verbatim_and_plain_spellings_alike() {
+    let expected = pipe_name_in(r"\\server\Share\MassOrca");
+    assert_eq!(pipe_name_in(r"\\?\UNC\server\share\massorca"), expected);
+    assert_eq!(pipe_name_in("//SERVER/share/massorca"), expected);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn unix_pipe_name_keeps_the_case_of_the_home() {
+    assert_ne!(
+        pipe_name_in("/Work/massorca"),
+        pipe_name_in("/work/massorca")
+    );
 }
 
 #[test]

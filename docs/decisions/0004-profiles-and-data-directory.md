@@ -32,10 +32,17 @@ retrofitting isolation later means migrating every path.
   ```
 
 - **Socket name.** Unix: `<profile dir>/service.sock`. Windows: the named pipe
-  `massorca-<profile>-<hash>`, where `<hash>` is 16 hex digits of a hash of
-  the absolute profile directory, so two homes (for example two test runs)
-  never share a pipe. On Unix the path must fit the 104-byte `sun_path` limit;
-  the service refuses to start with a clear message when it does not.
+  `massorca-<profile>-<hash>`, where `<hash>` is 16 hex digits of FNV-1a over
+  the profile directory in one normal form, so two homes (for example two test
+  runs) never share a pipe and one directory never gets two. The normal form is
+  the absolute path (`std::path::absolute` on Windows also resolves `.`, `..`
+  and `/`) with a `\\?\` prefix dropped from drive and UNC paths, `\` as the
+  separator, and lowercase: NTFS ignores case, so `C:\X` and `c:\x` name one
+  pipe. A directory with per-directory case sensitivity shares its pipe with
+  its case-insensitive twin, an accepted trade-off. On Unix the path is hashed
+  as given, case included. The Unix socket path must fit the 104-byte
+  `sun_path` limit; the service refuses to start with a clear message when it
+  does not.
 
 ## Alternatives
 

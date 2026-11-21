@@ -85,9 +85,10 @@ impl Profile {
         self.dir.join("service.sock")
     }
 
-    /// Windows pipe name. FNV-1a keeps it identical across builds, which std's hashers do not.
+    /// Windows pipe name. FNV-1a keeps it identical across builds, which std's hashers do not. It hashes `pipe_key`,
+    /// so every spelling of one directory names one pipe.
     pub fn pipe_name(&self) -> String {
-        let hash = fnv1a_64(self.dir.to_string_lossy().as_bytes());
+        let hash = fnv1a_64(pipe_key(&self.dir).as_bytes());
         format!("massorca-{}-{hash:016x}", self.name)
     }
 }
@@ -96,6 +97,36 @@ impl Profile {
 pub fn ensure_dir(profile: &Profile) -> io::Result<()> {
     fs::create_dir_all(profile.dir())?;
     fs::create_dir_all(profile.logs_dir())
+}
+
+/// What the pipe name hashes: the directory in one form, so every spelling of a Windows directory names one pipe.
+/// NTFS ignores case and takes `/` as `\`, and `\\?\` prefixes are dropped from drive and UNC paths.
+#[cfg(windows)]
+fn pipe_key(dir: &Path) -> String {
+    let text = dir.to_string_lossy();
+    let plain = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else if let Some(drive) = text
+        .strip_prefix(r"\\?\")
+        .filter(|rest| starts_with_drive_root(rest))
+    {
+        drive.to_owned()
+    } else {
+        text.into_owned()
+    };
+    plain.replace('/', r"\").to_lowercase()
+}
+
+/// Other platforms hash the path as given, since their case and separators are significant.
+#[cfg(not(windows))]
+fn pipe_key(dir: &Path) -> String {
+    dir.to_string_lossy().into_owned()
+}
+
+/// Whether `text` begins with a drive root such as `C:\`.
+#[cfg(windows)]
+fn starts_with_drive_root(text: &str) -> bool {
+    matches!(text.as_bytes(), [letter, b':', b'\\', ..] if letter.is_ascii_alphabetic())
 }
 
 /// The data directory ADR 0004 names: `%APPDATA%\MassOrca`, `$XDG_DATA_HOME/massorca`, `~/Library/Application Support/MassOrca`.
