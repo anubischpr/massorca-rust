@@ -530,6 +530,12 @@ impl PickerView {
         self
     }
 
+    /// Starts with the panel open, for the gallery and visual checks.
+    pub fn open_at_start(mut self) -> Self {
+        self.open = true;
+        self
+    }
+
     pub fn state(&self) -> &PickerState {
         &self.state
     }
@@ -844,6 +850,7 @@ impl Render for PickerView {
         };
         let mut trigger = div()
             .id((self.id.clone(), "trigger"))
+            .debug_selector(|| "picker-trigger".into())
             .track_focus(&self.trigger_focus)
             .tab_stop(!self.disabled)
             .focus_ring(&theme)
@@ -1212,5 +1219,210 @@ mod tests {
         assert_eq!(parent_location("/a/b/"), Some("/a".to_owned()));
         assert_eq!(parent_location("a"), None);
         assert_eq!(parent_location("a/b"), Some("a".to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use crate::components::search_field::SEARCH_DEBOUNCE_MS;
+    use gpui::{Modifiers, Pixels, Point, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    type Events = Rc<RefCell<Vec<PickerEvent>>>;
+
+    fn branches() -> PickerState {
+        PickerState::new(
+            "branches",
+            vec![
+                PickerItem::new("main", "main"),
+                PickerItem::new("feature/map", "feature/map"),
+                PickerItem::new("release", "release"),
+            ],
+        )
+    }
+
+    fn folders() -> PickerState {
+        PickerState::new(
+            "folders",
+            vec![
+                PickerItem::new("/projects/massorca/crates", "crates").folder(),
+                PickerItem::new("/projects/massorca/README.md", "README.md"),
+            ],
+        )
+        .folder("/projects/massorca")
+    }
+
+    /// A picker in a window, with its events recorded and its first frame drawn.
+    fn picker(
+        cx: &mut TestAppContext,
+        state: PickerState,
+    ) -> (Entity<PickerView>, Events, &mut VisualTestContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            PickerView::new("branch", "Base branch", "Choose a base branch", state, cx)
+        });
+        let events: Events = Rc::default();
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &PickerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+        draw(cx);
+        (view, events, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    fn centre(cx: &mut VisualTestContext, selector: &'static str) -> Point<Pixels> {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center()
+    }
+
+    /// Opens the panel with a pointer click on the trigger, and draws it.
+    fn open_by_click(cx: &mut VisualTestContext) {
+        let trigger = centre(cx, "picker-trigger");
+        cx.simulate_click(trigger, Modifiers::none());
+        cx.run_until_parked();
+        draw(cx);
+    }
+
+    fn is_open(view: &Entity<PickerView>, cx: &VisualTestContext) -> bool {
+        view.read_with(cx, |picker, _| picker.is_open())
+    }
+
+    #[gpui::test]
+    fn a_click_opens_the_panel_and_a_row_click_chooses_its_item(cx: &mut TestAppContext) {
+        let (view, events, cx) = picker(cx, branches());
+        open_by_click(cx);
+        assert!(is_open(&view, cx));
+        let row = centre(cx, "picker-row-1");
+        cx.simulate_click(row, Modifiers::none());
+        cx.run_until_parked();
+        assert!(!is_open(&view, cx));
+        assert_eq!(
+            *events.borrow(),
+            vec![PickerEvent::Chosen("feature/map".into())]
+        );
+        assert_eq!(
+            view.read_with(cx, |picker, _| picker.state().selected_key().cloned()),
+            Some("feature/map".into())
+        );
+    }
+
+    #[gpui::test]
+    fn down_opens_and_the_keys_move_and_choose_from_the_panel(cx: &mut TestAppContext) {
+        let (view, events, cx) = picker(cx, branches());
+        let trigger = view.read_with(cx, |picker, _| picker.trigger_focus.clone());
+        focus_and_draw(cx, &trigger);
+        press_key(cx, "down");
+        draw(cx);
+        assert!(is_open(&view, cx));
+        press_key(cx, "down");
+        press_key(cx, "enter");
+        assert_eq!(
+            *events.borrow(),
+            vec![PickerEvent::Chosen("feature/map".into())]
+        );
+    }
+
+    #[gpui::test]
+    fn escape_closes_the_panel_with_a_query_and_returns_focus_to_the_trigger(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, events, cx) = picker(cx, branches());
+        open_by_click(cx);
+        cx.simulate_input("ma");
+        let typed = view.read_with(cx, |picker, cx| picker.search.read(cx).text(cx).to_owned());
+        assert_eq!(typed, "ma");
+        press_key(cx, "escape");
+        assert!(!is_open(&view, cx));
+        let trigger = view.read_with(cx, |picker, _| picker.trigger_focus.clone());
+        cx.update(|window, _| assert!(trigger.is_focused(window)));
+        assert!(events.borrow().is_empty(), "nothing was chosen");
+    }
+
+    #[gpui::test]
+    fn typing_filters_the_entries_after_the_pause(cx: &mut TestAppContext) {
+        let clock = cx.executor();
+        let (view, events, cx) = picker(cx, branches());
+        open_by_click(cx);
+        cx.simulate_input("ma");
+        clock.advance_clock(Duration::from_millis(SEARCH_DEBOUNCE_MS));
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |picker, _| picker.state().entries().len()),
+            2,
+            "main and feature/map match"
+        );
+        assert!(events.borrow().contains(&PickerEvent::Query("ma".into())));
+    }
+
+    #[gpui::test]
+    fn an_empty_list_says_why_and_loading_shows_placeholders(cx: &mut TestAppContext) {
+        let (view, _events, cx) = picker(cx, PickerState::new("branches", Vec::new()));
+        open_by_click(cx);
+        assert!(cx.debug_bounds("picker-empty").is_some());
+        view.update(cx, |picker, cx| {
+            picker.set_status(PickerStatus::Loading, cx)
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("picker-loading").is_some());
+        assert!(cx.debug_bounds("picker-empty").is_none());
+    }
+
+    #[gpui::test]
+    fn an_error_keeps_the_last_rows_and_retry_reports_retry(cx: &mut TestAppContext) {
+        let (view, events, cx) = picker(cx, branches());
+        open_by_click(cx);
+        view.update(cx, |picker, cx| picker.set_status(PickerStatus::Error, cx));
+        draw(cx);
+        assert!(
+            cx.debug_bounds("picker-row-0").is_some(),
+            "the last list stays above the error"
+        );
+        let retry = centre(cx, "error-retry");
+        cx.simulate_click(retry, Modifiers::none());
+        assert_eq!(*events.borrow(), vec![PickerEvent::Retry]);
+    }
+
+    #[gpui::test]
+    fn right_enters_the_active_folder_and_the_panel_stays_open(cx: &mut TestAppContext) {
+        let (view, events, cx) = picker(cx, folders());
+        open_by_click(cx);
+        press_key(cx, "down");
+        press_key(cx, "right");
+        assert_eq!(
+            *events.borrow(),
+            vec![PickerEvent::Navigate("/projects/massorca/crates".into())]
+        );
+        assert!(is_open(&view, cx));
+    }
+
+    #[gpui::test]
+    fn the_create_row_reports_the_typed_name(cx: &mut TestAppContext) {
+        let clock = cx.executor();
+        let (_view, events, cx) = picker(cx, branches().creatable("Create branch"));
+        open_by_click(cx);
+        cx.simulate_input("feat/x");
+        clock.advance_clock(Duration::from_millis(SEARCH_DEBOUNCE_MS));
+        cx.run_until_parked();
+        draw(cx);
+        let create = centre(cx, "picker-row-0");
+        cx.simulate_click(create, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            events.borrow().last(),
+            Some(&PickerEvent::Created("feat/x".into()))
+        );
     }
 }

@@ -1,4 +1,4 @@
-//! Stories of the data components: Table and file tree, and later Picker. A stateful
+//! Stories of the data components: Table, file tree and Picker. A stateful
 //! component keeps its entity across frames under a key of its own.
 
 use super::{Story, variant};
@@ -7,6 +7,7 @@ use crate::components::agent_status::AgentState;
 use crate::components::file_tree::{
     ContentMatch, FileEntry, FileTreeState, FileTreeStatus, FileTreeView, GitStatus, SearchScope,
 };
+use crate::components::picker::{PickerItem, PickerState, PickerStatus, PickerView};
 use crate::components::table::{
     SortDirection, TableCell, TableColumn, TableDensity, TableRow, TableState, TableStatus,
     TableView,
@@ -29,6 +30,11 @@ pub fn stories() -> Vec<Story> {
             name: "File tree",
             spec: "FileTree.md",
             render: file_tree,
+        },
+        Story {
+            name: "Picker",
+            spec: "Picker.md",
+            render: picker_story,
         },
     ]
 }
@@ -273,4 +279,192 @@ fn files() -> FileTreeState {
         FileEntry::file("src/lib.rs"),
         FileEntry::file("notes.txt").ignored(),
     ])
+}
+
+/// Height of a gallery frame around a closed picker: its trigger only.
+const PICKER_CLOSED_HEIGHT: f32 = 60.0;
+/// Height of a gallery frame around an open picker, which needs room for its panel.
+const PICKER_OPEN_HEIGHT: f32 = 340.0;
+
+fn picker_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let closed = keyed_picker(window, cx, "picker-closed", |cx| {
+        PickerView::new(
+            "picker-closed",
+            "Base branch",
+            "Choose a base branch",
+            branches(),
+            cx,
+        )
+    });
+    let grouped = keyed_picker(window, cx, "picker-grouped", |cx| {
+        let state = grouped_branches().selected("feature/map");
+        PickerView::new(
+            "picker-grouped",
+            "Base branch",
+            "Choose a base branch",
+            state,
+            cx,
+        )
+        .open_at_start()
+    });
+    let folder = keyed_picker(window, cx, "picker-folder", |cx| {
+        PickerView::new(
+            "picker-folder",
+            "Parent folder",
+            "Choose a folder",
+            folders(),
+            cx,
+        )
+        .open_at_start()
+    });
+    let creatable = keyed_picker(window, cx, "picker-creatable", |cx| {
+        let mut state = branches().creatable("Create branch");
+        state.set_query("feat/x");
+        PickerView::new(
+            "picker-creatable",
+            "Base branch",
+            "Choose a base branch",
+            state,
+            cx,
+        )
+        .open_at_start()
+    });
+    let loading = keyed_picker(window, cx, "picker-loading", |cx| {
+        let mut state = branches();
+        state.set_status(PickerStatus::Loading);
+        PickerView::new(
+            "picker-loading",
+            "Base branch",
+            "Choose a base branch",
+            state,
+            cx,
+        )
+        .open_at_start()
+    });
+    let error = keyed_picker(window, cx, "picker-error", |cx| {
+        let mut state = branches();
+        state.set_status(PickerStatus::Error);
+        PickerView::new(
+            "picker-error",
+            "Base branch",
+            "Choose a base branch",
+            state,
+            cx,
+        )
+        .open_at_start()
+    });
+    let empty = keyed_picker(window, cx, "picker-empty", |cx| {
+        let state = PickerState::new("branches", Vec::new());
+        PickerView::new(
+            "picker-empty",
+            "Base branch",
+            "Choose a base branch",
+            state,
+            cx,
+        )
+        .open_at_start()
+    });
+    let disabled = keyed_picker(window, cx, "picker-disabled", |cx| {
+        PickerView::new(
+            "picker-disabled",
+            "Base branch",
+            "Choose a base branch",
+            branches(),
+            cx,
+        )
+        .disabled(true)
+    });
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Closed, with its placeholder",
+            picker_frame(closed, PICKER_CLOSED_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Open, with overline groups and the chosen value",
+            picker_frame(grouped, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Folder mode, with crumbs and a parent row",
+            picker_frame(folder, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Create row for the typed name",
+            picker_frame(creatable, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Loading: three placeholders",
+            picker_frame(loading, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Empty list, with the reason",
+            picker_frame(empty, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Error, with Retry",
+            picker_frame(error, PICKER_OPEN_HEIGHT),
+            cx,
+        ))
+        .child(variant(
+            "Disabled",
+            picker_frame(disabled, PICKER_CLOSED_HEIGHT),
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// The picker of one variant, kept across frames under its own key.
+fn keyed_picker(
+    window: &mut Window,
+    cx: &mut App,
+    key: &'static str,
+    build: fn(&mut Context<PickerView>) -> PickerView,
+) -> Entity<PickerView> {
+    window.use_keyed_state(key, cx, |_, cx| build(cx))
+}
+
+fn picker_frame(picker: Entity<PickerView>, height: f32) -> impl IntoElement {
+    div().h(px(height)).child(picker)
+}
+
+fn branches() -> PickerState {
+    PickerState::new(
+        "branches",
+        vec![
+            PickerItem::new("main", "main"),
+            PickerItem::new("feature/map", "feature/map"),
+            PickerItem::new("release", "release"),
+        ],
+    )
+}
+
+fn grouped_branches() -> PickerState {
+    PickerState::new(
+        "branches",
+        vec![
+            PickerItem::new("main", "main").group("RECENT"),
+            PickerItem::new("feature/map", "feature/map").group("RECENT"),
+            PickerItem::new("release", "release").group("ALL"),
+        ],
+    )
+}
+
+fn folders() -> PickerState {
+    PickerState::new(
+        "folders",
+        vec![
+            PickerItem::new("/projects/massorca/crates", "crates").folder(),
+            PickerItem::new("/projects/massorca/README.md", "README.md"),
+        ],
+    )
+    .folder("/projects/massorca/app/src")
 }
