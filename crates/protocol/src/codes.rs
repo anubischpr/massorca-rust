@@ -13,6 +13,8 @@ pub const STREAM_NOT_FOUND: &str = "stream.not_found";
 pub const STREAM_OVERFLOW: &str = "stream.overflow";
 /// One stream item is larger than a frame; the stream ends with this error.
 pub const STREAM_ITEM_TOO_LARGE: &str = "stream.item_too_large";
+/// The method sends stream-bytes frames and the client did not negotiate `binary-frames/1`.
+pub const STREAM_BINARY_FRAMES_REQUIRED: &str = "stream.binary_frames_required";
 /// A reply is larger than a frame; only the request that asked for it fails.
 pub const RESPONSE_TOO_LARGE: &str = "response.too_large";
 pub const PATH_NOT_UTF8: &str = "path.not_utf8";

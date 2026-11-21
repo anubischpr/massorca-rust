@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use massorca_protocol::capabilities::BINARY_FRAMES;
 use massorca_protocol::methods::events::Subscribed;
 use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use serde_json::Value;
@@ -35,6 +36,20 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
             Err(ErrorBody::new(
                 codes::CAPABILITY_NOT_NEGOTIATED,
                 format!("{method} needs {capability}, which this connection was not offered"),
+            )),
+        )
+        .await;
+    }
+    // Older clients close the connection on a frame they cannot read, so they never get a byte stream.
+    if entry.value.sends_bytes && !session.client_capabilities.contains(BINARY_FRAMES) {
+        return reply(
+            &session,
+            id,
+            Err(ErrorBody::new(
+                codes::STREAM_BINARY_FRAMES_REQUIRED,
+                format!(
+                    "{method} sends binary frames, and this client did not offer {BINARY_FRAMES}"
+                ),
             )),
         )
         .await;

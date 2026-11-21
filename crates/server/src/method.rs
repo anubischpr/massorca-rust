@@ -24,7 +24,7 @@ pub type StreamSource = mpsc::Receiver<Value>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamItem {
     Event(Value),
-    /// Needs the client's `binary-frames/1`; see [`MethodRegistry::register_byte_stream`].
+    /// Sent only to clients that negotiated `binary-frames/1`; see [`MethodRegistry::register_byte_stream`].
     Bytes(Vec<u8>),
 }
 
@@ -63,6 +63,8 @@ pub(crate) struct MethodEntry {
     pub(crate) capability: String,
     pub(crate) permission: Permission,
     pub(crate) handler: Handler,
+    /// The method may send stream-bytes frames, so the client must have offered `binary-frames/1`.
+    pub(crate) sends_bytes: bool,
 }
 
 /// One registered method, for listings.
@@ -107,7 +109,14 @@ impl MethodRegistry {
         F: Fn(RequestCtx, P) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R, ErrorBody>> + Send + 'static,
     {
-        self.insert(owner, method, capability, permission, call_handler(handler))
+        self.insert(
+            owner,
+            method,
+            capability,
+            permission,
+            call_handler(handler),
+            false,
+        )
     }
 
     /// Registers a method that opens a stream. Its result is `Subscribed { stream }` and its items follow as events.
@@ -130,12 +139,13 @@ impl MethodRegistry {
             capability,
             permission,
             stream_handler(handler, OpenedSource::Events),
+            false,
         )
     }
 
     /// Registers a method that opens a stream whose items may be bytes. Like `register_stream`, but `Bytes` items go out
-    /// as stream-bytes frames. The dispatcher does not check the client's `binary-frames/1`: a handler that opens one must
-    /// check `ctx.client_capabilities` first and refuse otherwise.
+    /// as stream-bytes frames. The dispatcher refuses the method with `stream.binary_frames_required`, before the handler
+    /// runs, to a client whose `hello` did not offer `binary-frames/1`; handlers need not check it.
     pub fn register_byte_stream<P, F, Fut>(
         &self,
         owner: Owner,
@@ -155,6 +165,7 @@ impl MethodRegistry {
             capability,
             permission,
             stream_handler(handler, OpenedSource::Items),
+            true,
         )
     }
 
@@ -183,12 +194,14 @@ impl MethodRegistry {
         capability: &str,
         permission: Permission,
         handler: Handler,
+        sends_bytes: bool,
     ) -> Result<RegistrationHandle, MethodError> {
         check_prefix(&owner, method)?;
         let entry = MethodEntry {
             capability: capability.to_owned(),
             permission,
             handler,
+            sends_bytes,
         };
         Ok(self.entries.register(owner, method, entry)?)
     }

@@ -20,6 +20,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::STREAM_NOT_FOUND, "stream.not_found"),
     (codes::STREAM_OVERFLOW, "stream.overflow"),
     (codes::STREAM_ITEM_TOO_LARGE, "stream.item_too_large"),
+    (
+        codes::STREAM_BINARY_FRAMES_REQUIRED,
+        "stream.binary_frames_required",
+    ),
     (codes::RESPONSE_TOO_LARGE, "response.too_large"),
     (codes::PATH_NOT_UTF8, "path.not_utf8"),
     (codes::PATH_NOT_FOUND, "path.not_found"),

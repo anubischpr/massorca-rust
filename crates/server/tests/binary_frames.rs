@@ -2,6 +2,8 @@
 //! and a handler sees the capabilities its client's `hello` named.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use interprocess::local_socket::tokio::Stream;
@@ -352,4 +354,53 @@ async fn result_of_stream(raw: &mut RawFrames, id: u64) -> u64 {
         .get("stream")
         .and_then(Value::as_u64)
         .expect("the answer names a stream")
+}
+
+#[tokio::test]
+async fn byte_streams_are_refused_to_a_client_without_binary_frames() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let ran = Arc::new(AtomicBool::new(false));
+    let handler_ran = Arc::clone(&ran);
+    let _method = running
+        .registries()
+        .methods
+        .register_byte_stream(
+            demo(),
+            "ext.demo.bytes",
+            capabilities::BINARY_FRAMES,
+            Permission::Read,
+            move |ctx: RequestCtx, params: Value| {
+                handler_ran.store(true, Ordering::SeqCst);
+                interleaved_items(ctx, params)
+            },
+        )
+        .expect("the byte stream method registers");
+
+    let mut old = RawFrames::open(home.path()).await;
+    old.handshake(&[]).await;
+    old.send(&request(1, "ext.demo.bytes", Value::Null)).await;
+    old.send(&request(2, service::INFO, Value::Null)).await;
+
+    let mut refused = None;
+    loop {
+        match old.recv().await {
+            Frame::StreamBytes { .. } => {
+                panic!("a client without binary-frames/1 got stream bytes")
+            }
+            Frame::Message(Message::Response { id: 1, error, .. }) => refused = error,
+            Frame::Message(Message::Response { id: 2, error, .. }) => {
+                assert!(error.is_none(), "service.info failed: {error:?}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    let refused = refused.expect("the byte stream request is answered with an error");
+    assert_eq!(refused.code, codes::STREAM_BINARY_FRAMES_REQUIRED);
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "the handler ran for an old client"
+    );
+    stop(running).await;
 }
