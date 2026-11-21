@@ -16,6 +16,7 @@ mod handshake;
 mod instance_lock;
 mod method;
 mod names;
+mod network;
 mod owner;
 mod permission;
 mod registry;
@@ -37,7 +38,7 @@ pub use method::{
     ByteStreamSource, MethodError, MethodInfo, MethodRegistry, StreamItem, StreamSource,
 };
 pub use owner::Owner;
-pub use permission::{Permission, Principal, authorize};
+pub use permission::{Permission, Principal, Scopes, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 pub use service::{RunningService, Service, ServiceConfig};
 pub use settings::{SettingDecl, SettingKind, SettingsRegistry};

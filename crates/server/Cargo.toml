@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
 directories.workspace = true
 interprocess.workspace = true
 massorca-core-git.workspace = true
@@ -16,8 +17,10 @@ massorca-core-terminal.workspace = true
 massorca-core-workspace.workspace = true
 massorca-profile.workspace = true
 massorca-protocol.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true

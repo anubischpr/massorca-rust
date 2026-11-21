@@ -56,7 +56,7 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
     }
 
     let ctx = RequestCtx {
-        principal: session.principal,
+        principal: session.principal.clone(),
         state: Arc::clone(&session.state),
         connection_id: session.connection_id.clone(),
         client_capabilities: Arc::clone(&session.client_capabilities),

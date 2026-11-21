@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use massorca_protocol::{
-    ErrorBody, Frame, Message, codes, fits,
-};
+use massorca_protocol::{ErrorBody, Frame, Message, codes, fits};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::method::StreamItem;
