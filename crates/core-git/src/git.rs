@@ -70,7 +70,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, Some(self.timeout))
+        self.run_limited(cwd, args, Some(self.timeout), true)
     }
 
     /// Like `run`, for a command that changes the repository or belongs to one that does.
@@ -83,7 +83,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, self.mutation_timeout)
+        self.run_limited(cwd, args, self.mutation_timeout, false)
     }
 
     fn run_limited<I, S>(
@@ -91,6 +91,7 @@ impl Git {
         cwd: Option<&Path>,
         args: I,
         timeout: Option<Duration>,
+        read_only: bool,
     ) -> Result<Captured, GitError>
     where
         I: IntoIterator<Item = S>,
@@ -115,6 +116,10 @@ impl Git {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE");
+        if read_only {
+            // A read never refreshes the index, so it cannot wake a watcher (decision 0012).
+            command.env("GIT_OPTIONAL_LOCKS", "0");
+        }
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }

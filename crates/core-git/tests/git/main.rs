@@ -4,5 +4,6 @@ mod discovery;
 mod fixture;
 mod refs;
 mod repository;
+mod status;
 mod worktree_failures;
 mod worktrees;

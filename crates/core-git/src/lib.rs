@@ -9,6 +9,7 @@ mod git;
 mod process;
 mod refs;
 mod repository;
+mod status;
 mod version;
 #[cfg(windows)]
 mod windows_job_spawn;
