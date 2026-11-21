@@ -3,9 +3,11 @@
 
 mod connection;
 mod refusal;
+mod update;
 
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
 pub use refusal::Refusal;
+pub use update::{StoreState, StoreUpdate};
