@@ -73,6 +73,9 @@ same time. The same API must later run against a remote execution host
   directories. It is never read from `REBASE_HEAD` alone, which can linger.
 - Every read runs with `GIT_OPTIONAL_LOCKS=0`. A read then never rewrites the
   index, which would wake every watcher (0012).
+- Porcelain `git diff` against the working tree rewrites the index even with
+  that variable set. Reads therefore use the plumbing commands `diff-files`
+  and `diff-index`, and a test checks that a read leaves the index untouched.
 
 ### Concurrency
 
