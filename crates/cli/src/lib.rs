@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod args;
+pub mod connect;
 pub mod error;
 pub mod ext;
 pub mod logging;

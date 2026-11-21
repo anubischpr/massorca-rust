@@ -63,6 +63,14 @@ pub enum Commands {
 pub enum ServiceCommand {
     /// Runs the service in this process until it is stopped.
     Run(RunArgs),
+    /// Shows whether the service is running. Never starts it.
+    Status,
+    /// Shows the service's identity. Starts the service when it is not running.
+    Info,
+    /// Stops the service. Succeeds when it is not running.
+    Stop,
+    /// Stops the service, then starts it again.
+    Restart,
 }
 
 #[derive(Debug, Args)]

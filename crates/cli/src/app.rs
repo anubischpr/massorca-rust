@@ -1,16 +1,18 @@
 //! Runs one command line: parses it, dispatches to the command, and turns the outcome into output and an exit code.
 
 use std::ffi::OsString;
+use std::future::Future;
 use std::process::ExitCode;
 
 use clap::Parser;
 use massorca_profile::Profile;
+use tokio::runtime::Builder;
 
 use crate::args::{Cli, Commands, ServiceCommand};
 use crate::error::CliError;
 use crate::ext;
 use crate::output::{self, Output};
-use crate::service::foreground;
+use crate::service::{control, foreground};
 
 /// Runs the command line `args` (program name first) and returns its exit code.
 pub fn run<I, T>(args: I) -> ExitCode
@@ -38,16 +40,28 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
     let Cli {
         profile,
         home,
+        no_autostart,
         command,
         ..
     } = cli;
+    let autostart = !no_autostart;
     match command {
         Commands::Service { command } => {
             let profile = Profile::resolve(home, profile)?;
             match command {
                 ServiceCommand::Run(args) => foreground::run(&profile, &args, output),
+                ServiceCommand::Status => block_on(control::status(&profile, output)),
+                ServiceCommand::Info => block_on(control::info(&profile, autostart, output)),
+                ServiceCommand::Stop => block_on(control::stop(&profile, output)),
+                ServiceCommand::Restart => block_on(control::restart(&profile, output)),
             }
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
+}
+
+/// Runs one async command on a current-thread runtime.
+fn block_on<T>(future: impl Future<Output = Result<T, CliError>>) -> Result<T, CliError> {
+    let runtime = Builder::new_current_thread().enable_all().build()?;
+    runtime.block_on(future)
 }
