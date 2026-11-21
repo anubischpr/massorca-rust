@@ -1,0 +1,22 @@
+[package]
+name = "massorca-core-workspace"
+description = "Projects and workspaces (git worktrees and folders) over the store and git: the domain rules of ADR 0008"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dunce.workspace = true
+massorca-core-git.workspace = true
+massorca-core-store.workspace = true
+massorca-protocol.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
