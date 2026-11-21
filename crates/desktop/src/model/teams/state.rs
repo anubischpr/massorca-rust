@@ -389,6 +389,7 @@ fn highest_id(teams: &[Team]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::super::sample::{SampleTeamsSource, TeamsSource};
+    use super::super::types::{BoardOwner, TaskId};
     use super::*;
 
     fn new_team(name: &str, host: usize) -> NewTeam {
@@ -445,6 +446,20 @@ mod tests {
         let team = state.team(id).unwrap();
         assert_eq!(team.lead, Some(bot));
         assert_eq!(team.lead_name(), Some("Nora"));
+    }
+
+    #[test]
+    fn deleting_a_project_removes_its_board_and_a_pick_on_it() {
+        let mut state = SampleTeamsSource.teams();
+        let team = TeamId(1);
+        let project = ProjectId(1);
+        state
+            .pick_task(BoardOwner::Project(team, project), TaskId(7))
+            .unwrap();
+        state.delete_project(team, project).unwrap();
+        assert!(state.team(team).unwrap().project(project).is_none());
+        assert!(state.pick().is_none());
+        assert_eq!(state.delete_project(team, project), Err(TeamError::Missing));
     }
 
     #[test]
