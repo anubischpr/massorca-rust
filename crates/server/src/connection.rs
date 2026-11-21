@@ -17,6 +17,8 @@ use crate::transport;
 
 const INBOUND_CAPACITY: usize = 64;
 const OUTBOUND_CAPACITY: usize = 256;
+/// Requests one connection may have in flight. At the limit it reads no further frames, so the peer waits on the socket.
+const MAX_REQUESTS_IN_FLIGHT: usize = 64;
 
 /// Serves one accepted connection until the peer leaves or the service stops.
 pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: ShutdownSignal) {
@@ -60,7 +62,7 @@ async fn run_session(
             biased;
             () = signal.wait() => break true,
             Some(_) = requests.join_next(), if !requests.is_empty() => {}
-            message = inbound.recv() => match message {
+            message = inbound.recv(), if requests.len() < MAX_REQUESTS_IN_FLIGHT => match message {
                 Some(message) => route(message, session, &mut requests),
                 None => break false,
             },
