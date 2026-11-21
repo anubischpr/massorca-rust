@@ -46,6 +46,7 @@ pub(super) fn tree_row(row: &TreeRow, index: usize, focus: &FocusHandle) -> Side
         TreeRow::Workspace {
             name,
             branch,
+            id: _,
             usage_slot,
         } => {
             let mut item = SidebarRow::workspace(

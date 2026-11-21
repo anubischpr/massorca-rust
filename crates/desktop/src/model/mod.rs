@@ -8,6 +8,7 @@ pub mod rail;
 pub mod region_cycle;
 pub mod regions;
 pub mod roving;
+pub mod service_view;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;

@@ -138,6 +138,8 @@ impl DataSource for SampleDataSource {
             session_title: Some("Implementation of master catalogs".into()),
             active_session: Some("s1".into()),
             prototypes: 3,
+            service_status: None,
+            service_notice: None,
         }
     }
 }
