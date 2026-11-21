@@ -8,7 +8,7 @@ use alacritty_terminal::vte::ansi::CursorShape;
 
 use super::TerminalFeed;
 use crate::components::terminal_surface::colors;
-use crate::tokens::{Color, TerminalColors};
+use crate::tokens::{Color, TERMINAL_MIN_CONTRAST, TerminalColors};
 
 /// The visible grid, as the surface paints it.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,8 +113,9 @@ fn blank_cell(palette: &TerminalColors) -> RenderCell {
     }
 }
 
-/// A cell as the surface paints it: inverse, dim and hidden applied, and the selection
-/// drawn as its background.
+/// A cell as the surface paints it: inverse, dim and hidden applied, the selection drawn as
+/// its background, and the text raised to the minimum contrast. Faint text keeps its reduced
+/// contrast, and hidden text stays hidden.
 fn render_cell(
     cell: &Cell,
     palette: &TerminalColors,
@@ -127,14 +128,17 @@ fn render_cell(
     if flags.contains(Flags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
     }
-    if flags.intersects(Flags::DIM) {
+    let faint = flags.intersects(Flags::DIM);
+    if faint {
         fg = colors::mix(fg, bg, 0.5);
-    }
-    if flags.contains(Flags::HIDDEN) {
-        fg = bg;
     }
     if selected {
         bg = palette.selection;
+    }
+    if flags.contains(Flags::HIDDEN) {
+        fg = bg;
+    } else if !faint {
+        fg = colors::ensure_contrast(fg, bg, TERMINAL_MIN_CONTRAST);
     }
     RenderCell {
         ch: cell.c,
@@ -216,9 +220,9 @@ mod tests {
     fn program_colours_resolve_against_the_palette() {
         let palette = Palette::DARK.terminal;
         let snapshot =
-            painted(10, 3, b"\x1b[31mR\x1b[38;2;1;2;3mT\x1b[38;5;196mX").snapshot(&palette);
+            painted(10, 3, b"\x1b[31mR\x1b[38;2;255;136;0mT\x1b[38;5;196mX").snapshot(&palette);
         assert_eq!(cell(&snapshot, 0, 0).fg, palette.ansi_red);
-        assert_eq!(cell(&snapshot, 0, 1).fg, Color::rgba8(1, 2, 3, 1.0));
+        assert_eq!(cell(&snapshot, 0, 1).fg, Color::rgba8(255, 136, 0, 1.0));
         assert_eq!(cell(&snapshot, 0, 2).fg, colors::indexed(196));
     }
 
@@ -294,5 +298,26 @@ mod tests {
         let snapshot = painted(10, 3, b"\x1b[?1h\x1b[?2004h").snapshot(&palette);
         assert!(snapshot.modes.contains(TermMode::APP_CURSOR));
         assert!(snapshot.modes.contains(TermMode::BRACKETED_PASTE));
+    }
+
+    #[test]
+    fn a_low_contrast_program_colour_is_raised_to_the_minimum() {
+        let palette = Palette::DARK.terminal;
+        let dark = Color::rgba8(30, 30, 30, 1.0);
+        let snapshot = painted(10, 3, b"\x1b[38;2;30;30;30mX").snapshot(&palette);
+        let text = cell(&snapshot, 0, 0);
+        assert!(text.fg.contrast(text.bg) >= TERMINAL_MIN_CONTRAST);
+        assert!(
+            text.fg.luminance() > dark.luminance(),
+            "raised towards white"
+        );
+    }
+
+    #[test]
+    fn faint_text_is_not_raised_to_the_minimum() {
+        let palette = Palette::DARK.terminal;
+        let dark = Color::rgba8(30, 30, 30, 1.0);
+        let snapshot = painted(10, 3, b"\x1b[38;2;30;30;30m\x1b[2mD").snapshot(&palette);
+        assert_eq!(cell(&snapshot, 0, 0).fg, colors::mix(dark, palette.bg, 0.5));
     }
 }

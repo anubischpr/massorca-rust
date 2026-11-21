@@ -5,6 +5,9 @@ use crate::tokens::{Color, TerminalColors};
 use alacritty_terminal::term::color::Colors as Overrides;
 use alacritty_terminal::vte::ansi::{Color as ProgramColor, NamedColor};
 
+const BLACK: Color = Color::rgba8(0, 0, 0, 1.0);
+const WHITE: Color = Color::rgba8(255, 255, 255, 1.0);
+
 /// The colour of ANSI slot `index` (0 to 15) from the palette.
 pub fn ansi(palette: &TerminalColors, index: u8) -> Color {
     let slots = [
@@ -89,10 +92,31 @@ fn named_default(palette: &TerminalColors, named: NamedColor) -> Color {
     }
 }
 
+/// Moves `fg` towards white or black, whichever gives more contrast on `bg`, until it has
+/// `minimum` contrast against `bg`. A foreground that already has enough is returned as it is.
+pub fn ensure_contrast(fg: Color, bg: Color, minimum: f32) -> Color {
+    if fg.contrast(bg) >= minimum {
+        return fg;
+    }
+    // Black and white contrast equally with a background of luminance about 0.179.
+    let target = if bg.luminance() > 0.179 { BLACK } else { WHITE };
+    // Along the way to `target` the contrast crosses `minimum` once: bisect for that point.
+    let (mut low, mut high) = (0.0_f32, 1.0_f32);
+    for _ in 0..16 {
+        let middle = (low + high) / 2.0;
+        if mix(fg, target, middle).contrast(bg) >= minimum {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    mix(fg, target, high)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokens::Palette;
+    use crate::tokens::{Palette, TERMINAL_MIN_CONTRAST};
     use alacritty_terminal::vte::ansi::Rgb;
 
     fn assert_close(actual: Color, expected: Color) {
@@ -173,5 +197,57 @@ mod tests {
         };
         assert_close(mix(white, black, 0.5), half);
         assert_eq!(mix(white, black, 0.0), white);
+    }
+
+    #[test]
+    fn a_foreground_with_enough_contrast_is_left_alone() {
+        let palette = Palette::DARK.terminal;
+        assert_eq!(
+            ensure_contrast(palette.fg, palette.bg, TERMINAL_MIN_CONTRAST),
+            palette.fg
+        );
+        let white = Color::rgba8(255, 255, 255, 1.0);
+        let black = Color::rgba8(0, 0, 0, 1.0);
+        assert_eq!(ensure_contrast(white, black, TERMINAL_MIN_CONTRAST), white);
+    }
+
+    #[test]
+    fn a_dark_foreground_on_a_dark_background_is_lightened_to_the_minimum() {
+        let palette = Palette::DARK.terminal;
+        let fg = Color::rgba8(30, 30, 30, 1.0);
+        let raised = ensure_contrast(fg, palette.bg, TERMINAL_MIN_CONTRAST);
+        assert!(raised.contrast(palette.bg) >= TERMINAL_MIN_CONTRAST);
+        assert!(raised.luminance() > fg.luminance(), "moved towards white");
+    }
+
+    #[test]
+    fn a_light_foreground_on_a_light_background_is_darkened_to_the_minimum() {
+        let palette = Palette::LIGHT.terminal;
+        let fg = Color::rgba8(230, 230, 230, 1.0);
+        let darkened = ensure_contrast(fg, palette.bg, TERMINAL_MIN_CONTRAST);
+        assert!(darkened.contrast(palette.bg) >= TERMINAL_MIN_CONTRAST);
+        assert!(darkened.luminance() < fg.luminance(), "moved towards black");
+    }
+
+    #[test]
+    fn the_minimum_is_reached_for_every_pair_of_a_colour_sweep() {
+        let steps: [u8; 6] = [0, 51, 102, 153, 204, 255];
+        let mut colours = Vec::new();
+        for r in steps {
+            for g in steps {
+                for b in steps {
+                    colours.push(Color::rgba8(r, g, b, 1.0));
+                }
+            }
+        }
+        for &fg in &colours {
+            for &bg in &colours {
+                let adjusted = ensure_contrast(fg, bg, TERMINAL_MIN_CONTRAST);
+                assert!(
+                    adjusted.contrast(bg) >= TERMINAL_MIN_CONTRAST,
+                    "{fg:?} on {bg:?} gave {adjusted:?}"
+                );
+            }
+        }
     }
 }
