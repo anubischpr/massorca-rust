@@ -15,6 +15,7 @@ use massorca_desktop::model::teams::SampleTeamsSource;
 use massorca_desktop::service::LaunchOptions;
 use massorca_desktop::shell::{self, Shell};
 use massorca_desktop::store::ClientDataSource;
+use massorca_desktop::window_identity;
 use massorca_ui::tokens::{LAYOUT_WINDOW_MIN_HEIGHT, LAYOUT_WINDOW_MIN_WIDTH};
 use massorca_ui::{Appearance, Assets};
 use std::io::Write;
@@ -66,6 +67,8 @@ fn main() {
                     // Linux draws its own frame; GPUI keeps the platform frame where the WM cannot.
                     window_decorations: cfg!(target_os = "linux")
                         .then_some(WindowDecorations::Client),
+                    // The window identity Linux shells read; other platforms keep their defaults.
+                    app_id: cfg!(target_os = "linux").then(|| window_identity::APP_ID.to_string()),
                     focus: launch.focus(),
                     show: launch.show(),
                     ..Default::default()
