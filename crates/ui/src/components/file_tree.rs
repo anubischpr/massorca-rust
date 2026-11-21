@@ -517,3 +517,162 @@ impl FileTreeState {
         self.cursor = self.cursor.min(self.visible().len().saturating_sub(1));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> FileTreeState {
+        FileTreeState::new(vec![
+            FileEntry::file("README.md"),
+            FileEntry::file("src/main.rs").git(GitStatus::Modified),
+            FileEntry::file("src/lib/util.rs"),
+            FileEntry::file("target/debug/app").ignored(),
+            FileEntry::dir("docs"),
+            FileEntry::file("Cargo.toml").git(GitStatus::Added),
+        ])
+    }
+
+    fn names(state: &FileTreeState) -> Vec<String> {
+        state
+            .visible()
+            .iter()
+            .map(|row| row.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn folders_come_first_and_names_sort_ignoring_case() {
+        assert_eq!(
+            names(&project()),
+            ["docs", "src", "target", "Cargo.toml", "README.md"]
+        );
+    }
+
+    #[test]
+    fn a_folder_implied_by_its_files_is_listed_and_its_children_show_only_when_open() {
+        let mut state = project();
+        assert!(state.toggle(&"src".into()));
+        assert_eq!(
+            names(&state),
+            [
+                "docs",
+                "src",
+                "lib",
+                "main.rs",
+                "target",
+                "Cargo.toml",
+                "README.md"
+            ]
+        );
+        assert!(!state.toggle(&"src".into()));
+        assert_eq!(names(&state).len(), 5);
+    }
+
+    #[test]
+    fn right_opens_a_folder_then_enters_it_and_left_leaves_it_for_the_parent() {
+        let mut state = project();
+        state.move_cursor(ListMove::Next);
+        assert!(state.right(), "src opens");
+        assert_eq!(state.cursor(), 1);
+        assert!(state.right(), "an open folder moves to its first child");
+        assert_eq!(state.cursor(), 2, "lib");
+        state.left();
+        assert_eq!(state.cursor(), 1, "lib is a child of src");
+        state.left();
+        assert_eq!(names(&state).len(), 5, "left on an opened folder closes it");
+    }
+
+    #[test]
+    fn enter_opens_a_file_and_toggles_a_folder() {
+        let mut state = project();
+        state.move_cursor(ListMove::Last);
+        assert_eq!(
+            state.activate(),
+            Some(TreeActivation::Open("README.md".into()))
+        );
+        assert_eq!(state.active(), Some(&SharedString::from("README.md")));
+        state.move_cursor(ListMove::First);
+        assert_eq!(
+            state.activate(),
+            Some(TreeActivation::Toggled {
+                path: "docs".into(),
+                expanded: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_name_filter_keeps_the_ancestors_open_and_marks_the_matched_characters() {
+        let mut state = project();
+        state.set_query("util");
+        let rows = state.visible();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.name.to_string())
+                .collect::<Vec<_>>(),
+            ["src", "lib", "util.rs"]
+        );
+        assert_eq!(
+            rows[0].expanded,
+            Some(true),
+            "the filter opens the ancestors"
+        );
+        assert_eq!(rows[2].matches, vec![0..4]);
+    }
+
+    #[test]
+    fn the_filter_ignores_ascii_case() {
+        let mut state = project();
+        state.set_query("readme");
+        assert_eq!(names(&state), ["README.md"]);
+        assert_eq!(state.visible()[0].matches, vec![0..6]);
+    }
+
+    #[test]
+    fn typing_jumps_to_the_next_name_that_starts_with_the_letter_and_wraps() {
+        let mut state = project();
+        assert!(state.type_ahead('c'));
+        assert_eq!(state.cursor(), 3, "Cargo.toml");
+        assert!(state.type_ahead('r'));
+        assert_eq!(state.cursor(), 4, "README.md");
+        assert!(state.type_ahead('d'));
+        assert_eq!(state.cursor(), 0, "wraps to docs");
+        assert!(!state.type_ahead('z'));
+    }
+
+    #[test]
+    fn git_letters_and_words_come_from_the_status() {
+        assert_eq!(GitStatus::Untracked.letter(), '?');
+        assert_eq!(GitStatus::Modified.letter(), 'M');
+        assert_eq!(GitStatus::Added.word(), "added");
+        let mut state = project();
+        state.toggle(&"src".into());
+        let main = state
+            .visible()
+            .into_iter()
+            .find(|row| row.name == "main.rs");
+        assert_eq!(main.and_then(|row| row.git), Some(GitStatus::Modified));
+    }
+
+    #[test]
+    fn a_new_listing_keeps_open_folders_and_drops_a_file_that_is_gone() {
+        let mut state = project();
+        state.toggle(&"src".into());
+        state.open_path(&"README.md".into());
+        state.set_entries(vec![FileEntry::file("src/main.rs")]);
+        assert_eq!(state.active(), None);
+        assert_eq!(names(&state), ["src", "main.rs"]);
+    }
+
+    #[test]
+    fn the_cursor_stops_at_both_ends() {
+        let mut state = project();
+        state.move_cursor(ListMove::Previous);
+        assert_eq!(state.cursor(), 0);
+        state.move_cursor(ListMove::Last);
+        assert_eq!(state.cursor(), 4);
+        state.move_cursor(ListMove::Next);
+        assert_eq!(state.cursor(), 4);
+    }
+}
