@@ -13,7 +13,12 @@ use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
 // One system call resumes every thread of a process; enumerating threads with a Toolhelp snapshot instead
 // costs a scan of every thread on the machine per spawn, which doubled the time of a git-heavy test run.
-#[link(name = "ntdll", kind = "raw-dylib")]
+// On 32-bit x86 a raw-dylib import is decorated (`_NtResumeProcess@4`) unless told otherwise; ntdll exports it bare.
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "ntdll", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+#[cfg_attr(not(target_arch = "x86"), link(name = "ntdll", kind = "raw-dylib"))]
 unsafe extern "system" {
     fn NtResumeProcess(process: *mut c_void) -> i32;
 }
