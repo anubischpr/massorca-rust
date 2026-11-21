@@ -3,13 +3,14 @@
 use super::{Story, variant};
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant, StatePreview};
+use crate::components::checkbox::Checkbox;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::kbd::{Kbd, ShortcutOs};
 use crate::components::switch::Switch;
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{LAYOUT_MENU_MIN_WIDTH, SPACE_2, SPACE_3, SPACE_4};
+use crate::tokens::{LAYOUT_MENU_MIN_WIDTH, SPACE_2, SPACE_3, SPACE_4, TYPE_OVERLINE};
 use gpui::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
@@ -38,6 +39,11 @@ pub fn stories() -> Vec<Story> {
             name: "Switch",
             spec: "Switch.md",
             render: switch_story,
+        },
+        Story {
+            name: "Checkbox",
+            spec: "Checkbox.md",
+            render: checkbox_story,
         },
     ]
 }
@@ -378,6 +384,104 @@ fn switch_story(_: &mut Window, cx: &mut App) -> AnyElement {
                 Switch::new("switch-long", false)
                     .label("Keep the session running after the window is closed on this machine"),
             ),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn checkbox_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let p = cx.theme().palette;
+    column()
+        .child(variant(
+            "Unchecked, checked and partly checked",
+            row()
+                .child(Checkbox::new("cb-unchecked", false).label("Unchecked"))
+                .child(Checkbox::new("cb-checked", true).label("Checked"))
+                .child(
+                    Checkbox::new("cb-partial", false)
+                        .indeterminate(true)
+                        .label("Partly checked"),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Hover, unchecked and checked",
+            row()
+                .child(
+                    Checkbox::new("cb-hover-off", false)
+                        .preview(StatePreview::Hover)
+                        .label("Unchecked, hover"),
+                )
+                .child(
+                    Checkbox::new("cb-hover-on", true)
+                        .preview(StatePreview::Hover)
+                        .label("Checked, hover"),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Focus ring (keyboard focus), around the box and the label",
+            Checkbox::new("cb-focus", true)
+                .preview(StatePreview::Focus)
+                .label("Include archived projects"),
+            cx,
+        ))
+        .child(variant(
+            "Disabled, unchecked and checked",
+            row()
+                .child(
+                    Checkbox::new("cb-disabled-off", false)
+                        .disabled(true)
+                        .label("Unchecked"),
+                )
+                .child(
+                    Checkbox::new("cb-disabled-on", true)
+                        .disabled(true)
+                        .label("Checked"),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Error (outlined in danger, with the reason)",
+            Checkbox::new("cb-error", false)
+                .label("Accept the terms")
+                .error("Choose at least one option."),
+            cx,
+        ))
+        .child(variant(
+            "With a helper line",
+            Checkbox::new("cb-helper", true)
+                .label("Include archived projects")
+                .helper("Shown in the list, marked as archived"),
+            cx,
+        ))
+        .child(variant(
+            "Long label wraps inside a form",
+            div().w(px(LAYOUT_MENU_MIN_WIDTH)).child(
+                Checkbox::new("cb-wrap", true)
+                    .label("Send a summary of every change to the team when the session ends"),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Group: an overline label, then options under a partly checked parent",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .child(
+                    div()
+                        .text_style(TYPE_OVERLINE)
+                        .text_color(p.text.tertiary)
+                        .child("SHOW"),
+                )
+                .child(
+                    Checkbox::new("group-parent", false)
+                        .indeterminate(true)
+                        .label("All files"),
+                )
+                .child(Checkbox::new("group-modified", true).label("Modified"))
+                .child(Checkbox::new("group-added", false).label("Added")),
             cx,
         ))
         .into_any_element()
