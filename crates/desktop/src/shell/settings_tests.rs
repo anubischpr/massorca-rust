@@ -253,6 +253,18 @@ fn escape_puts_the_stored_folder_back_without_sending_anything(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn the_setup_checklist_opens_as_a_full_page_from_settings_general(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    click(cx, "settings-setup-open");
+    assert_eq!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.model().navigation().page),
+        Page::Setup
+    );
+    draw(cx);
+}
+
+#[gpui::test]
 fn a_search_query_is_the_text_the_field_settled_on(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
     rig.shell.update_in(cx, |shell, window, cx| {

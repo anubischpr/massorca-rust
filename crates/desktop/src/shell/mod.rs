@@ -6,6 +6,7 @@ mod palette;
 mod rail;
 mod service_banner;
 mod settings;
+mod setup;
 mod sidebar;
 mod sidebar_rows;
 mod start_page;
@@ -345,6 +346,10 @@ impl Render for Shell {
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
         };
+        let setup_rows = crate::model::setup::checklist(
+            self.store.read(cx).state(),
+            if theme.is_dark() { "Dark" } else { "Light" },
+        );
         let start = self
             .model
             .selected_workspace()
@@ -355,7 +360,15 @@ impl Render for Shell {
                 page,
                 shell: shell.clone(),
             });
-        let canvas = canvas::canvas(&self.model, &self.zones, settings, start, window, cx);
+        let canvas = canvas::canvas(
+            &self.model,
+            &self.zones,
+            settings,
+            start,
+            setup_rows,
+            window,
+            cx,
+        );
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),

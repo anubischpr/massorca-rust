@@ -2,6 +2,7 @@
 
 use super::Shell;
 use super::settings::{self, SettingsFrame};
+use super::setup;
 use super::start_page::{self, StartFrame};
 use super::teams;
 use super::zones::ZoneFocus;
@@ -28,6 +29,7 @@ pub(super) fn canvas(
     zones: &ZoneFocus,
     settings: SettingsFrame<'_>,
     start: Option<StartFrame>,
+    setup_rows: Vec<crate::model::setup::SetupRow>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -46,7 +48,7 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, settings, start, window, cx, &theme))
+        .child(conversation(model, &shell, settings, start, &setup_rows, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -62,6 +64,7 @@ fn conversation(
     shell: &WeakEntity<Shell>,
     settings: SettingsFrame<'_>,
     start: Option<StartFrame>,
+    setup_rows: &[crate::model::setup::SetupRow],
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
@@ -69,6 +72,9 @@ fn conversation(
     // The Settings page fills the Canvas, so it is not centred in a box.
     if model.canvas() == Canvas::Page(Page::Settings) {
         return settings::settings_page(settings, window, cx);
+    }
+    if model.canvas() == Canvas::Page(Page::Setup) {
+        return setup::setup_page(setup_rows, cx);
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {

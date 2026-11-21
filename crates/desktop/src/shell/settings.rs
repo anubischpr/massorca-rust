@@ -272,12 +272,27 @@ fn row(
         ),
         RowBody::WorkspaceFolder => folder_row(row, frame),
         RowBody::ThisPc => (row, value_box(host_word(&frame.connection), &theme)),
-        RowBody::SetupChecklist => (
-            row.disabled_reason(NOT_AVAILABLE),
-            link_button(id.clone()).into_any_element(),
-        ),
+        RowBody::SetupChecklist => (row, setup_link(id.clone(), frame)),
     };
     row.control(control).into_any_element()
+}
+
+/// Opens the setup checklist, a full page (D-OB-12).
+fn setup_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+    let shell = frame.shell.clone();
+    let button = Button::new(id, "Open")
+        .variant(ButtonVariant::Ghost)
+        .trailing_icon(IconName::ChevronRight)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.model.open_page(Page::Setup);
+                cx.notify();
+            });
+        });
+    div()
+        .debug_selector(|| "settings-setup-open".to_owned())
+        .child(button)
+        .into_any_element()
 }
 
 /// The disabled "Open" button of a link row.

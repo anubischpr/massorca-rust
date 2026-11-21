@@ -13,6 +13,7 @@ pub mod roving;
 pub mod service_view;
 pub mod settings;
 pub mod settings_sections;
+pub mod setup;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
