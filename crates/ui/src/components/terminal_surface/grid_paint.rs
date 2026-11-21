@@ -13,7 +13,9 @@ use gpui::{
 use super::feed::{RenderCell, RenderCursor, RenderSnapshot};
 use super::geometry::CellSize;
 use crate::assets::FONT_MONO;
-use crate::tokens::{Color, TYPE_TERMINAL, TerminalColors};
+use crate::tokens::{
+    BORDER_WIDTH_DEFAULT, BORDER_WIDTH_THICK, Color, TYPE_TERMINAL, TerminalColors,
+};
 
 /// Everything the paint pass needs, computed during prepaint.
 #[derive(Debug)]
@@ -235,12 +237,12 @@ fn paint_span(
         color,
         background_color: None,
         underline: span.style.underline.then(|| UnderlineStyle {
-            thickness: px(1.0),
+            thickness: px(BORDER_WIDTH_DEFAULT),
             color: Some(color),
             wavy: false,
         }),
         strikethrough: span.style.strikeout.then(|| StrikethroughStyle {
-            thickness: px(1.0),
+            thickness: px(BORDER_WIDTH_DEFAULT),
             color: Some(color),
         }),
     };
@@ -271,13 +273,13 @@ fn paint_cursor(
     match (focused, cursor.shape) {
         (_, CursorShape::Hidden) | (true, CursorShape::Block) => {}
         (true, CursorShape::Beam) => {
-            let bar = Bounds::new(point(x, y), size(px(2.0), px(cell.height)));
+            let bar = Bounds::new(point(x, y), size(px(BORDER_WIDTH_THICK), px(cell.height)));
             window.paint_quad(fill(bar, color));
         }
         (true, CursorShape::Underline) => {
             let underline = Bounds::new(
-                point(x, y + px(cell.height - 2.0)),
-                size(px(cell.width), px(2.0)),
+                point(x, y + px(cell.height - BORDER_WIDTH_THICK)),
+                size(px(cell.width), px(BORDER_WIDTH_THICK)),
             );
             window.paint_quad(fill(underline, color));
         }
