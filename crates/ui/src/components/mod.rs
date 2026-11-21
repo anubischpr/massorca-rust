@@ -9,6 +9,7 @@ pub mod button;
 pub mod card;
 pub mod checkbox;
 pub mod dialog;
+pub mod diff_view;
 pub mod empty_state;
 pub mod error_state;
 pub mod extension_card;
