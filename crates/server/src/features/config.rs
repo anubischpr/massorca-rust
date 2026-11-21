@@ -16,7 +16,7 @@ use crate::settings::{SettingDecl, SettingKind, SettingsRegistry};
 use crate::store_blocking;
 
 /// Where new workspaces go when a project does not set a root of its own.
-const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
+pub(crate) const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     Ok(vec![
@@ -56,7 +56,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 /// `<user home>/massorca/workspaces`, as a string the protocol can carry.
-fn default_workspace_root() -> Result<String, ServiceError> {
+pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
     let base = directories::BaseDirs::new().ok_or_else(|| {
         ServiceError::DefaultWorkspaceRoot("there is no user home directory".to_owned())
     })?;

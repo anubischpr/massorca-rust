@@ -10,4 +10,5 @@ mod events;
 mod frames;
 mod handshake;
 mod lifecycle;
+mod projects;
 mod registries;

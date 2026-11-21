@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
+use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
+use massorca_core_workspace::Workspaces;
 #[cfg(windows)]
 use massorca_profile::owner_only_security_descriptor;
 #[cfg(unix)]
@@ -58,12 +60,17 @@ impl Service {
         let registrations = features::register_core(&registries)?;
         let (shutdown, signal) = shutdown::channel();
         let started_at_ms = now_ms();
+        // A missing git is reported per call as git.unavailable, so the service still starts.
+        let git = Git::discover().unwrap_or_else(|_| Git::with_binary("git"));
+        let default_root = PathBuf::from(features::default_workspace_root()?);
+        let workspaces = Arc::new(Workspaces::new(store.clone(), git, default_root));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
             events: EventBus::new(),
             shutdown: shutdown.clone(),
             registries,
+            workspaces,
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
