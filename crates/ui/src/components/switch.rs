@@ -393,8 +393,11 @@ impl RenderOnce for Switch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
     use crate::theme::Theme;
     use crate::tokens::Appearance;
+    use gpui::Render;
+    use std::cell::RefCell;
 
     fn dark() -> Theme {
         Theme::new(Appearance::Dark)
@@ -474,5 +477,74 @@ mod tests {
         assert!(Switch::new("a", false).activates());
         assert!(!Switch::new("a", false).disabled(true).activates());
         assert!(!Switch::new("a", false).loading(true).activates());
+    }
+
+    /// Hosts one switch that records each value it asks for.
+    struct Harness {
+        focus: FocusHandle,
+        asked: Rc<RefCell<Vec<bool>>>,
+        disabled: bool,
+    }
+
+    impl Harness {
+        fn new(
+            cx: &mut gpui::Context<Self>,
+            asked: Rc<RefCell<Vec<bool>>>,
+            disabled: bool,
+        ) -> Self {
+            Self {
+                focus: cx.focus_handle(),
+                asked,
+                disabled,
+            }
+        }
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let asked = self.asked.clone();
+            div().child(
+                div()
+                    .absolute()
+                    .top(gpui::px(0.))
+                    .left(gpui::px(0.))
+                    .debug_selector(|| "switch".into())
+                    .child(
+                        Switch::new("under-test", false)
+                            .focus_handle(self.focus.clone())
+                            .disabled(self.disabled)
+                            .on_change(move |next, _, _| asked.borrow_mut().push(next)),
+                    ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn pointer_and_space_each_toggle_and_enter_does_nothing(cx: &mut gpui::TestAppContext) {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness::new(cx, asked.clone(), false));
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("switch").expect("switch is drawn");
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        assert_eq!(*asked.borrow(), vec![true]);
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "enter");
+        assert_eq!(asked.borrow().len(), 1, "Enter does nothing on a switch");
+        press_key(cx, "space");
+        assert_eq!(*asked.borrow(), vec![true, true]);
+    }
+
+    #[gpui::test]
+    fn disabled_switch_ignores_pointer_and_keys(cx: &mut gpui::TestAppContext) {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness::new(cx, asked.clone(), true));
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("switch").expect("switch is drawn");
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "space");
+        assert!(asked.borrow().is_empty());
     }
 }

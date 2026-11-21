@@ -5,6 +5,7 @@ use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant, StatePreview};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::kbd::{Kbd, ShortcutOs};
+use crate::components::switch::Switch;
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled};
@@ -32,6 +33,11 @@ pub fn stories() -> Vec<Story> {
             name: "Badge",
             spec: "Badge.md",
             render: badge_story,
+        },
+        Story {
+            name: "Switch",
+            spec: "Switch.md",
+            render: switch_story,
         },
     ]
 }
@@ -295,6 +301,83 @@ fn badge_story(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant(
             "Disconnected host (dashed ring and Unreachable, never Stopped)",
             row().child(Badge::text("Unreachable").glyph(IconName::CircleDashed)),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn switch_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    column()
+        .child(variant(
+            "Off and on",
+            row()
+                .child(Switch::new("switch-off", false))
+                .child(Switch::new("switch-on", true)),
+            cx,
+        ))
+        .child(variant(
+            "Hover, off and on",
+            row()
+                .child(Switch::new("switch-hover-off", false).preview(StatePreview::Hover))
+                .child(Switch::new("switch-hover-on", true).preview(StatePreview::Hover)),
+            cx,
+        ))
+        .child(variant(
+            "Pressed, off and on",
+            row()
+                .child(Switch::new("switch-pressed-off", false).preview(StatePreview::Pressed))
+                .child(Switch::new("switch-pressed-on", true).preview(StatePreview::Pressed)),
+            cx,
+        ))
+        .child(variant(
+            "Focus ring (keyboard focus), off and on",
+            row()
+                .child(Switch::new("switch-focus-off", false).preview(StatePreview::Focus))
+                .child(Switch::new("switch-focus-on", true).preview(StatePreview::Focus)),
+            cx,
+        ))
+        .child(variant(
+            "Disabled, off and on",
+            row()
+                .child(Switch::new("switch-disabled-off", false).disabled(true))
+                .child(Switch::new("switch-disabled-on", true).disabled(true)),
+            cx,
+        ))
+        .child(variant(
+            "Loading (the change is being saved)",
+            row()
+                .child(Switch::new("switch-loading-off", false).loading(true))
+                .child(Switch::new("switch-loading-on", true).loading(true)),
+            cx,
+        ))
+        .child(variant(
+            "With a label and a helper line",
+            Switch::new("switch-helper", true)
+                .label("Show hidden files")
+                .helper("Applies to new terminals"),
+            cx,
+        ))
+        .child(variant(
+            "Error (the switch keeps its previous value)",
+            Switch::new("switch-error", false)
+                .label("Run on login")
+                .error("Could not save. Setting went back to off."),
+            cx,
+        ))
+        .child(variant(
+            "Disconnected host (disabled, the reason is the helper line)",
+            Switch::new("switch-host", true)
+                .label("Sync settings")
+                .disabled(true)
+                .helper("Host unreachable. Last known state, 5 min ago"),
+            cx,
+        ))
+        .child(variant(
+            "Long label truncates, never wraps",
+            div().w(px(LAYOUT_MENU_MIN_WIDTH)).child(
+                Switch::new("switch-long", false)
+                    .label("Keep the session running after the window is closed on this machine"),
+            ),
             cx,
         ))
         .into_any_element()
