@@ -8,6 +8,7 @@ pub mod browser_chrome;
 pub mod button;
 pub mod card;
 pub mod checkbox;
+pub mod composer;
 pub mod delegation_tree;
 pub mod dialog;
 pub mod diff_view;
