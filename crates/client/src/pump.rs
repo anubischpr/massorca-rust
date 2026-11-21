@@ -4,18 +4,19 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use massorca_protocol::{ErrorBody, Message, codes};
+use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::error::ClientError;
+use crate::subscription::StreamItem;
 
 /// The outcome of a call: its result, or the error the service sent.
 pub(crate) type Reply = Result<Value, ErrorBody>;
 
-/// One item of a subscription: an event, or the error that ended the stream.
-pub(crate) type Item = Result<Value, ErrorBody>;
+/// One item of a subscription: an event or bytes, or the error that ended the stream.
+pub(crate) type Item = Result<StreamItem, ErrorBody>;
 
 /// A request waiting for its answer.
 pub(crate) enum Pending {
@@ -60,12 +61,19 @@ impl Shared {
         lock(&self.routes).pending.remove(&id);
     }
 
-    /// Hands one incoming message to whoever waits for it. Frames nobody waits for are dropped.
-    pub(crate) fn route(&self, message: Message) {
-        match message {
-            Message::Response { id, result, error } => self.answer(id, reply(result, error)),
-            Message::Event { stream, data } => self.deliver(stream, data),
-            Message::End { stream, error } => self.end(stream, error),
+    /// Hands one incoming frame to whoever waits for it. Frames nobody waits for are dropped.
+    pub(crate) fn route(&self, frame: Frame) {
+        match frame {
+            Frame::Message(Message::Response { id, result, error }) => {
+                self.answer(id, reply(result, error));
+            }
+            Frame::Message(Message::Event { stream, data }) => {
+                self.deliver(stream, StreamItem::Event(data));
+            }
+            Frame::Message(Message::End { stream, error }) => self.end(stream, error),
+            Frame::StreamBytes { stream, payload } => {
+                self.deliver(stream, StreamItem::Bytes(payload));
+            }
             _ => {}
         }
     }
@@ -99,12 +107,12 @@ impl Shared {
         }
     }
 
-    /// Queues one event for its subscriber. A subscriber whose queue is full is ended with `stream.overflow`. The last
-    /// slot is kept back for that error, so it always fits, and events never take it.
-    fn deliver(&self, stream: u64, data: Value) {
+    /// Queues one event or byte item for its subscriber. A subscriber whose queue is full is ended with `stream.overflow`.
+    /// The last slot is kept back for that error, so it always fits, and items never take it.
+    fn deliver(&self, stream: u64, item: StreamItem) {
         let mut routes = lock(&self.routes);
         let ended = match routes.streams.get(&stream) {
-            Some(items) if items.capacity() > 1 => items.try_send(Ok(data)).is_err(),
+            Some(items) if items.capacity() > 1 => items.try_send(Ok(item)).is_err(),
             Some(items) => {
                 let _ = items.try_send(Err(overflow()));
                 true
@@ -128,7 +136,7 @@ impl Shared {
 /// Routes frames until the connection ends, then closes the shared state and stops both socket tasks.
 pub(crate) async fn run(
     shared: Arc<Shared>,
-    mut inbound: mpsc::Receiver<Message>,
+    mut inbound: mpsc::Receiver<Frame>,
     reader: JoinHandle<()>,
     mut writer: JoinHandle<()>,
 ) {
