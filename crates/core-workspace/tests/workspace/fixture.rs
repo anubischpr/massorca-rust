@@ -16,7 +16,6 @@ use tempfile::TempDir;
 
 pub struct Fixture {
     root: TempDir,
-    #[allow(dead_code)] // used by the removal tests, which land later
     pub store: Store,
     pub workspaces: Arc<Workspaces>,
 }
