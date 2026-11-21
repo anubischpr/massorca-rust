@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::error::StoreError;
+use crate::store::BUSY_TIMEOUT;
 
 /// Backups kept per database file; older ones are deleted after each new backup.
 const KEPT_BACKUPS: usize = 5;
@@ -22,11 +23,9 @@ pub(crate) fn holds_objects(connection: &Connection) -> Result<bool, StoreError>
 
 /// Copies the database to `<file>.bak-v<version>` with `VACUUM INTO`, then prunes old backups.
 /// `VACUUM INTO` gives a consistent snapshot even in WAL mode, where a plain file copy could miss frames.
-pub(crate) fn create_before_migration(
-    connection: &Connection,
-    file: &Path,
-    version: i64,
-) -> Result<(), StoreError> {
+/// The caller holds the migration's write lock, so no other migration can race this copy. It runs on its own
+/// connection because `VACUUM INTO` cannot run inside the caller's transaction.
+pub(crate) fn create_before_migration(file: &Path, version: i64) -> Result<(), StoreError> {
     let backup = backup_path(file, version)?;
     if backup.exists() {
         fs::remove_file(&backup)?;
@@ -34,7 +33,9 @@ pub(crate) fn create_before_migration(
     let target = backup.to_str().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "store path is not valid UTF-8")
     })?;
-    connection.execute("VACUUM INTO ?1", [target])?;
+    let snapshot = Connection::open(file)?;
+    snapshot.busy_timeout(BUSY_TIMEOUT)?;
+    snapshot.execute("VACUUM INTO ?1", [target])?;
     prune(file)
 }
 

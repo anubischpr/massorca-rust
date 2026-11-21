@@ -17,11 +17,14 @@ that a newer binary can upgrade while an older one refuses to damage.
   go through `tokio::task::spawn_blocking`. SQLite serialises writes anyway,
   and one connection keeps transactions simple.
 - **Migrations.** Our own small runner: an ordered list of SQL steps; the
-  applied count is SQLite's `user_version`. Each step runs in a transaction.
-  A database whose `user_version` is newer than the binary knows is refused
-  (`store.newer_schema`) and never touched. Before migrating an existing
-  database the file is copied to `store.sqlite3.bak-v<old>`; the last five
-  backups are kept.
+  applied count is SQLite's `user_version`. Each step runs in its own
+  `BEGIN IMMEDIATE` transaction that re-reads `user_version` first and skips a
+  step another process has already applied, so two processes opening the same
+  old file migrate it once between them. A database whose `user_version` is
+  newer than the binary knows is refused (`store.newer_schema`) and never
+  touched. Before the first step of a run on an existing database, the file is
+  copied to `store.sqlite3.bak-v<old>` under that write lock, once per run; the
+  last five backups are kept.
 - **What is durable.** Projects and workspaces, including a workspace's
   `removing` state, written before any file is deleted so an interrupted
   removal is visible and can be resumed. Connections, streams and anything

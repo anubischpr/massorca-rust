@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Barrier;
+use std::thread;
 
 use massorca_core_store::{MIGRATIONS, Store, StoreError};
 use rusqlite::Connection;
@@ -122,6 +124,42 @@ fn older_non_empty_database_is_backed_up_before_it_is_migrated() {
 
     assert_eq!(user_version(&path), latest());
     assert!(table_exists(&path, "legacy"));
+}
+
+#[test]
+fn concurrent_opens_of_an_old_database_migrate_it_once() {
+    for round in 0..8 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(&dir);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE legacy (value TEXT); INSERT INTO legacy VALUES ('kept');",
+                )
+                .unwrap();
+        }
+
+        let start = Barrier::new(2);
+        let (first, second) = thread::scope(|scope| {
+            let open = || {
+                start.wait();
+                Store::open(&path)
+            };
+            let first = scope.spawn(open);
+            let second = scope.spawn(open);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        first.unwrap_or_else(|error| panic!("round {round}: first open failed: {error}"));
+        second.unwrap_or_else(|error| panic!("round {round}: second open failed: {error}"));
+
+        assert_eq!(user_version(&path), latest(), "round {round}");
+        assert_eq!(backups_of(&path), ["store.sqlite3.bak-v0"], "round {round}");
+        let backup = path.with_file_name("store.sqlite3.bak-v0");
+        assert_eq!(user_version(&backup), 0, "round {round}");
+        assert!(!table_exists(&backup, "projects"), "round {round}");
+        assert!(table_exists(&path, "legacy"), "round {round}");
+    }
 }
 
 #[test]

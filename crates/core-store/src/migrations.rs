@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 use crate::backup;
 use crate::error::StoreError;
@@ -42,32 +42,58 @@ CREATE TABLE settings (
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.
+/// Each step runs under the write lock and re-reads `user_version` there, so concurrent openers migrate a file once.
 pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[&str],
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
-    let found: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if found > supported {
-        return Err(StoreError::NewerSchema { found, supported });
+    let mut backed_up = false;
+    loop {
+        // Read without the lock first, so an up-to-date database is never written to.
+        let found = user_version(connection)?;
+        if found > supported {
+            return Err(StoreError::NewerSchema { found, supported });
+        }
+        let index = usize::try_from(found).unwrap_or(0);
+        let Some(step) = steps.get(index) else {
+            return Ok(());
+        };
+        apply_step(connection, file, found, index, step, &mut backed_up)?;
     }
-    if found == supported {
+}
+
+/// Runs one step if `user_version` still reads `found` under the write lock. Otherwise another process has moved
+/// it on, and the caller reads it again.
+fn apply_step(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    found: i64,
+    index: usize,
+    step: &str,
+    backed_up: &mut bool,
+) -> Result<(), StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if user_version(&transaction)? != found {
         return Ok(());
     }
-    if let Some(file) = file
-        && backup::holds_objects(connection)?
+    // One backup per run, taken under the lock: a process that arrives after the schema moved on never copies it.
+    if !*backed_up
+        && let Some(file) = file
+        && backup::holds_objects(&transaction)?
     {
-        backup::create_before_migration(connection, file, found)?;
+        backup::create_before_migration(file, found)?;
     }
-    let first_pending = usize::try_from(found).unwrap_or(0);
-    for (index, step) in steps.iter().enumerate().skip(first_pending) {
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(step)?;
-        transaction.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
-        transaction.commit()?;
-    }
+    *backed_up = true;
+    transaction.execute_batch(step)?;
+    transaction.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
+    transaction.commit()?;
     Ok(())
+}
+
+fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
+    connection.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
 #[cfg(test)]

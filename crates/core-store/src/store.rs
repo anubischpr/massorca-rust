@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Row};
 use crate::error::StoreError;
 use crate::migrations::{self, MIGRATIONS};
 
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Durable MassOrca state. Cheap to clone; methods are synchronous, so async callers use `spawn_blocking`.
 #[derive(Clone)]
