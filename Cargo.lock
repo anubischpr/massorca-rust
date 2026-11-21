@@ -3277,6 +3277,7 @@ dependencies = [
  "massorca-client",
  "massorca-core-git",
  "massorca-core-store",
+ "massorca-core-terminal",
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
