@@ -44,11 +44,11 @@ const CLI_COMMAND_IDS: [&str; 15] = [
     "project.add",
     "project.list",
     "project.show",
-    "project.remove",
+    "project.rm",
     "workspace.create",
     "workspace.list",
     "workspace.show",
-    "workspace.remove",
+    "workspace.rm",
 ];
 
 #[tokio::test]

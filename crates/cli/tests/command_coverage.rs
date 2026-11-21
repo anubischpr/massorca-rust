@@ -55,10 +55,18 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "config.get",
             "config.list",
             "config.set",
+            "project.add",
+            "project.list",
+            "project.rm",
+            "project.show",
             "service.info",
             "service.restart",
             "service.status",
             "service.stop",
+            "workspace.create",
+            "workspace.list",
+            "workspace.rm",
+            "workspace.show",
         ])
     );
     for path in &checked {

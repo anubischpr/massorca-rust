@@ -267,3 +267,35 @@ pub fn eventually<T>(what: &str, mut attempt: impl FnMut() -> Option<T>) -> T {
         thread::sleep(POLL);
     }
 }
+
+/// Runs git in `dir` with a fixed identity; panics on failure. Returns stdout as text.
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("spawn git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Creates a git repository at `dir` with one commit that holds `README.md`.
+pub fn git_repo(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("create repository dir");
+    git(dir, &["init", "-q"]);
+    std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
+    git(dir, &["add", "README.md"]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+}

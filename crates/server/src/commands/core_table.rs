@@ -81,7 +81,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("project"),
         ),
         command(
-            "project.remove",
+            "project.rm",
             "Remove a project",
             "project.remove",
             selector("project"),
@@ -99,7 +99,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "branch": { "type": "string" },
                     "base": { "type": "string" },
                     "existing_branch": { "type": "boolean" },
-                    "path": { "type": "string" }
+                    "path": { "type": "string" },
+                    "request_id": { "type": "string" }
                 }
             }),
         ),
@@ -116,7 +117,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("workspace"),
         ),
         command(
-            "workspace.remove",
+            "workspace.rm",
             "Remove a workspace",
             "workspace.remove",
             json!({
