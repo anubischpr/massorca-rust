@@ -1,6 +1,9 @@
 //! Command palette state: grouping, filtering, the active row (D-CP-01, A13).
 
-use super::shell::{Agent, AgentState};
+use super::navigation::Page;
+use super::regions::Region;
+use super::shell::{Agent, AgentState, SessionRow, ShellSnapshot};
+use std::ops::Range;
 
 /// Result groups, in the order the palette shows them (A13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -27,7 +30,18 @@ impl PaletteGroup {
 pub enum PaletteAction {
     OpenWorkspace(String),
     OpenSession(String),
-    Command(&'static str),
+    Command(Command),
+}
+
+/// A command the palette lists, with the same effect as its control on the shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// The theme is app-wide, so the shell flips it rather than the shell model.
+    ToggleTheme,
+    /// Opens a full page.
+    Open(Page),
+    /// Shows or hides a region.
+    Toggle(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,6 +141,15 @@ impl PaletteModel {
         }
     }
 
+    /// Makes a row active, as a click does; a disabled row cannot become active.
+    pub fn select(&mut self, index: usize) {
+        if let Some(found) = self.matches.get(index)
+            && self.items[found.item].disabled_reason.is_none()
+        {
+            self.active = index;
+        }
+    }
+
     fn first_enabled_from(&self, start: usize, step: isize) -> Option<usize> {
         let len = self.matches.len();
         (0..len)
@@ -145,6 +168,105 @@ impl PaletteModel {
         (self.matches.is_empty() && !self.query.is_empty())
             .then(|| format!("No matches for \u{201c}{}\u{201d}", self.query))
     }
+}
+
+/// The rows the palette lists for a snapshot: workspaces, then sessions, then the commands.
+pub fn palette_items(snapshot: &ShellSnapshot) -> Vec<PaletteItem> {
+    let mut items = Vec::new();
+    for project in &snapshot.projects {
+        for host in &project.hosts {
+            for workspace in &host.workspaces {
+                items.push(PaletteItem {
+                    group: PaletteGroup::Workspaces,
+                    title: workspace.name.clone(),
+                    detail: project.name.clone(),
+                    agent: None,
+                    state: None,
+                    shortcut: None,
+                    disabled_reason: None,
+                    action: PaletteAction::OpenWorkspace(workspace.id.clone()),
+                });
+                let location = format!("{} / {}", project.name, workspace.name);
+                for session in &workspace.sessions {
+                    push_session(&mut items, session, &location);
+                }
+            }
+        }
+    }
+    items.extend(command_items());
+    items
+}
+
+fn push_session(items: &mut Vec<PaletteItem>, session: &SessionRow, location: &str) {
+    items.push(PaletteItem {
+        group: PaletteGroup::Sessions,
+        title: session.title.clone(),
+        detail: location.to_owned(),
+        agent: Some(session.agent),
+        state: Some(session.state),
+        shortcut: None,
+        disabled_reason: None,
+        action: PaletteAction::OpenSession(session.id.clone()),
+    });
+    for child in &session.children {
+        push_session(items, child, location);
+    }
+}
+
+fn command_items() -> Vec<PaletteItem> {
+    let commands: [(&str, Option<&'static str>, Command); 9] = [
+        ("Toggle theme", None, Command::ToggleTheme),
+        (
+            "Open settings",
+            Some("Mod+,"),
+            Command::Open(Page::Settings),
+        ),
+        ("Toggle sidebar", None, Command::Toggle(Region::Sidebar)),
+        (
+            "Toggle session summary",
+            None,
+            Command::Toggle(Region::SessionSummary),
+        ),
+        (
+            "Toggle work panel",
+            None,
+            Command::Toggle(Region::WorkPanel),
+        ),
+        (
+            "Toggle project sidebar",
+            None,
+            Command::Toggle(Region::ProjectSidebar),
+        ),
+        ("Open tasks", None, Command::Open(Page::Tasks)),
+        ("Open calendar", None, Command::Open(Page::Calendar)),
+        ("Open marketplace", None, Command::Open(Page::Marketplace)),
+    ];
+    commands
+        .into_iter()
+        .map(|(title, shortcut, command)| PaletteItem {
+            group: PaletteGroup::Commands,
+            title: title.to_owned(),
+            detail: String::new(),
+            agent: None,
+            state: None,
+            shortcut,
+            disabled_reason: None,
+            action: PaletteAction::Command(command),
+        })
+        .collect()
+}
+
+/// The byte ranges of matched characters, for drawing the match highlight (match.bg).
+pub fn highlight_ranges(text: &str, positions: &[usize]) -> Vec<Range<usize>> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    positions
+        .iter()
+        .filter_map(|&position| {
+            chars
+                .get(position)
+                .map(|&(start, c)| start..start + c.len_utf8())
+        })
+        .collect()
 }
 
 /// Case-insensitive subsequence match. Consecutive and word-start matches
@@ -183,7 +305,7 @@ mod tests {
             state: None,
             shortcut: None,
             disabled_reason: disabled.then(|| "No session is open".into()),
-            action: PaletteAction::Command("test"),
+            action: PaletteAction::Command(Command::ToggleTheme),
         }
     }
 
@@ -194,6 +316,55 @@ mod tests {
             item(PaletteGroup::Workspaces, "massorca-rust / main", false),
             item(PaletteGroup::Commands, "Close tab", true),
         ])
+    }
+
+    #[test]
+    fn the_sample_snapshot_lists_workspaces_sessions_then_commands() {
+        use crate::data::{DataSource, SampleDataSource};
+        let items = palette_items(&SampleDataSource.snapshot());
+        let count = |group| items.iter().filter(|item| item.group == group).count();
+        assert_eq!(count(PaletteGroup::Workspaces), 4);
+        assert_eq!(count(PaletteGroup::Sessions), 6);
+        assert_eq!(count(PaletteGroup::Commands), 9);
+        assert_eq!(
+            items.first().map(|item| item.group),
+            Some(PaletteGroup::Workspaces)
+        );
+        assert_eq!(
+            items.last().map(|item| item.group),
+            Some(PaletteGroup::Commands)
+        );
+    }
+
+    #[test]
+    fn a_session_row_carries_its_agent_and_where_it_lives() {
+        use crate::data::{DataSource, SampleDataSource};
+        let items = palette_items(&SampleDataSource.snapshot());
+        let session = items
+            .iter()
+            .find(|item| item.title == "Implementation of master catalogs")
+            .expect("the lead session is listed");
+        assert_eq!(session.agent, Some(Agent::Claude));
+        assert_eq!(session.detail, "massorca-rust / desktop-shell");
+        assert_eq!(session.action, PaletteAction::OpenSession("s1".to_owned()));
+    }
+
+    #[test]
+    fn match_highlights_map_character_positions_to_bytes() {
+        // "Café" has a two-byte "é" at character 3 and byte 3.
+        assert_eq!(highlight_ranges("Café", &[0, 3]), vec![0..1, 3..5]);
+        assert!(highlight_ranges("abc", &[7]).is_empty());
+    }
+
+    #[test]
+    fn a_click_activates_an_enabled_row_only() {
+        let mut m = model();
+        m.select(2);
+        assert_eq!(m.active_index(), 2);
+        m.select(3);
+        assert_eq!(m.active_index(), 2, "the disabled row cannot become active");
+        m.select(99);
+        assert_eq!(m.active_index(), 2);
     }
 
     #[test]
@@ -251,6 +422,9 @@ mod tests {
         m.set_query("close");
         assert!(m.confirm().is_none());
         m.set_query("toggle");
-        assert_eq!(m.confirm(), Some(&PaletteAction::Command("test")));
+        assert_eq!(
+            m.confirm(),
+            Some(&PaletteAction::Command(Command::ToggleTheme))
+        );
     }
 }

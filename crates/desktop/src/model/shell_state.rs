@@ -1,10 +1,11 @@
-//! The shell's state without GPUI: the page the user is on, the regions they opened
-//! and the snapshot the views draw. Actions change it through plain methods.
+//! The shell's state without GPUI: the page the user is on, the regions they opened, the
+//! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
+use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
 use super::regions::{Placement, Region, RegionState};
-use super::shell::ShellSnapshot;
+use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
@@ -21,6 +22,8 @@ pub struct ShellModel {
     navigation: Navigation,
     regions: RegionState,
     window_width: f32,
+    /// Present while the command palette is open.
+    palette: Option<PaletteModel>,
 }
 
 impl ShellModel {
@@ -31,6 +34,7 @@ impl ShellModel {
             navigation: Navigation::default(),
             regions: RegionState::default(),
             window_width,
+            palette: None,
         }
     }
 
@@ -134,6 +138,16 @@ impl ShellModel {
         self.navigation.press_mode_switch()
     }
 
+    /// Makes a session the open one: the title bar and the Sidebar selection follow it.
+    pub fn open_session(&mut self, id: &str) {
+        let found = find_session(&self.snapshot.projects, id)
+            .map(|session| (session.title.clone(), session.id.clone()));
+        if let Some((title, id)) = found {
+            self.snapshot.session_title = Some(title);
+            self.snapshot.active_session = Some(id);
+        }
+    }
+
     /// The Canvas content for the current page, mode and open session.
     pub fn canvas(&self) -> Canvas {
         Canvas::of(
@@ -142,13 +156,77 @@ impl ShellModel {
             self.snapshot.session_title.as_deref(),
         )
     }
+
+    /// The palette while it is open.
+    pub fn palette(&self) -> Option<&PaletteModel> {
+        self.palette.as_ref()
+    }
+
+    /// Opens the palette over the current snapshot, or closes it when it is open (Mod+K).
+    pub fn toggle_palette(&mut self) {
+        if self.palette.is_some() {
+            self.palette = None;
+        } else {
+            self.palette = Some(PaletteModel::new(palette_items(&self.snapshot)));
+        }
+    }
+
+    pub fn close_palette(&mut self) {
+        self.palette = None;
+    }
+
+    pub fn set_palette_query(&mut self, query: &str) {
+        if let Some(palette) = &mut self.palette {
+            palette.set_query(query);
+        }
+    }
+
+    pub fn move_palette(&mut self, delta: isize) {
+        if let Some(palette) = &mut self.palette {
+            palette.move_active(delta);
+        }
+    }
+
+    pub fn select_palette_row(&mut self, index: usize) {
+        if let Some(palette) = &mut self.palette {
+            palette.select(index);
+        }
+    }
+
+    /// Enter: closes the palette and returns the active row's action. A disabled row keeps the
+    /// palette open and returns nothing.
+    pub fn confirm_palette(&mut self) -> Option<PaletteAction> {
+        let action = self.palette.as_ref()?.confirm()?.clone();
+        self.palette = None;
+        Some(action)
+    }
+
+    /// Runs what a palette row does. A workspace page is not built yet, so its row only closes
+    /// the palette.
+    pub fn run_palette_action(&mut self, action: &PaletteAction) {
+        match action {
+            PaletteAction::OpenWorkspace(_) => {}
+            PaletteAction::OpenSession(id) => self.open_session(id),
+            PaletteAction::Command(command) => self.run_command(*command),
+        }
+    }
+
+    /// Runs a command that changes the shell's own state. The theme is app-wide and flips in
+    /// the window layer, so it does nothing here.
+    pub fn run_command(&mut self, command: Command) {
+        match command {
+            Command::ToggleTheme => {}
+            Command::Open(page) => self.open_page(page),
+            Command::Toggle(region) => self.toggle_region(region),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
-    use crate::model::navigation::{Mode, Page};
+    use crate::model::navigation::Mode;
 
     fn shell(width: f32) -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), width)
@@ -237,5 +315,43 @@ mod tests {
         snapshot.session_title = None;
         let model = ShellModel::new(snapshot, 1440.0);
         assert_eq!(model.canvas(), Canvas::Home(Mode::Workspaces));
+    }
+
+    #[test]
+    fn mod_k_toggles_the_palette_over_the_snapshot() {
+        let mut model = shell(1440.0);
+        model.toggle_palette();
+        assert!(model.palette().is_some());
+        model.toggle_palette();
+        assert!(model.palette().is_none());
+    }
+
+    #[test]
+    fn a_command_row_runs_and_closes_the_palette() {
+        let mut model = shell(1440.0);
+        model.toggle_palette();
+        model.set_palette_query("work panel");
+        let action = model.confirm_palette().expect("the matching command runs");
+        assert_eq!(
+            action,
+            PaletteAction::Command(Command::Toggle(Region::WorkPanel))
+        );
+        model.run_palette_action(&action);
+        assert!(model.palette().is_none());
+        assert_eq!(model.inline_regions(), vec![Region::WorkPanel]);
+    }
+
+    #[test]
+    fn a_session_row_opens_that_session_in_the_title_and_the_sidebar() {
+        let mut model = shell(1440.0);
+        model.toggle_palette();
+        model.set_palette_query("feed endpoints");
+        let action = model.confirm_palette().expect("the session row runs");
+        model.run_palette_action(&action);
+        assert_eq!(
+            model.snapshot().session_title.as_deref(),
+            Some("Feed endpoints")
+        );
+        assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
     }
 }

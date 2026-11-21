@@ -150,6 +150,23 @@ fn plural(n: u32, word: &str, none: &str) -> String {
     }
 }
 
+/// The session with this id, searched through every project, host, workspace and child.
+pub fn find_session<'a>(projects: &'a [ProjectGroup], id: &str) -> Option<&'a SessionRow> {
+    projects
+        .iter()
+        .flat_map(|project| &project.hosts)
+        .flat_map(|host| &host.workspaces)
+        .flat_map(|workspace| &workspace.sessions)
+        .find_map(|session| find_in(session, id))
+}
+
+fn find_in<'a>(session: &'a SessionRow, id: &str) -> Option<&'a SessionRow> {
+    if session.id == id {
+        return Some(session);
+    }
+    session.children.iter().find_map(|child| find_in(child, id))
+}
+
 /// Everything the shell shows at one moment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellSnapshot {
@@ -178,6 +195,17 @@ mod tests {
             hosts_total: 2,
             hosts_unreachable: 0,
         }
+    }
+
+    #[test]
+    fn find_session_reaches_child_sessions() {
+        use crate::data::{DataSource, SampleDataSource};
+        let snap = SampleDataSource.snapshot();
+        assert_eq!(
+            find_session(&snap.projects, "s1b").map(|s| s.title.as_str()),
+            Some("Catalog tests")
+        );
+        assert!(find_session(&snap.projects, "missing").is_none());
     }
 
     #[test]
