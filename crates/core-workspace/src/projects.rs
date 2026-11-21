@@ -23,7 +23,7 @@ impl Workspaces {
                 "unknown project kind",
             ));
         }
-        let given = paths::existing_directory(Path::new(&params.path))?;
+        let given = paths::existing_directory(&paths::absolute(&params.path)?)?;
         let (kind, root) = match params.kind {
             Some(ProjectKind::Folder) => (StoreKind::Folder, given),
             Some(ProjectKind::Git) => {

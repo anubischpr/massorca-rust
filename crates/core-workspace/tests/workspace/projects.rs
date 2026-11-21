@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::ProjectKind;
@@ -163,6 +164,17 @@ fn a_relative_workspaces_root_is_refused() {
 
     expect_code(
         fx.workspaces.add_project(params),
+        codes::REQUEST_INVALID_PARAMS,
+    );
+}
+
+#[test]
+fn a_relative_path_is_refused_as_invalid_before_it_is_checked_for_existence() {
+    let fx = Fixture::new();
+
+    expect_code(
+        fx.workspaces
+            .add_project(project_add(Path::new("no/such/dir"))),
         codes::REQUEST_INVALID_PARAMS,
     );
 }
