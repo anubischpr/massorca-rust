@@ -55,6 +55,26 @@ fn empty_file_migrates_to_the_latest_schema_without_a_backup() {
 }
 
 #[test]
+fn reopening_a_migrated_store_keeps_its_data_and_takes_no_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = store_path(&dir);
+    Store::open(&path)
+        .unwrap()
+        .set_setting("app", "theme", "\"dark\"")
+        .unwrap();
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.get_setting("app", "theme").unwrap(),
+        Some("\"dark\"".to_owned())
+    );
+    drop(reopened);
+
+    assert_eq!(user_version(&path), latest());
+    assert!(backups_of(&path).is_empty());
+}
+
+#[test]
 fn newer_schema_is_refused_and_the_file_is_left_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let path = store_path(&dir);
@@ -102,6 +122,16 @@ fn older_non_empty_database_is_backed_up_before_it_is_migrated() {
 
     assert_eq!(user_version(&path), latest());
     assert!(table_exists(&path, "legacy"));
+}
+
+#[test]
+fn in_memory_store_is_migrated_to_the_latest_schema() {
+    let store = Store::open_in_memory().unwrap();
+    store.set_setting("app", "theme", "\"dark\"").unwrap();
+    assert_eq!(
+        store.get_setting("app", "theme").unwrap(),
+        Some("\"dark\"".to_owned())
+    );
 }
 
 #[test]

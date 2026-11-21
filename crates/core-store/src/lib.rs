@@ -5,6 +5,7 @@ mod backup;
 mod error;
 mod migrations;
 mod projects;
+mod settings;
 mod store;
 mod workspaces;
 
