@@ -5,16 +5,20 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
-    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
-    SharedString, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
-    actions, div, fill, point, px, relative, size,
+    App, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, Div, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
+    ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun,
+    UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, px, relative, size,
 };
 
+use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{Color, Palette, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_2, TYPE_BODY};
+use crate::tokens::{
+    Color, Palette, RADIUS_MD, RADIUS_SM, SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_DEFAULT,
+    SIZE_HIT_POINTER, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_LABEL, TYPE_MONO,
+};
 
 const ZWJ: char = '\u{200D}';
 
@@ -394,6 +398,13 @@ pub struct TextField {
     focus_handle: FocusHandle,
     buffer: TextBuffer,
     placeholder: SharedString,
+    label: Option<SharedString>,
+    helper: Option<SharedString>,
+    error: Option<SharedString>,
+    leading_icon: Option<IconName>,
+    comfortable: bool,
+    mono: bool,
+    clearable: bool,
     disabled: bool,
     read_only: bool,
     /// The last paint, for pointer hit tests and IME geometry.
@@ -417,6 +428,13 @@ impl TextField {
             focus_handle: cx.focus_handle().tab_stop(true),
             buffer: TextBuffer::new(""),
             placeholder: SharedString::default(),
+            label: None,
+            helper: None,
+            error: None,
+            leading_icon: None,
+            comfortable: false,
+            mono: false,
+            clearable: false,
             disabled: false,
             read_only: false,
             last_layout: None,
@@ -431,8 +449,46 @@ impl TextField {
         self
     }
 
+    pub fn label(mut self, text: impl Into<SharedString>) -> Self {
+        self.label = Some(text.into());
+        self
+    }
+
+    pub fn helper(mut self, text: impl Into<SharedString>) -> Self {
+        self.helper = Some(text.into());
+        self
+    }
+
+    pub fn error(mut self, text: impl Into<SharedString>) -> Self {
+        self.error = Some(text.into());
+        self
+    }
+
+    pub fn leading_icon(mut self, icon: IconName) -> Self {
+        self.leading_icon = Some(icon);
+        self
+    }
+
     pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
         self.buffer = TextBuffer::new(text.as_ref());
+        self
+    }
+
+    /// The 32 px form size with 12 px padding.
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self
+    }
+
+    /// Paths, IDs and values use the mono type style.
+    pub fn mono(mut self) -> Self {
+        self.mono = true;
+        self
+    }
+
+    /// Shows a clear action while the field has a value and is focused or hovered.
+    pub fn clearable(mut self) -> Self {
+        self.clearable = true;
         self
     }
 
@@ -454,6 +510,11 @@ impl TextField {
     pub fn set_text(&mut self, text: impl AsRef<str>, window: &mut Window, cx: &mut Context<Self>) {
         let changed = self.buffer.set_text(text.as_ref());
         self.after_edit(changed, window, cx);
+    }
+
+    pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
+        self.error = error;
+        cx.notify();
     }
 
     pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
@@ -578,6 +639,11 @@ impl TextField {
         cx.emit(TextFieldEvent::Submitted);
     }
 
+    fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(window, cx, |buffer| buffer.set_text(""));
+        self.focus(window, cx);
+    }
+
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.disabled {
             return;
@@ -630,6 +696,8 @@ impl TextField {
     fn outline(&self, focused: bool, palette: &Palette) -> (Color, f32) {
         if self.disabled {
             (palette.border.disabled, 1.)
+        } else if self.error.is_some() {
+            (palette.status.danger_fg, if focused { 2. } else { 1. })
         } else if focused {
             (palette.border.focus, 2.)
         } else if self.read_only {
@@ -637,6 +705,36 @@ impl TextField {
         } else {
             (palette.border.strong, 1.)
         }
+    }
+
+    fn clear_button(
+        &self,
+        focused: bool,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let filled = !self.buffer.is_empty();
+        div()
+            .id("text-field-clear")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(SIZE_HIT_POINTER))
+            .rounded(px(RADIUS_SM))
+            .cursor_pointer()
+            .invisible()
+            .when(filled, |button| {
+                button.group_hover(FIELD_GROUP, |style| style.visible())
+            })
+            .when(filled && focused, |button| button.visible())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
+            .child(
+                Icon::new(IconName::X)
+                    .size(IconSize::Small)
+                    .color(palette.text.secondary),
+            )
     }
 }
 
@@ -650,6 +748,12 @@ impl Render for TextField {
             (palette.text.disabled, palette.fill.disabled)
         } else {
             (palette.text.primary, palette.surface.sunken)
+        };
+        let inset = if self.comfortable { SPACE_3 } else { SPACE_2 };
+        let height = if self.comfortable {
+            SIZE_CONTROL_COMFORTABLE
+        } else {
+            SIZE_CONTROL_DEFAULT
         };
         let field = div()
             .group(FIELD_GROUP)
@@ -681,27 +785,89 @@ impl Render for TextField {
             .flex()
             .items_center()
             .gap(px(SPACE_2))
-            .h(px(SIZE_CONTROL_DEFAULT))
+            .h(px(height))
             .w_full()
-            .px(px(SPACE_2 - (width - 1.)))
+            .px(px(inset - (width - 1.)))
             .rounded(px(RADIUS_MD))
             .bg(fill_color)
             .border_color(outline)
             .text_color(text_color)
-            .text_style(TYPE_BODY);
+            .text_style(if self.mono { TYPE_MONO } else { TYPE_BODY });
         let field = if width > 1. {
             field.border_2()
         } else {
             field.border_1()
         };
-        field.child(
+        let icon_color = if self.disabled {
+            palette.text.disabled
+        } else {
+            palette.text.secondary
+        };
+        let field = field
+            .when_some(self.leading_icon, |field, icon| {
+                field.child(Icon::new(icon).size(IconSize::Small).color(icon_color))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(TextElement { input: cx.entity() }),
+            )
+            .when(self.clearable && enabled, |field| {
+                field.child(self.clear_button(focused, &palette, cx))
+            });
+
+        let label = self.label.clone().map(|label| {
             div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .child(TextElement { input: cx.entity() }),
-        )
+                .text_style(TYPE_LABEL)
+                .text_color(palette.text.secondary)
+                .child(label)
+                .when(enabled, |row| {
+                    row.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, window, cx| this.focus(window, cx)),
+                    )
+                })
+        });
+        let note = self
+            .error
+            .clone()
+            .map(|error| {
+                note_line(
+                    error,
+                    palette.status.danger_fg,
+                    Some(IconName::OctagonAlert),
+                )
+            })
+            .or_else(|| {
+                self.helper
+                    .clone()
+                    .map(|helper| note_line(helper, palette.text.secondary, None))
+            });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1))
+            .w_full()
+            .when_some(label, |root, label| root.child(label))
+            .child(field)
+            .when_some(note, |root, note| root.child(note))
     }
+}
+
+/// A helper or error line under the field.
+fn note_line(text: SharedString, color: Color, icon: Option<IconName>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .text_style(TYPE_BODY_SM)
+        .text_color(color)
+        .when_some(icon, |line, icon| {
+            line.child(Icon::new(icon).size(IconSize::XSmall).color(color))
+        })
+        .child(text)
 }
 
 /// Paints the line, selection and caret, and registers the platform input handler.
@@ -1395,5 +1561,30 @@ mod tests {
         cx.write_to_clipboard(ClipboardItem::new_string("x\ny".to_owned()));
         cx.simulate_keystrokes("secondary-v");
         assert_eq!(text_of(&field, cx), "abcabcx y");
+    }
+
+    #[gpui::test]
+    fn error_outline_outranks_focus_and_thickens_when_focused(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).error("Name is taken."));
+        let palette = cx.update(|_, cx| cx.theme().palette);
+        assert_eq!(
+            field.read_with(cx, |field, _| field.outline(false, &palette)),
+            (palette.status.danger_fg, 1.)
+        );
+        focus_and_draw(&field, cx);
+        assert_eq!(
+            field.read_with(cx, |field, _| field.outline(true, &palette)),
+            (palette.status.danger_fg, 2.)
+        );
+    }
+
+    #[gpui::test]
+    fn clear_empties_the_field_and_keeps_focus(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).clearable().with_text("oppm"));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear(window, cx));
+        assert_eq!(text_of(&field, cx), "");
+        assert!(field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)));
     }
 }
