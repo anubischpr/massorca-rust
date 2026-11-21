@@ -6,7 +6,8 @@ use super::actions::{PaletteDown, PaletteUp};
 use super::rail::agent_kind;
 use super::sidebar_rows::glyph_state;
 use crate::model::palette::{
-    PaletteGroup, PaletteItem, PaletteMatch, PaletteModel, highlight_ranges,
+    PaletteAction, PaletteGroup, PaletteItem, PaletteMatch, PaletteMode, PaletteModel,
+    highlight_ranges,
 };
 use gpui::{
     AnyElement, Context, Div, Entity, HighlightStyle, IntoElement, MouseButton, MouseDownEvent,
@@ -82,7 +83,7 @@ fn panel(
         let active = index == palette.active_index();
         results = results.child(row(index, item, found, active, shell, theme));
     }
-    if let Some(text) = palette.no_match_text() {
+    if let Some(text) = palette.no_match_text().or_else(|| palette.empty_text()) {
         results = results.child(
             div()
                 .px(px(SPACE_2))
@@ -115,8 +116,36 @@ fn panel(
         .border_color(theme.palette.border.default)
         .rounded(px(RADIUS_XL))
         .shadow(box_shadows(theme.shadows.e3))
-        .child(div().p(px(SPACE_2)).child(input.clone()))
+        .child(query_row(palette, input, theme))
         .child(results)
+}
+
+/// The query field. In "Go to file" mode the mode's label sits on its left and its shortcut on
+/// its right (CommandPalette spec).
+fn query_row(palette: &PaletteModel, input: &Entity<TextField>, theme: &Theme) -> Div {
+    let quick_open = palette.mode() == PaletteMode::GoToFile;
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE_2))
+        .p(px(SPACE_2));
+    if quick_open {
+        row = row.child(
+            div()
+                .id("palette-mode")
+                .debug_selector(|| "palette-mode".into())
+                .flex_none()
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.secondary)
+                .child("Go to file"),
+        );
+    }
+    row = row.child(div().flex_1().min_w_0().child(input.clone()));
+    if quick_open {
+        row = row.child(Kbd::new("Mod+P"));
+    }
+    row
 }
 
 fn group_header(group: PaletteGroup, theme: &Theme) -> impl IntoElement {
@@ -194,10 +223,10 @@ fn leading(item: &PaletteItem, theme: &Theme) -> AnyElement {
             .size(AgentIconSize::Small)
             .into_any_element();
     }
-    let name = match item.group {
-        PaletteGroup::Workspaces => IconName::Folder,
-        PaletteGroup::Commands => IconName::Command,
-        PaletteGroup::Sessions | PaletteGroup::Tabs => IconName::Square,
+    let name = match &item.action {
+        PaletteAction::OpenWorkspace(_) => IconName::Folder,
+        PaletteAction::Command(_) => IconName::Command,
+        PaletteAction::OpenSession(_) => IconName::Square,
     };
     Icon::new(name)
         .size(IconSize::Small)

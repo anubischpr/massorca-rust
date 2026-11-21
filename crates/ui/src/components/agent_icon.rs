@@ -338,3 +338,20 @@ mod tests {
         assert!((png_corner_radius(28.0) - 4.0).abs() < 1e-6);
     }
 }
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn an_agent_icon_is_an_image_named_by_its_agent(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(AgentIcon::new(AgentKind::Claude).render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Image);
+        assert_eq!(node.label(), Some(AgentKind::Claude.label()));
+    }
+}
