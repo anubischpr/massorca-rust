@@ -8,6 +8,7 @@ use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
+use super::status_items::{StatusItem, StatusItemVisibility};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -27,6 +28,8 @@ pub struct ShellModel {
     palette: Option<PaletteModel>,
     /// The ring whose usage popover is open, by its position in the snapshot.
     usage_popover: Option<usize>,
+    /// The Status bar items this window hides.
+    status_items: StatusItemVisibility,
 }
 
 impl ShellModel {
@@ -39,6 +42,7 @@ impl ShellModel {
             window_width,
             palette: None,
             usage_popover: None,
+            status_items: StatusItemVisibility::default(),
         }
     }
 
@@ -188,6 +192,16 @@ impl ShellModel {
                 Zone::TitleBar | Zone::Rail | Zone::Conversation | Zone::StatusBar => true,
             })
             .collect()
+    }
+
+    /// Which Status bar items this window shows (StatusBar spec).
+    pub fn status_items(&self) -> &StatusItemVisibility {
+        &self.status_items
+    }
+
+    /// Shows a hidden Status bar item or hides a shown one, as the visibility menu does.
+    pub fn toggle_status_item(&mut self, item: StatusItem) {
+        self.status_items.toggle(item);
     }
 
     /// The ring whose usage popover is open, if it still exists in the snapshot.

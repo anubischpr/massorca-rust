@@ -229,6 +229,8 @@ impl Render for Shell {
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
+            self.model.status_items(),
+            &shell,
             &theme,
         )
         .track_focus(self.zones.get(Zone::StatusBar));

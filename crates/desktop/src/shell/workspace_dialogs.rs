@@ -3,6 +3,7 @@
 //! through the events those calls cause.
 
 use super::Shell;
+use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
     CreateForm, ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, project_menu_rows,
 };
@@ -29,6 +30,8 @@ pub(super) struct CreateDialog {
 pub(super) enum MenuTarget {
     Projects(Vec<ProjectChoice>),
     Workspace(String),
+    /// One entry per menu row, with `None` for the heading.
+    StatusItems(Vec<Option<StatusItem>>),
 }
 
 #[derive(Debug)]
@@ -183,6 +186,7 @@ impl Shell {
             entries,
             MenuTarget::Projects(choices),
             OverlayLayer::Dialog,
+            window.mouse_position(),
             window,
             cx,
         );
@@ -208,6 +212,33 @@ impl Shell {
             entries,
             MenuTarget::Workspace(id),
             OverlayLayer::Page,
+            window.mouse_position(),
+            window,
+            cx,
+        );
+    }
+
+    /// The Status bar's visibility menu: a checkable row per item under a heading (StatusBar
+    /// spec). Choosing a row shows or hides that item for this window.
+    pub(super) fn open_status_menu(
+        &mut self,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = visibility_menu_items(self.model.snapshot().service_status.is_some());
+        let mut entries = vec![MenuEntry::Group("Status bar items".into())];
+        let mut rows = vec![None];
+        for item in items {
+            let shown = self.model.status_items().is_shown(item);
+            entries.push(MenuItem::new(item.label()).checked(shown).into());
+            rows.push(Some(item));
+        }
+        self.open_menu(
+            entries,
+            MenuTarget::StatusItems(rows),
+            OverlayLayer::Page,
+            at,
             window,
             cx,
         );
@@ -218,10 +249,10 @@ impl Shell {
         entries: Vec<MenuEntry>,
         target: MenuTarget,
         layer: OverlayLayer,
+        at: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let at = window.mouse_position();
         let menu = cx.new(|cx| MenuView::new(entries, window, cx).with_layer(layer));
         let subscription =
             cx.subscribe_in(&menu, window, |shell, _, event: &MenuEvent, window, cx| {
@@ -255,6 +286,11 @@ impl Shell {
                     dialog.form.project = Some(choice.clone());
                     let focus = dialog.name.read(cx).focus_handle(cx);
                     window.focus(&focus, cx);
+                }
+            }
+            MenuTarget::StatusItems(rows) => {
+                if let Some(item) = rows.get(row).copied().flatten() {
+                    self.model.toggle_status_item(item);
                 }
             }
             MenuTarget::Workspace(id) => self.open_remove(&id, cx),

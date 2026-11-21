@@ -12,5 +12,6 @@ pub mod service_view;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
+pub mod status_items;
 pub mod title_bar;
 pub mod workspace_flow;

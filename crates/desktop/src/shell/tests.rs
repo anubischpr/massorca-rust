@@ -1,12 +1,14 @@
 //! Element tests of the shell in a test window (no visible window is opened).
 
+use super::workspace_dialogs::MenuTarget;
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px, size};
+use crate::model::status_items::StatusItem;
+use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
 use massorca_ui::{ActiveTheme, Appearance, Theme};
 
 /// The sample data without an open session: the landing view.
@@ -357,4 +359,68 @@ fn a_ring_without_a_percentage_still_opens_its_popover(cx: &mut TestAppContext) 
     draw(cx);
     assert_eq!(usage_popover(&shell, cx), Some(2));
     assert!(cx.debug_bounds("popover-panel").is_some());
+}
+
+/// The rows of the open Status bar menu: `None` for the heading, the item for each other row.
+fn status_menu_rows(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<Option<StatusItem>> {
+    shell.read_with(cx, |shell, _| {
+        match shell.dialogs.menu.as_ref().map(|open| &open.target) {
+            Some(MenuTarget::StatusItems(rows)) => rows.clone(),
+            _ => Vec::new(),
+        }
+    })
+}
+
+#[gpui::test]
+fn right_clicking_the_status_bar_opens_a_checkable_row_per_item(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    let hosts = cx
+        .debug_bounds("status-hosts")
+        .expect("the hosts item is drawn");
+    cx.simulate_mouse_down(hosts.center(), MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(hosts.center(), MouseButton::Right, Modifiers::default());
+    draw(cx);
+    let rows = status_menu_rows(&shell, cx);
+    // A heading, then the five items of sample data; the service item needs a service.
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows.iter().flatten().count(), 5);
+    assert!(cx.debug_bounds("menu-panel").is_some());
+}
+
+#[gpui::test]
+fn choosing_a_row_hides_that_item_and_closes_the_menu(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    shell.update_in(cx, |shell, window, cx| {
+        shell.open_status_menu(point(px(40.), px(40.)), window, cx);
+    });
+    draw(cx);
+    // The first item is the active row, so Enter chooses it.
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert!(!shell.read_with(cx, |shell, _| {
+        shell.model().status_items().is_shown(StatusItem::Agents)
+    }));
+    assert!(
+        cx.debug_bounds("status-agents").is_none(),
+        "the hidden item leaves the bar"
+    );
+    assert!(cx.debug_bounds("status-memory").is_some());
+    assert!(shell.read_with(cx, |shell, _| shell.dialogs.menu.is_none()));
+}
+
+#[gpui::test]
+fn the_menu_key_on_the_status_bar_opens_the_visibility_menu(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    cx.update(|window, cx| {
+        let focus = shell.read(cx).zones.get(Zone::StatusBar).clone();
+        window.focus(&focus, cx);
+    });
+    draw(cx);
+    cx.simulate_keystrokes("menu");
+    draw(cx);
+    assert!(!status_menu_rows(&shell, cx).is_empty());
 }
