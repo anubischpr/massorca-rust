@@ -34,6 +34,10 @@ const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
 /// How long a kill waits for the exit after the tree is killed.
 const EXIT_MARGIN: Duration = Duration::from_secs(2);
+/// After a failed wait the waiter tries again, first after this long, then doubling up to
+/// `WAIT_RETRY_MAX`; a kill wakes it at once.
+const WAIT_RETRY_FIRST: Duration = Duration::from_millis(250);
+const WAIT_RETRY_MAX: Duration = Duration::from_secs(5);
 /// The cursor position query (DSR 6). ConPTY renders nothing until it is answered.
 const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
@@ -118,7 +122,10 @@ impl fmt::Debug for CreateSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerminalState {
     Live,
-    /// The exit could not be established; never treated as death.
+    /// The wait for the process failed, so whether it runs is unknown. Never treated as
+    /// death: it stays listed, counted as live, attachable, and accepts input, resize and
+    /// kill. Only a later successful wait (a confirmed reap) makes it `Exited`; if the
+    /// process can never be reaped it stays `Unverifiable` until closed.
     Unverifiable,
     Exited,
 }
@@ -418,11 +425,11 @@ impl TerminalManager {
             return Err(TerminalError::InputTooLarge);
         }
         let terminal = self.inner.find(id)?;
-        if !terminal.is_live() {
+        if terminal.is_exited() {
             return Err(TerminalError::Exited);
         }
         terminal.master.write_all(bytes).map_err(|error| {
-            if error.kind() == io::ErrorKind::BrokenPipe || !terminal.is_live() {
+            if error.kind() == io::ErrorKind::BrokenPipe || terminal.is_exited() {
                 TerminalError::Exited
             } else {
                 TerminalError::Io(error)
@@ -435,13 +442,13 @@ impl TerminalManager {
         validate_size(size)?;
         let terminal = self.inner.find(id)?;
         let _gate = lock(&terminal.resize_gate);
-        if !terminal.is_live() {
+        if terminal.is_exited() {
             return Err(TerminalError::Exited);
         }
         // Outside the terminal lock: a closing pseudoconsole holds the master until the
         // reader, which needs that lock, drains it.
         terminal.master.resize(size).map_err(|error| {
-            if terminal.is_live() {
+            if !terminal.is_exited() {
                 TerminalError::Io(io::Error::other(error.to_string()))
             } else {
                 TerminalError::Exited
@@ -506,7 +513,7 @@ impl TerminalManager {
                     queue.items.push_back(snapshot);
                 }
             }
-            if matches!(core.status, Status::Live) {
+            if !matches!(core.status, Status::Exited(_)) {
                 core.attachments.push(Arc::clone(&shared));
             } else {
                 queue.items.push_back(AttachItem::Exited { info });
@@ -516,13 +523,13 @@ impl TerminalManager {
         Ok(Attachment::new(terminal, shared))
     }
 
-    /// Kills every live terminal at once (reason `ServiceStopped`), bounded by the shutdown
-    /// grace plus a short margin.
+    /// Kills every terminal not yet exited at once (reason `ServiceStopped`), bounded by the
+    /// shutdown grace plus a short margin.
     pub fn shutdown(&self) {
         let terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
             .terminals
             .values()
-            .filter(|terminal| terminal.is_live())
+            .filter(|terminal| !terminal.is_exited())
             .cloned()
             .collect();
         let grace = self.inner.config.shutdown_grace;
@@ -540,6 +547,15 @@ impl TerminalManager {
                 }
             }
         });
+    }
+
+    /// Test-only seam, not part of the API: the terminal's waiter behaves as if its wait
+    /// had failed, while the real wait goes on, so a later reap still records the exit.
+    #[doc(hidden)]
+    pub fn simulate_failed_wait(&self, id: &str) -> Result<()> {
+        let terminal = self.inner.find(id)?;
+        terminal.mark_unverifiable(&io::Error::other("simulated wait failure"));
+        Ok(())
     }
 
     /// Live terminals, counting creates in progress.
@@ -680,7 +696,7 @@ pub(crate) struct Terminal {
     master: Arc<PtyMaster>,
     tree: ProcessTree,
     core: Mutex<Core>,
-    /// Signalled when the exit is recorded.
+    /// Signalled when the exit is recorded, and by a kill to wake a waiter retrying its wait.
     changed: Condvar,
     /// Keeps the PTY and the screen sizes in the same order.
     resize_gate: Mutex<()>,
@@ -691,8 +707,9 @@ impl Terminal {
         &self.id
     }
 
-    fn is_live(&self) -> bool {
-        matches!(lock(&self.core).status, Status::Live)
+    /// Only a confirmed reap counts: `Unverifiable` is not exited.
+    fn is_exited(&self) -> bool {
+        matches!(lock(&self.core).status, Status::Exited(_))
     }
 
     fn info(&self) -> TerminalInfo {
@@ -728,7 +745,7 @@ impl Terminal {
     fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
         {
             let mut core = lock(&self.core);
-            if !matches!(core.status, Status::Live) {
+            if matches!(core.status, Status::Exited(_)) {
                 return self.info_locked(&core);
             }
             core.kill_reason.get_or_insert(reason);
@@ -739,13 +756,15 @@ impl Terminal {
             self.wait_for_exit(grace);
         }
         self.tree.kill();
+        // A waiter retrying a failed wait tries again now.
+        self.changed.notify_all();
         self.wait_for_exit(EXIT_MARGIN)
     }
 
     fn wait_for_exit(&self, timeout: Duration) -> TerminalInfo {
         let deadline = Instant::now() + timeout;
         let mut core = lock(&self.core);
-        while matches!(core.status, Status::Live) {
+        while !matches!(core.status, Status::Exited(_)) {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -759,20 +778,34 @@ impl Terminal {
         self.info_locked(&core)
     }
 
-    fn record_exit(&self, result: io::Result<ExitInfo>) {
+    /// A failed wait: the process may still run, so attachments stay open.
+    fn mark_unverifiable(&self, error: &io::Error) {
+        tracing::warn!(terminal = %self.id, error = %error, "a terminal's exit could not be read");
         let mut core = lock(&self.core);
-        core.status = match result {
-            Ok(exit) => Status::Exited(ExitRecord {
-                code: exit.code,
-                signal: exit.signal,
-                reason: core.kill_reason.unwrap_or(ExitReason::Exited),
-                at_ms: now_ms(),
-            }),
-            Err(error) => {
-                tracing::warn!(terminal = %self.id, error = %error, "a terminal's exit could not be read");
-                Status::Unverifiable
-            }
-        };
+        if matches!(core.status, Status::Live) {
+            core.status = Status::Unverifiable;
+        }
+    }
+
+    /// Waits up to `pause` before the waiter retries a failed wait; a kill cuts it short.
+    fn pause_before_retry(&self, pause: Duration) {
+        let core = lock(&self.core);
+        drop(
+            self.changed
+                .wait_timeout(core, pause)
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+    }
+
+    /// The confirmed reap: the only way a terminal becomes `Exited`.
+    fn record_exit(&self, exit: ExitInfo) {
+        let mut core = lock(&self.core);
+        core.status = Status::Exited(ExitRecord {
+            code: exit.code,
+            signal: exit.signal,
+            reason: core.kill_reason.unwrap_or(ExitReason::Exited),
+            at_ms: now_ms(),
+        });
         let info = self.info_locked(&core);
         for attachment in core.attachments.drain(..) {
             attachment.push(AttachItem::Exited { info: info.clone() });
@@ -787,7 +820,7 @@ impl Terminal {
         let mut queue = lock(&shared.queue);
         queue.items.clear();
         queue.lagging = false;
-        if !matches!(core.status, Status::Live) {
+        if matches!(core.status, Status::Exited(_)) {
             queue.items.push_back(AttachItem::Exited {
                 info: self.info_locked(&core),
             });
@@ -827,12 +860,22 @@ fn wait_for_exit(
     drained: &mpsc::Receiver<()>,
     manager: &Weak<Inner>,
 ) {
-    let result = child.wait();
+    let mut pause = WAIT_RETRY_FIRST;
+    let exit = loop {
+        match child.wait() {
+            Ok(exit) => break exit,
+            Err(error) => {
+                terminal.mark_unverifiable(&error);
+                terminal.pause_before_retry(pause);
+                pause = (pause * 2).min(WAIT_RETRY_MAX);
+            }
+        }
+    };
     // Close first: on Windows that is what ends the output. The channel disconnects when
     // the reader ends, so every attachment has all the output before `Exited`.
     close_off_thread(&terminal.master);
     let _ = drained.recv_timeout(DRAIN_LIMIT);
-    terminal.record_exit(result);
+    terminal.record_exit(exit);
     if let Some(manager) = manager.upgrade() {
         manager.retire(&terminal.id);
     }

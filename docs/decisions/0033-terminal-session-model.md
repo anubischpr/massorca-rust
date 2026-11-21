@@ -26,9 +26,11 @@ proof that its work died.
 - **States.** `live` from spawn until the process is reaped, then `exited`
   with `exit { code?, signal?, reason, at_ms }`. `unverifiable` is reserved for
   hosts the service cannot currently reach (remote, Phase 3); a local
-  terminal never reports it, because the service is the parent of the
-  process and its wait is proof. A failed wait is reported as `unverifiable`,
-  never as `exited`.
+  terminal reports it only when its wait fails, because the service is the
+  parent of the process and its wait is proof. A failed wait is reported as
+  `unverifiable`, never as `exited`: the terminal stays listed, counted as
+  live, attachable, and accepts input, resize and kill, until a later wait
+  reaps it.
 - **Exited terminals stay listed** until `terminal.close`, so a client that
   reconnects sees how a terminal ended and can still attach to read its last
   screen. At most 64 exited terminals are kept; the oldest are forgotten
