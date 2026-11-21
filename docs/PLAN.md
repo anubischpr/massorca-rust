@@ -200,8 +200,8 @@ Electron app if wanted. Retire the Electron app.
   features should use those same extension points where practical; the UI has
   defined places where extensions add panels, commands and views; the protocol
   lets extensions add capabilities without a core release. The extension model
-  (what a plugin is, in which language, how it is sandboxed and distributed)
-  is a Phase 0 research item.
+  is decided in `docs/decisions/0001-extension-model.md` and designed in
+  `docs/architecture/extensions.md`, including the seams Phase 1 must build.
 
 ## How the work is organised
 
