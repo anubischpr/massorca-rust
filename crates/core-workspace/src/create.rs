@@ -132,7 +132,11 @@ impl Workspaces {
             request_id: params.request_id.clone(),
             created_at: now_ms(),
         };
-        self.store.insert_workspace(&row).map_err(refused_insert)?;
+        if let Err(error) = self.store.insert_workspace(&row) {
+            let leftovers =
+                self.roll_back_worktree(repo, &target, created_branch.then_some(branch));
+            return Err(with_leftovers(refused_insert(error), &leftovers));
+        }
         Ok(views::workspace(&row))
     }
 
@@ -183,6 +187,28 @@ impl Workspaces {
         }
         Ok(())
     }
+
+    /// Undoes a worktree whose row could not be stored: removes it and, when this request
+    /// created the branch, deletes that branch if git proves it merged. Returns what is left.
+    fn roll_back_worktree(
+        &self,
+        repo: &Path,
+        target: &Path,
+        created_branch: Option<&str>,
+    ) -> Vec<String> {
+        let mut leftovers = Vec::new();
+        if let Err(error) = self.git.worktree_remove(repo, target, true) {
+            leftovers.push(format!("worktree {} ({error})", target.display()));
+        }
+        if let Some(branch) = created_branch {
+            match self.git.delete_branch_if_merged(repo, branch) {
+                Ok(true) => {}
+                Ok(false) => leftovers.push(format!("branch {branch} (not merged)")),
+                Err(error) => leftovers.push(format!("branch {branch} ({error})")),
+            }
+        }
+        leftovers
+    }
 }
 
 fn invalid(message: &str) -> DomainError {
@@ -214,5 +240,17 @@ fn refused_insert(error: StoreError) -> DomainError {
             "that name was claimed by another workspace",
         ),
         other => other.into(),
+    }
+}
+
+/// Names what a failed rollback left behind, so the caller can finish the cleanup.
+fn with_leftovers(error: DomainError, leftovers: &[String]) -> DomainError {
+    if leftovers.is_empty() {
+        error
+    } else {
+        DomainError::new(
+            error.code(),
+            format!("{}; left behind: {}", error.message(), leftovers.join(", ")),
+        )
     }
 }

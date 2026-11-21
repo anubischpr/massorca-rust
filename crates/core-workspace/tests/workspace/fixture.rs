@@ -51,7 +51,6 @@ impl Fixture {
     }
 
     /// Another repository beside the main one, with its own commit.
-    #[allow(dead_code)] // used by the read tests, which land later
     pub fn second_repo(&self, name: &str) -> PathBuf {
         let repo = self.path(name);
         init_repo(&repo, "other.md", "other\n");
@@ -82,6 +81,28 @@ impl Fixture {
         self.workspaces
             .create_workspace(create_params(project, name))
             .expect("create workspace")
+    }
+
+    /// Makes every workspace row insert fail, as a store that rejects the row would.
+    pub fn fail_workspace_inserts(&self) {
+        self.connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_workspace_insert BEFORE INSERT ON workspaces \
+                 BEGIN SELECT RAISE(ABORT, 'simulated insert failure'); END;",
+            )
+            .expect("install trigger");
+    }
+
+    /// Lets workspace row inserts succeed again.
+    pub fn allow_workspace_inserts(&self) {
+        self.connection()
+            .execute_batch("DROP TRIGGER fail_workspace_insert;")
+            .expect("drop trigger");
+    }
+
+    /// A second connection to the store file, used only for fault injection.
+    fn connection(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.root.path().join("store.db")).expect("open store file")
     }
 }
 
