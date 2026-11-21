@@ -4,6 +4,7 @@ use super::{Story, variant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardPadding, CardVariant};
 use crate::components::empty_state::{EmptyState, EmptyStateVariant};
+use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::icon::IconName;
 use crate::style::Surface;
@@ -23,7 +24,44 @@ pub fn stories() -> Vec<Story> {
             spec: "EmptyState.md",
             render: empty_state_story,
         },
+        Story {
+            name: "Error state",
+            spec: "ErrorState.md",
+            render: error_state_story,
+        },
     ]
+}
+
+fn error_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Page: title, explanation, Retry and Show details",
+            ErrorState::new("error-page", "Could not load routines")
+                .variant(ErrorStateVariant::Page)
+                .explanation("Your changes are kept.")
+                .details("E_TIMEOUT at 10:14:03"),
+            cx,
+        ))
+        .child(variant(
+            "Section: a danger panel with Retry",
+            ErrorState::new("error-section", "Could not load sessions")
+                .explanation("The list shows the last loaded sessions."),
+            cx,
+        ))
+        .child(variant(
+            "Retrying: a spinner and Retry cannot be activated",
+            ErrorState::new("error-retrying", "Could not load sessions").retrying(true),
+            cx,
+        ))
+        .child(variant(
+            "Inline: no panel, Retry as a text button",
+            ErrorState::new("error-inline", "Could not delete").variant(ErrorStateVariant::Inline),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn empty_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
