@@ -28,6 +28,7 @@ pub mod search_field;
 pub mod secret_request_card;
 pub mod segmented_control;
 pub mod select;
+pub mod session_summary_card;
 pub mod sheet;
 pub mod sidebar_row;
 pub mod skeleton;
