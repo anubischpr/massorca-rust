@@ -1,17 +1,36 @@
-//! Sheet: the Android bottom sheet (docs/design/components/Sheet.md). This file holds the sheet's
-//! rules as plain functions: how tall it may open, how tall its body may be, how far a handle drag
-//! has travelled and whether a release closes the sheet. The element builds on them.
+//! Sheet: the Android bottom sheet (docs/design/components/Sheet.md). It holds an action list, an
+//! option list or a content view above a scrim, with a drag handle, an optional header and footer.
+//! Escape, a scrim press and the close button dismiss it unless it is busy. A drag of the handle
+//! closes it when released past a third of its height and snaps it back otherwise. Focus moves into
+//! the sheet on open, stays inside while it is open and returns to the opener on close. Desktop uses
+//! Popover and Menu instead, so the gallery shows the sheet in place.
 
+use crate::components::popover::{DismissHandler, OpenEdge, OpenTracker, TriggerBounds};
+use crate::components::skeleton::{Skeleton, SkeletonShape};
+use crate::components::switch::ease;
+use crate::icon::{Icon, IconName, IconSize};
+use crate::theme::{ActiveTheme, TextStyled, box_shadows};
 use crate::tokens::{
-    LAYOUT_SHEET_MAX_HEIGHT, Measure, SIZE_APPBAR_ANDROID, SIZE_HIT_TOUCH,
-    SIZE_SHEET_HANDLE_HEIGHT, SPACE_1, SPACE_2, SPACE_4,
+    DURATION_SLOW, EASE_ENTER, EASE_EXIT, LAYOUT_SHEET_MAX_HEIGHT, Measure, RADIUS_2XL,
+    RADIUS_FULL, SIZE_APPBAR_ANDROID, SIZE_HIT_TOUCH, SIZE_SHEET_HANDLE_HEIGHT,
+    SIZE_SHEET_HANDLE_WIDTH, SPACE_1, SPACE_2, SPACE_4, TYPE_A_BODY, TYPE_A_TITLE, Z_DIALOG,
 };
+use gpui::{
+    Animation, AnimationExt, AnyElement, App, AppContext, DragMoveEvent, ElementId, EmptyView,
+    Entity, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseUpEvent, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window, deferred, div, px,
+};
+use std::fmt;
+use std::rc::Rc;
 
 /// Share of the sheet's height a handle drag must pass to close it on release. The spec leaves
 /// the threshold open; a third is this component's choice.
 pub const DISMISS_DRAG_SHARE: f32 = 1.0 / 3.0;
 /// The drag handle's row: `space.2` above and below the 4 dp handle.
 const HANDLE_ROW: f32 = SPACE_2 + SIZE_SHEET_HANDLE_HEIGHT + SPACE_2;
+/// Rows of placeholder shown while a sheet loads.
+const LOADING_ROWS: usize = 3;
 
 /// The tallest a sheet may open: `layout.sheet.max-height` of the window's height.
 pub fn max_height(window_height: f32) -> f32 {
@@ -57,11 +76,469 @@ pub enum SheetVariant {
 
 impl SheetVariant {
     /// The body's (horizontal, vertical) padding.
-    pub fn body_padding(self) -> (f32, f32) {
+    fn body_padding(self) -> (f32, f32) {
         match self {
             Self::Action | Self::Option => (0.0, SPACE_1 + SPACE_1),
             Self::Content => (SPACE_4, SPACE_4),
         }
+    }
+}
+
+/// The payload of a handle drag; only handle drags reach the panel's move handler.
+struct SheetDrag;
+
+/// What the sheet keeps between frames: its open edge, focus, the opener, the animation
+/// generation, a handle drag in progress and the timer that ends the closing animation.
+struct SheetState {
+    edges: OpenTracker,
+    panel: FocusHandle,
+    opener: Option<FocusHandle>,
+    entered: usize,
+    exiting: bool,
+    exit_timer: Option<Task<()>>,
+    press: Option<f32>,
+    travel: f32,
+    panel_bounds: TriggerBounds,
+}
+
+/// Ends the closing animation after its duration, so the sheet leaves the tree.
+fn schedule_exit_end(state: &Entity<SheetState>, cx: &mut App) {
+    let weak = state.downgrade();
+    let timer = cx.spawn(async move |cx| {
+        cx.background_executor().timer(DURATION_SLOW).await;
+        weak.update(cx, |state, cx| {
+            state.exiting = false;
+            cx.notify();
+        })
+        .ok();
+    });
+    state.update(cx, |state, _| state.exit_timer = Some(timer));
+}
+
+/// The bottom sheet. The owner keeps `open`, handles `on_dismiss` and closes the sheet by setting
+/// `open` to false, which returns focus to the opener.
+#[derive(IntoElement)]
+pub struct Sheet {
+    id: ElementId,
+    open: bool,
+    variant: SheetVariant,
+    title: Option<SharedString>,
+    body: Vec<AnyElement>,
+    footer: Option<AnyElement>,
+    loading: bool,
+    empty: Option<SharedString>,
+    busy: bool,
+    initial_focus: Option<FocusHandle>,
+    inline: bool,
+    on_dismiss: Option<DismissHandler>,
+}
+
+impl fmt::Debug for Sheet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sheet")
+            .field("id", &self.id)
+            .field("open", &self.open)
+            .field("variant", &self.variant)
+            .field("title", &self.title)
+            .field("busy", &self.busy)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Sheet {
+    pub fn new(id: impl Into<ElementId>) -> Self {
+        Self {
+            id: id.into(),
+            open: false,
+            variant: SheetVariant::default(),
+            title: None,
+            body: Vec::new(),
+            footer: None,
+            loading: false,
+            empty: None,
+            busy: false,
+            initial_focus: None,
+            inline: false,
+            on_dismiss: None,
+        }
+    }
+
+    pub fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    pub fn variant(mut self, variant: SheetVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Shows the header with this title, which also names the sheet for assistive technology.
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// One body element, in order. The body scrolls past the sheet's maximum height.
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.body.push(child.into_any_element());
+        self
+    }
+
+    /// Pinned below the body: the primary action, full width.
+    pub fn footer(mut self, footer: impl IntoElement) -> Self {
+        self.footer = Some(footer.into_any_element());
+        self
+    }
+
+    /// Shows placeholder rows in place of the body while its content loads.
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    /// Shows one line with the reason the body is empty, in place of the body.
+    pub fn empty(mut self, text: impl Into<SharedString>) -> Self {
+        self.empty = Some(text.into());
+        self
+    }
+
+    /// While busy, Escape, the scrim, the close button and a handle drag do not dismiss.
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+
+    /// The first control of the sheet, focused on open. Without one the panel takes focus.
+    pub fn initial_focus(mut self, focus: FocusHandle) -> Self {
+        self.initial_focus = Some(focus);
+        self
+    }
+
+    /// Draws the panel in place, without the scrim, the overlay layer or the motion, for galleries.
+    pub fn inline(mut self) -> Self {
+        self.inline = true;
+        self
+    }
+
+    pub fn on_dismiss(mut self, listener: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_dismiss = Some(Rc::new(listener));
+        self
+    }
+}
+
+impl RenderOnce for Sheet {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let reduce_motion = cx.reduce_motion();
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| SheetState {
+            edges: OpenTracker::default(),
+            panel: cx.focus_handle(),
+            opener: None,
+            entered: 0,
+            exiting: false,
+            exit_timer: None,
+            press: None,
+            travel: 0.0,
+            panel_bounds: TriggerBounds::default(),
+        });
+        let panel_focus = state.read(cx).panel.clone();
+        let panel_bounds = state.read(cx).panel_bounds.clone();
+        match state.update(cx, |state, _| state.edges.observe(self.open)) {
+            Some(OpenEdge::Opened) => {
+                let opener = window.focused(cx);
+                let first = self
+                    .initial_focus
+                    .clone()
+                    .unwrap_or_else(|| panel_focus.clone());
+                state.update(cx, |state, _| {
+                    state.opener = opener;
+                    state.entered += 1;
+                    state.exiting = false;
+                    state.exit_timer = None;
+                    state.press = None;
+                    state.travel = 0.0;
+                });
+                window.focus(&first, cx);
+            }
+            Some(OpenEdge::Closed) => {
+                let opener = state.read(cx).opener.clone();
+                state.update(cx, |state, _| {
+                    state.exiting = !reduce_motion;
+                    state.press = None;
+                    state.travel = 0.0;
+                });
+                if !reduce_motion {
+                    schedule_exit_end(&state, cx);
+                }
+                if let Some(opener) = opener {
+                    window.focus(&opener, cx);
+                }
+            }
+            None => {}
+        }
+        let (exiting, entered, travel) = {
+            let s = state.read(cx);
+            (s.exiting, s.entered, s.travel)
+        };
+        if !self.open && !exiting {
+            return div().into_any_element();
+        }
+
+        let viewport = f32::from(window.viewport_size().height);
+        let busy = self.busy;
+        let dismiss: DismissHandler = {
+            let on_dismiss = self.on_dismiss.clone();
+            Rc::new(move |window, cx| {
+                if !busy && let Some(on_dismiss) = &on_dismiss {
+                    on_dismiss(window, cx);
+                }
+            })
+        };
+        let has_header = self.title.is_some();
+        let has_footer = self.footer.is_some();
+        let (side, vertical) = self.variant.body_padding();
+
+        let mut panel = div()
+            .id((self.id.clone(), "panel"))
+            .w_full()
+            .max_h(px(max_height(viewport)))
+            .flex()
+            .flex_col()
+            .bg(p.surface.overlay)
+            .border_1()
+            .border_color(p.border.default)
+            .rounded_t(px(RADIUS_2XL))
+            .shadow(box_shadows(theme.shadows.e3))
+            .occlude()
+            .track_focus(&panel_focus)
+            .role(Role::Dialog)
+            .aria_label(self.title.clone().unwrap_or_else(|| "Sheet".into()))
+            .debug_selector(|| "sheet-panel".into())
+            .on_key_down({
+                let dismiss = dismiss.clone();
+                let panel = panel_focus.clone();
+                let first_stop = self
+                    .initial_focus
+                    .clone()
+                    .unwrap_or_else(|| panel_focus.clone());
+                move |event: &KeyDownEvent, window, cx| match event.keystroke.key.as_str() {
+                    "escape" => {
+                        cx.stop_propagation();
+                        dismiss(window, cx);
+                    }
+                    "tab" => {
+                        cx.stop_propagation();
+                        if event.keystroke.modifiers.shift {
+                            window.focus_prev(cx);
+                        } else {
+                            window.focus_next(cx);
+                        }
+                        if !panel.contains_focused(window, cx) {
+                            window.focus(&first_stop, cx);
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        let release = {
+            let state = state.clone();
+            let dismiss = dismiss.clone();
+            let panel_bounds = panel_bounds.clone();
+            move |_: &MouseUpEvent, window: &mut Window, cx: &mut App| {
+                let (pressed, travel) = {
+                    let s = state.read(cx);
+                    (s.press.is_some(), s.travel)
+                };
+                let height = panel_bounds.get().map_or(0.0, |b| f32::from(b.size.height));
+                if !pressed {
+                    return;
+                }
+                state.update(cx, |state, cx| {
+                    state.press = None;
+                    state.travel = 0.0;
+                    cx.notify();
+                });
+                if dismisses_on_release(travel, height) {
+                    dismiss(window, cx);
+                }
+            }
+        };
+        panel = panel
+            .on_mouse_up(MouseButton::Left, release.clone())
+            .on_mouse_up_out(MouseButton::Left, release);
+
+        let grab = div()
+            .id((self.id.clone(), "grab"))
+            .w_full()
+            .flex()
+            .justify_center()
+            .py(px(SPACE_2))
+            .on_mouse_down(MouseButton::Left, {
+                let state = state.clone();
+                move |event: &MouseDownEvent, _, cx| {
+                    state.update(cx, |state, cx| {
+                        state.press = Some(f32::from(event.position.y));
+                        state.travel = 0.0;
+                        cx.notify();
+                    });
+                }
+            })
+            .on_drag(SheetDrag, |_, _, _, cx| cx.new(|_| EmptyView))
+            .on_drag_move::<SheetDrag>({
+                let state = state.clone();
+                move |event: &DragMoveEvent<SheetDrag>, _, cx| {
+                    let pointer = f32::from(event.event.position.y);
+                    state.update(cx, |state, cx| {
+                        let Some(press) = state.press else {
+                            return;
+                        };
+                        let travel = drag_travel(press, pointer);
+                        if travel != state.travel {
+                            state.travel = travel;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .child(
+                div()
+                    .w(px(SIZE_SHEET_HANDLE_WIDTH))
+                    .h(px(SIZE_SHEET_HANDLE_HEIGHT))
+                    .rounded(px(RADIUS_FULL))
+                    .bg(p.border.strong)
+                    .debug_selector(|| "sheet-handle".into()),
+            );
+        panel = panel.child(grab);
+
+        if let Some(title) = self.title.clone() {
+            let close = dismiss.clone();
+            panel = panel.child(
+                div()
+                    .h(px(SIZE_APPBAR_ANDROID))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pl(px(SPACE_4))
+                    .pr(px(SPACE_1))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_style(TYPE_A_TITLE)
+                            .text_color(p.text.primary)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .id((self.id.clone(), "close"))
+                            .role(Role::Button)
+                            .aria_label("Close")
+                            .w(px(SIZE_HIT_TOUCH))
+                            .h(px(SIZE_HIT_TOUCH))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(RADIUS_FULL))
+                            .hover(move |s| s.bg(p.fill.hover_overlay))
+                            .on_click(move |_, window, cx| close(window, cx))
+                            .child(
+                                Icon::new(IconName::X)
+                                    .size(IconSize::Medium)
+                                    .color(p.text.secondary),
+                            ),
+                    ),
+            );
+        }
+
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .px(px(side))
+            .py(px(vertical))
+            .text_style(TYPE_A_BODY)
+            .text_color(p.text.secondary);
+        if self.loading {
+            for index in 0..LOADING_ROWS {
+                column = column.child(
+                    Skeleton::new(SkeletonShape::Row)
+                        .delayed((self.id.clone(), format!("row-{index}"))),
+                );
+            }
+        } else if let Some(empty) = self.empty.clone() {
+            column = column.child(div().px(px(SPACE_4)).py(px(SPACE_4)).child(empty));
+        } else {
+            column = column.children(self.body);
+        }
+        let body_max = body_max_height(viewport, has_header, has_footer);
+        panel = panel.child(
+            div()
+                .id((self.id.clone(), "body"))
+                .flex_1()
+                .min_h_0()
+                .max_h(px(body_max))
+                .overflow_y_scroll()
+                .child(column),
+        );
+
+        if let Some(footer) = self.footer {
+            panel = panel.child(div().w_full().p(px(SPACE_4)).child(footer));
+        }
+
+        if self.inline {
+            return panel.into_any_element();
+        }
+
+        // The panel rises from the bottom edge on open and sinks back on close; a handle drag
+        // moves it by the travel it has made.
+        let panel = if reduce_motion {
+            panel.top(px(travel)).into_any_element()
+        } else if exiting && !self.open {
+            panel
+                .with_animation(
+                    format!("sheet-exit-{entered}"),
+                    Animation::new(DURATION_SLOW),
+                    move |el, delta| el.top(px(viewport * ease(EASE_EXIT, delta))),
+                )
+                .into_any_element()
+        } else if entered > 0 && self.open && travel == 0.0 {
+            panel
+                .with_animation(
+                    format!("sheet-enter-{entered}"),
+                    Animation::new(DURATION_SLOW),
+                    move |el, delta| el.top(px(viewport * (1.0 - ease(EASE_ENTER, delta)))),
+                )
+                .into_any_element()
+        } else {
+            panel.top(px(travel)).into_any_element()
+        };
+
+        let host = panel_bounds.track(div().w_full().child(panel));
+        let scrim = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(p.scrim)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let dismiss = dismiss.clone();
+                move |_, window, cx| dismiss(window, cx)
+            });
+        let layer = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .child(scrim)
+            .child(host);
+        deferred(layer)
+            .priority(Z_DIALOG as usize)
+            .into_any_element()
     }
 }
 
