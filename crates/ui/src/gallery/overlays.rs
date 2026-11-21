@@ -2,10 +2,12 @@
 
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonVariant};
+use crate::components::menu::{MenuEntry, MenuItem, MenuView};
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
 use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::text_field::TextField;
 use crate::components::tooltip::{Tooltip, TooltipTrigger};
+use crate::icon::IconName;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{SPACE_2, TYPE_BODY_SM};
 use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
@@ -21,6 +23,11 @@ pub fn stories() -> Vec<Story> {
             name: "Tooltip",
             spec: "Tooltip.md",
             render: tooltip_story,
+        },
+        Story {
+            name: "Menu",
+            spec: "Menu.md",
+            render: menu_story,
         },
     ]
 }
@@ -177,4 +184,86 @@ fn tooltip_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Long content, three lines", long, cx))
         .child(variant("Trigger: hover, or Tab to it", trigger, cx))
         .into_any_element()
+}
+
+fn menu_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let actions = window.use_keyed_state("menu-story/actions", cx, |window, cx| {
+        MenuView::new(action_entries(), window, cx)
+    });
+    let submenu = window.use_keyed_state("menu-story/submenu", cx, |window, cx| {
+        let mut menu = MenuView::new(action_entries(), window, cx);
+        menu.open_submenu(SUBMENU_ROW, cx);
+        menu
+    });
+    let checkable = window.use_keyed_state("menu-story/checkable", cx, |window, cx| {
+        MenuView::new(checkable_entries(), window, cx)
+    });
+    let empty = window.use_keyed_state("menu-story/empty", cx, |window, cx| {
+        MenuView::new(Vec::new(), window, cx)
+    });
+
+    div()
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap(px(SPACE_2))
+        .child(variant(
+            "Actions, icons, shortcut, disabled and destructive",
+            actions,
+            cx,
+        ))
+        .child(variant("Submenu open (Right or hover)", submenu, cx))
+        .child(variant(
+            "Checkable options and a group label",
+            checkable,
+            cx,
+        ))
+        .child(variant("Empty", empty, cx))
+        .into_any_element()
+}
+
+/// Row of the action menu that opens a submenu in the gallery.
+const SUBMENU_ROW: usize = 6;
+
+fn action_entries() -> Vec<MenuEntry> {
+    vec![
+        MenuItem::new("Rename")
+            .icon(IconName::Pencil)
+            .shortcut("Mod+R")
+            .into(),
+        MenuItem::new("Duplicate").icon(IconName::Copy).into(),
+        MenuItem::new("Open in editor")
+            .icon(IconName::ExternalLink)
+            .into(),
+        MenuEntry::Separator,
+        MenuItem::new("Stop agent")
+            .icon(IconName::Zap)
+            .disabled("Host unreachable")
+            .into(),
+        MenuEntry::Separator,
+        MenuItem::new("Open with")
+            .icon(IconName::SquareTerminal)
+            .submenu(vec![
+                MenuItem::new("Terminal").icon(IconName::Terminal).into(),
+                MenuItem::new("Editor").icon(IconName::FileText).into(),
+            ])
+            .into(),
+        MenuEntry::Separator,
+        MenuItem::new("Delete workspace (uncommitted changes lost)")
+            .icon(IconName::Trash2)
+            .destructive()
+            .into(),
+    ]
+}
+
+fn checkable_entries() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::Group("Layout".into()),
+        MenuItem::new("Activity rail").checked(true).into(),
+        MenuItem::new("Sidebar").checked(true).into(),
+        MenuItem::new("Status bar").checked(false).into(),
+        MenuEntry::Separator,
+        MenuItem::new("Wrap long lines").checked(false).into(),
+        MenuItem::new("Reset layout").into(),
+    ]
 }
