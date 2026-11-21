@@ -14,6 +14,7 @@ pub mod icon_button;
 pub mod kbd;
 pub mod list_row;
 pub mod menu;
+pub mod notification_card;
 pub mod popover;
 pub mod progress;
 pub mod scroll_area;
