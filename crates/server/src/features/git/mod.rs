@@ -1,7 +1,7 @@
 //! The `git/1` capability (decisions 0010-0015): one module per command group, sharing workspace resolution here.
 
-mod commit;
 mod branch;
+mod commit;
 mod diff;
 mod index;
 mod log;

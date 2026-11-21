@@ -1,11 +1,11 @@
 //! Typed helpers over the `git/1` methods (decision 0010).
 
-use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::branch::{
     self, GitBranch, GitBranchCreateParams, GitBranchDeleteParams, GitBranchDeleted,
     GitBranchRenameParams, GitBranchSwitchParams, GitBranchSwitched, GitBranches,
 };
+use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{
     self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
 };
