@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscription};
 use massorca_profile::Profile;
+use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
     TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
@@ -51,6 +52,13 @@ pub(crate) enum Command {
     AddProject {
         params: ProjectAddParams,
         reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    ListConfig {
+        reply: oneshot::Sender<Result<ConfigList, Refusal>>,
+    },
+    SetConfig {
+        params: ConfigSet,
+        reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
     },
     Stop,
 }
@@ -116,13 +124,7 @@ impl ServiceHandle {
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, Refusal> {
-        let (reply, answer) = oneshot::channel();
-        self.commands
-            .send(Command::Create { params, reply })
-            .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
-        answer
-            .await
-            .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+        self.ask(|reply| Command::Create { params, reply }).await
     }
 
     /// `project.add`. The project list changes through the resulting event, not from this answer.
@@ -141,9 +143,28 @@ impl ServiceHandle {
         &self,
         params: WorkspaceRemoveParams,
     ) -> Result<WorkspaceRemoved, Refusal> {
+        self.ask(|reply| Command::Remove { params, reply }).await
+    }
+
+    /// `config.list`: every declared setting with its value and default.
+    pub async fn config_list(&self) -> Result<ConfigList, Refusal> {
+        self.ask(|reply| Command::ListConfig { reply }).await
+    }
+
+    /// `config.set`: the service checks the value and stores it. The answer is the value in effect,
+    /// and the caller shows "Saved" only from that answer.
+    pub async fn config_set(&self, params: ConfigSet) -> Result<ConfigValue, Refusal> {
+        self.ask(|reply| Command::SetConfig { params, reply }).await
+    }
+
+    /// Sends one command and waits for its answer. A bridge that has stopped answers as unavailable.
+    async fn ask<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<T, Refusal>>) -> Command,
+    ) -> Result<T, Refusal> {
         let (reply, answer) = oneshot::channel();
         self.commands
-            .send(Command::Remove { params, reply })
+            .send(command(reply))
             .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
         answer
             .await
@@ -450,6 +471,24 @@ fn spawn_call(client: &Client, command: Command) {
                 let _ = reply.send(result);
             });
         }
+        Command::ListConfig { reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .config_list()
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::SetConfig { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .config_set(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::RetryNow | Command::Stop => {}
     }
 }
@@ -465,6 +504,12 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AddProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::ListConfig { reply } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::SetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::RetryNow | Command::Stop => {}

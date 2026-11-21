@@ -4,6 +4,8 @@
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -17,6 +19,9 @@ const PIPE_GRACE: Duration = Duration::from_secs(2);
 /// How long a finished command with no deadline waits for a pipe held outside its process tree.
 const ESCAPED_GRACE: Duration = Duration::from_secs(30);
 
+/// Git's messages are short; a child that floods stderr is cut here rather than filling memory.
+const MAX_STDERR: usize = 1 << 20;
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -25,6 +30,8 @@ pub(crate) struct Output {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
+    /// Stdout reached the byte budget: it holds the first bytes only, and the process tree was killed.
+    pub(crate) truncated: bool,
 }
 
 #[derive(Debug)]
@@ -38,8 +45,13 @@ type Reader = JoinHandle<io::Result<Vec<u8>>>;
 
 /// Runs `command` with stdin closed and both output streams captured. The stdio
 /// and window settings are applied here, so no caller can run a child without them.
-/// `None` waits for the child however long it runs.
-pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> io::Result<Bounded> {
+/// `None` waits for the child however long it runs. Past `max_stdout` bytes the
+/// tree is killed and the output so far is returned as truncated.
+pub(crate) fn run_bounded(
+    command: &mut Command,
+    timeout: Option<Duration>,
+    max_stdout: Option<usize>,
+) -> io::Result<Bounded> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -50,12 +62,30 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> i
         command.creation_flags(CREATE_NO_WINDOW);
     }
     let (mut child, tree) = ProcessTree::spawn(command)?;
-    let stdout = child.stdout.take().map(read_on_thread);
-    let stderr = child.stderr.take().map(read_on_thread);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout = child
+        .stdout
+        .take()
+        .map(|pipe| read_on_thread(pipe, max_stdout, Arc::clone(&overflow)));
+    let stderr = child
+        .stderr
+        .take()
+        .map(|pipe| read_on_thread(pipe, Some(MAX_STDERR), Arc::new(AtomicBool::new(false))));
     let readers = [&stdout, &stderr];
     let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
-    let status = match wait_for_exit(&mut child, deadline) {
+    let status = match wait_for_exit(&mut child, deadline, &overflow) {
         Ok(Some(status)) => status,
+        Ok(None) if overflow.load(Ordering::Acquire) => {
+            tree.kill();
+            reap(&mut child);
+            wait_for_readers(&readers, Instant::now() + PIPE_GRACE);
+            return Ok(Bounded::Finished(Output {
+                status: child.wait()?,
+                stdout: join(stdout)?,
+                stderr: join(stderr)?,
+                truncated: true,
+            }));
+        }
         outcome => {
             tree.kill();
             reap(&mut child);
@@ -82,6 +112,7 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> i
         status,
         stdout: join(stdout)?,
         stderr: join(stderr)?,
+        truncated: overflow.load(Ordering::Acquire),
     }))
 }
 
@@ -142,17 +173,40 @@ impl ProcessTree {
     }
 }
 
-fn read_on_thread<R: Read + Send + 'static>(mut pipe: R) -> Reader {
+/// Reads `pipe` to its end, or until `limit` bytes; then it stops reading and raises `overflow`.
+fn read_on_thread<R: Read + Send + 'static>(
+    pipe: R,
+    limit: Option<usize>,
+    overflow: Arc<AtomicBool>,
+) -> Reader {
     thread::spawn(move || {
         let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes).map(|_| bytes)
+        let Some(limit) = limit else {
+            let mut pipe = pipe;
+            return pipe.read_to_end(&mut bytes).map(|_| bytes);
+        };
+        // One byte past the limit tells a full budget from an overflow.
+        let budget = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+        pipe.take(budget).read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
+            bytes.truncate(limit);
+            overflow.store(true, Ordering::Release);
+        }
+        Ok(bytes)
     })
 }
 
-/// Polls until the child exits. `None` means the deadline passed first; without a
-/// deadline (no timeout, or one too large for an `Instant`) it waits for the exit.
-fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> io::Result<Option<ExitStatus>> {
+/// Polls until the child exits. `None` means the deadline passed first, or stdout
+/// overflowed its budget; without either it waits for the exit.
+fn wait_for_exit(
+    child: &mut Child,
+    deadline: Option<Instant>,
+    overflow: &AtomicBool,
+) -> io::Result<Option<ExitStatus>> {
     loop {
+        if overflow.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         // Checked first, so a passed deadline wins even over a child that already exited.
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Ok(None);
@@ -204,6 +258,8 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    use std::sync::atomic::AtomicBool;
+
     use super::{Bounded, run_bounded, wait_for_exit};
 
     /// Set only on child processes, never on the test process.
@@ -213,6 +269,8 @@ mod tests {
     const CHILD_SPAWNS: &str = "MASSORCA_CORE_GIT_TEST_CHILD_SPAWNS";
     const CHILD_THEN: &str = "MASSORCA_CORE_GIT_TEST_CHILD_THEN";
     const CHILD_TEST: &str = "process::tests::child_sleeps_when_asked";
+    /// Makes the child write far more than any test budget to stdout, then sleep.
+    const CHILD_FLOODS: &str = "MASSORCA_CORE_GIT_TEST_CHILD_FLOODS";
 
     /// This test binary limited to `CHILD_TEST`: a real child process on every OS.
     fn test_binary() -> Command {
@@ -249,6 +307,16 @@ mod tests {
                 .and_then(|text| text.parse().ok())
                 .unwrap_or(120);
             std::thread::sleep(Duration::from_secs(seconds));
+        } else if std::env::var_os(CHILD_FLOODS).is_some() {
+            use std::io::Write;
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut stdout = std::io::stdout().lock();
+            for _ in 0..1024 {
+                if stdout.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(120));
         }
     }
 
@@ -305,7 +373,7 @@ mod tests {
     #[test]
     fn a_finished_child_returns_its_status_and_output() {
         let outcome =
-            run_bounded(&mut test_binary(), Some(Duration::from_secs(120))).expect("spawn");
+            run_bounded(&mut test_binary(), Some(Duration::from_secs(120)), None).expect("spawn");
         match outcome {
             Bounded::Finished(output) => {
                 assert!(output.status.success());
@@ -320,7 +388,8 @@ mod tests {
         let mut command = test_binary();
         command.env(CHILD_SLEEPS, "1");
         let started = Instant::now();
-        let outcome = run_bounded(&mut command, Some(Duration::from_millis(300))).expect("spawn");
+        let outcome =
+            run_bounded(&mut command, Some(Duration::from_millis(300)), None).expect("spawn");
         assert!(matches!(outcome, Bounded::TimedOut), "{outcome:?}");
         assert!(
             started.elapsed() < Duration::from_secs(30),
@@ -333,7 +402,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let (mut command, pid_file) = child_with_grandchild("sleep", dir.path());
         let started = Instant::now();
-        let outcome = run_bounded(&mut command, Some(Duration::from_secs(3))).expect("spawn");
+        let outcome = run_bounded(&mut command, Some(Duration::from_secs(3)), None).expect("spawn");
         assert!(matches!(outcome, Bounded::TimedOut), "{outcome:?}");
         assert!(started.elapsed() < Duration::from_secs(30));
         assert_grandchild_dies(&pid_file);
@@ -344,7 +413,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let (mut command, pid_file) = child_with_grandchild("exit", dir.path());
         let started = Instant::now();
-        let outcome = run_bounded(&mut command, Some(Duration::from_secs(120))).expect("spawn");
+        let outcome =
+            run_bounded(&mut command, Some(Duration::from_secs(120)), None).expect("spawn");
         match outcome {
             Bounded::Finished(output) => assert!(output.status.success()),
             Bounded::TimedOut => panic!("a successful child was reported as timed out"),
@@ -360,7 +430,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let (mut command, _pid_file) = child_with_grandchild("escape", dir.path());
         let started = Instant::now();
-        let outcome = run_bounded(&mut command, Some(Duration::from_secs(120))).expect("spawn");
+        let outcome =
+            run_bounded(&mut command, Some(Duration::from_secs(120)), None).expect("spawn");
         match outcome {
             Bounded::Finished(output) => assert!(output.status.success()),
             Bounded::TimedOut => panic!("a finished child was reported as timed out"),
@@ -377,15 +448,50 @@ mod tests {
             .spawn()
             .expect("spawn");
         child.wait().expect("the child exits");
-        let outcome = wait_for_exit(&mut child, Some(Instant::now())).expect("poll");
+        let outcome =
+            wait_for_exit(&mut child, Some(Instant::now()), &AtomicBool::new(false)).expect("poll");
         assert!(outcome.is_none(), "{outcome:?}");
+    }
+
+    #[test]
+    fn output_past_the_budget_is_cut_and_the_child_killed() {
+        let mut command = test_binary();
+        command.env(CHILD_FLOODS, "1");
+        let started = Instant::now();
+        let outcome =
+            run_bounded(&mut command, Some(Duration::from_secs(120)), Some(4096)).expect("spawn");
+        match outcome {
+            Bounded::Finished(output) => {
+                assert!(output.truncated);
+                assert_eq!(output.stdout.len(), 4096);
+            }
+            Bounded::TimedOut => panic!("an overflow was reported as a timeout"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the child was not killed"
+        );
+    }
+
+    #[test]
+    fn output_within_the_budget_is_not_truncated() {
+        let outcome = run_bounded(
+            &mut test_binary(),
+            Some(Duration::from_secs(120)),
+            Some(1 << 20),
+        )
+        .expect("spawn");
+        match outcome {
+            Bounded::Finished(output) => assert!(!output.truncated && output.status.success()),
+            Bounded::TimedOut => panic!("timed out"),
+        }
     }
 
     #[test]
     fn a_missing_program_is_a_spawn_error() {
         let mut command = Command::new("massorca-no-such-program");
-        let error =
-            run_bounded(&mut command, Some(Duration::from_secs(5))).expect_err("no such program");
+        let error = run_bounded(&mut command, Some(Duration::from_secs(5)), None)
+            .expect_err("no such program");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

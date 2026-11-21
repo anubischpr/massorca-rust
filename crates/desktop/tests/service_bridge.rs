@@ -11,9 +11,10 @@ use massorca_desktop::service::{
     connect_options,
 };
 use massorca_profile::Profile;
-use massorca_protocol::PeerInfo;
+use massorca_protocol::methods::config::ConfigSet;
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::workspaces::{WorkspaceCreateParams, WorkspaceRemoveParams};
+use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -306,4 +307,93 @@ async fn a_lost_connection_reconnects_and_resyncs() {
     );
     drop(bridge);
     stop_service(again).await;
+}
+
+#[tokio::test]
+async fn config_values_are_read_and_stored_through_the_bridge() {
+    const FOLDER: &str = "workspaces.default_root";
+    let home = tempfile::tempdir().expect("a temporary home");
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the connection", |s| {
+        s.connection.is_connected()
+    })
+    .await;
+
+    let listed = handle.config_list().await.expect("the settings are listed");
+    let folder = listed
+        .values
+        .iter()
+        .find(|value| value.key == FOLDER)
+        .expect("the folder setting is declared");
+    assert!(folder.is_default);
+    let default_text = folder.value.as_str().expect("a path").to_owned();
+
+    // The service refuses a folder that is not absolute, and the refusal keeps its code.
+    let refused = handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: FOLDER.to_owned(),
+            value: "relative".to_owned().into(),
+        })
+        .await
+        .expect_err("a relative folder is refused");
+    assert!(
+        matches!(&refused, Refusal::Failed { code, .. } if code == codes::CONFIG_INVALID_VALUE),
+        "{refused:?}"
+    );
+
+    let unknown = handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: "no.such.key".to_owned(),
+            value: "x".to_owned().into(),
+        })
+        .await
+        .expect_err("an unknown key is refused");
+    assert!(
+        matches!(&unknown, Refusal::Failed { code, .. } if code == codes::CONFIG_UNKNOWN_KEY),
+        "{unknown:?}"
+    );
+
+    // An absolute folder is stored, and the answer is the value in effect.
+    let chosen = std::env::temp_dir()
+        .join("massorca-config-test")
+        .to_string_lossy()
+        .into_owned();
+    let stored = handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: FOLDER.to_owned(),
+            value: chosen.clone().into(),
+        })
+        .await
+        .expect("an absolute folder is stored");
+    assert_eq!(stored.value.as_str(), Some(chosen.as_str()));
+    assert!(!stored.is_default);
+    let relisted = handle
+        .config_list()
+        .await
+        .expect("the settings are listed again");
+    let again = relisted
+        .values
+        .iter()
+        .find(|value| value.key == FOLDER)
+        .expect("the folder setting is still declared");
+    assert_eq!(again.value.as_str(), Some(chosen.as_str()));
+
+    // Storing the default again makes it the default in effect.
+    let back = handle
+        .config_set(ConfigSet {
+            owner: None,
+            key: FOLDER.to_owned(),
+            value: default_text.into(),
+        })
+        .await
+        .expect("the default is stored");
+    assert!(back.is_default);
+
+    drop(bridge);
+    stop_service(service).await;
 }

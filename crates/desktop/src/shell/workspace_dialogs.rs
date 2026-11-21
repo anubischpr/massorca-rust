@@ -35,6 +35,39 @@ pub(super) struct AddProjectDialog {
     _subscriptions: Vec<Subscription>,
 }
 
+/// The rows of a project menu: every project with `chosen` checked, a caption when there are no
+/// projects, then a separator and "Add a project…" last (A38). Shared by the create form and by
+/// the start page, so both menus list the same rows.
+pub(super) fn project_menu(
+    projects: &[Project],
+    chosen: Option<&ProjectChoice>,
+) -> (Vec<MenuEntry>, Vec<Option<ProjectMenuChoice>>) {
+    let mut entries: Vec<MenuEntry> = Vec::new();
+    let mut choices: Vec<Option<ProjectMenuChoice>> = Vec::new();
+    if projects.is_empty() {
+        entries.push(MenuEntry::Group(NO_PROJECTS_LABEL.into()));
+        choices.push(None);
+    }
+    for row in project_menu_rows(projects) {
+        entries.push(
+            MenuItem::new(row.label.clone())
+                .icon(icon_of(row.icon))
+                .checked(chosen == Some(&row.choice))
+                .into(),
+        );
+        choices.push(Some(ProjectMenuChoice::Project(row.choice)));
+    }
+    entries.push(MenuEntry::Separator);
+    choices.push(None);
+    entries.push(
+        MenuItem::new(ADD_PROJECT_LABEL)
+            .icon(IconName::FolderPlus)
+            .into(),
+    );
+    choices.push(Some(ProjectMenuChoice::AddProject));
+    (entries, choices)
+}
+
 /// What a row of the project menu does when chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ProjectMenuChoice {
@@ -50,6 +83,8 @@ pub(super) enum MenuTarget {
     Workspace(String),
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
+    /// The start page's project menu: the rows of the project menu, chosen to open a start page.
+    StartProject(Vec<Option<ProjectMenuChoice>>),
 }
 
 #[derive(Debug)]
@@ -70,7 +105,7 @@ pub(super) struct WorkspaceDialogs {
     pub menu: Option<OpenMenu>,
 }
 
-fn icon_of(icon: ProjectIcon) -> IconName {
+pub(super) fn icon_of(icon: ProjectIcon) -> IconName {
     match icon {
         ProjectIcon::Folder => IconName::Folder,
         ProjectIcon::FolderStruck => IconName::FolderX,
@@ -192,29 +227,7 @@ impl Shell {
         let Some(chosen) = self.dialogs.create.as_ref().map(|d| d.form.project.clone()) else {
             return;
         };
-        let mut entries: Vec<MenuEntry> = Vec::new();
-        let mut choices: Vec<Option<ProjectMenuChoice>> = Vec::new();
-        if projects.is_empty() {
-            entries.push(MenuEntry::Group(NO_PROJECTS_LABEL.into()));
-            choices.push(None);
-        }
-        for row in project_menu_rows(&projects) {
-            entries.push(
-                MenuItem::new(row.label.clone())
-                    .icon(icon_of(row.icon))
-                    .checked(chosen.as_ref() == Some(&row.choice))
-                    .into(),
-            );
-            choices.push(Some(ProjectMenuChoice::Project(row.choice)));
-        }
-        entries.push(MenuEntry::Separator);
-        choices.push(None);
-        entries.push(
-            MenuItem::new(ADD_PROJECT_LABEL)
-                .icon(IconName::FolderPlus)
-                .into(),
-        );
-        choices.push(Some(ProjectMenuChoice::AddProject));
+        let (entries, choices) = project_menu(&projects, chosen.as_ref());
         self.open_menu(
             entries,
             MenuTarget::Projects(choices),
@@ -376,7 +389,7 @@ impl Shell {
         );
     }
 
-    fn open_menu(
+    pub(super) fn open_menu(
         &mut self,
         entries: Vec<MenuEntry>,
         target: MenuTarget,
@@ -428,6 +441,11 @@ impl Shell {
                 }
             }
             MenuTarget::Workspace(id) => self.open_remove(&id, cx),
+            MenuTarget::StartProject(choices) => match choices.get(row).cloned().flatten() {
+                Some(ProjectMenuChoice::Project(choice)) => self.open_start_project(choice, cx),
+                Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
+                None => {}
+            },
         }
     }
 

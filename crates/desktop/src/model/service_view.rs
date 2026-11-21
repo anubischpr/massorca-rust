@@ -11,7 +11,7 @@ use super::shell::{
 use crate::service::{ConnectionState, StoreState};
 
 /// The one host a local service stands for in the tree (A10).
-const LOCAL_HOST: &str = "This PC";
+pub const LOCAL_HOST: &str = "This PC";
 /// The usage colours cycle over workspaces; they are labels, never status (P29).
 const USAGE_SLOTS: usize = 6;
 
