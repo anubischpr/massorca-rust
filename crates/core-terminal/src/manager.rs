@@ -918,4 +918,62 @@ mod tests {
             send_future(&attachment.next());
         }
     }
+
+    /// A shell that exits while a background process still holds its terminal: the reader
+    /// and the waiter must end, which releases the terminal's buffers (decision 0034).
+    #[test]
+    fn a_shell_that_exits_releases_its_reader_and_waiter() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use super::{CreateSpec, ShellChoice, TerminalState};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
+            (
+                "cmd.exe",
+                vec!["/d", "/c", "start /b ping -n 120 127.0.0.1 >nul & exit 0"],
+            )
+        } else {
+            ("bash", vec!["-c", "set -m; sleep 120 & exit 0"])
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(ShellChoice {
+                    program: program.to_owned(),
+                    args: args.into_iter().map(str::to_owned).collect(),
+                }),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+        let terminal = super::lock(&manager.inner.registry)
+            .terminals
+            .get(&info.id)
+            .cloned()
+            .expect("the terminal is registered");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while manager.get(&info.id).expect("listed").state != TerminalState::Exited {
+            assert!(Instant::now() < deadline, "the shell did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Only the registry and this test hold the terminal once the reader and waiter end.
+        while Arc::strong_count(&terminal) != 2 {
+            assert!(
+                Instant::now() < deadline,
+                "the reader or the waiter still holds the terminal"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }

@@ -201,10 +201,10 @@ fn background_shell(then: &str) -> ShellChoice {
         }
     } else {
         ShellChoice {
-            program: "sh".to_owned(),
+            program: "bash".to_owned(),
             args: vec![
                 "-c".to_owned(),
-                format!("sleep 120 & echo \"child=$!;\"; {then}"),
+                format!("set -m; sleep 120 & echo \"child=$!;\"; {then}"),
             ],
         }
     }
@@ -258,6 +258,28 @@ async fn kill_after_the_shell_exited_ends_what_it_left_running() {
         .expect("kill an exited terminal");
 
     assert_eq!(killed.state, TerminalState::Exited);
+    wait_until("the grandchild to end", || is_gone(pid));
+}
+
+#[tokio::test]
+async fn a_shell_that_exits_by_itself_ends_what_it_left_running() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    create.shell = Some(background_shell("exit 0"));
+    let info = manager.create(create).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    let pid = read_child_pid(&mut watch).await;
+
+    let exited = watch.wait_for_exit().await;
+
+    assert_eq!(exited.state, TerminalState::Exited);
+    let exit = exited.exit.expect("an exit record");
+    assert_eq!(exit.reason, ExitReason::Exited);
+    // On Unix the leftovers end before the exit is recorded, so they are gone by now.
+    if cfg!(unix) {
+        assert!(is_gone(pid), "the grandchild {pid} outlived its shell");
+    }
     wait_until("the grandchild to end", || is_gone(pid));
 }
 

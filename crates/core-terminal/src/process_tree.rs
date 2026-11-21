@@ -3,7 +3,11 @@
 
 use std::io;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(unix)]
+use std::time::Duration;
 
+#[cfg(unix)]
+use rustix::io::Errno;
 #[cfg(target_os = "linux")]
 use rustix::process::kill_process;
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -12,6 +16,16 @@ use rustix::process::kill_process_group;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, waitid};
 #[cfg(windows)]
 use std::os::windows::io::RawHandle;
+
+/// A shell that exits by itself leaves its processes this long after the hangup (0031).
+#[cfg(unix)]
+const REAP_GRACE: Duration = Duration::from_secs(1);
+/// After the SIGKILL that follows, the leftovers get this long to be gone.
+#[cfg(target_os = "linux")]
+const REAP_KILL_LIMIT: Duration = Duration::from_secs(1);
+/// How often a check for leftovers looks again.
+#[cfg(target_os = "linux")]
+const POLL: Duration = Duration::from_millis(20);
 
 /// The processes one terminal's shell started. Held by the service until the terminal closes.
 pub struct ProcessTree {
@@ -142,9 +156,10 @@ impl ProcessTree {
         }
     }
 
-    /// Reaps the shell with `reap` once it has exited. Unix: the exit is observed without
-    /// reaping, so the shell's pid (its session and group id) stays held while the session
-    /// is recorded; the reap then runs under the lock, and nothing scans after it (0031).
+    /// Reaps the shell with `reap` once it has exited, after ending what it left running.
+    /// Unix: the exit is observed without reaping, so the shell's pid (its session and group
+    /// id) stays held while the leftovers are ended and recorded; the reap then runs under
+    /// the lock, and nothing scans after it (0031).
     #[cfg(unix)]
     pub(crate) fn reap_shell<T>(
         &self,
@@ -153,6 +168,7 @@ impl ProcessTree {
     ) -> io::Result<T> {
         await_exit_unreaped(self.shell)?;
         let foreground = foreground();
+        self.end_leftovers(foreground);
         let mut session = lock(&self.session);
         self.observe(&mut session, foreground);
         let status = reap()?;
@@ -160,14 +176,57 @@ impl ProcessTree {
         Ok(status)
     }
 
-    /// Windows: the job outlives the shell; nothing to observe before the reap.
+    /// Windows: once the shell is reaped its job is dropped, which ends whatever the shell
+    /// left in it. A shell that exits by itself leaves no job-less survivors (0031).
     #[cfg(windows)]
     pub(crate) fn reap_shell<T>(
         &self,
         _foreground: impl FnOnce() -> Option<i32>,
         reap: impl FnOnce() -> io::Result<T>,
     ) -> io::Result<T> {
-        reap()
+        let status = reap()?;
+        drop(lock(&self.job).take());
+        Ok(status)
+    }
+
+    /// Ends what the shell left running, while its pid is still held: a hangup, a short
+    /// grace, then SIGKILL. Waits are bounded; a survivor stays recorded for a later kill.
+    #[cfg(unix)]
+    fn end_leftovers(&self, foreground: Option<i32>) {
+        self.signal(Signal::HUP, foreground);
+        self.signal(Signal::CONT, foreground);
+        #[cfg(target_os = "linux")]
+        {
+            if !self.await_no_leftovers(REAP_GRACE) {
+                self.signal(Signal::KILL, foreground);
+                self.await_no_leftovers(REAP_KILL_LIMIT);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // No `/proc` to poll, so the grace is fixed; the groups are then killed.
+            std::thread::sleep(REAP_GRACE);
+            self.signal(Signal::KILL, foreground);
+        }
+    }
+
+    /// Polls the session until it holds no live member, for at most `limit`.
+    #[cfg(target_os = "linux")]
+    fn await_no_leftovers(&self, limit: Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            {
+                let mut session = lock(&self.session);
+                self.observe(&mut session, None);
+                if session.members.is_empty() {
+                    return true;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(POLL);
+        }
     }
 
     /// Records what the session holds now. Only before the reap: until then the shell's pid
@@ -231,8 +290,8 @@ fn await_exit_unreaped(shell: i32) -> io::Result<()> {
             WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
         ) {
             Ok(_) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
+            Err(Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
         }
     }
 }
