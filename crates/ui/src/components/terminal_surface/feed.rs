@@ -367,3 +367,5 @@ impl EventListener for Listener {
     }
 }
 
+#[cfg(test)]
+mod tests;
