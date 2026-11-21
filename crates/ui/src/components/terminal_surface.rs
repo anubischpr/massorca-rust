@@ -6,3 +6,7 @@ pub mod feed;
 pub mod geometry;
 pub mod grid_paint;
 pub mod keys;
+
+mod view;
+
+pub use view::{InputHandler, ResizeHandler, RestartHandler, TerminalSurface};
