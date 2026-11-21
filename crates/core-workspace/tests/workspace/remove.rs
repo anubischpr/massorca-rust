@@ -12,7 +12,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{WorkspaceRemoved, WorkspaceState};
 
 use crate::fixture::{
-    Fixture, branch_exists, commit_file, create_params, entries, expect_code, run_git,
+    Fixture, branch_exists, commit_file, create_params, entries, expect_code, path_key_of, run_git,
     worktree_count,
 };
 
@@ -122,7 +122,7 @@ fn the_main_worktree_is_never_removed() {
         kind: StoreWorkspaceKind::Worktree,
         name: "main-row".into(),
         path: project.path.clone(),
-        path_key: "recomputed-from-path".into(),
+        path_key: path_key_of(&fx.repo()),
         branch: Some("main".into()),
         base_ref: None,
         created_branch: false,
