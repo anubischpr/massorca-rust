@@ -32,8 +32,12 @@ const READ_CHUNK: usize = 64 * 1024;
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 #[cfg(not(windows))]
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
-/// How long a kill waits for the exit after the tree is killed.
-const EXIT_MARGIN: Duration = Duration::from_secs(2);
+/// How long a kill waits for the exit after the tree is killed: the reap plus the drain,
+/// so a kill returns the recorded exit.
+const KILL_EXIT_MARGIN: Duration = Duration::from_secs(2).saturating_add(DRAIN_LIMIT);
+/// The same wait during `shutdown`, short so it fits the service's shutdown budget; an exit
+/// that takes longer is recorded after `shutdown` returns.
+const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_secs(2);
 /// After a failed wait the waiter tries again, first after this long, then doubling up to
 /// `WAIT_RETRY_MAX`; a kill wakes it at once.
 const WAIT_RETRY_FIRST: Duration = Duration::from_millis(250);
@@ -474,13 +478,23 @@ impl TerminalManager {
     /// grace and a short margin have passed.
     pub fn kill(&self, id: &str, force: bool) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        Ok(terminal.kill(force, ExitReason::Killed, self.inner.config.kill_grace))
+        Ok(terminal.kill(
+            force,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        ))
     }
 
     /// Kills the terminal if it is live, then forgets it.
     pub fn close(&self, id: &str) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        let info = terminal.kill(false, ExitReason::Killed, self.inner.config.kill_grace);
+        let info = terminal.kill(
+            false,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        );
         let forgotten = lock(&self.inner.registry).forget(id);
         drop(forgotten);
         Ok(info)
@@ -557,14 +571,24 @@ impl TerminalManager {
         thread::scope(|scope| {
             for terminal in &terminals {
                 let kill = move || {
-                    terminal.kill(false, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        false,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 };
                 if thread::Builder::new()
                     .name("terminal-shutdown".to_owned())
                     .spawn_scoped(scope, kill)
                     .is_err()
                 {
-                    terminal.kill(true, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        true,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 }
             }
         });
@@ -806,7 +830,13 @@ impl Terminal {
     /// Graceful: hang up and close the terminal, wait up to `grace`, then kill the tree.
     /// Force: kill the tree at once. Either way, what is left of the tree is killed.
     /// An exited terminal still gets the tree kill: it only reaches what was recorded.
-    fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
+    fn kill(
+        &self,
+        force: bool,
+        reason: ExitReason,
+        grace: Duration,
+        margin: Duration,
+    ) -> TerminalInfo {
         let exited = {
             let mut core = lock(&self.core);
             let exited = matches!(core.status, Status::Exited(_));
@@ -827,7 +857,7 @@ impl Terminal {
         self.tree.kill(self.master.foreground_process_group());
         // A waiter retrying a failed wait tries again now.
         self.changed.notify_all();
-        self.wait_for_exit(EXIT_MARGIN)
+        self.wait_for_exit(margin)
     }
 
     /// Reaps the shell once it has exited, through the tree (0031).

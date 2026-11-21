@@ -463,8 +463,13 @@ async fn shutdown_kills_every_terminal() {
 
     assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     for id in [&first.id, &second.id] {
+        // Shutdown is bounded; a slow drain records the exit just after it returns.
+        wait_until("the exit after shutdown", || {
+            manager
+                .get(id)
+                .is_ok_and(|info| info.state == TerminalState::Exited)
+        });
         let info = manager.get(id).expect("listed after shutdown");
-        assert_eq!(info.state, TerminalState::Exited);
         assert_eq!(
             info.exit.expect("an exit record").reason,
             ExitReason::ServiceStopped
