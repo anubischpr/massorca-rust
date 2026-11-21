@@ -201,7 +201,12 @@ async fn force_kill_ends_the_shell_at_once() {
         killed.exit.expect("an exit record").reason,
         ExitReason::Killed
     );
-    assert_eq!(manager.live_count(), 0);
+    // Read at once: the kill returns only after the terminal stopped counting as live.
+    assert_eq!(
+        manager.live_count(),
+        0,
+        "still counted live when kill returned"
+    );
 }
 
 /// The pid a `child=<pid>` line names.

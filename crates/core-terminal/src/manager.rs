@@ -244,7 +244,7 @@ impl Inner {
             .ok_or(TerminalError::NotFound)
     }
 
-    /// Called by the waiter once the exit is recorded.
+    /// Called by the waiter once the shell is reaped, just before the exit is recorded.
     fn retire(&self, id: &str) {
         let mut forgotten = Vec::new();
         {
@@ -901,10 +901,11 @@ fn wait_for_exit(
     // the reader ends, so every attachment has all the output before `Exited`.
     close_off_thread(&terminal.master);
     let _ = drained.recv_timeout(DRAIN_LIMIT);
-    terminal.record_exit(exit);
+    // Retired first: whoever `record_exit` wakes (a kill) already sees the live count lowered.
     if let Some(manager) = manager.upgrade() {
         manager.retire(&terminal.id);
     }
+    terminal.record_exit(exit);
 }
 
 #[cfg(test)]
