@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 directories.workspace = true
 interprocess.workspace = true
+massorca-core-agents.workspace = true
 massorca-core-git.workspace = true
 massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
