@@ -8,8 +8,8 @@ use crate::tokens::{
 };
 use gpui::{
     App, AppContext, Context, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
-    px, svg,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div,
+    img, px, svg,
 };
 
 /// Claude's brand colour, fixed by A94 and not themed. No token exists for it yet.
@@ -194,6 +194,7 @@ impl RenderOnce for AgentIcon {
             )))
             .flex_none()
             .size(px(edge))
+            .role(Role::Image)
             .aria_label(name)
             .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
             .tooltip(move |_, cx| cx.new(|_| NameTooltip(tooltip_name.clone())).into())
@@ -201,9 +202,9 @@ impl RenderOnce for AgentIcon {
     }
 }
 
-/// The agent's name on hover, in the overlay style of tooltips.
+/// A name on hover, in the overlay style of tooltips; shared by marks and status glyphs.
 #[derive(Debug)]
-struct NameTooltip(SharedString);
+pub(crate) struct NameTooltip(pub(crate) SharedString);
 
 impl Render for NameTooltip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
