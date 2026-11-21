@@ -28,6 +28,13 @@ lineage) comes later; the model must not block it.
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
   given. Create carries an optional client request id; repeating the same id
   returns the first result instead of creating twice.
+- **Interrupted create.** A create that stops after `worktree add` and before
+  its row is stored leaves a worktree that git registers and no row records.
+  The same create (same project, name, path and branch) adopts it: it stores
+  the row and says the branch was not created by this request, so removal keeps
+  the branch. A registered worktree that another row owns, that is on another
+  branch, or that is the main worktree is never adopted and the path is taken.
+  The adopted worktree's base is not verified.
 - **Create a folder workspace.** Registers an existing directory (the project
   path by default). No files are created.
 - **Remove.** The workspace row is first set to `removing`, then git runs
