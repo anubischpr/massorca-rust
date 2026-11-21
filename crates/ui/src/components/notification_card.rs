@@ -3,7 +3,7 @@
 //! three highest-priority cards and folds the rest into a "+N more" row.
 
 use crate::components::agent_status::{AgentState, AgentStatus};
-use crate::components::button::{Button, ButtonSize, ClickHandler};
+use crate::components::button::{Button, ButtonSize, ButtonVariant, ClickHandler};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::progress::Spinner;
 use crate::components::switch::ease;
@@ -20,7 +20,10 @@ use gpui::{
     Styled, Window, div, px, relative,
 };
 use std::rc::Rc;
+use std::sync::Arc;
 
+/// Cards a stack shows before it folds the rest into a "+N more" row.
+pub const MAX_VISIBLE: usize = 3;
 /// Actions a card holds; the spec allows two.
 const MAX_ACTIONS: usize = 2;
 
@@ -468,6 +471,172 @@ fn progress_bar(id: impl Into<ElementId>, fraction: f32, p: &Palette) -> impl In
         )
 }
 
+/// Cards in stack order, top first: priority, then newest first. The input is oldest first.
+pub fn stack_order(kinds: &[NotificationKind]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..kinds.len()).collect();
+    order.sort_by_key(|&index| (kinds[index].priority(), std::cmp::Reverse(index)));
+    order
+}
+
+/// How many cards are drawn: the first three, or all of them once the stack is expanded.
+pub fn stack_visible(total: usize, expanded: bool) -> usize {
+    if expanded {
+        total
+    } else {
+        total.min(MAX_VISIBLE)
+    }
+}
+
+/// The card's own focus handle, or one the window keeps for the card's id.
+fn card_focus(card: &NotificationCard, window: &mut Window, cx: &mut App) -> FocusHandle {
+    card.focus.clone().unwrap_or_else(|| {
+        let key = ElementId::NamedChild(Arc::new(card.id.clone()), "focus".into());
+        window
+            .use_keyed_state(key, cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone()
+    })
+}
+
+/// The cards of one corner: the top card first, the rest behind a "+N more" row. Up and Down
+/// move focus between the visible cards.
+#[derive(IntoElement)]
+pub struct NotificationStack {
+    id: ElementId,
+    cards: Vec<NotificationCard>,
+    expanded: bool,
+    width: Option<f32>,
+    max_height: Option<f32>,
+    on_expand: Option<ClickHandler>,
+}
+
+impl std::fmt::Debug for NotificationStack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationStack")
+            .field("id", &self.id)
+            .field("cards", &self.cards.len())
+            .field("expanded", &self.expanded)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NotificationStack {
+    pub fn new(id: impl Into<ElementId>) -> Self {
+        Self {
+            id: id.into(),
+            cards: Vec::new(),
+            expanded: false,
+            width: None,
+            max_height: None,
+            on_expand: None,
+        }
+    }
+
+    /// The cards in creation order, oldest first; the stack sorts them.
+    pub fn cards(mut self, cards: Vec<NotificationCard>) -> Self {
+        self.cards = cards;
+        self
+    }
+
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
+        self
+    }
+
+    /// Applies one width to every card, for a Conversation narrower than 400 px.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Caps the expanded stack; it scrolls past this height.
+    pub fn max_height(mut self, height: f32) -> Self {
+        self.max_height = Some(height);
+        self
+    }
+
+    /// Runs when the "+N more" row is pressed; the caller keeps `expanded` and sets it again.
+    pub fn on_expand(mut self, listener: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_expand = Some(Rc::new(listener));
+        self
+    }
+}
+
+impl RenderOnce for NotificationStack {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let p = cx.theme().palette;
+        let Self {
+            id,
+            cards,
+            expanded,
+            width,
+            max_height,
+            on_expand,
+        } = self;
+        let kinds: Vec<NotificationKind> = cards.iter().map(NotificationCard::kind).collect();
+        let order = stack_order(&kinds);
+        let shown = stack_visible(order.len(), expanded);
+        let folded = order.len() - shown;
+        let mut slots: Vec<Option<NotificationCard>> = cards.into_iter().map(Some).collect();
+
+        let mut column = div()
+            .id(id.clone())
+            .role(Role::Region)
+            .aria_label("Notifications")
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2));
+        if let Some(height) = max_height {
+            column = column.max_h(px(height)).overflow_y_scroll();
+        }
+        if let (true, Some(expand)) = (folded > 0, on_expand) {
+            column = column.child(
+                div()
+                    .debug_selector(|| "folded".into())
+                    .flex()
+                    .justify_center()
+                    .rounded(px(RADIUS_LG))
+                    .border_1()
+                    .border_color(p.border.default)
+                    .bg(p.surface.overlay)
+                    .child(
+                        Button::new((id.clone(), "more"), format!("+{folded} more"))
+                            .variant(ButtonVariant::Ghost)
+                            .size(ButtonSize::Compact)
+                            .on_click(move |window, cx| expand(window, cx)),
+                    ),
+            );
+        }
+
+        let mut handles = Vec::with_capacity(shown);
+        for &index in &order[..shown] {
+            if let Some(card) = slots[index].take() {
+                let handle = card_focus(&card, window, cx);
+                handles.push(handle.clone());
+                let mut card = card.focus_handle(handle);
+                if let Some(width) = width {
+                    card = card.width(width);
+                }
+                column = column.child(card);
+            }
+        }
+
+        column.on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let step: isize = match event.keystroke.key.as_str() {
+                "up" => -1,
+                "down" => 1,
+                _ => return,
+            };
+            let Some(current) = handles.iter().position(|handle| handle.is_focused(window)) else {
+                return;
+            };
+            let next = (current as isize + step).clamp(0, handles.len() as isize - 1) as usize;
+            cx.stop_propagation();
+            handles[next].focus(window, cx);
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +655,20 @@ mod tests {
         assert!(NotificationKind::Error.priority() < NotificationKind::SignIn.priority());
         assert!(NotificationKind::SignIn.priority() < NotificationKind::Update.priority());
         assert!(NotificationKind::Update.priority() < NotificationKind::Info.priority());
+    }
+
+    #[test]
+    fn stack_puts_priority_first_and_newest_first_within_it() {
+        use NotificationKind::{Attention, Info, Update};
+        let kinds = [Info, Attention, Update, Attention];
+        assert_eq!(stack_order(&kinds), vec![3, 1, 2, 0]);
+    }
+
+    #[test]
+    fn stack_shows_three_and_folds_the_rest_until_expanded() {
+        assert_eq!(stack_visible(2, false), 2);
+        assert_eq!(stack_visible(5, false), MAX_VISIBLE);
+        assert_eq!(stack_visible(5, true), 5);
     }
 
     #[test]
@@ -553,6 +736,33 @@ mod tests {
         assert_eq!(dismissed.get(), 2);
     }
 
+    #[gpui::test]
+    fn arrow_keys_move_focus_between_cards(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| StackHarness::new(cx));
+        cx.run_until_parked();
+        let (first, second) = view.read_with(cx, |h, _| (h.first.clone(), h.second.clone()));
+
+        // The newest card sits on top, so the first card is the one below it.
+        focus_and_draw(cx, &second);
+        press_key(cx, "down");
+        assert!(cx.update(|window, _| first.is_focused(window)));
+        press_key(cx, "up");
+        assert!(cx.update(|window, _| second.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn folded_row_expands_the_stack(cx: &mut gpui::TestAppContext) {
+        let expanded = Rc::new(Cell::new(0_u32));
+        let (_, cx) = cx.add_window_view(|_, _| FoldHarness {
+            expanded: expanded.clone(),
+        });
+        cx.run_until_parked();
+
+        let center = cx.debug_bounds("folded").expect("folded row").center();
+        cx.simulate_click(center, gpui::Modifiers::none());
+        assert_eq!(expanded.get(), 1);
+    }
+
     /// Hosts one card that dismisses; its focus handle lets the test focus it.
     struct DismissHarness {
         focus: FocusHandle,
@@ -576,6 +786,55 @@ mod tests {
                     .focus_handle(self.focus.clone())
                     .on_dismiss(move |_, _| dismissed.set(dismissed.get() + 1)),
             )
+        }
+    }
+
+    /// Hosts a two-card stack whose cards hold focus handles the test can read.
+    struct StackHarness {
+        first: FocusHandle,
+        second: FocusHandle,
+    }
+
+    impl StackHarness {
+        fn new(cx: &mut gpui::Context<Self>) -> Self {
+            Self {
+                first: cx.focus_handle(),
+                second: cx.focus_handle(),
+            }
+        }
+    }
+
+    impl gpui::Render for StackHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            NotificationStack::new("stack").cards(vec![
+                NotificationCard::new("one", NotificationKind::Error, "First")
+                    .focus_handle(self.first.clone()),
+                NotificationCard::new("two", NotificationKind::Error, "Second")
+                    .focus_handle(self.second.clone()),
+            ])
+        }
+    }
+
+    /// Hosts a stack of four cards, one folded, with an expand handler that counts.
+    struct FoldHarness {
+        expanded: Rc<Cell<u32>>,
+    }
+
+    impl gpui::Render for FoldHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let expanded = self.expanded.clone();
+            let cards = (0_usize..4)
+                .map(|index| {
+                    NotificationCard::new(
+                        ("card", index),
+                        NotificationKind::Update,
+                        format!("Update {index}"),
+                    )
+                })
+                .collect();
+            NotificationStack::new("stack")
+                .cards(cards)
+                .on_expand(move |_, _| expanded.set(expanded.get() + 1))
         }
     }
 }

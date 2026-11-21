@@ -9,6 +9,7 @@ mod indicators;
 mod layout;
 mod lists;
 mod overlays;
+mod panels;
 
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_HEADING, TYPE_LABEL};
@@ -37,6 +38,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(overlays::stories());
     all.extend(feedback::stories());
     all.extend(layout::stories());
+    all.extend(panels::stories());
     all
 }
 
