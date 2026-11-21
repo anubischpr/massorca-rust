@@ -60,7 +60,15 @@ pub fn assert_geist_loaded(cx: &HeadlessAppContext) -> anyhow::Result<()> {
 }
 
 /// Lays out and paints the window's current state, so that its pixels can be captured.
+/// Overlays fade in, and the headless clock only moves when advanced, so the
+/// window is drawn twice (an anchored overlay needs its trigger's bounds),
+/// the clock moves past every enter animation, and it is drawn again.
 pub fn draw(cx: &mut HeadlessAppContext, window: AnyWindowHandle) -> anyhow::Result<()> {
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))?;
+    }
+    cx.advance_clock(std::time::Duration::from_millis(300));
     cx.run_until_parked();
     cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
 }
