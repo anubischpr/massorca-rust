@@ -44,14 +44,14 @@ pub(crate) fn workspace_name(name: &str) -> Result<(), DomainError> {
     }
 }
 
-/// A project name: not blank, no path separator, no colon (a drive or an alternate stream on
-/// Windows), not `.` or `..`, no trailing dot or space, and no Windows device name, because a
-/// default workspaces root is built from it.
+/// A project name: not blank, no leading `.` (so it is never read as a relative path selector,
+/// and `.` and `..` are refused with it), no path separator, colon, or shell wildcard or pipe, no
+/// trailing dot or space, and no Windows device name, because a default workspaces root is built
+/// from it.
 pub(crate) fn project_name(name: &str) -> Result<(), DomainError> {
     let well_formed = !name.trim().is_empty()
-        && !name.contains(['/', '\\', ':'])
-        && name != "."
-        && name != ".."
+        && !name.starts_with('.')
+        && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
         && !name.ends_with(['.', ' '])
         && !is_windows_device_name(name);
     if well_formed {
@@ -60,7 +60,7 @@ pub(crate) fn project_name(name: &str) -> Result<(), DomainError> {
         Err(DomainError::new(
             codes::REQUEST_INVALID_PARAMS,
             format!(
-                "project name {name:?} must not be blank, contain a path separator or colon, end with a dot or space, be . or .., or be a Windows device name"
+                "project name {name:?} must not be blank, start with '.', contain a path separator, colon, or any of * ? \" < > |, end with a dot or space, or be a Windows device name"
             ),
         ))
     }
@@ -104,6 +104,25 @@ mod tests {
             assert_eq!(error.code(), codes::REQUEST_INVALID_PARAMS, "{name:?}");
         }
         assert!(project_name("my-repo").is_ok());
+    }
+
+    #[test]
+    fn project_names_refuse_leading_dots_and_shell_wildcards_or_pipes() {
+        for name in [".hidden", "..x", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b"] {
+            let error = project_name(name).expect_err(name);
+            assert_eq!(error.code(), codes::REQUEST_INVALID_PARAMS, "{name:?}");
+        }
+        assert!(project_name("my.repo").is_ok());
+    }
+
+    #[test]
+    fn a_leading_dot_is_refused_on_project_and_workspace_names_alike() {
+        for name in [".x", "..x"] {
+            let project = project_name(name).expect_err(name);
+            assert_eq!(project.code(), codes::REQUEST_INVALID_PARAMS, "{name:?}");
+            let workspace = workspace_name(name).expect_err(name);
+            assert_eq!(workspace.code(), codes::WORKSPACE_NAME_INVALID, "{name:?}");
+        }
     }
 
     #[test]
