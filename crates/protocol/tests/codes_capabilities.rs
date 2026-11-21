@@ -67,4 +67,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
+    assert_eq!(capabilities::TERMINALS, "terminals/1");
+    assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
 }
