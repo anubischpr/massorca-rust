@@ -8,9 +8,10 @@ use crate::model::navigation::Mode;
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
+use crate::model::teams::{BoardOwner, TeamPage};
 use gpui::{
-    AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, div, img,
-    prelude::*, px,
+    AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, Window, div,
+    img, prelude::*, px,
 };
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
@@ -20,7 +21,12 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Canvas: the Conversation and the inline regions, with an open overlay on top (D-SH-01).
-pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<Shell>) -> Div {
+pub(super) fn canvas(
+    model: &ShellModel,
+    zones: &ZoneFocus,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let shell = cx.entity().downgrade();
@@ -36,7 +42,7 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, cx, &theme))
+        .child(conversation(model, &shell, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -50,12 +56,16 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
 fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
+    window: &mut Window,
     cx: &mut App,
     theme: &Theme,
 ) -> impl IntoElement {
     let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
         Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
+        Canvas::Team(TeamPage::Board(team)) => {
+            teams::board_page(model, shell, BoardOwner::Team(team), window, cx)
+        }
         Canvas::Session(title) => {
             placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
         }

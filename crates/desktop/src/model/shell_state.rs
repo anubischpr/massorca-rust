@@ -175,11 +175,13 @@ impl ShellModel {
     }
 
     pub fn open_page(&mut self, page: Page) {
+        self.teams.cancel_pick();
         self.navigation.open(page);
     }
 
     /// Opens a Bot Teams page and makes its team the one the Sidebar lists projects for.
     pub fn open_team_page(&mut self, page: TeamPage) {
+        self.teams.cancel_pick();
         self.teams.select(page.team());
         self.navigation.open(Page::Team(page));
     }
@@ -194,6 +196,7 @@ impl ShellModel {
 
     /// The mode button (P6). Returns true when the mode changed.
     pub fn press_mode_switch(&mut self) -> bool {
+        self.teams.cancel_pick();
         self.navigation.press_mode_switch()
     }
 
