@@ -251,7 +251,7 @@ fn build(entries: &[FileEntry]) -> Vec<Node> {
 
 /// ASCII case-insensitive occurrences of `query` in `name`. ASCII folding keeps byte
 /// offsets valid for the original name.
-fn matches_query(name: &str, query: &str) -> Vec<Range<usize>> {
+pub(crate) fn matches_query(name: &str, query: &str) -> Vec<Range<usize>> {
     if query.is_empty() {
         return Vec::new();
     }
