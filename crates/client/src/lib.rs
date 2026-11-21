@@ -19,4 +19,4 @@ pub use client::Client;
 pub use error::ClientError;
 pub use handshake::Welcome;
 pub use options::{Autostart, ConnectOptions};
-pub use subscription::Subscription;
+pub use subscription::{StreamItem, Subscription};

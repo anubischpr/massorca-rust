@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use interprocess::local_socket::tokio::Stream;
-use massorca_protocol::{ErrorBody, Message, codes};
+use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -65,7 +65,7 @@ pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: Shut
 /// Routes requests until the peer leaves or shutdown is requested, then lets in-flight requests finish and ends open streams.
 async fn run_session(
     session: &Arc<Session>,
-    inbound: &mut mpsc::Receiver<Message>,
+    inbound: &mut mpsc::Receiver<Frame>,
     signal: &mut ShutdownSignal,
 ) {
     let mut requests = JoinSet::new();
@@ -74,8 +74,8 @@ async fn run_session(
             biased;
             () = signal.wait() => break true,
             Some(_) = requests.join_next(), if !requests.is_empty() => {}
-            message = inbound.recv(), if requests.len() < MAX_REQUESTS_IN_FLIGHT => match message {
-                Some(message) => route(message, session, &mut requests),
+            frame = inbound.recv(), if requests.len() < MAX_REQUESTS_IN_FLIGHT => match frame {
+                Some(frame) => route(frame, session, &mut requests),
                 None => break false,
             },
         }
@@ -93,16 +93,20 @@ async fn run_session(
                 ErrorBody::new(codes::SERVICE_SHUTTING_DOWN, "the service is shutting down");
             let _ = session
                 .outbound
-                .send(Message::End {
+                .send(Frame::Message(Message::End {
                     stream,
                     error: Some(error),
-                })
+                }))
                 .await;
         }
     }
 }
 
-fn route(message: Message, session: &Arc<Session>, requests: &mut JoinSet<()>) {
+fn route(frame: Frame, session: &Arc<Session>, requests: &mut JoinSet<()>) {
+    // No client sends stream bytes yet, so they are dropped like the other frames nothing acts on.
+    let Frame::Message(message) = frame else {
+        return;
+    };
     match message {
         Message::Request { id, method, params } => {
             requests.spawn(dispatch::run(Arc::clone(session), id, method, params));

@@ -20,6 +20,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::STREAM_NOT_FOUND, "stream.not_found"),
     (codes::STREAM_OVERFLOW, "stream.overflow"),
     (codes::STREAM_ITEM_TOO_LARGE, "stream.item_too_large"),
+    (
+        codes::STREAM_BINARY_FRAMES_REQUIRED,
+        "stream.binary_frames_required",
+    ),
     (codes::RESPONSE_TOO_LARGE, "response.too_large"),
     (codes::PATH_NOT_UTF8, "path.not_utf8"),
     (codes::PATH_NOT_FOUND, "path.not_found"),
@@ -81,10 +85,6 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TERMINAL_EXITED, "terminal.exited"),
     (codes::TERMINAL_SPAWN_FAILED, "terminal.spawn_failed"),
     (codes::TERMINAL_INPUT_TOO_LARGE, "terminal.input_too_large"),
-    (
-        codes::TERMINAL_BINARY_FRAMES_REQUIRED,
-        "terminal.binary_frames_required",
-    ),
     (codes::TERMINAL_INVALID_SIZE, "terminal.invalid_size"),
     (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
     (codes::EXTENSION_PREFIX, "extension."),

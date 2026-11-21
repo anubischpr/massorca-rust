@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use massorca_protocol::Message;
+use massorca_protocol::Frame;
 use tokio::sync::mpsc;
 
 use crate::context::AppState;
@@ -19,6 +19,6 @@ pub(crate) struct Session {
     pub(crate) client_capabilities: Arc<HashSet<String>>,
     /// Who the connection acts as, decided once at the handshake.
     pub(crate) principal: Principal,
-    pub(crate) outbound: mpsc::Sender<Message>,
+    pub(crate) outbound: mpsc::Sender<Frame>,
     pub(crate) streams: StreamTable,
 }

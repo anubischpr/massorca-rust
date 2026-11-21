@@ -10,6 +10,13 @@ use tokio::sync::mpsc;
 use crate::error::ClientError;
 use crate::pump::Item;
 
+/// One item of a subscription: a JSON event, or raw bytes the service sent as a stream-bytes frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamItem {
+    Event(Value),
+    Bytes(Vec<u8>),
+}
+
 /// The items of one stream. They queue until read, up to a limit: a subscriber that falls behind gets `stream.overflow`.
 /// Dropping the subscription cancels the stream on the service.
 pub struct Subscription {
@@ -38,8 +45,8 @@ impl Subscription {
         self.stream
     }
 
-    /// The next item: `Some(Ok(value))` for an event, `Some(Err(error))` when the service ended the stream with an error, and `None` once the stream is over, including after the connection is lost.
-    pub async fn next(&mut self) -> Option<Result<Value, ErrorBody>> {
+    /// The next item, events and bytes alike: `Some(Ok(item))`, `Some(Err(error))` when the service ended the stream with an error, and `None` once the stream is over, including after the connection is lost.
+    pub async fn next_item(&mut self) -> Option<Result<StreamItem, ErrorBody>> {
         let item = self.items.recv().await;
         if !matches!(item, Some(Ok(_))) {
             self.finished = true;
@@ -49,6 +56,17 @@ impl Subscription {
             self.send_cancel();
         }
         item
+    }
+
+    /// The next event. Bytes items are skipped; read them with `next_item`. Otherwise as `next_item`.
+    pub async fn next(&mut self) -> Option<Result<Value, ErrorBody>> {
+        loop {
+            match self.next_item().await? {
+                Ok(StreamItem::Event(value)) => return Some(Ok(value)),
+                Ok(StreamItem::Bytes(_)) => {}
+                Err(error) => return Some(Err(error)),
+            }
+        }
     }
 
     /// Like `next`, with each event decoded as `T`.

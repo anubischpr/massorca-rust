@@ -33,7 +33,9 @@ pub use commands::{CommandDescriptor, CommandRegistry, core_commands};
 pub use context::{AppState, Registries, RequestCtx};
 pub use error::ServiceError;
 pub use event_bus::{EventBus, EventSubscription};
-pub use method::{MethodError, MethodInfo, MethodRegistry, StreamSource};
+pub use method::{
+    ByteStreamSource, MethodError, MethodInfo, MethodRegistry, StreamItem, StreamSource,
+};
 pub use owner::Owner;
 pub use permission::{Permission, Principal, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
