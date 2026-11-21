@@ -36,7 +36,9 @@ lineage) comes later; the model must not block it.
   The main worktree is never removed. A branch the workspace created is
   deleted with `git branch -d` (only if git proves it merged); otherwise it is
   kept and the result says so. A folder workspace is forgotten; its directory
-  is never deleted.
+  is never deleted. A failure before git acts returns the row to `ready`; a
+  failure after git has removed the worktree leaves it `removing`, and `rm` again
+  finishes the job.
 - **Changes a removal would lose.** Uncommitted and untracked changes in a
   worktree refuse with `workspace.dirty` unless `--force` is given. Ignored
   files are counted apart, because `git status` does not list them and
