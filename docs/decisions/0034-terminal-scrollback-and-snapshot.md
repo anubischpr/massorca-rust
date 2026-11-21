@@ -35,7 +35,9 @@ rendered snapshot on reattach rather than a raw replay.
 - **Atomicity.** The reader thread applies one chunk to the model, the ring
   and every attachment under one lock, so a snapshot or a ring read taken
   under that lock sits exactly between two chunks. The offset in the snapshot
-  is therefore exact.
+  is therefore exact. A resize takes the same lock to change the model and the
+  attachments before it resizes the PTY, so output drawn at the new size is
+  parsed at the new size and queued after its `Resized`.
 - **Attachments never slow the shell.** Each attachment queues at most
   **256 chunks** (a chunk is one PTY read, up to 64 KiB). When the queue is
   full the attachment is marked lagging, its queue is dropped, and it gets a

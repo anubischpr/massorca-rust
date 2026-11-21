@@ -437,32 +437,34 @@ impl TerminalManager {
         })
     }
 
-    /// Sets the terminal's one size; every attachment hears `Resized`.
+    /// Sets the terminal's one size; every attachment hears `Resized`. The model and the
+    /// attachments change first, then the PTY: output the program draws at the new size is
+    /// parsed at it, and `Resized` is queued ahead of it (0034).
     pub fn resize(&self, id: &str, size: PtySize) -> Result<TerminalInfo> {
         validate_size(size)?;
         let terminal = self.inner.find(id)?;
         let _gate = lock(&terminal.resize_gate);
-        if terminal.is_exited() {
-            return Err(TerminalError::Exited);
-        }
+        let previous = {
+            let mut core = lock(&terminal.core);
+            if matches!(core.status, Status::Exited(_)) {
+                return Err(TerminalError::Exited);
+            }
+            let previous = core.size;
+            core.set_size(size);
+            previous
+        };
         // Outside the terminal lock: a closing pseudoconsole holds the master until the
         // reader, which needs that lock, drains it.
-        terminal.master.resize(size).map_err(|error| {
-            if !terminal.is_exited() {
-                TerminalError::Io(io::Error::other(error.to_string()))
-            } else {
-                TerminalError::Exited
+        if let Err(error) = terminal.master.resize(size) {
+            let mut core = lock(&terminal.core);
+            if matches!(core.status, Status::Exited(_)) {
+                return Err(TerminalError::Exited);
             }
-        })?;
-        let mut core = lock(&terminal.core);
-        core.screen.resize(size.cols, size.rows);
-        core.size = size;
-        for attachment in &core.attachments {
-            attachment.push(AttachItem::Resized {
-                cols: size.cols,
-                rows: size.rows,
-            });
+            // The PTY kept its old size, so the model goes back to it.
+            core.set_size(previous);
+            return Err(TerminalError::Io(io::Error::other(error.to_string())));
         }
+        let core = lock(&terminal.core);
         Ok(terminal.info_locked(&core))
     }
 
@@ -632,6 +634,18 @@ struct Core {
 }
 
 impl Core {
+    /// Sets the model's size and tells every attachment. Never blocks.
+    fn set_size(&mut self, size: PtySize) {
+        self.screen.resize(size.cols, size.rows);
+        self.size = size;
+        for attachment in &self.attachments {
+            attachment.push(AttachItem::Resized {
+                cols: size.cols,
+                rows: size.rows,
+            });
+        }
+    }
+
     /// The snapshot item and the offset output continues from.
     fn snapshot(&mut self) -> (u64, AttachItem) {
         let offset = self.ring.end_offset();
@@ -917,6 +931,58 @@ mod tests {
         if let Ok(mut attachment) = manager.attach("missing", None) {
             send_future(&attachment.next());
         }
+    }
+
+    #[test]
+    fn a_resize_sets_the_screen_model_to_the_new_size() {
+        use std::collections::BTreeMap;
+
+        use super::{CreateSpec, ShellChoice};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let shell = if cfg!(windows) {
+            ShellChoice {
+                program: "cmd.exe".to_owned(),
+                args: vec!["/d".to_owned()],
+            }
+        } else {
+            ShellChoice {
+                program: "sh".to_owned(),
+                args: Vec::new(),
+            }
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(shell),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+        let size = PtySize {
+            cols: 100,
+            rows: 30,
+        };
+
+        manager.resize(&info.id, size).expect("resize");
+
+        let terminal = super::lock(&manager.inner.registry)
+            .terminals
+            .get(&info.id)
+            .cloned()
+            .expect("the terminal is registered");
+        let core = super::lock(&terminal.core);
+        assert_eq!(core.size, size);
+        assert_eq!(core.screen.size(), (100, 30));
+        drop(core);
+        manager.kill(&info.id, true).expect("kill");
     }
 
     /// A shell that exits while a background process still holds its terminal: the reader

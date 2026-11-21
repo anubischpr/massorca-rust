@@ -104,6 +104,41 @@ async fn resize_updates_the_info_and_the_screen() {
 }
 
 #[tokio::test]
+async fn output_produced_after_a_resize_follows_its_resized_item() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_output().await;
+
+    manager
+        .resize(
+            &info.id,
+            PtySize {
+                cols: 100,
+                rows: 30,
+            },
+        )
+        .expect("resize");
+    let (command, expected) = marker_command("after-resize");
+    manager.input(&info.id, &command).expect("input");
+
+    let deadline = Instant::now() + TIMEOUT;
+    while !watch.visible.contains(&expected) {
+        assert!(
+            !watch.ended && Instant::now() < deadline,
+            "no output after the resize: {:?}",
+            watch.visible.tail()
+        );
+        watch.step().await;
+        if watch.visible.contains(&expected) {
+            // That output was produced after `resize` returned, so its `Resized` came first.
+            assert_eq!(watch.resized, vec![(100, 30)]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_shell_that_exits_by_itself_is_exited_with_its_code() {
     let dir = temp_dir();
     let manager = Managed::new();
