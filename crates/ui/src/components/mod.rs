@@ -16,6 +16,7 @@ pub mod list_row;
 pub mod menu;
 pub mod popover;
 pub mod progress;
+pub mod scroll_area;
 pub mod search_field;
 pub mod segmented_control;
 pub mod select;
