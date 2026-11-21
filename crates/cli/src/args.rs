@@ -61,6 +61,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Creates, lists, shows and removes workspaces: worktrees and folders of a project.
+    #[command(visible_alias = "ws")]
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
@@ -134,6 +140,57 @@ pub struct ProjectAddArgs {
     /// Directory that holds this project's workspaces. Defaults to a folder under the workspaces default root.
     #[arg(long, value_name = "DIR")]
     pub workspaces_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Creates a worktree on a new branch (git project), or registers a folder (folder project).
+    Create(WorkspaceCreateArgs),
+    /// Lists every workspace, or only those of one project.
+    List(WorkspaceListArgs),
+    /// Shows one workspace, selected by id, name or path.
+    Show {
+        /// Workspace id, name or path.
+        workspace: String,
+    },
+    /// Removes a workspace. A worktree is deleted with its directory; a folder is only forgotten.
+    Rm {
+        /// Workspace id, name or path.
+        workspace: String,
+        /// Discard uncommitted changes in the worktree.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceCreateArgs {
+    /// Project id, name or path.
+    pub project: String,
+    /// Name of the workspace; also its branch and directory name unless set otherwise.
+    pub name: String,
+    /// Branch to create or check out. Defaults to the workspace name.
+    #[arg(long, value_name = "BRANCH")]
+    pub branch: Option<String>,
+    /// Commit or ref the new branch starts from. Defaults to HEAD.
+    #[arg(long, value_name = "REF")]
+    pub base: Option<String>,
+    /// Check out an existing local branch instead of creating one.
+    #[arg(long)]
+    pub existing_branch: bool,
+    /// Directory of the worktree. A relative path is taken from the current directory.
+    #[arg(long, value_name = "DIR")]
+    pub path: Option<PathBuf>,
+    /// Client request id: repeating it returns the first workspace instead of creating another.
+    #[arg(long, value_name = "ID")]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceListArgs {
+    /// Only the workspaces of this project (id, name or path).
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Args)]

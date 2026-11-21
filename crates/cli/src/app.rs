@@ -15,6 +15,7 @@ use crate::ext;
 use crate::output::{self, Output};
 use crate::project;
 use crate::service::{control, foreground};
+use crate::workspace;
 
 /// Runs the command line `args` (program name first) and returns its exit code.
 pub fn run<I, T>(args: I) -> ExitCode
@@ -65,6 +66,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Project { command } => {
             let profile = Profile::resolve(home, profile)?;
             block_on(project::execute(&profile, autostart, command, output))
+        }
+        Commands::Workspace { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            block_on(workspace::execute(&profile, autostart, command, output))
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }

@@ -13,6 +13,7 @@ pub mod logging;
 pub mod output;
 pub mod project;
 pub mod service;
+pub mod workspace;
 pub mod workspace_text;
 
 pub use app::run;

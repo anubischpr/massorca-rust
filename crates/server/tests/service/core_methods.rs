@@ -48,7 +48,7 @@ const CLI_COMMAND_IDS: [&str; 15] = [
     "workspace.create",
     "workspace.list",
     "workspace.show",
-    "workspace.remove",
+    "workspace.rm",
 ];
 
 #[tokio::test]
