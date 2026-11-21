@@ -21,3 +21,4 @@ pub use handshake::Welcome;
 pub use options::{Autostart, ConnectOptions};
 pub use subscription::{StreamItem, Subscription};
 pub use terminal_attach::{AttachUpdate, TerminalAttachment};
+pub use transport::{FrameIo, FrameQueues};
