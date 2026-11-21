@@ -2,3 +2,4 @@
 //! field and the multi-line area both implement (decision 0021).
 
 pub(crate) mod input;
+pub mod layout;
