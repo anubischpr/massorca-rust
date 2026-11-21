@@ -550,3 +550,251 @@ impl RenderOnce for Toast {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn info(message: &str) -> ToastSpec {
+        ToastSpec::new(ToastKind::Info, message.to_string())
+    }
+
+    fn at(t0: Instant, secs: f32) -> Instant {
+        t0 + Duration::from_secs_f32(secs)
+    }
+
+    #[test]
+    fn an_info_toast_clears_after_eight_seconds() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let id = queue.push(t0, info("Copied"));
+        queue.advance(at(t0, 7.9));
+        assert_eq!(queue.visible(), vec![id]);
+        queue.advance(at(t0, 8.0));
+        assert!(queue.is_leaving(id), "leaving once the timer runs out");
+        queue.advance(at(t0, 8.0) + DURATION_BASE);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn an_error_toast_stays_until_dismissed() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let id = queue.push(
+            t0,
+            ToastSpec::new(ToastKind::Error, "Could not rename the session"),
+        );
+        queue.advance(at(t0, 600.0));
+        assert_eq!(queue.visible(), vec![id]);
+        assert!(queue.dismiss(at(t0, 601.0), id));
+        assert!(queue.is_leaving(id), "fades for the leave time first");
+        queue.advance(at(t0, 601.0) + DURATION_BASE);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn an_undo_toast_times_out_and_other_actions_stay() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let undo = queue.push(
+            t0,
+            ToastSpec::new(ToastKind::Success, "Removed from queue").with_action("Undo", true),
+        );
+        let retry = queue.push(
+            t0,
+            ToastSpec::new(ToastKind::Error, "Setup script failed").with_action("Open log", false),
+        );
+        queue.advance(at(t0, 8.0));
+        assert!(queue.is_leaving(undo));
+        assert!(
+            !queue.is_leaving(retry),
+            "an action toast stays until acted on"
+        );
+        assert_eq!(UNDO_TIMEOUT_MS, 8_000, "design-system 4.8");
+    }
+
+    #[test]
+    fn hovering_pauses_the_timer_and_leaving_resumes_it() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let id = queue.push(t0, info("Copied"));
+        queue.set_hovered(at(t0, 1.0), id, true);
+        queue.advance(at(t0, 100.0));
+        assert!(!queue.is_leaving(id), "paused while hovered");
+        queue.set_hovered(at(t0, 100.0), id, false);
+        queue.advance(at(t0, 106.9));
+        assert!(!queue.is_leaving(id), "seven seconds were left");
+        queue.advance(at(t0, 107.0));
+        assert!(queue.is_leaving(id));
+    }
+
+    #[test]
+    fn focus_and_window_blur_pause_the_timer_together() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let id = queue.push(t0, info("Copied"));
+        queue.set_focused(at(t0, 2.0), id, true);
+        queue.set_window_active(at(t0, 3.0), false);
+        queue.set_focused(at(t0, 10.0), id, false);
+        queue.advance(at(t0, 20.0));
+        assert!(!queue.is_leaving(id), "the window is still blurred");
+        queue.set_window_active(at(t0, 20.0), true);
+        queue.advance(at(t0, 25.9));
+        assert!(!queue.is_leaving(id), "six seconds were left at 2 s");
+        queue.advance(at(t0, 26.0));
+        assert!(queue.is_leaving(id));
+    }
+
+    #[test]
+    fn three_toasts_are_visible_and_the_rest_wait_their_turn() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let ids: Vec<_> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|m| queue.push(t0, info(m)))
+            .collect();
+        assert_eq!(queue.visible(), ids[..3].to_vec());
+        assert_eq!(queue.displayed(), ids[..3].to_vec());
+        assert_eq!(queue.repeats(ids[3]), Some(1));
+    }
+
+    #[test]
+    fn a_waiting_toast_starts_its_timer_only_when_it_becomes_visible() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let ids: Vec<_> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|m| queue.push(t0, info(m)))
+            .collect();
+        queue.dismiss(at(t0, 5.0), ids[0]);
+        assert_eq!(queue.visible(), vec![ids[1], ids[2], ids[3]]);
+        queue.advance(at(t0, 12.9));
+        assert!(!queue.is_leaving(ids[3]), "its eight seconds start at 5 s");
+        queue.advance(at(t0, 13.0));
+        assert!(queue.is_leaving(ids[3]));
+    }
+
+    #[test]
+    fn an_identical_message_within_two_seconds_is_a_repeat() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let first = queue.push(t0, info("Copied"));
+        assert_eq!(queue.push(at(t0, 1.5), info("Copied")), first);
+        assert_eq!(queue.repeats(first), Some(2));
+        assert_eq!(
+            queue.push(at(t0, 3.4), info("Copied")),
+            first,
+            "the window slides"
+        );
+        assert_eq!(queue.repeats(first), Some(3));
+        let later = queue.push(at(t0, 5.5), info("Copied"));
+        assert_ne!(later, first, "more than two seconds since the last repeat");
+        assert_eq!(queue.displayed().len(), 2);
+    }
+
+    #[test]
+    fn toasts_are_displayed_in_arrival_order() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let first = queue.push(t0, info("one"));
+        let second = queue.push(t0, info("two"));
+        assert_eq!(queue.displayed(), vec![first, second]);
+    }
+
+    #[test]
+    fn reduced_motion_removes_a_dismissed_toast_at_once() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        queue.set_reduced_motion(true);
+        let id = queue.push(t0, info("Copied"));
+        assert!(queue.dismiss(t0, id));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn dismissing_an_unknown_toast_does_nothing() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        assert!(!queue.dismiss(t0, 99));
+        let id = queue.push(t0, info("Copied"));
+        assert!(queue.dismiss(t0, id));
+        assert!(!queue.dismiss(t0, id), "already leaving");
+    }
+
+    #[test]
+    fn advance_reports_the_toasts_it_removed() {
+        let t0 = Instant::now();
+        let mut queue = ToastQueue::new(t0);
+        let id = queue.push(t0, info("Copied"));
+        assert!(queue.advance(at(t0, 8.0)).is_empty(), "still fading");
+        assert_eq!(queue.advance(at(t0, 8.0) + DURATION_BASE), vec![id]);
+    }
+
+    #[gpui::test]
+    fn escape_on_the_focused_toast_dismisses_it(cx: &mut gpui::TestAppContext) {
+        let dismissed = Rc::new(Cell::new(0_u32));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| Harness::new(cx, dismissed.clone(), Rc::new(Cell::new(0))));
+        cx.run_until_parked();
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "escape");
+        assert_eq!(dismissed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn the_action_runs_once_and_does_not_dismiss_by_itself(cx: &mut gpui::TestAppContext) {
+        let dismissed = Rc::new(Cell::new(0_u32));
+        let acted = Rc::new(Cell::new(0_u32));
+        let (_, cx) =
+            cx.add_window_view(|_, cx| Harness::new(cx, dismissed.clone(), acted.clone()));
+        cx.run_until_parked();
+        let center = cx
+            .debug_bounds("toast-action")
+            .expect("action is drawn")
+            .center();
+        cx.simulate_click(center, gpui::Modifiers::none());
+        assert_eq!(acted.get(), 1);
+        assert_eq!(
+            dismissed.get(),
+            0,
+            "the stack dismisses an acted toast, not the element"
+        );
+    }
+
+    /// Hosts one error toast with an action, a focus handle and two counters.
+    struct Harness {
+        focus: FocusHandle,
+        dismissed: Rc<Cell<u32>>,
+        acted: Rc<Cell<u32>>,
+    }
+
+    impl Harness {
+        fn new(
+            cx: &mut gpui::Context<Self>,
+            dismissed: Rc<Cell<u32>>,
+            acted: Rc<Cell<u32>>,
+        ) -> Self {
+            Self {
+                focus: cx.focus_handle(),
+                dismissed,
+                acted,
+            }
+        }
+    }
+
+    impl gpui::Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let (dismissed, acted) = (self.dismissed.clone(), self.acted.clone());
+            div().w(px(480.)).child(
+                Toast::new("toast", ToastKind::Error, "Could not rename the session")
+                    .action("Retry", move |_, _| acted.set(acted.get() + 1))
+                    .focus_handle(self.focus.clone())
+                    .on_dismiss(move |_, _| dismissed.set(dismissed.get() + 1)),
+            )
+        }
+    }
+}

@@ -7,10 +7,11 @@ use crate::components::card::{Card, CardPadding, CardVariant};
 use crate::components::empty_state::{EmptyState, EmptyStateVariant};
 use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::toast::{Toast, ToastKind};
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{SPACE_3, TYPE_BODY_SM};
+use crate::tokens::{SPACE_2, SPACE_3, TYPE_BODY_SM};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
@@ -35,7 +36,62 @@ pub fn stories() -> Vec<Story> {
             spec: "Banner.md",
             render: banner_story,
         },
+        Story {
+            name: "Toast",
+            spec: "Toast.md",
+            render: toast_story,
+        },
     ]
+}
+
+fn toast_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Kinds: info, success and warning clear after eight seconds; an error stays",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .child(Toast::new("toast-info", ToastKind::Info, "Copied"))
+                .child(Toast::new(
+                    "toast-success",
+                    ToastKind::Success,
+                    "Session renamed",
+                ))
+                .child(Toast::new(
+                    "toast-warning",
+                    ToastKind::Warning,
+                    "Runs on a host that is slow to answer",
+                ))
+                .child(Toast::new(
+                    "toast-error",
+                    ToastKind::Error,
+                    "Could not rename the session",
+                )),
+            cx,
+        ))
+        .child(variant(
+            "Undo: times out after eight seconds",
+            Toast::new("toast-undo", ToastKind::Success, "Removed from queue")
+                .action("Undo", |_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Repeated within two seconds: a counter chip instead of a second toast",
+            Toast::new("toast-repeat", ToastKind::Info, "Copied").repeats(2),
+            cx,
+        ))
+        .child(variant(
+            "Action running: the button shows a spinner and cannot be pressed",
+            Toast::new("toast-busy", ToastKind::Error, "Setup script failed")
+                .action("Open log", |_, _| {})
+                .action_loading(true),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
