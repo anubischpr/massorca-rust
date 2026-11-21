@@ -18,6 +18,7 @@ pub mod menu;
 pub mod notification_card;
 pub mod popover;
 pub mod progress;
+pub mod project_sidebar_tabs;
 pub mod scroll_area;
 pub mod search_field;
 pub mod secret_request_card;

@@ -7,6 +7,7 @@ use crate::components::extension_card::{ExtensionCard, ExtensionState};
 use crate::components::notification_card::{
     NotificationCard, NotificationKind, NotificationStack, UpdateState,
 };
+use crate::components::project_sidebar_tabs::{ProjectSidebarTabs, ProjectTab, core_tabs};
 use crate::components::secret_request_card::{SecretRequestCard, SecretState};
 use crate::icon::IconName;
 use crate::tokens::{SPACE_3, SPACE_4};
@@ -30,6 +31,11 @@ pub fn stories() -> Vec<Story> {
             name: "Secret request card",
             spec: "SecretRequestCard.md",
             render: secret_story,
+        },
+        Story {
+            name: "Project sidebar tabs",
+            spec: "ProjectSidebarTabs.md",
+            render: project_tabs_story,
         },
     ]
 }
@@ -362,6 +368,40 @@ fn secret_story(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant(
             "Host unreachable: Add is disabled, Decline works",
             asked("secret-unreachable", SecretState::Pending).unreachable(true),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn project_tabs_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let mut extended = core_tabs(0, 0);
+    extended.push(ProjectTab::new(
+        "Acme Metrics dashboard panel",
+        IconName::Puzzle,
+    ));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Files selected, no counts",
+            ProjectSidebarTabs::new("project-tabs-plain", core_tabs(0, 0))
+                .selected(0)
+                .on_select(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Source control with 3 changed files, Checks with 2 failing runs",
+            ProjectSidebarTabs::new("project-tabs-counts", core_tabs(3, 2))
+                .selected(3)
+                .on_select(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "An extension tab; its label is cut at 24 characters",
+            ProjectSidebarTabs::new("project-tabs-extension", extended)
+                .selected(4)
+                .on_select(|_, _, _| {}),
             cx,
         ))
         .into_any_element()
