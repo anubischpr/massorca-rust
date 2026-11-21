@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::builder::FalseyValueParser;
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
 #[derive(Debug, Parser)]
@@ -46,10 +46,28 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Runs the service and controls the running one.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
         #[arg(allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
         args: Vec<OsString>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceCommand {
+    /// Runs the service in this process until it is stopped.
+    Run(RunArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Also write log lines to stderr.
+    #[arg(long)]
+    pub log_stderr: bool,
 }

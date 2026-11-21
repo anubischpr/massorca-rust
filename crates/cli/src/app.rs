@@ -4,11 +4,13 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 use clap::Parser;
+use massorca_profile::Profile;
 
-use crate::args::{Cli, Commands};
+use crate::args::{Cli, Commands, ServiceCommand};
 use crate::error::CliError;
 use crate::ext;
 use crate::output::{self, Output};
+use crate::service::foreground;
 
 /// Runs the command line `args` (program name first) and returns its exit code.
 pub fn run<I, T>(args: I) -> ExitCode
@@ -23,7 +25,7 @@ where
         Err(error) => return output::usage(error, json_requested),
     };
     let output = Output::new(cli.wants_json());
-    match dispatch(cli) {
+    match dispatch(cli, output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             output.failure(&error);
@@ -32,8 +34,20 @@ where
     }
 }
 
-fn dispatch(cli: Cli) -> Result<(), CliError> {
-    match cli.command {
+fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
+    let Cli {
+        profile,
+        home,
+        command,
+        ..
+    } = cli;
+    match command {
+        Commands::Service { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            match command {
+                ServiceCommand::Run(args) => foreground::run(&profile, &args, output),
+            }
+        }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
 }

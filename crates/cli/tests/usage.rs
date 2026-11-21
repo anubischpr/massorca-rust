@@ -21,3 +21,17 @@ fn unknown_command_exits_2() {
 fn running_without_arguments_exits_2_and_prints_usage() {
     massorca().assert().code(2).stderr(contains("Usage"));
 }
+
+#[test]
+fn command_group_without_a_subcommand_exits_2() {
+    massorca().arg("service").assert().code(2);
+}
+
+#[test]
+fn invalid_profile_name_exits_2_with_its_code() {
+    massorca()
+        .args(["--profile", "Bad Name", "service", "run"])
+        .assert()
+        .code(2)
+        .stderr(contains("usage.invalid_profile"));
+}

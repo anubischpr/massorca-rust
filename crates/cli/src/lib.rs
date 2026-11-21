@@ -6,6 +6,8 @@ pub mod app;
 pub mod args;
 pub mod error;
 pub mod ext;
+pub mod logging;
 pub mod output;
+pub mod service;
 
 pub use app::run;
