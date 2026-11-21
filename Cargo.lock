@@ -3214,7 +3214,9 @@ dependencies = [
  "rustix",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
+ "uuid",
  "vt100",
  "win32job",
 ]
