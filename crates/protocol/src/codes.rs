@@ -44,6 +44,18 @@ pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
 pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
 /// A revision does not resolve to a commit.
 pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
+/// A discard named untracked files without `delete_untracked`; `data.paths` lists them.
+pub const GIT_DISCARD_UNTRACKED: &str = "git.discard_untracked";
+/// A discard named files whose only changes are staged, without `include_staged`; `data.paths` lists them.
+pub const GIT_DISCARD_STAGED: &str = "git.discard_staged";
+/// A discard named unmerged files; resolve or abort the operation first. `data.paths` lists them.
+pub const GIT_PATH_CONFLICTED: &str = "git.path_conflicted";
+/// A discard named a directory; it acts on the files status lists only. `data.paths` lists them.
+pub const GIT_PATH_IS_DIRECTORY: &str = "git.path_is_directory";
+/// A request named both `paths` and `all`, or neither.
+pub const GIT_PATHS_REQUIRED: &str = "git.paths_required";
+/// Another process holds the index lock (`index.lock`); retry once it finishes.
+pub const GIT_INDEX_LOCKED: &str = "git.index_locked";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

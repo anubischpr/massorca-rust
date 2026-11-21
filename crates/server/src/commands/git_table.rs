@@ -24,6 +24,28 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             })),
         ),
         command(
+            "git.stage",
+            "Stage files, or every change",
+            "git.stage",
+            paths_args(json!({})),
+        ),
+        command(
+            "git.unstage",
+            "Unstage files, or everything, keeping the working files",
+            "git.unstage",
+            paths_args(json!({})),
+        ),
+        command(
+            "git.discard",
+            "Discard changes to files; refuses to lose more than its flags name",
+            "git.discard",
+            paths_args(json!({
+                "delete_untracked": { "type": "boolean" },
+                "include_staged": { "type": "boolean" },
+                "dry_run": { "type": "boolean" }
+            })),
+        ),
+        command(
             "git.log",
             "Show the history of a workspace, a page at a time",
             "git.log",
@@ -56,6 +78,18 @@ fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDe
         method: method.to_owned(),
         args_schema,
     }
+}
+
+/// `workspace` with `paths` or `all`, and `extra` properties.
+fn paths_args(extra: Value) -> Value {
+    let mut properties = json!({
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "all": { "type": "boolean" }
+    });
+    if let (Some(all), Some(extra)) = (properties.as_object_mut(), extra.as_object()) {
+        all.extend(extra.clone());
+    }
+    workspace_args(properties)
 }
 
 /// A schema that requires `workspace` and allows `extra` properties.
