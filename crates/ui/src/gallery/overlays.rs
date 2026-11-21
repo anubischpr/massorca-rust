@@ -1,7 +1,125 @@
 //! Gallery stories for the overlays group.
 
-use super::Story;
+use super::{Story, variant};
+use crate::components::button::{Button, ButtonVariant};
+use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
+use crate::components::skeleton::{LineWidth, Skeleton};
+use crate::components::text_field::TextField;
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{SPACE_2, TYPE_BODY_SM};
+use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    Vec::new()
+    vec![Story {
+        name: "Popover",
+        spec: "Popover.md",
+        render: popover_story,
+    }]
+}
+
+/// Room under each trigger for its open panel, which floats over the gallery.
+const SLOT_HEIGHT: f32 = 240.0;
+
+fn popover_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let trigger = window
+        .use_keyed_state("popover-story/trigger", cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone();
+    let field = window.use_keyed_state("popover-story/field", cx, |_, cx| {
+        TextField::new(cx).placeholder("Project name")
+    });
+    let field_focus = field.read(cx).focus_handle(cx);
+    let secondary = cx.theme().palette.text.secondary;
+
+    let line = move |text: &'static str| div().text_body().text_color(secondary).child(text);
+
+    let info = Popover::new(
+        "popover-info",
+        Button::new("popover-info-trigger", "Claude usage").focus_handle(trigger.clone()),
+    )
+    .open(true)
+    .variant(PopoverVariant::Info)
+    .width(PopoverWidth::Small)
+    .title("Claude usage")
+    .trigger_focus(trigger.clone())
+    .child(line("5-hour window: 62 percent used"))
+    .child(line("Resets in 2 days"));
+
+    let form = Popover::new(
+        "popover-form",
+        Button::new("popover-form-trigger", "Rename project").focus_handle(trigger.clone()),
+    )
+    .open(true)
+    .variant(PopoverVariant::Form)
+    .title("Rename project")
+    .trigger_focus(trigger.clone())
+    .initial_focus(field_focus)
+    .child(field.clone())
+    .footer(
+        div()
+            .flex()
+            .gap(px(SPACE_2))
+            .child(Button::new("popover-form-cancel", "Cancel").variant(ButtonVariant::Secondary))
+            .child(Button::new("popover-form-apply", "Apply").variant(ButtonVariant::Primary)),
+    );
+
+    let action = Popover::new(
+        "popover-action",
+        Button::new("popover-action-trigger", "Attach").focus_handle(trigger.clone()),
+    )
+    .open(true)
+    .variant(PopoverVariant::Action)
+    .width(PopoverWidth::Medium)
+    .child(line("Attach an image or a file from disk"));
+
+    let loading = Popover::new(
+        "popover-loading",
+        Button::new("popover-loading-trigger", "Activity").focus_handle(trigger.clone()),
+    )
+    .open(true)
+    .variant(PopoverVariant::Info)
+    .title("Activity")
+    .child(Skeleton::line(LineWidth::Full))
+    .child(Skeleton::line(LineWidth::Most))
+    .child(Skeleton::line(LineWidth::Partial));
+
+    let empty = Popover::new(
+        "popover-empty",
+        Button::new("popover-empty-trigger", "Usage").focus_handle(trigger.clone()),
+    )
+    .open(true)
+    .variant(PopoverVariant::Info)
+    .width(PopoverWidth::Small)
+    .title("Claude usage")
+    .child(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(secondary)
+            .child("No usage reported yet"),
+    );
+
+    let closed = Popover::new(
+        "popover-closed",
+        Button::new("popover-closed-trigger", "Claude usage").focus_handle(trigger),
+    )
+    .open(false)
+    .title("Claude usage")
+    .child(line("Not rendered while closed"));
+
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(SPACE_2))
+        .child(variant("Closed (trigger only)", slot(closed), cx))
+        .child(variant("Info, open", slot(info), cx))
+        .child(variant("Form, focus in first field", slot(form), cx))
+        .child(variant("Action, 320 px", slot(action), cx))
+        .child(variant("Loading", slot(loading), cx))
+        .child(variant("Empty", slot(empty), cx))
+        .into_any_element()
+}
+
+/// A fixed-height slot so the open panel has room to float below its trigger.
+fn slot(content: impl IntoElement) -> impl IntoElement {
+    div().h(px(SLOT_HEIGHT)).child(content)
 }
