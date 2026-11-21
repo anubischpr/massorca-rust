@@ -3,6 +3,7 @@
 //!
 //! Space toggles a focused switch and Enter does nothing (Switch.md, keyboard).
 
+use crate::a11y;
 use crate::components::button::{HOVER_GROUP, StatePreview, spinner};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
@@ -15,8 +16,8 @@ use crate::tokens::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, App, ClickEvent, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, KeyboardButton, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    IntoElement, KeyboardButton, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -269,8 +270,9 @@ impl Switch {
     }
 }
 
-impl RenderOnce for Switch {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+impl Switch {
+    /// The track is the focusable control, so it carries the switch's role, name and state.
+    fn track(&self, window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
         let theme = *cx.theme();
         let p = &theme.palette;
         let checked = self.checked;
@@ -335,6 +337,8 @@ impl RenderOnce for Switch {
 
         let mut track = div()
             .id(self.id.clone())
+            .role(Role::Switch)
+            .aria_toggled(Toggled::from(checked))
             .group(HOVER_GROUP)
             .track_focus(&focus)
             .focus_ring(&theme)
@@ -355,7 +359,10 @@ impl RenderOnce for Switch {
                 .hover(move |s| s.bg(hover.track).border_color(hover.border))
                 .active(move |s| s.bg(pressed.track).border_color(pressed.border));
         }
-        if let Some(on_change) = self.on_change.filter(|_| interactive) {
+        if let Some(label) = &self.label {
+            track = track.aria_label(label.clone());
+        }
+        if let Some(on_change) = self.on_change.clone().filter(|_| interactive) {
             let next = !checked;
             track = track.on_click(move |event: &ClickEvent, window, cx| {
                 if !is_enter(event) {
@@ -363,6 +370,15 @@ impl RenderOnce for Switch {
                 }
             });
         }
+        a11y::disabled(a11y::busy(track, self.loading), self.disabled)
+    }
+}
+
+impl RenderOnce for Switch {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let track = self.track(window, cx);
+        let theme = *cx.theme();
+        let p = &theme.palette;
 
         let mut row = div()
             .flex()
@@ -554,5 +570,55 @@ mod tests {
         focus_and_draw(cx, &focus);
         press_key(cx, "space");
         assert!(asked.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{
+        TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn a_switch_is_named_by_its_label_and_reports_whether_it_is_on(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Switch::new("sync", true)
+                    .label("Sync settings")
+                    .track(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Switch);
+        assert_eq!(node.label(), Some("Sync settings"));
+        assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[gpui::test]
+    fn a_disabled_switch_is_disabled_and_a_loading_one_is_busy(cx: &mut TestAppContext) {
+        let disabled = root(cx, |window, cx| {
+            reported(
+                Switch::new("sync", false)
+                    .label("Sync")
+                    .disabled(true)
+                    .track(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(disabled.is_disabled());
+
+        let loading = root(cx, |window, cx| {
+            reported(
+                Switch::new("sync", false)
+                    .label("Sync")
+                    .loading(true)
+                    .track(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(loading.is_busy());
     }
 }

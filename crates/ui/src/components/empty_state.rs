@@ -12,8 +12,8 @@ use crate::tokens::{
     TYPE_BODY, TYPE_BODY_SM, TYPE_DISPLAY, TYPE_LABEL, TYPE_TITLE_SM, TextStyleToken,
 };
 use gpui::{
-    AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
-    Window, div, font, px,
+    AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, font, px,
 };
 
 /// Where an empty state sits and how much room it takes.
@@ -177,14 +177,15 @@ fn measure_px(cx: &App, measure: Measure) -> Option<f32> {
 
 impl RenderOnce for EmptyState {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let name = self.title.clone();
         if self.variant == EmptyStateVariant::WorkPanel {
             return div()
+                .id(self.id.clone())
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(SPACE_2))
-                .children(self.actions)
-                .into_any_element();
+                .children(self.actions);
         }
 
         let theme = *cx.theme();
@@ -197,6 +198,8 @@ impl RenderOnce for EmptyState {
         let explanation_width = measure_px(cx, LAYOUT_EMPTY_STATE_TEXT_MAX_WIDTH);
 
         let mut panel = div()
+            .id(self.id.clone())
+            .role(Role::Group)
             .flex()
             .flex_col()
             .gap(px(SPACE_2))
@@ -251,7 +254,10 @@ impl RenderOnce for EmptyState {
                     .child(note),
             );
         }
-        panel.into_any_element()
+        if let Some(title) = name {
+            panel = panel.aria_label(title);
+        }
+        panel
     }
 }
 
@@ -345,5 +351,22 @@ mod tests {
                 ),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn an_empty_state_is_a_group_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(EmptyState::new("sessions", "No sessions yet").render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.label(), Some("No sessions yet"));
     }
 }

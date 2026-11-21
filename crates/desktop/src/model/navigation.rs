@@ -1,5 +1,7 @@
 //! Modes and pages: the Activity rail and the mode switch (D-SH-09, D-SH-10).
 
+use super::teams::TeamPage;
+
 /// The two modes of the app; each has its own Sidebar and home.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
@@ -45,12 +47,14 @@ pub enum Page {
     Settings,
     /// Opened from the Workspaces Sidebar, not the rail (A9).
     Automations,
+    /// A Bot Teams page. It keeps the Sidebar open, unlike a full page (screens 3, decision 1).
+    Team(TeamPage),
 }
 
 impl Page {
-    /// Full pages cover the Canvas, hide the Sidebar and show Back (A8).
+    /// Full pages cover the Canvas, hide the Sidebar and show Back (A8). Team pages do not.
     pub fn is_full_page(self) -> bool {
-        self != Page::Home
+        !matches!(self, Page::Home | Page::Team(_))
     }
 
     pub fn title(self) -> &'static str {
@@ -61,6 +65,7 @@ impl Page {
             Page::Marketplace => "Marketplace",
             Page::Settings => "Settings",
             Page::Automations => "Automations",
+            Page::Team(page) => page.title(),
         }
     }
 }
