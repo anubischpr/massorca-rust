@@ -38,7 +38,7 @@ pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
     options
 }
 
-enum Command {
+pub(crate) enum Command {
     RetryNow,
     Create {
         params: WorkspaceCreateParams,
@@ -51,6 +51,22 @@ enum Command {
     Stop,
 }
 
+/// The service's side of a handle made for tests: the calls the UI sent, to answer by hand.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Script {
+    commands: mpsc::UnboundedReceiver<Command>,
+    _connection: watch::Sender<ConnectionState>,
+}
+
+#[cfg(test)]
+impl Script {
+    /// The next call the UI sent, if one is waiting.
+    pub(crate) fn next(&mut self) -> Option<Command> {
+        self.commands.try_recv().ok()
+    }
+}
+
 /// The UI's side of the link. Clones share it.
 #[derive(Clone, Debug)]
 pub struct ServiceHandle {
@@ -59,6 +75,23 @@ pub struct ServiceHandle {
 }
 
 impl ServiceHandle {
+    /// A handle with no bridge behind it, so a test answers each call itself.
+    #[cfg(test)]
+    pub(crate) fn scripted() -> (Self, Script) {
+        let (commands, command_rx) = mpsc::unbounded_channel();
+        let (connection_tx, connection) = watch::channel(ConnectionState::Connecting);
+        (
+            Self {
+                commands,
+                connection,
+            },
+            Script {
+                commands: command_rx,
+                _connection: connection_tx,
+            },
+        )
+    }
+
     /// The connection state right now.
     pub fn connection(&self) -> ConnectionState {
         self.connection.borrow().clone()

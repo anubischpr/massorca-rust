@@ -8,6 +8,8 @@ mod launch;
 mod refusal;
 mod update;
 
+#[cfg(test)]
+pub(crate) use bridge::{Command, Script};
 pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
 pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,

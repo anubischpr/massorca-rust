@@ -2,7 +2,7 @@
 //! (D-SH-05). Values come from the status view model; the glyphs are the shell's own.
 
 use super::tooltip::tooltip;
-use crate::model::shell::StatusBarModel;
+use crate::model::shell::{ServiceStatus, ServiceTone, StatusBarModel};
 use gpui::{AnyElement, Div, IntoElement, SharedString, div, prelude::*, px};
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
@@ -16,7 +16,11 @@ use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
 /// The Status bar: 24 px on the Canvas surface with caption text. Items share one hover and
 /// press treatment and show their full value in a tooltip (StatusItem spec).
-pub(super) fn status_bar(status: &StatusBarModel, theme: &Theme) -> Div {
+pub(super) fn status_bar(
+    status: &StatusBarModel,
+    service: Option<&ServiceStatus>,
+    theme: &Theme,
+) -> Div {
     let secondary = theme.palette.text.secondary;
     div()
         .flex()
@@ -62,7 +66,34 @@ pub(super) fn status_bar(status: &StatusBarModel, theme: &Theme) -> Div {
             theme,
         ))
         .child(div().flex_1())
+        .when_some(service, |bar, service| {
+            bar.child(service_item(service, theme))
+        })
         .child(hosts_item(status, theme))
+}
+
+/// The service item: a dot in the colour of the link's state and a short word. The tooltip gives
+/// the server, the retry time or the reason.
+fn service_item(service: &ServiceStatus, theme: &Theme) -> impl IntoElement {
+    let dot = div()
+        .flex_none()
+        .size(px(SIZE_INDICATOR_DOT))
+        .rounded(px(RADIUS_FULL));
+    let status = &theme.palette.status;
+    let dot = match service.tone {
+        ServiceTone::Ok => dot.bg(status.success_solid),
+        ServiceTone::Busy => dot.border_1().border_color(theme.palette.border.strong),
+        ServiceTone::Warning => dot.bg(status.warning_solid),
+        ServiceTone::Unreachable => dot.bg(status.danger_solid),
+    };
+    item(
+        "status-service",
+        Some(dot.into_any_element()),
+        service.text.clone(),
+        service.tooltip.clone(),
+        theme.palette.text.secondary,
+        theme,
+    )
 }
 
 /// One status item: an optional glyph and a caption. Its hover fill sits on the Canvas.
