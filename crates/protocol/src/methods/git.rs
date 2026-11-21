@@ -7,6 +7,7 @@ pub mod commit;
 pub mod diff;
 pub mod index;
 pub mod log;
+pub mod remote;
 pub mod status;
 
 use serde::{Deserialize, Serialize};

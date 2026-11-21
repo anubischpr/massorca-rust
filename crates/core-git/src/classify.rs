@@ -8,6 +8,29 @@ use crate::error::GitError;
 /// `(code, phrase)`: the first phrase found in stderr names the failure.
 const PATTERNS: &[(&str, &str)] = &[
     (codes::GIT_INDEX_LOCKED, "index.lock': File exists"),
+    // Authentication first: git adds "Could not read from remote repository" to these as well.
+    (codes::GIT_AUTH_REQUIRED, "terminal prompts disabled"),
+    (codes::GIT_AUTH_REQUIRED, "could not read Username"),
+    (codes::GIT_AUTH_REQUIRED, "could not read Password"),
+    (codes::GIT_AUTH_REQUIRED, "Authentication failed"),
+    (codes::GIT_AUTH_REQUIRED, "Permission denied (publickey"), // untested: needs a real remote
+    (codes::GIT_HOST_KEY_UNKNOWN, "Host key verification failed"), // untested: needs a real remote
+    (
+        codes::GIT_REMOTE_NOT_FOUND,
+        "does not appear to be a git repository",
+    ),
+    (codes::GIT_REMOTE_NOT_FOUND, "Repository not found"), // untested
+    (codes::GIT_REMOTE_UNREACHABLE, "Could not resolve host"), // untested: needs a real remote
+    (codes::GIT_REMOTE_UNREACHABLE, "Failed to connect to"),
+    (codes::GIT_REMOTE_UNREACHABLE, "Connection refused"),
+    (codes::GIT_REMOTE_UNREACHABLE, "Connection timed out"), // untested: needs a real remote
+    (codes::GIT_REMOTE_UNREACHABLE, "Network is unreachable"), // untested: needs a real remote
+    (codes::GIT_LOCAL_CHANGES, "would be overwritten by merge"), // untested
+    (codes::GIT_LOCAL_CHANGES, "You have unstaged changes"), // untested
+    (
+        codes::GIT_LOCAL_CHANGES,
+        "Your index contains uncommitted changes",
+    ), // untested
     (codes::GIT_IDENTITY_UNKNOWN, "Please tell me who you are"),
     (codes::GIT_IDENTITY_UNKNOWN, "empty ident name"),
     // Both the local-changes and the untracked-files refusals end their heading this way.

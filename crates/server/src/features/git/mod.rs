@@ -5,6 +5,7 @@ mod commit;
 mod diff;
 mod index;
 mod log;
+mod remote;
 mod status;
 
 use std::collections::HashMap;
@@ -33,6 +34,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(index::register(registries)?);
     handles.extend(commit::register(registries)?);
     handles.extend(branch::register(registries)?);
+    handles.extend(remote::register(registries)?);
     Ok(handles)
 }
 

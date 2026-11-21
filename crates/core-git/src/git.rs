@@ -70,7 +70,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, Some(self.timeout), true, None)
+        self.run_limited(cwd, args, Some(self.timeout), true, None, &[])
     }
 
     /// Like `run`, keeping at most `max_stdout` bytes of output; `Captured::truncated` says whether more existed.
@@ -84,7 +84,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, Some(self.timeout), true, Some(max_stdout))
+        self.run_limited(cwd, args, Some(self.timeout), true, Some(max_stdout), &[])
     }
 
     /// Like `run`, for a command that changes the repository or belongs to one that does.
@@ -97,7 +97,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, self.mutation_timeout, false, None)
+        self.run_limited(cwd, args, self.mutation_timeout, false, None, &[])
     }
 
     /// Like `run_mutation`, bounded by `timeout` unless the configured mutation timeout is shorter.
@@ -114,7 +114,22 @@ impl Git {
         let timeout = self
             .mutation_timeout
             .map_or(timeout, |own| own.min(timeout));
-        self.run_limited(cwd, args, Some(timeout), false, None)
+        self.run_limited(cwd, args, Some(timeout), false, None, &[])
+    }
+
+    /// Runs a command that talks to a remote, bounded by `timeout`, with `env` added (decision 0013).
+    pub(crate) fn run_network<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        timeout: Duration,
+        env: &[(&str, &str)],
+    ) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run_limited(cwd, args, Some(timeout), false, None, env)
     }
 
     fn run_limited<I, S>(
@@ -124,6 +139,7 @@ impl Git {
         timeout: Option<Duration>,
         read_only: bool,
         max_stdout: Option<usize>,
+        env: &[(&str, &str)],
     ) -> Result<Captured, GitError>
     where
         I: IntoIterator<Item = S>,
@@ -135,7 +151,7 @@ impl Git {
             .collect();
         let shown: Vec<String> = args
             .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
+            .map(|arg| redact_urls(&arg.to_string_lossy()))
             .collect();
         let mut command = Command::new(&self.binary);
         command
@@ -144,6 +160,15 @@ impl Git {
             .args(&args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
+            // Nothing may wait for an answer (decision 0013): an empty askpass also skips `core.askPass`.
+            .env("GIT_ASKPASS", "")
+            .env("SSH_ASKPASS", "")
+            .env("SSH_ASKPASS_REQUIRE", "never")
+            .env("GCM_INTERACTIVE", "never")
+            .env_remove("GIT_TRACE")
+            .env_remove("GIT_TRACE_CURL")
+            .env_remove("GIT_TRACE_PACKET")
+            .env_remove("GIT_CURL_VERBOSE")
             // A repository location inherited from a git hook would override the cwd.
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
@@ -152,6 +177,7 @@ impl Git {
             // A read never refreshes the index, so it cannot wake a watcher (decision 0012).
             command.env("GIT_OPTIONAL_LOCKS", "0");
         }
+        command.envs(env.iter().copied());
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
@@ -194,9 +220,7 @@ impl Captured {
         GitError::Failed {
             args: self.args.clone(),
             code: self.exit_code(),
-            stderr: String::from_utf8_lossy(&self.output.stderr)
-                .trim()
-                .to_owned(),
+            stderr: redact_urls(String::from_utf8_lossy(&self.output.stderr).trim()),
         }
     }
 
@@ -225,6 +249,30 @@ impl Captured {
             reason: reason.into(),
         }
     }
+}
+
+/// Replaces the user information of every URL in `text` with `***`, so a credential in a remote URL
+/// never reaches a reply, an error or a log (decision 0013).
+pub fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(scheme_end) = rest.find("://") {
+        let (before, after) = rest.split_at(scheme_end + 3);
+        out.push_str(before);
+        let authority_end = after
+            .find(|c: char| c == '/' || c.is_whitespace() || c == '\'' || c == '"')
+            .unwrap_or(after.len());
+        match after[..authority_end].rfind('@') {
+            Some(at) => {
+                out.push_str("***");
+                out.push_str(&after[at..authority_end]);
+            }
+            None => out.push_str(&after[..authority_end]),
+        }
+        rest = &after[authority_end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Turns one path printed by git into a `PathBuf`. Git uses forward slashes on
@@ -258,7 +306,21 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{GitError, discover_with, resolve_binary};
+    use super::{GitError, discover_with, redact_urls, resolve_binary};
+
+    #[test]
+    fn credentials_in_urls_are_redacted_and_everything_else_is_kept() {
+        assert_eq!(
+            redact_urls("fatal: unable to access 'https://user:s3cret@host.example/r.git/': 403"),
+            "fatal: unable to access 'https://***@host.example/r.git/': 403"
+        );
+        assert_eq!(
+            redact_urls("ssh://git@host/r and https://tok@x.example"),
+            "ssh://***@host/r and https://***@x.example"
+        );
+        assert_eq!(redact_urls("https://host/a@b"), "https://host/a@b");
+        assert_eq!(redact_urls("no url here"), "no url here");
+    }
 
     #[test]
     fn the_binary_is_git_unless_overridden() {

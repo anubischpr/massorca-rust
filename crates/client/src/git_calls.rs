@@ -13,6 +13,10 @@ use massorca_protocol::methods::git::index::{
     self, GitDiscardParams, GitDiscarded, GitPathsParams,
 };
 use massorca_protocol::methods::git::log::{self, GitLog, GitLogParams};
+use massorca_protocol::methods::git::remote::{
+    self, GitAborted, GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams,
+    GitPushed,
+};
 use massorca_protocol::methods::git::status::{self, GitStatus, GitStatusParams};
 
 use crate::client::Client;
@@ -50,6 +54,26 @@ impl Client {
     /// `git.commit`: commits the staged changes, or amends HEAD.
     pub async fn git_commit(&self, params: &GitCommitParams) -> Result<GitCommitted, ClientError> {
         self.call(commit::COMMIT, params).await
+    }
+
+    /// `git.fetch`: fetches with prune; reports the remote-tracking refs that changed.
+    pub async fn git_fetch(&self, params: &GitFetchParams) -> Result<GitFetched, ClientError> {
+        self.call(remote::FETCH, params).await
+    }
+
+    /// `git.pull`: brings the branch up to date under an explicit mode.
+    pub async fn git_pull(&self, params: &GitPullParams) -> Result<GitPulled, ClientError> {
+        self.call(remote::PULL, params).await
+    }
+
+    /// `git.push`: pushes the branch; a rejection is a result, not an error.
+    pub async fn git_push(&self, params: &GitPushParams) -> Result<GitPushed, ClientError> {
+        self.call(remote::PUSH, params).await
+    }
+
+    /// `git.abort`: aborts the merge, rebase, cherry-pick or revert in progress.
+    pub async fn git_abort(&self, params: &GitWorkspaceRef) -> Result<GitAborted, ClientError> {
+        self.call(remote::ABORT, params).await
     }
 
     /// `git.log`: one page of history; pass `next_cursor` back for the next page.

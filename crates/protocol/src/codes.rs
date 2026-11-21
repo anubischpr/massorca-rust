@@ -75,6 +75,22 @@ pub const GIT_NO_COMMITS: &str = "git.no_commits";
 pub const GIT_IDENTITY_UNKNOWN: &str = "git.identity_unknown";
 /// A checkout would overwrite local changes or untracked files; `data.paths` lists them.
 pub const GIT_CHECKOUT_WOULD_OVERWRITE: &str = "git.checkout_would_overwrite";
+/// A remote asked for credentials the host's git setup does not supply; authenticate in a terminal, then retry.
+pub const GIT_AUTH_REQUIRED: &str = "git.auth_required";
+/// SSH does not know the remote host's key; accept it once in a terminal, then retry.
+pub const GIT_HOST_KEY_UNKNOWN: &str = "git.host_key_unknown";
+/// The remote host could not be reached: name resolution, connection or timeout.
+pub const GIT_REMOTE_UNREACHABLE: &str = "git.remote_unreachable";
+/// The remote answered that the repository does not exist, or the remote is not configured.
+pub const GIT_REMOTE_NOT_FOUND: &str = "git.remote_not_found";
+/// The branch has no upstream to pull from.
+pub const GIT_NO_UPSTREAM: &str = "git.no_upstream";
+/// HEAD is not on a branch.
+pub const GIT_DETACHED_HEAD: &str = "git.detached_head";
+/// No merge, rebase, cherry-pick or revert is in progress.
+pub const GIT_NO_OPERATION: &str = "git.no_operation";
+/// A merge or rebase would overwrite local changes; commit, stash elsewhere or discard them first.
+pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
