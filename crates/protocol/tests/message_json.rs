@@ -1,4 +1,5 @@
 use massorca_protocol::{ErrorBody, Message, PeerInfo, ProtocolRange};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 fn peer(name: &str) -> PeerInfo {
@@ -315,4 +316,38 @@ fn error_body_new_leaves_data_unset() {
     assert_eq!(body.code, "project.not_found");
     assert_eq!(body.message, "no such project");
     assert!(body.data.is_none());
+}
+
+#[test]
+fn rejected_has_the_documented_wire_shape() {
+    let message = Message::Rejected {
+        error: ErrorBody::new("protocol.unsupported_version", "no common version"),
+        supported: ProtocolRange { min: 1, max: 2 },
+    };
+    let wire = json!({
+        "type": "rejected",
+        "error": { "code": "protocol.unsupported_version", "message": "no common version" },
+        "supported": { "min": 1, "max": 2 }
+    });
+    assert_eq!(to_json(&message), wire);
+    assert_eq!(from_json(wire), message);
+}
+
+/// The message set of a build that predates `rejected`.
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OldMessage {
+    Welcome {},
+    #[serde(other)]
+    Unknown,
+}
+
+#[test]
+fn an_older_receiver_decodes_rejected_as_unknown() {
+    let rejected = to_json(&Message::Rejected {
+        error: ErrorBody::new("protocol.handshake", "malformed hello"),
+        supported: ProtocolRange { min: 1, max: 1 },
+    });
+    let decoded: OldMessage = serde_json::from_value(rejected).expect("old receiver decodes");
+    assert_eq!(decoded, OldMessage::Unknown);
 }

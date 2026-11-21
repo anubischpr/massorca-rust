@@ -7,11 +7,13 @@ pub mod codes;
 pub mod frame;
 pub mod message;
 pub mod methods;
+pub mod version;
 
 pub use frame::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame};
 #[cfg(feature = "tokio")]
 pub use frame::{read_message, write_message};
 pub use message::{ErrorBody, Message, PeerInfo, ProtocolRange};
+pub use version::negotiate;
 
 /// Highest protocol version this build speaks.
 pub const PROTOCOL_VERSION: u32 = 1;

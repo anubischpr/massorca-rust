@@ -56,6 +56,12 @@ pub enum Message {
         capabilities: Vec<String>,
         connection_id: String,
     },
+    /// Sent instead of `welcome` when the handshake fails; the server then closes.
+    Rejected {
+        error: ErrorBody,
+        /// The protocol range the server speaks.
+        supported: ProtocolRange,
+    },
     Request {
         id: u64,
         method: String,
