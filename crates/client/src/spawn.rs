@@ -1,6 +1,6 @@
 //! Starts `massorca service run` detached from this process (ADR 0003), so the service outlives the client that started it.
 
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use massorca_profile::Profile;
 
@@ -18,10 +18,27 @@ pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<()
         .stderr(Stdio::null());
     detach(&mut command);
     keep_handles_private();
-    command
-        .spawn()
-        .map(drop)
-        .map_err(|error| ClientError::StartFailed(format!("{}: {error}", autostart.exe.display())))
+    let child = command.spawn().map_err(|error| {
+        ClientError::StartFailed(format!("{}: {error}", autostart.exe.display()))
+    })?;
+    reap_when_it_exits(child);
+    Ok(())
+}
+
+/// Waits for the started service on a thread of its own. Until it exits the service is this process's child, and an
+/// unwaited child stays a zombie for as long as the client lives. Detaching is process groups only: `setsid` would need a
+/// second fork, which takes `unsafe`, and the workspace forbids it.
+#[cfg(unix)]
+fn reap_when_it_exits(mut child: Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+/// Windows releases the process when its handle closes, so there is nothing to wait for.
+#[cfg(windows)]
+fn reap_when_it_exits(child: Child) {
+    drop(child);
 }
 
 /// Stops the detached service from inheriting this process's standard pipes, so a caller reading them to end-of-file is not held open.

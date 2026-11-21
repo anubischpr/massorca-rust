@@ -100,3 +100,36 @@ async fn restarting_through_the_client_five_times_starts_a_new_service_each_time
     }
     assert_eq!(pids.len(), 5, "every round reached a new service");
 }
+
+/// An autostarted service is reaped once it stops. A client that lives on must not keep it as a zombie, which keeps its
+/// `/proc` entry until the parent waits for it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_autostarted_service_is_reaped_once_it_stops() {
+    use std::time::{Duration, Instant};
+
+    let sandbox = Sandbox::new();
+    sandbox.track("default");
+    let (profile, exe) = (profile(sandbox.home()), massorca());
+
+    let client = Client::connect(&profile, autostarting(&exe))
+        .await
+        .expect("the client starts the service and connects");
+    let pid = client
+        .service_info()
+        .await
+        .expect("service.info answers")
+        .pid;
+    client.shutdown().await.expect("the shutdown is answered");
+    drop(client);
+
+    let entry = PathBuf::from(format!("/proc/{pid}"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while entry.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the stopped service {pid} was never reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
