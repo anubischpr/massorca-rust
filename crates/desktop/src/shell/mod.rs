@@ -4,6 +4,7 @@ mod actions;
 mod canvas;
 mod palette;
 mod rail;
+mod resize_edges;
 mod service_banner;
 mod settings;
 mod setup;
@@ -335,6 +336,7 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
+        let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
@@ -522,6 +524,7 @@ impl Render for Shell {
                     .child(title_bar)
                     .child(body),
             )
+            .when_some(resize_grabs, |el, grabs| el.child(grabs))
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))

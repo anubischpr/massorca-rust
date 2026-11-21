@@ -5,7 +5,10 @@
 //! `MASSORCA_HOME`, `MASSORCA_PROFILE` and `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1`
 //! opens the window hidden and unfocused for automated checks (see `launch_options`).
 
-use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
+use gpui::{
+    AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
+    size,
+};
 use massorca_desktop::data::SampleDataSource;
 use massorca_desktop::launch_options::WindowLaunch;
 use massorca_desktop::model::teams::SampleTeamsSource;
@@ -60,6 +63,9 @@ fn main() {
                         traffic_light_position: cfg!(target_os = "macos")
                             .then(|| point(px(16.), px(14.))),
                     }),
+                    // Linux draws its own frame; GPUI keeps the platform frame where the WM cannot.
+                    window_decorations: cfg!(target_os = "linux")
+                        .then_some(WindowDecorations::Client),
                     focus: launch.focus(),
                     show: launch.show(),
                     ..Default::default()
