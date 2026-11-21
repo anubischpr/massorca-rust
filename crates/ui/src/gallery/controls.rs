@@ -1,6 +1,7 @@
 //! Gallery stories for the controls group.
 
 use super::{Story, variant};
+use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant, StatePreview};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::kbd::{Kbd, ShortcutOs};
@@ -26,6 +27,11 @@ pub fn stories() -> Vec<Story> {
             name: "Kbd",
             spec: "Kbd.md",
             render: kbd_story,
+        },
+        Story {
+            name: "Badge",
+            spec: "Badge.md",
+            render: badge_story,
         },
     ]
 }
@@ -200,6 +206,78 @@ fn kbd_story(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant(
             "Disabled (no fill)",
             row().child(Kbd::new("Mod+K").disabled(true)),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn badge_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let p = cx.theme().palette;
+    column()
+        .child(variant(
+            "Text, subtle (a status tone carries its glyph and word)",
+            row()
+                .child(Badge::text("Category"))
+                .child(Badge::text("New").tone(BadgeTone::Accent))
+                .child(Badge::text("Connected").tone(BadgeTone::Success))
+                .child(Badge::text("Waiting for you").tone(BadgeTone::Warning))
+                .child(Badge::text("Failed").tone(BadgeTone::Danger))
+                .child(Badge::text("Notice").tone(BadgeTone::Info)),
+            cx,
+        ))
+        .child(variant(
+            "Solid (high-emphasis status on a dark row)",
+            row()
+                .child(Badge::text("Passed").tone(BadgeTone::Success).solid(true))
+                .child(Badge::text("Failed").tone(BadgeTone::Danger).solid(true))
+                .child(Badge::text("Waiting").tone(BadgeTone::Warning).solid(true))
+                .child(Badge::text("Notice").tone(BadgeTone::Info).solid(true)),
+            cx,
+        ))
+        .child(variant(
+            "Category chips (label style)",
+            row().child(Badge::text("Extension").category(true)).child(
+                Badge::text("Selected")
+                    .tone(BadgeTone::Accent)
+                    .category(true),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Counts (99+ above 99; a zero count draws nothing)",
+            row()
+                .child(Badge::count(1))
+                .child(Badge::count(7).tone(BadgeTone::Accent))
+                .child(Badge::count(99).tone(BadgeTone::Danger))
+                .child(Badge::count(100).tone(BadgeTone::Warning)),
+            cx,
+        ))
+        .child(variant(
+            "Dots, beside a labelled item",
+            row()
+                .child(Badge::dot().tone(BadgeTone::Accent))
+                .child(div().text_body().text_color(p.text.primary).child("Checks"))
+                .child(Badge::dot().tone(BadgeTone::Success))
+                .child(div().text_body().text_color(p.text.primary).child("Build"))
+                .child(Badge::dot().tone(BadgeTone::Danger))
+                .child(div().text_body().text_color(p.text.primary).child("Deploy")),
+            cx,
+        ))
+        .child(variant(
+            "Disabled (text disabled, no background)",
+            row()
+                .child(Badge::text("Failed").tone(BadgeTone::Danger).disabled(true))
+                .child(Badge::count(3).tone(BadgeTone::Danger).disabled(true)),
+            cx,
+        ))
+        .child(variant(
+            "Long text (clipped after 16 characters)",
+            row().child(Badge::text("Waiting for your approval on the checks")),
+            cx,
+        ))
+        .child(variant(
+            "Disconnected host (dashed ring and Unreachable, never Stopped)",
+            row().child(Badge::text("Unreachable").glyph(IconName::CircleDashed)),
             cx,
         ))
         .into_any_element()
