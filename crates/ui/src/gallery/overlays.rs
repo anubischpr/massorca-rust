@@ -4,13 +4,16 @@ use super::{Story, variant};
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::menu::{MenuEntry, MenuItem, MenuView};
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
+use crate::components::select::SelectView;
 use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::text_field::TextField;
 use crate::components::tooltip::{Tooltip, TooltipTrigger};
 use crate::icon::IconName;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{SPACE_2, TYPE_BODY_SM};
-use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui::{
+    AnyElement, App, Focusable, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+};
 
 pub fn stories() -> Vec<Story> {
     vec![
@@ -28,6 +31,11 @@ pub fn stories() -> Vec<Story> {
             name: "Menu",
             spec: "Menu.md",
             render: menu_story,
+        },
+        Story {
+            name: "Select",
+            spec: "Select.md",
+            render: select_story,
         },
     ]
 }
@@ -266,4 +274,55 @@ fn checkable_entries() -> Vec<MenuEntry> {
         MenuItem::new("Wrap long lines").checked(false).into(),
         MenuItem::new("Reset layout").into(),
     ]
+}
+
+fn select_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let chosen = window.use_keyed_state("select-story/chosen", cx, |_, cx| {
+        SelectView::new(branch_options(), cx).selected(Some(0))
+    });
+    let placeholder = window.use_keyed_state("select-story/placeholder", cx, |_, cx| {
+        SelectView::new(branch_options(), cx).placeholder("Choose a branch")
+    });
+    let disabled = window.use_keyed_state("select-story/disabled", cx, |_, cx| {
+        SelectView::new(branch_options(), cx)
+            .selected(Some(1))
+            .disabled(true)
+    });
+    let error = window.use_keyed_state("select-story/error", cx, |_, cx| {
+        SelectView::new(branch_options(), cx)
+            .placeholder("Choose a branch")
+            .error("Choose a branch before you run the agent.")
+    });
+    let open = window.use_keyed_state("select-story/open", cx, |window, cx| {
+        let mut select = SelectView::new(branch_options(), cx).selected(Some(1));
+        select.open(window, cx);
+        select
+    });
+    let empty = window.use_keyed_state("select-story/empty", cx, |window, cx| {
+        let mut select = SelectView::new(Vec::<SharedString>::new(), cx)
+            .placeholder("Choose a branch")
+            .empty_text("No branches in this repo");
+        select.open(window, cx);
+        select
+    });
+
+    div()
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap(px(SPACE_2))
+        .child(variant("Chosen value", chosen, cx))
+        .child(variant("Placeholder", placeholder, cx))
+        .child(variant("Disabled", disabled, cx))
+        .child(variant("Error", error, cx))
+        .child(variant("Open, value highlighted", slot(open), cx))
+        .child(variant("Open, no options", slot(empty), cx))
+        .into_any_element()
+}
+
+fn branch_options() -> Vec<SharedString> {
+    ["main", "feature/overlays", "release/2026.11"]
+        .into_iter()
+        .map(SharedString::from)
+        .collect()
 }
