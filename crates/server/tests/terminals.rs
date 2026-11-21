@@ -12,8 +12,7 @@ use massorca_client::{Client, ClientError, ConnectOptions};
 use massorca_profile::{Profile, local_socket_name};
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::{
-    self, MAX_INPUT_BYTES, Terminal, TerminalCreateParams, TerminalInputParams, TerminalKillParams,
-    TerminalList, TerminalListParams, TerminalRef, TerminalState,
+    MAX_INPUT_BYTES, Terminal, TerminalCreateParams, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{
@@ -137,60 +136,6 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
         rows: None,
         title: None,
         request_id: None,
-    }
-}
-
-/// Typed terminal calls, until the client crate offers them.
-trait TerminalCalls {
-    async fn terminal_create(&self, params: &TerminalCreateParams)
-    -> Result<Terminal, ClientError>;
-    async fn terminal_list(&self, workspace: Option<&str>) -> Result<TerminalList, ClientError>;
-    async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError>;
-    async fn terminal_input(&self, terminal: &str, bytes: &[u8]) -> Result<(), ClientError>;
-    async fn terminal_kill(&self, terminal: &str, force: bool) -> Result<Terminal, ClientError>;
-    async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError>;
-}
-
-fn terminal_ref(terminal: &str) -> TerminalRef {
-    TerminalRef {
-        terminal: terminal.to_owned(),
-    }
-}
-
-impl TerminalCalls for Client {
-    async fn terminal_create(
-        &self,
-        params: &TerminalCreateParams,
-    ) -> Result<Terminal, ClientError> {
-        self.call(terminals::CREATE, params).await
-    }
-
-    async fn terminal_list(&self, workspace: Option<&str>) -> Result<TerminalList, ClientError> {
-        let params = TerminalListParams {
-            workspace: workspace.map(str::to_owned),
-        };
-        self.call(terminals::LIST, &params).await
-    }
-
-    async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError> {
-        self.call(terminals::SHOW, &terminal_ref(terminal)).await
-    }
-
-    async fn terminal_input(&self, terminal: &str, bytes: &[u8]) -> Result<(), ClientError> {
-        let params = TerminalInputParams::from_bytes(terminal, bytes);
-        self.call(terminals::INPUT, &params).await
-    }
-
-    async fn terminal_kill(&self, terminal: &str, force: bool) -> Result<Terminal, ClientError> {
-        let params = TerminalKillParams {
-            terminal: terminal.to_owned(),
-            force,
-        };
-        self.call(terminals::KILL, &params).await
-    }
-
-    async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError> {
-        self.call(terminals::CLOSE, &terminal_ref(terminal)).await
     }
 }
 
