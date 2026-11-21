@@ -3,17 +3,19 @@
 
 use std::fmt;
 use std::rc::Rc;
+use std::time::Duration;
 
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::Side;
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
+use gpui::AppContext;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, Role, ScrollEvent, StatefulInteractiveElement, Styled,
-    Window, canvas, div, px,
+    AnyWindowHandle, App, Bounds, ClipboardItem, Context, Div, Entity, FocusHandle,
+    InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, Role, ScrollEvent,
+    StatefulInteractiveElement, Styled, Window, canvas, div, px,
 };
 
 use super::feed::{Exit, FeedError, FeedEvent, FeedOutcome, TerminalFeed};
@@ -43,6 +45,9 @@ fn accessible_name(title: Option<&str>) -> String {
     }
 }
 
+/// How long a pane must hold a new size before the grid follows it (TerminalSurface.md).
+const RESIZE_DEBOUNCE: Duration = Duration::from_millis(100);
+
 /// One terminal drawn as a grid of text cells. Feed it with [`TerminalSurface::apply`];
 /// keys, pastes and resizes leave through the callbacks it was given.
 pub struct TerminalSurface {
@@ -50,8 +55,12 @@ pub struct TerminalSurface {
     focus: FocusHandle,
     /// Where the grid was painted last, for pointer hits.
     place: Option<GridPlace>,
-    /// The grid last reported to `on_resize`.
+    /// The grid applied to the emulator and reported to `on_resize`.
     grid_size: Option<(u16, u16)>,
+    /// A pane size that differs from `grid_size`, waiting out the debounce.
+    resize_target: Option<(u16, u16)>,
+    /// Counts the size changes, so a timer started by an earlier change does nothing.
+    resize_generation: u64,
     selecting: bool,
     /// Scroll distance that is not yet a whole line.
     scroll_remainder: f32,
@@ -75,6 +84,8 @@ impl TerminalSurface {
             focus: cx.focus_handle(),
             place: None,
             grid_size: None,
+            resize_target: None,
+            resize_generation: 0,
             selecting: false,
             scroll_remainder: 0.0,
             on_input: None,
@@ -125,16 +136,62 @@ impl TerminalSurface {
         outcome
     }
 
-    /// Records where the grid is painted and the size it fits. When the size changed,
-    /// returns the resize handler with the new size, to be called outside this view.
-    fn fit(&mut self, place: GridPlace, cols: u16, rows: u16) -> Option<(ResizeHandler, u16, u16)> {
+    /// Records where the grid is painted and the size the pane asks for. The first grid applies
+    /// at once; a later change applies once the pane has held it for `RESIZE_DEBOUNCE`. Returns
+    /// the handler and size to report now, when the grid changed at once.
+    fn fit(
+        &mut self,
+        place: GridPlace,
+        size: (u16, u16),
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> Option<(ResizeHandler, u16, u16)> {
         self.place = Some(place);
-        if self.grid_size == Some((cols, rows)) {
-            return None;
+        match self.grid_size {
+            None => self.apply_grid(size),
+            Some(applied) if applied == size => {
+                self.resize_target = None;
+                None
+            }
+            Some(_) if self.resize_target == Some(size) => None,
+            Some(_) => {
+                self.resize_target = Some(size);
+                self.resize_generation += 1;
+                let generation = self.resize_generation;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(RESIZE_DEBOUNCE).await;
+                    let settled = this
+                        .update(cx, |view, _| view.commit_resize(generation))
+                        .ok()
+                        .flatten();
+                    if let Some((handler, cols, rows)) = settled {
+                        cx.update_window(window, |_, window, cx| handler(cols, rows, window, cx))
+                            .ok();
+                    }
+                })
+                .detach();
+                None
+            }
         }
-        self.grid_size = Some((cols, rows));
+    }
+
+    /// Makes `size` the grid: the emulator takes it and the owner is told.
+    fn apply_grid(&mut self, size: (u16, u16)) -> Option<(ResizeHandler, u16, u16)> {
+        let (cols, rows) = size;
+        self.grid_size = Some(size);
+        self.resize_target = None;
         let _ = self.feed.apply(FeedEvent::Resized { cols, rows });
         self.on_resize.clone().map(|handler| (handler, cols, rows))
+    }
+
+    /// The debounce timer of `generation` fired: applies the size the pane has settled on,
+    /// unless a later change has started its own timer.
+    fn commit_resize(&mut self, generation: u64) -> Option<(ResizeHandler, u16, u16)> {
+        if generation != self.resize_generation {
+            return None;
+        }
+        let target = self.resize_target?;
+        self.apply_grid(target)
     }
 
     /// Sends `bytes` to the program. Typing returns the view to the live screen.
@@ -327,7 +384,10 @@ fn prepare(
         origin: bounds.origin,
         cell,
     };
-    let resized = surface.update(cx, |view, _| view.fit(place, cols, rows));
+    let window_handle = window.window_handle();
+    let resized = surface.update(cx, |view, cx| {
+        view.fit(place, (cols, rows), window_handle, cx)
+    });
     if let Some((handler, cols, rows)) = resized {
         handler(cols, rows, window, cx);
     }
