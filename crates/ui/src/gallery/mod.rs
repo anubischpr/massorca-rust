@@ -13,6 +13,7 @@ mod lists;
 mod overlays;
 mod panels;
 mod session;
+mod settings;
 mod teams;
 mod terminal;
 
@@ -49,6 +50,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(composer::stories());
     all.extend(terminal::stories());
     all.extend(teams::stories());
+    all.extend(settings::stories());
     all
 }
 

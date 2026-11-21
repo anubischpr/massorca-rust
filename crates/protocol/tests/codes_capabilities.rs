@@ -32,6 +32,35 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::PROJECT_EXISTS, "project.exists"),
     (codes::PROJECT_NOT_GIT, "project.not_git"),
     (codes::PROJECT_HAS_WORKSPACES, "project.has_workspaces"),
+    (codes::GIT_NOT_A_REPOSITORY, "git.not_a_repository"),
+    (
+        codes::GIT_PATH_OUTSIDE_WORKTREE,
+        "git.path_outside_worktree",
+    ),
+    (codes::GIT_REVISION_NOT_FOUND, "git.revision_not_found"),
+    (codes::GIT_DISCARD_UNTRACKED, "git.discard_untracked"),
+    (codes::GIT_DISCARD_STAGED, "git.discard_staged"),
+    (codes::GIT_PATH_CONFLICTED, "git.path_conflicted"),
+    (codes::GIT_PATH_IS_DIRECTORY, "git.path_is_directory"),
+    (codes::GIT_PATHS_REQUIRED, "git.paths_required"),
+    (codes::GIT_INDEX_LOCKED, "git.index_locked"),
+    (codes::GIT_NOTHING_TO_COMMIT, "git.nothing_to_commit"),
+    (codes::GIT_COMMIT_MESSAGE_EMPTY, "git.commit_message_empty"),
+    (codes::GIT_COMMIT_PUBLISHED, "git.commit_published"),
+    (codes::GIT_NO_COMMITS, "git.no_commits"),
+    (codes::GIT_IDENTITY_UNKNOWN, "git.identity_unknown"),
+    (
+        codes::GIT_CHECKOUT_WOULD_OVERWRITE,
+        "git.checkout_would_overwrite",
+    ),
+    (codes::GIT_AUTH_REQUIRED, "git.auth_required"),
+    (codes::GIT_HOST_KEY_UNKNOWN, "git.host_key_unknown"),
+    (codes::GIT_REMOTE_UNREACHABLE, "git.remote_unreachable"),
+    (codes::GIT_REMOTE_NOT_FOUND, "git.remote_not_found"),
+    (codes::GIT_NO_UPSTREAM, "git.no_upstream"),
+    (codes::GIT_DETACHED_HEAD, "git.detached_head"),
+    (codes::GIT_NO_OPERATION, "git.no_operation"),
+    (codes::GIT_LOCAL_CHANGES, "git.local_changes"),
     (codes::WORKSPACE_NOT_FOUND, "workspace.not_found"),
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
@@ -41,6 +70,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_MAIN_WORKTREE, "workspace.main_worktree"),
     (codes::BRANCH_EXISTS, "branch.exists"),
     (codes::BRANCH_NOT_FOUND, "branch.not_found"),
+    (codes::BRANCH_NAME_INVALID, "branch.name_invalid"),
+    (codes::BRANCH_UNMERGED, "branch.unmerged"),
+    (codes::BRANCH_CHECKED_OUT, "branch.checked_out"),
+    (codes::BRANCH_IN_USE, "branch.in_use"),
     (codes::BASE_NOT_FOUND, "base.not_found"),
     (codes::GIT_UNAVAILABLE, "git.unavailable"),
     (codes::GIT_FAILED, "git.failed"),
@@ -75,6 +108,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::SERVICE, "service/1");
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
+    assert_eq!(capabilities::GIT, "git/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
     assert_eq!(capabilities::TERMINALS, "terminals/1");
