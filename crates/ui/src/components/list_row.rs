@@ -646,7 +646,10 @@ impl RenderOnce for ListRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
     use crate::tokens::Appearance;
+    use gpui::{Modifiers, Render};
+    use std::cell::RefCell;
 
     fn dark() -> Theme {
         Theme::new(Appearance::Dark)
@@ -736,5 +739,136 @@ mod tests {
         let disabled = row_ink(&p, true, true, Some(usage));
         assert_eq!(disabled.title, p.text.disabled);
         assert_eq!(disabled.icon, p.text.disabled);
+    }
+
+    /// Hosts one row that logs what it is asked to do.
+    struct Harness {
+        focus: FocusHandle,
+        log: Rc<RefCell<Vec<String>>>,
+        expanded: Option<bool>,
+        disabled: bool,
+    }
+
+    impl Harness {
+        fn new(
+            cx: &mut gpui::Context<Self>,
+            log: Rc<RefCell<Vec<String>>>,
+            expanded: Option<bool>,
+            disabled: bool,
+        ) -> Self {
+            Self {
+                focus: cx.focus_handle(),
+                log,
+                expanded,
+                disabled,
+            }
+        }
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let (click, toggle, menu) = (self.log.clone(), self.log.clone(), self.log.clone());
+            let mut row = ListRow::new("under-test", "Row")
+                .focus_handle(self.focus.clone())
+                .disabled(self.disabled)
+                .on_click(move |event, _, _| {
+                    let kind = if matches!(event, ClickEvent::Keyboard(_)) {
+                        "keyboard click"
+                    } else {
+                        "click"
+                    };
+                    click.borrow_mut().push(kind.into());
+                })
+                .on_context_menu(move |_, _| menu.borrow_mut().push("menu".into()));
+            if let Some(open) = self.expanded {
+                row = row.expanded(open).on_toggle(move |next, _, _| {
+                    toggle.borrow_mut().push(format!("toggle {next}"));
+                });
+            }
+            div().child(
+                div()
+                    .absolute()
+                    .top(px(0.))
+                    .left(px(0.))
+                    .debug_selector(|| "row".into())
+                    .child(row),
+            )
+        }
+    }
+
+    fn harness(
+        cx: &mut gpui::TestAppContext,
+        expanded: Option<bool>,
+        disabled: bool,
+    ) -> (
+        Rc<RefCell<Vec<String>>>,
+        gpui::Entity<Harness>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let shared = log.clone();
+        let (view, cx) =
+            cx.add_window_view(|_, cx| Harness::new(cx, shared.clone(), expanded, disabled));
+        cx.run_until_parked();
+        (log, view, cx)
+    }
+
+    #[gpui::test]
+    fn pointer_click_opens_and_right_click_opens_the_menu(cx: &mut gpui::TestAppContext) {
+        let (log, _view, cx) = harness(cx, None, false);
+        let bounds = cx.debug_bounds("row").expect("row is drawn");
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::none());
+        assert_eq!(*log.borrow(), vec!["click", "menu"]);
+    }
+
+    #[gpui::test]
+    fn enter_and_space_are_keyboard_clicks_and_shift_f10_opens_the_menu(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (log, view, cx) = harness(cx, None, false);
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "enter");
+        press_key(cx, "space");
+        press_key(cx, "shift-f10");
+        press_key(cx, "menu");
+        assert_eq!(
+            *log.borrow(),
+            vec!["keyboard click", "keyboard click", "menu", "menu"]
+        );
+    }
+
+    #[gpui::test]
+    fn right_and_left_toggle_only_the_matching_tree_state(cx: &mut gpui::TestAppContext) {
+        let (log, view, cx) = harness(cx, Some(false), false);
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "left");
+        press_key(cx, "down");
+        assert!(
+            log.borrow().is_empty(),
+            "a closed row ignores Left and Down"
+        );
+        press_key(cx, "right");
+        assert_eq!(*log.borrow(), vec!["toggle true"]);
+    }
+
+    #[gpui::test]
+    fn left_closes_an_open_tree_row(cx: &mut gpui::TestAppContext) {
+        let (log, view, cx) = harness(cx, Some(true), false);
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "left");
+        assert_eq!(*log.borrow(), vec!["toggle false"]);
+    }
+
+    #[gpui::test]
+    fn disabled_rows_ignore_pointer_and_keys(cx: &mut gpui::TestAppContext) {
+        let (log, _view, cx) = harness(cx, None, true);
+        let bounds = cx.debug_bounds("row").expect("row is drawn");
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::none());
+        assert!(log.borrow().is_empty());
     }
 }
