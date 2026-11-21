@@ -3,7 +3,7 @@
 //! Enter and Space activate a focused button through GPUI's keyboard click, so
 //! one `on_click` serves the pointer and the keyboard (handoff 2.3).
 
-use crate::icon::{Icon, IconName, IconSize};
+use crate::icon::{IconName, IconSize};
 use crate::style::{FocusRing, Surface};
 use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
 use crate::tokens::{
@@ -14,8 +14,8 @@ use crate::tokens::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, App, ElementId, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Transformation,
-    Window, div, px, radians, svg,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Svg,
+    Transformation, Window, div, px, radians, svg,
 };
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -48,7 +48,7 @@ pub enum ButtonSize {
 }
 
 impl ButtonSize {
-    fn metrics(self) -> (f32, f32, IconSize, TextStyleToken) {
+    pub(crate) fn metrics(self) -> (f32, f32, IconSize, TextStyleToken) {
         match self {
             Self::Compact => (SIZE_CONTROL_COMPACT, SPACE_2, IconSize::Small, TYPE_LABEL),
             Self::Default => (SIZE_CONTROL_DEFAULT, SPACE_3, IconSize::Small, TYPE_LABEL),
@@ -185,8 +185,25 @@ pub(crate) fn spinner(size: f32, color: Color) -> impl IntoElement {
         .with_transformation(Transformation::rotate(radians(spinner_angle())))
 }
 
+/// Group a button sets on its root so its glyphs follow the hover colour.
+pub(crate) const HOVER_GROUP: &str = "button";
+
+/// A Lucide glyph in `rest`, turning `hover` while its button group is hovered.
+pub(crate) fn glyph(name: IconName, size: IconSize, rest: Color, hover: Color) -> Svg {
+    svg()
+        .path(name.path())
+        .size(px(size.px()))
+        .flex_none()
+        .text_color(rest)
+        .group_hover(HOVER_GROUP, move |style| style.text_color(hover))
+}
+
 /// The leading slot while loading: the icon until `SPINNER_DELAY`, then the spinner.
-fn loading_slot(icon: Option<IconName>, size: IconSize, color: Color) -> impl IntoElement {
+pub(crate) fn loading_slot(
+    icon: Option<IconName>,
+    size: IconSize,
+    color: Color,
+) -> impl IntoElement {
     div().flex_none().size(px(size.px())).with_animation(
         ("spinner-delay", 0usize),
         Animation::new(SPINNER_DELAY),
@@ -194,7 +211,7 @@ fn loading_slot(icon: Option<IconName>, size: IconSize, color: Color) -> impl In
             if delta >= 1.0 {
                 slot.child(spinner(size.px(), color))
             } else {
-                slot.children(icon.map(|name| Icon::new(name).size(size).color(color)))
+                slot.children(icon.map(|name| glyph(name, size, color, color)))
             }
         },
     )
@@ -352,6 +369,9 @@ impl RenderOnce for Button {
             _ => self.visual(),
         };
         let rest = paint(self.variant, self.surface, shown, &theme);
+        let hover = paint(self.variant, self.surface, Visual::Hover, &theme);
+        let pressed = paint(self.variant, self.surface, Visual::Pressed, &theme);
+        let hover_label = if interactive { hover.label } else { rest.label };
         let focus = self.focus.clone().unwrap_or_else(|| {
             window
                 .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
@@ -367,6 +387,7 @@ impl RenderOnce for Button {
             .track_focus(&focus)
             .tab_stop(true)
             .focus_ring(&theme)
+            .group(HOVER_GROUP)
             .flex()
             .min_w_0()
             .items_center()
@@ -385,8 +406,6 @@ impl RenderOnce for Button {
             });
 
         if interactive && self.preview.is_none() {
-            let hover = paint(self.variant, self.surface, Visual::Hover, &theme);
-            let pressed = paint(self.variant, self.surface, Visual::Pressed, &theme);
             root = root
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover.fill).text_color(hover.label))
@@ -399,11 +418,11 @@ impl RenderOnce for Button {
         if self.loading {
             root = root.child(loading_slot(self.leading, icon_size, rest.label));
         } else if let Some(icon) = self.leading {
-            root = root.child(Icon::new(icon).size(icon_size).color(rest.label));
+            root = root.child(glyph(icon, icon_size, rest.label, hover_label));
         }
         root = root.child(div().min_w_0().truncate().child(self.label));
         if let Some(icon) = self.trailing {
-            root = root.child(Icon::new(icon).size(icon_size).color(rest.label));
+            root = root.child(glyph(icon, icon_size, rest.label, hover_label));
         }
         root
     }
