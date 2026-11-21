@@ -5,6 +5,7 @@
 //! Nothing here publishes events: the handler publishes `workspace.removing` between
 //! [`Workspaces::begin_remove`] and [`Workspaces::finish_remove`].
 
+mod create;
 mod error;
 mod names;
 mod paths;
