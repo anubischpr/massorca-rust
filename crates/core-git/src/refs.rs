@@ -47,7 +47,7 @@ impl Git {
     /// Deletes `branch` with `git branch -d`. Returns `false` when git refuses because
     /// the branch is not fully merged; any other refusal is an error.
     pub fn delete_branch_if_merged(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
-        let captured = self.run(Some(repo), ["branch", "-d", "--", branch])?;
+        let captured = self.run_mutation(Some(repo), ["branch", "-d", "--", branch])?;
         if captured.succeeded() {
             return Ok(true);
         }

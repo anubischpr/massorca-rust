@@ -8,7 +8,8 @@ use crate::error::GitError;
 use crate::process::{Bounded, Output, run_bounded};
 use crate::version::GitVersion;
 
-/// Time a single git command may run before it is killed.
+/// Time a single read-only git query may run before it is killed. Commands that
+/// change the repository have no timeout unless `Git::with_mutation_timeout` sets one.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Environment variable that overrides the git executable.
@@ -18,6 +19,9 @@ const BINARY_ENV: &str = "MASSORCA_GIT";
 pub struct Git {
     binary: PathBuf,
     timeout: Duration,
+    /// `None` lets a mutation run to completion: killing one midway can leave a
+    /// half-created worktree or branch behind.
+    mutation_timeout: Option<Duration>,
 }
 
 impl Git {
@@ -26,6 +30,7 @@ impl Git {
         Self {
             binary: binary.into(),
             timeout: DEFAULT_TIMEOUT,
+            mutation_timeout: None,
         }
     }
 
@@ -34,10 +39,17 @@ impl Git {
         discover_with(std::env::var_os(BINARY_ENV))
     }
 
-    /// Replaces the per-command timeout.
+    /// Replaces the timeout of read-only queries.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Sets the timeout of commands that change the repository; `None`, the default, waits for them.
+    #[must_use]
+    pub fn with_mutation_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.mutation_timeout = timeout;
         self
     }
 
@@ -51,8 +63,35 @@ impl Git {
         })
     }
 
-    /// Runs git in `cwd` (or the process directory) and returns its output whatever the exit status.
+    /// Runs a read-only query in `cwd` (or the process directory) and returns its
+    /// output whatever the exit status.
     pub(crate) fn run<I, S>(&self, cwd: Option<&Path>, args: I) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run_limited(cwd, args, Some(self.timeout))
+    }
+
+    /// Like `run`, for a command that changes the repository or belongs to one that does.
+    pub(crate) fn run_mutation<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+    ) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run_limited(cwd, args, self.mutation_timeout)
+    }
+
+    fn run_limited<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        timeout: Option<Duration>,
+    ) -> Result<Captured, GitError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -79,7 +118,7 @@ impl Git {
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        match run_bounded(&mut command, self.timeout) {
+        match run_bounded(&mut command, timeout) {
             Ok(Bounded::Finished(output)) => Ok(Captured {
                 args: shown,
                 output,

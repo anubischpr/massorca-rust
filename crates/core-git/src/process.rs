@@ -1,5 +1,5 @@
-//! Runs one child process with piped output and a deadline. The child is killed
-//! when it outlives the deadline; output is read on threads so a full pipe never
+//! Runs one child process with piped output and an optional deadline. The child
+//! is killed when it outlives the deadline; output is read on threads so a full pipe never
 //! stalls it.
 
 use std::io::{self, Read};
@@ -32,7 +32,8 @@ pub(crate) enum Bounded {
 
 /// Runs `command` with stdin closed and both output streams captured. The stdio
 /// and window settings are applied here, so no caller can run a child without them.
-pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> io::Result<Bounded> {
+/// `None` waits for the child however long it runs.
+pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> io::Result<Bounded> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -45,7 +46,7 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Duration) -> io::Resul
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().map(read_on_thread);
     let stderr = child.stderr.take().map(read_on_thread);
-    let deadline = Instant::now().checked_add(timeout);
+    let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
     let status = match wait_for_exit(&mut child, deadline) {
         Ok(Some(status)) => status,
         Ok(None) => {
@@ -78,8 +79,8 @@ fn read_on_thread<R: Read + Send + 'static>(mut pipe: R) -> JoinHandle<io::Resul
     })
 }
 
-/// Polls until the child exits. `None` means the deadline passed first; no deadline
-/// only happens when `timeout` is too large to represent as an `Instant`.
+/// Polls until the child exits. `None` means the deadline passed first; without a
+/// deadline (no timeout, or one too large for an `Instant`) it waits for the exit.
 fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> io::Result<Option<ExitStatus>> {
     loop {
         if let Some(status) = child.try_wait()? {
@@ -147,7 +148,8 @@ mod tests {
 
     #[test]
     fn a_finished_child_returns_its_status_and_output() {
-        let outcome = run_bounded(&mut test_binary(), Duration::from_secs(120)).expect("spawn");
+        let outcome =
+            run_bounded(&mut test_binary(), Some(Duration::from_secs(120))).expect("spawn");
         match outcome {
             Bounded::Finished(output) => {
                 assert!(output.status.success());
@@ -162,7 +164,7 @@ mod tests {
         let mut command = test_binary();
         command.env(CHILD_SLEEPS, "1");
         let started = Instant::now();
-        let outcome = run_bounded(&mut command, Duration::from_millis(300)).expect("spawn");
+        let outcome = run_bounded(&mut command, Some(Duration::from_millis(300))).expect("spawn");
         assert!(matches!(outcome, Bounded::TimedOut), "{outcome:?}");
         assert!(
             started.elapsed() < Duration::from_secs(30),
@@ -173,7 +175,8 @@ mod tests {
     #[test]
     fn a_missing_program_is_a_spawn_error() {
         let mut command = Command::new("massorca-no-such-program");
-        let error = run_bounded(&mut command, Duration::from_secs(5)).expect_err("no such program");
+        let error =
+            run_bounded(&mut command, Some(Duration::from_secs(5))).expect_err("no such program");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

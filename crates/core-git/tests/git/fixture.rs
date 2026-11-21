@@ -95,3 +95,24 @@ pub fn canonical(path: &Path) -> PathBuf {
 pub fn text(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")
 }
+
+/// Installs a `post-checkout` hook running `body` under `sh`, overriding any global hooks path.
+pub fn install_post_checkout_hook(repo: &Path, body: &str) {
+    let hooks = repo.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).expect("create hooks dir");
+    let hook = hooks.join("post-checkout");
+    std::fs::write(&hook, format!("#!/bin/sh\n{body}\n")).expect("write hook");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("make hook executable");
+    }
+    run_git(repo, &["config", "core.hooksPath", text(&hooks)]);
+}
+
+/// Removes the hook installed by `install_post_checkout_hook`.
+pub fn remove_post_checkout_hook(repo: &Path) {
+    std::fs::remove_file(repo.join(".git").join("hooks").join("post-checkout"))
+        .expect("remove hook");
+}
