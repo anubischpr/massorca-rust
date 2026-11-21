@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use interprocess::local_socket::Name;
 use interprocess::local_socket::tokio::Stream;
+use interprocess::local_socket::traits::StreamCommon as _;
 use interprocess::local_socket::traits::tokio::Stream as _;
 use massorca_profile::{Profile, local_socket_name};
 use tokio::time::{Instant, sleep};
@@ -35,8 +36,43 @@ pub(crate) async fn connect(
         },
         Err(error) => return Err(ClientError::Unavailable(error)),
     };
+    ensure_trusted_endpoint(&stream)?;
     let welcome = handshake::exchange(&mut stream, &options.client).await?;
     Ok(Client::open(stream, welcome))
+}
+
+/// Refuses an endpoint another user serves, or whose owner cannot be read. Runs before the first `hello`, so no request
+/// reaches a stranger, and a refusal is never retried.
+fn ensure_trusted_endpoint(stream: &Stream) -> Result<(), ClientError> {
+    match peer_is_this_user(stream) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ClientError::UntrustedEndpoint(
+            "it is served by another user".to_owned(),
+        )),
+        Err(error) => Err(ClientError::UntrustedEndpoint(format!(
+            "its owner cannot be read: {error}"
+        ))),
+    }
+}
+
+/// On a client stream the peer is the server, so this reads the server process of the pipe and checks its user.
+#[cfg(windows)]
+fn peer_is_this_user(stream: &Stream) -> io::Result<bool> {
+    let pid = stream
+        .peer_creds()?
+        .pid()
+        .ok_or_else(|| io::Error::other("the pipe names no server process"))?;
+    massorca_profile::process_belongs_to_current_user(pid)
+}
+
+/// The peer's effective uid must be this process's effective uid.
+#[cfg(unix)]
+fn peer_is_this_user(stream: &Stream) -> io::Result<bool> {
+    let uid = stream
+        .peer_creds()?
+        .euid()
+        .ok_or_else(|| io::Error::other("the socket names no peer user"))?;
+    Ok(uid == massorca_profile::current_uid())
 }
 
 /// Retries until the started service accepts a connection, or the timeout passes.

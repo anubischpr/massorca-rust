@@ -10,6 +10,9 @@ pub enum ClientError {
     Unavailable(#[source] io::Error),
     #[error("could not start the service: {0}")]
     StartFailed(String),
+    /// The endpoint is served by another user, or its owner cannot be checked. It is never retried.
+    #[error("the service endpoint is not trusted: {0} (service.untrusted_endpoint)")]
+    UntrustedEndpoint(String),
     /// The service refused the handshake. `supported` is the protocol range it speaks.
     /// Boxed so the error stays small: an `ErrorBody` with `data` makes this variant large.
     #[error("the service refused the connection: {} ({})", .error.message, .error.code)]
@@ -34,6 +37,7 @@ impl ClientError {
             Self::Remote(_) | Self::Protocol(_) | Self::Io(_) => 1,
             Self::Unavailable(_)
             | Self::StartFailed(_)
+            | Self::UntrustedEndpoint(_)
             | Self::Handshake { .. }
             | Self::Disconnected => 4,
         }

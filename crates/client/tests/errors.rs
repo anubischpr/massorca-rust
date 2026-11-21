@@ -53,3 +53,13 @@ fn remote_errors_show_their_stable_code() {
     ));
     assert!(error.to_string().contains("config.unknown_key"), "{error}");
 }
+
+#[test]
+fn an_untrusted_endpoint_exits_with_four_and_names_its_code() {
+    let error = ClientError::UntrustedEndpoint("it is served by another user".to_owned());
+    assert_eq!(error.exit_code(), 4);
+    assert!(
+        error.to_string().contains("service.untrusted_endpoint"),
+        "{error}"
+    );
+}
