@@ -437,7 +437,10 @@ impl RenderOnce for ProgressBar {
             )
             .child(row);
         if let ProgressValue::Determinate(fraction) = self.value {
-            root = root.aria_numeric_value(f64::from(clamp_fraction(fraction)) * 100.0);
+            root = root
+                .aria_numeric_value(f64::from(clamp_fraction(fraction)) * 100.0)
+                .aria_min_numeric_value(0.0)
+                .aria_max_numeric_value(100.0);
         }
         root
     }
@@ -571,5 +574,42 @@ mod tests {
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
         assert!(gate.read_with(cx, |gate, _| gate.revealed()));
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_determinate_bar_reports_its_percentage_out_of_one_hundred(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ProgressBar::new("Upload")
+                    .determinate(0.25)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.label(), Some("Upload"));
+        assert_eq!(node.numeric_value(), Some(25.0));
+        assert_eq!(node.min_numeric_value(), Some(0.0));
+        assert_eq!(node.max_numeric_value(), Some(100.0));
+    }
+
+    #[gpui::test]
+    fn an_indeterminate_bar_reports_no_value(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ProgressBar::new("Connecting")
+                    .indeterminate()
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.numeric_value(), None);
     }
 }
