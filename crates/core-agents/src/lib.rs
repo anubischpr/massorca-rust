@@ -6,6 +6,7 @@
 pub mod catalog;
 pub mod event;
 pub mod kind;
+pub mod launch;
 pub mod paths;
 pub mod resolve;
 
