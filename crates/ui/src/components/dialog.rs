@@ -16,8 +16,8 @@ use crate::tokens::{
 };
 use gpui::{
     Animation, AnimationExt, AnyElement, App, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
-    Styled, Window, deferred, div, px,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, deferred, div, px,
 };
 use std::fmt;
 use std::rc::Rc;
@@ -320,6 +320,7 @@ impl RenderOnce for Dialog {
             .gap(px(SPACE_3))
             .p(px(SPACE_4))
             .debug_selector(|| "dialog-panel".into())
+            .occlude()
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" => {
@@ -442,11 +443,6 @@ impl RenderOnce for Dialog {
 
         let scrim_closes = self.dismiss_on_scrim && self.variant.scrim_dismisses(false);
         let outside = self.on_dismiss.clone();
-        panel = panel.on_mouse_down_out(move |_, window, cx| {
-            if scrim_closes && let Some(dismiss) = &outside {
-                dismiss(window, cx);
-            }
-        });
 
         let panel = if cx.reduce_motion() {
             panel.into_any_element()
@@ -463,7 +459,21 @@ impl RenderOnce for Dialog {
         if self.inline {
             return panel;
         }
+        // The scrim is a sibling below the panel, not its parent: only a press on the scrim
+        // itself dismisses. A press on the panel, or on an overlay opened from it, never reaches it.
         let scrim = div()
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .size_full()
+            .bg(p.scrim)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                if scrim_closes && let Some(dismiss) = &outside {
+                    dismiss(window, cx);
+                }
+            });
+        let layer = div()
             .absolute()
             .top(px(0.))
             .left(px(0.))
@@ -471,10 +481,9 @@ impl RenderOnce for Dialog {
             .flex()
             .items_center()
             .justify_center()
-            .bg(p.scrim)
-            .occlude()
+            .child(scrim)
             .child(panel);
-        deferred(scrim)
+        deferred(layer)
             .priority(Z_DIALOG as usize)
             .into_any_element()
     }
@@ -549,38 +558,51 @@ mod element_tests {
     use super::*;
     use crate::components::button::Button;
     use crate::components::button::test_support::{focus_and_draw, press_key};
-    use gpui::{Context, Entity, Render, TestAppContext, VisualTestContext};
-    use std::cell::Cell;
+    use crate::components::menu::{
+        MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay,
+    };
+    use crate::components::popover::OverlayLayer;
+    use gpui::{
+        AppContext, Context, Entity, Modifiers, Render, TestAppContext, VisualTestContext, point,
+    };
+    use std::cell::{Cell, RefCell};
 
     type Count = Rc<Cell<u32>>;
 
-    /// Hosts an opener button and one dialog whose state the test drives.
+    /// Hosts an opener button and one dialog whose state the test drives. When a menu is set,
+    /// the dialog body opens it at the window's top-left corner, over the scrim.
     struct Harness {
         opener: FocusHandle,
         open: bool,
         busy: bool,
         variant: DialogVariant,
+        dismiss_on_scrim: bool,
+        menu: Option<Entity<MenuView>>,
         actions: Count,
         dismissals: Count,
     }
 
     impl Render for Harness {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let actions = self.actions.clone();
             let dismissals = self.dismissals.clone();
+            let mut dialog = Dialog::new("dialog-under-test", "Delete secret DB_PASSWORD?")
+                .variant(self.variant)
+                .open(self.open)
+                .busy(self.busy)
+                .dismiss_on_scrim(self.dismiss_on_scrim)
+                .loss(["3 projects", "2 routines stop"])
+                .action("Delete secret (3 projects use it)")
+                .on_action(move |_, _| actions.set(actions.get() + 1))
+                .on_dismiss(move |_, _| dismissals.set(dismissals.get() + 1));
+            if let Some(menu) = self.menu.clone() {
+                let origin = MenuOrigin::At(point(px(20.), px(20.)));
+                dialog = dialog.child(menu_overlay(&menu, origin, cx));
+            }
             div()
                 .p(px(SPACE_2))
                 .child(Button::new("dialog-opener", "Delete").focus_handle(self.opener.clone()))
-                .child(
-                    Dialog::new("dialog-under-test", "Delete secret DB_PASSWORD?")
-                        .variant(self.variant)
-                        .open(self.open)
-                        .busy(self.busy)
-                        .loss(["3 projects", "2 routines stop"])
-                        .action("Delete secret (3 projects use it)")
-                        .on_action(move |_, _| actions.set(actions.get() + 1))
-                        .on_dismiss(move |_, _| dismissals.set(dismissals.get() + 1)),
-                )
+                .child(dialog)
         }
     }
 
@@ -602,6 +624,8 @@ mod element_tests {
             open: false,
             busy: false,
             variant,
+            dismiss_on_scrim: false,
+            menu: None,
             actions: actions.clone(),
             dismissals: dismissals.clone(),
         });
@@ -619,6 +643,38 @@ mod element_tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
+    }
+
+    /// Opens a two-row menu on `layer` from the dialog body, scrim dismissal enabled, and returns
+    /// the choices the menu reports.
+    fn open_menu_on(
+        view: &Entity<Harness>,
+        cx: &mut VisualTestContext,
+        layer: OverlayLayer,
+    ) -> Rc<RefCell<Vec<MenuEvent>>> {
+        let entries: Vec<MenuEntry> = vec![
+            MenuItem::new("Rename").into(),
+            MenuItem::new("Duplicate").into(),
+        ];
+        let menu = cx
+            .update(|window, cx| cx.new(|cx| MenuView::new(entries, window, cx).with_layer(layer)));
+        let choices: Rc<RefCell<Vec<MenuEvent>>> = Rc::default();
+        let sink = choices.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&menu, move |_, event: &MenuEvent, _| {
+                sink.borrow_mut().push(*event);
+            })
+            .detach();
+        });
+        view.update(cx, |harness, cx| {
+            harness.dismiss_on_scrim = true;
+            harness.menu = Some(menu);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        choices
     }
 
     #[gpui::test]
@@ -674,7 +730,7 @@ mod element_tests {
             .debug_bounds("dialog-action")
             .expect("the action is drawn")
             .center();
-        cx.simulate_click(action, gpui::Modifiers::none());
+        cx.simulate_click(action, Modifiers::none());
         assert_eq!(actions.get(), 1);
         assert_eq!(dismissals.get(), 0);
     }
@@ -686,5 +742,57 @@ mod element_tests {
         cx.update(|window, _| assert!(!opener.is_focused(window), "focus moved into the dialog"));
         set_open(&view, cx, false);
         cx.update(|window, _| assert!(opener.is_focused(window), "focus is back on the opener"));
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_scrim_dismisses_only_when_allowed_and_a_press_on_the_panel_never_does(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx, _actions, dismissals, _opener) = open_window(cx, DialogVariant::Confirm);
+        set_open(&view, cx, true);
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+        assert_eq!(dismissals.get(), 0, "scrim dismissal is off by default");
+
+        view.update(cx, |harness, cx| {
+            harness.dismiss_on_scrim = true;
+            cx.notify();
+        });
+        set_open(&view, cx, true);
+        let panel = cx.debug_bounds("dialog-panel").expect("the panel is drawn");
+        cx.simulate_click(panel.origin + point(px(24.), px(24.)), Modifiers::none());
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "a press on the panel is not outside it"
+        );
+
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+        assert_eq!(dismissals.get(), 1, "a press on the scrim dismisses");
+    }
+
+    #[gpui::test]
+    fn a_menu_opened_from_a_dialog_takes_clicks_above_the_scrim(cx: &mut TestAppContext) {
+        let (view, cx, _actions, dismissals, _opener) = open_window(cx, DialogVariant::Confirm);
+        set_open(&view, cx, true);
+        let choices = open_menu_on(&view, cx, OverlayLayer::Dialog);
+
+        let row = cx
+            .debug_bounds("menu-item-1")
+            .expect("the menu row is drawn")
+            .center();
+        cx.simulate_click(row, Modifiers::none());
+        assert_eq!(
+            *choices.borrow(),
+            vec![MenuEvent::Chosen(MenuChoice {
+                row: 1,
+                child: None
+            })],
+            "the menu row, not the scrim, takes the click"
+        );
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "a press on the menu does not dismiss the dialog"
+        );
     }
 }

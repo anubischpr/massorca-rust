@@ -5,13 +5,13 @@
 //! focus to the opener. Items do not take focus one by one; the panel does.
 
 use crate::components::kbd::Kbd;
-use crate::components::popover::{fade_in, overlay_surface};
+use crate::components::popover::{OverlayLayer, fade_in, overlay_surface};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::{StateFill, Surface};
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
     LAYOUT_MENU_MAX_WIDTH, LAYOUT_MENU_MIN_WIDTH, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_DEFAULT,
-    SIZE_ICON_SM, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_OVERLINE, Z_POPOVER,
+    SIZE_ICON_SM, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_OVERLINE,
 };
 use gpui::relative;
 use gpui::{
@@ -249,6 +249,7 @@ pub struct MenuView {
     ignored_outside: Option<Bounds<Pixels>>,
     min_width: f32,
     empty_text: SharedString,
+    layer: OverlayLayer,
     _hover_timer: Option<Task<()>>,
 }
 
@@ -282,8 +283,21 @@ impl MenuView {
             ignored_outside: None,
             min_width: LAYOUT_MENU_MIN_WIDTH,
             empty_text: "Nothing to do here yet".into(),
+            layer: OverlayLayer::default(),
             _hover_timer: None,
         }
+    }
+
+    /// The layer the menu paints on. A menu opened from inside a dialog takes
+    /// [`OverlayLayer::Dialog`] so that it paints above the dialog's scrim.
+    pub fn with_layer(mut self, layer: OverlayLayer) -> Self {
+        self.layer = layer;
+        self
+    }
+
+    /// The layer the menu paints on.
+    pub fn layer(&self) -> OverlayLayer {
+        self.layer
     }
 
     /// Minimum panel width, kept within the menu width range; a Select passes its trigger width.
@@ -587,6 +601,7 @@ impl Render for MenuView {
             .max_w(px(LAYOUT_MENU_MAX_WIDTH))
             .p(px(SPACE_1))
             .debug_selector(|| "menu-panel".into())
+            .occlude()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key(event, window, cx);
             }))
@@ -795,6 +810,7 @@ pub enum MenuOrigin {
 
 /// Places `menu` as an overlay at `origin`, on the overlay layer above the content.
 pub fn menu_overlay(menu: &Entity<MenuView>, origin: MenuOrigin, cx: &mut App) -> AnyElement {
+    let priority = menu.read(cx).layer().priority();
     let layer = match origin {
         MenuOrigin::At(point) => {
             menu.update(cx, |menu, _| menu.ignore_outside_clicks_in(None));
@@ -811,7 +827,7 @@ pub fn menu_overlay(menu: &Entity<MenuView>, origin: MenuOrigin, cx: &mut App) -
         }
     };
     deferred(layer.child(menu.clone()))
-        .priority(Z_POPOVER as usize)
+        .priority(priority)
         .into_any_element()
 }
 

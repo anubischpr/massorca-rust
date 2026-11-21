@@ -4,6 +4,7 @@ use super::{Story, variant};
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use crate::components::menu::{MenuEntry, MenuItem, MenuView};
+use crate::components::popover::OverlayLayer;
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
 use crate::components::select::SelectView;
 use crate::components::skeleton::{LineWidth, Skeleton};
@@ -386,6 +387,19 @@ fn dialog_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .child(field.clone())
         .action("Rename")
         .inline();
+    let dialog_select = window.use_keyed_state("dialog-story/select", cx, |window, cx| {
+        let mut select = SelectView::new(branch_options(), cx)
+            .selected(Some(1))
+            .layer(OverlayLayer::Dialog);
+        select.open(window, cx);
+        select
+    });
+    let select_dialog = Dialog::new("dialog-story/select-dialog", "Create workspace")
+        .open(true)
+        .child(body("Pick the branch the workspace starts from."))
+        .child(dialog_select.clone())
+        .action("Create")
+        .inline();
     let busy = Dialog::new("dialog-story/busy", "Delete secret DB_PASSWORD?")
         .open(true)
         .variant(DialogVariant::Destructive)
@@ -404,6 +418,11 @@ fn dialog_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Destructive, long loss list", long_loss, cx))
         .child(variant("Error", error, cx))
         .child(variant("One field", one_field, cx))
+        .child(variant(
+            "Select in a dialog, menu on the dialog layer",
+            slot(select_dialog),
+            cx,
+        ))
         .child(variant("Busy", busy, cx))
         .into_any_element()
 }

@@ -9,7 +9,8 @@ use crate::icon::IconName;
 use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
 use crate::tokens::{
     DURATION_BASE, EASE_ENTER, LAYOUT_POPOVER_WIDTH_LG, LAYOUT_POPOVER_WIDTH_MD,
-    LAYOUT_POPOVER_WIDTH_SM, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, TYPE_TITLE_SM, Z_POPOVER,
+    LAYOUT_POPOVER_WIDTH_SM, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, TYPE_TITLE_SM, Z_DIALOG,
+    Z_POPOVER,
 };
 use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, App, Bounds, Div, ElementId, FocusHandle,
@@ -93,6 +94,28 @@ impl PopoverPlacement {
     }
 }
 
+/// Where an overlay paints. A popover or menu opened from inside a dialog takes
+/// [`OverlayLayer::Dialog`], so that it paints above the dialog's scrim and panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverlayLayer {
+    /// On the page, below dialogs. A nested overlay still wins clicks over its dialog whatever its
+    /// priority (GPUI hit-tests nested overlays in prepaint order), so use `Dialog` inside one.
+    #[default]
+    Page,
+    /// Inside a dialog: one step above the dialog's layer.
+    Dialog,
+}
+
+impl OverlayLayer {
+    /// The deferred-draw priority of an overlay on this layer; GPUI draws higher values on top.
+    pub fn priority(self) -> usize {
+        match self {
+            Self::Page => Z_POPOVER as usize,
+            Self::Dialog => Z_DIALOG as usize + 1,
+        }
+    }
+}
+
 /// An open-state change seen between two renders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpenEdge {
@@ -158,6 +181,7 @@ pub struct Popover {
     variant: PopoverVariant,
     width: PopoverWidth,
     placement: PopoverPlacement,
+    layer: OverlayLayer,
     title: Option<SharedString>,
     children: Vec<AnyElement>,
     footer: Option<AnyElement>,
@@ -188,6 +212,7 @@ impl Popover {
             variant: PopoverVariant::default(),
             width: PopoverWidth::default(),
             placement: PopoverPlacement::default(),
+            layer: OverlayLayer::default(),
             title: None,
             children: Vec::new(),
             footer: None,
@@ -214,6 +239,12 @@ impl Popover {
 
     pub fn placement(mut self, placement: PopoverPlacement) -> Self {
         self.placement = placement;
+        self
+    }
+
+    /// The layer the panel paints on; a popover inside a dialog takes [`OverlayLayer::Dialog`].
+    pub fn layer(mut self, layer: OverlayLayer) -> Self {
+        self.layer = layer;
         self
     }
 
@@ -289,6 +320,7 @@ impl RenderOnce for Popover {
             .gap(px(SPACE_2))
             .p(px(SPACE_3))
             .debug_selector(|| "popover-panel".into())
+            .occlude()
             .on_mouse_down_out(move |event, window, cx| {
                 let on_trigger = outside.get().is_some_and(|b| b.contains(&event.position));
                 if !on_trigger && let Some(on_dismiss) = &on_outside {
@@ -346,7 +378,7 @@ impl RenderOnce for Popover {
         };
         host.child(
             deferred(layer.child(fade_in((self.id, "enter"), panel, cx)))
-                .priority(Z_POPOVER as usize),
+                .priority(self.layer.priority()),
         )
     }
 }
@@ -408,6 +440,17 @@ mod tests {
         assert!(PopoverVariant::Form.takes_focus());
         assert!(PopoverVariant::Picker.takes_focus());
         assert!(!PopoverVariant::Action.takes_focus());
+    }
+
+    #[test]
+    fn a_dialog_layer_paints_one_step_above_the_dialog() {
+        assert_eq!(OverlayLayer::default(), OverlayLayer::Page);
+        assert_eq!(OverlayLayer::Page.priority(), Z_POPOVER as usize);
+        assert_eq!(OverlayLayer::Dialog.priority(), Z_DIALOG as usize + 1);
+        assert!(
+            OverlayLayer::Dialog.priority() > Z_DIALOG as usize,
+            "above the dialog's scrim and panel"
+        );
     }
 
     #[test]
