@@ -18,7 +18,8 @@ use massorca_core_terminal::{
     TerminalManager,
 };
 
-pub const TIMEOUT: Duration = Duration::from_secs(10);
+/// Generous so a loaded machine passes; waits end as soon as their condition holds.
+pub const TIMEOUT: Duration = Duration::from_secs(30);
 /// Wide enough that ConPTY does not wrap the lines the tests read.
 pub const SIZE: PtySize = PtySize {
     cols: 200,

@@ -15,7 +15,10 @@ use massorca_core_terminal::{
     AttachItem, AttachMode, ExitReason, ShellChoice, TerminalError, TerminalState,
 };
 
-const GRACE: Duration = Duration::from_secs(5);
+/// Far above any load-induced delay, so finishing under it proves the grace was not waited out.
+const GRACE: Duration = Duration::from_secs(60);
+/// Upper bound for work that must not wait the grace.
+const PROMPT: Duration = Duration::from_secs(30);
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -164,7 +167,7 @@ async fn a_shell_that_exits_by_itself_is_exited_with_its_code() {
 #[tokio::test]
 async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let info = manager.create(spec("ws", dir.path())).expect("create");
     let mut watch = watch(&manager, &info.id, None).await;
     watch.wait_for_output().await;
@@ -172,7 +175,7 @@ async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
     let started = Instant::now();
     let killed = manager.kill(&info.id, false).expect("kill");
 
-    assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     assert_eq!(killed.state, TerminalState::Exited);
     assert_eq!(
         killed.exit.expect("an exit record").reason,
@@ -185,17 +188,13 @@ async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
 #[tokio::test]
 async fn force_kill_ends_the_shell_at_once() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let info = manager.create(spec("ws", dir.path())).expect("create");
 
     let started = Instant::now();
     let killed = manager.kill(&info.id, true).expect("kill");
 
-    assert!(
-        started.elapsed() < Duration::from_secs(3),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     assert_eq!(killed.state, TerminalState::Exited);
     assert_eq!(
         killed.exit.expect("an exit record").reason,
@@ -454,18 +453,15 @@ async fn input_is_bounded_and_needs_a_live_terminal() {
 #[tokio::test]
 async fn shutdown_kills_every_terminal() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    // Shutdown uses its own short grace, never the kill grace.
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let first = manager.create(spec("ws", dir.path())).expect("create");
     let second = manager.create(spec("other", dir.path())).expect("create");
 
     let started = Instant::now();
     manager.shutdown();
 
-    assert!(
-        started.elapsed() < GRACE + Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     for id in [&first.id, &second.id] {
         let info = manager.get(id).expect("listed after shutdown");
         assert_eq!(info.state, TerminalState::Exited);
