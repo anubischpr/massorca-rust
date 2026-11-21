@@ -1,6 +1,7 @@
 //! `massorca git ...`: the `git/1` methods on a workspace, one module per command group (decision 0010).
 
 mod diff;
+mod log;
 mod status;
 
 use clap::{Args, Subcommand};
@@ -17,6 +18,8 @@ pub enum GitCommand {
     Status(status::StatusArgs),
     /// Lists the files a comparison changes, with line counts.
     Diff(diff::DiffArgs),
+    /// Shows the history, newest first, a page at a time.
+    Log(log::LogArgs),
     /// Shows the patch of one file.
     Patch(diff::PatchArgs),
 }
@@ -47,6 +50,7 @@ pub async fn execute(
     match command {
         GitCommand::Status(args) => status::run(&client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
+        GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
     }
 }

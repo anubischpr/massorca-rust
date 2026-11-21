@@ -3,6 +3,7 @@
 mod diff;
 mod discovery;
 mod fixture;
+mod log;
 mod refs;
 mod repository;
 mod status;

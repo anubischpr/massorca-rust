@@ -7,6 +7,7 @@
 mod diff;
 mod error;
 mod git;
+mod log;
 mod process;
 mod refs;
 mod repository;
@@ -20,6 +21,7 @@ mod worktree_porcelain;
 
 pub use error::GitError;
 pub use git::{DEFAULT_TIMEOUT, Git};
+pub use log::LogCursor;
 pub use repository::WorktreeChanges;
 pub use version::GitVersion;
 pub use worktree::{WorktreeAdd, WorktreeEntry};

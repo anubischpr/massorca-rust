@@ -1,6 +1,7 @@
 //! The `git/1` capability (decisions 0010-0015): one module per command group, sharing workspace resolution here.
 
 mod diff;
+mod log;
 mod status;
 
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     ];
     handles.extend(status::register(registries)?);
     handles.extend(diff::register(registries)?);
+    handles.extend(log::register(registries)?);
     Ok(handles)
 }
 

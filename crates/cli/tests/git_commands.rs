@@ -126,3 +126,27 @@ staged
         .code(1)
         .stderr(contains("git.path_outside_worktree"));
 }
+
+#[test]
+fn log_prints_a_page_and_the_cursor_for_the_next() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    std::fs::write(dir.join("a.txt"), "a").expect("write");
+    harness::git(&dir, &["add", "a.txt"]);
+    harness::git(&dir, &["commit", "-q", "-m", "second"]);
+
+    let page = sandbox.json_ok("default", &["git", "log", "-w", "feature", "-n", "1"]);
+    assert_eq!(page["commits"][0]["subject"], "second");
+    let cursor = page["next_cursor"].as_str().expect("a cursor").to_owned();
+    let next = sandbox.json_ok(
+        "default",
+        &["git", "log", "-w", "feature", "--cursor", &cursor],
+    );
+    assert_eq!(next["commits"].as_array().map(Vec::len), Some(1));
+    assert!(next.get("next_cursor").is_none());
+
+    let text = sandbox
+        .run("default", &["git", "log", "-w", "feature", "-n", "1"])
+        .success();
+    assert!(stdout_text(&text).contains("(more: --cursor "));
+}
