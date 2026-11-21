@@ -2,16 +2,25 @@
 
 use super::{Story, variant};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::progress::Spinner;
+use crate::icon::IconSize;
 use crate::theme::TextStyled;
 use crate::tokens::{SPACE_2, SPACE_4};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Agent icon",
-        spec: "AgentIcon.md",
-        render: agent_icon,
-    }]
+    vec![
+        Story {
+            name: "Agent icon",
+            spec: "AgentIcon.md",
+            render: agent_icon,
+        },
+        Story {
+            name: "Progress",
+            spec: "Progress.md",
+            render: progress,
+        },
+    ]
 }
 
 fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
@@ -45,5 +54,27 @@ fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Every agent", marks, cx))
         .child(variant("Sizes, 12 to 24 px", sizes, cx))
         .child(variant("Icon beside a name", beside_name, cx))
+        .into_any_element()
+}
+
+fn progress(_: &mut Window, cx: &mut App) -> AnyElement {
+    let spinners = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(Spinner::new().size(IconSize::XSmall))
+        .child(Spinner::new())
+        .child(Spinner::new().size(IconSize::Medium))
+        .child(Spinner::new().size(IconSize::Large));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant("Spinner, 12, 16, 20 and 24 px", spinners, cx))
+        .child(variant(
+            "Spinner, shown after 200 ms",
+            Spinner::new().delayed("gallery-progress-spinner"),
+            cx,
+        ))
         .into_any_element()
 }
