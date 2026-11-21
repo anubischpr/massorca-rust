@@ -1,11 +1,15 @@
 //! The MassOrca design system for GPUI (decisions 0021 to 0025).
 
 pub mod assets;
+pub mod components;
+pub mod gallery;
+pub mod icon;
 pub mod style;
 pub mod theme;
 pub mod tokens;
 
 pub use assets::{Assets, load_fonts};
+pub use icon::{Icon, IconName, IconSize};
 pub use theme::{ActiveTheme, TextStyled, Theme};
 pub use tokens::Appearance;
 
