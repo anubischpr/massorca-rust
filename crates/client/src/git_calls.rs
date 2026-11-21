@@ -3,6 +3,7 @@
 use massorca_protocol::methods::git::diff::{
     self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
 };
+use massorca_protocol::methods::git::log::{self, GitLog, GitLogParams};
 use massorca_protocol::methods::git::status::{self, GitStatus, GitStatusParams};
 
 use crate::client::Client;
@@ -17,6 +18,11 @@ impl Client {
     /// `git.diff`: the files a comparison changes, with line counts and no patch text.
     pub async fn git_diff(&self, params: &GitDiffParams) -> Result<GitDiff, ClientError> {
         self.call(diff::DIFF, params).await
+    }
+
+    /// `git.log`: one page of history; pass `next_cursor` back for the next page.
+    pub async fn git_log(&self, params: &GitLogParams) -> Result<GitLog, ClientError> {
+        self.call(log::LOG, params).await
     }
 
     /// `git.diff_file`: one file's patch, capped in bytes.

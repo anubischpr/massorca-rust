@@ -56,6 +56,7 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "config.list",
             "config.set",
             "git.diff",
+            "git.log",
             "git.patch",
             "git.status",
             "project.add",

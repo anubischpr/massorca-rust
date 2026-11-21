@@ -10,6 +10,7 @@ mod events;
 mod frames;
 mod git_diff;
 mod git_fixture;
+mod git_log;
 mod git_status;
 mod handshake;
 mod lifecycle;

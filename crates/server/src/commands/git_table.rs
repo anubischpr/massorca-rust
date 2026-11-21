@@ -24,6 +24,16 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             })),
         ),
         command(
+            "git.log",
+            "Show the history of a workspace, a page at a time",
+            "git.log",
+            workspace_args(json!({
+                "revision": { "type": "string" },
+                "limit": { "type": "integer", "minimum": 1 },
+                "cursor": { "type": "string" }
+            })),
+        ),
+        command(
             "git.patch",
             "Show the patch of one file",
             "git.diff_file",
