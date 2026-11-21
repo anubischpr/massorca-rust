@@ -12,7 +12,9 @@ that a newer binary can upgrade while an older one refuses to damage.
 
 - **Engine.** SQLite through `rusqlite` with the `bundled` feature (no system
   library on any platform), WAL journal, `synchronous=NORMAL`,
-  `foreign_keys=ON`, a busy timeout.
+  `foreign_keys=ON`, a busy timeout. The switch to WAL can fail with
+  `SQLITE_BUSY` at once while another opener holds the write lock, skipping the
+  busy timeout, so it is retried until that timeout.
 - **Access.** One connection owned by the store behind a mutex; async callers
   go through `tokio::task::spawn_blocking`. SQLite serialises writes anyway,
   and one connection keeps transactions simple.
