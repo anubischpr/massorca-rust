@@ -3,11 +3,13 @@
 
 use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
-use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
+use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
+use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
+use super::status_items::{StatusItem, StatusItemVisibility};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -25,6 +27,12 @@ pub struct ShellModel {
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
+    /// The ring whose usage popover is open, by its position in the snapshot.
+    usage_popover: Option<usize>,
+    /// The Status bar items this window hides.
+    status_items: StatusItemVisibility,
+    /// The commands and workspaces the palette ran last, for its Recent rows.
+    recent: RecentActions,
 }
 
 impl ShellModel {
@@ -36,6 +44,9 @@ impl ShellModel {
             regions: RegionState::default(),
             window_width,
             palette: None,
+            usage_popover: None,
+            status_items: StatusItemVisibility::default(),
+            recent: RecentActions::default(),
         }
     }
 
@@ -187,6 +198,35 @@ impl ShellModel {
             .collect()
     }
 
+    /// Which Status bar items this window shows (StatusBar spec).
+    pub fn status_items(&self) -> &StatusItemVisibility {
+        &self.status_items
+    }
+
+    /// Shows a hidden Status bar item or hides a shown one, as the visibility menu does.
+    pub fn toggle_status_item(&mut self, item: StatusItem) {
+        self.status_items.toggle(item);
+    }
+
+    /// The ring whose usage popover is open, if it still exists in the snapshot.
+    pub fn usage_popover(&self) -> Option<usize> {
+        self.usage_popover
+            .filter(|&position| position < self.snapshot.usage.len())
+    }
+
+    /// Opens a ring's usage popover, or closes it when that one is open (D-SH-15). Only one is
+    /// open at a time.
+    pub fn toggle_usage_popover(&mut self, position: usize) {
+        self.usage_popover = match self.usage_popover() {
+            Some(open) if open == position => None,
+            _ => Some(position),
+        };
+    }
+
+    pub fn close_usage_popover(&mut self) {
+        self.usage_popover = None;
+    }
+
     /// The palette while it is open.
     pub fn palette(&self) -> Option<&PaletteModel> {
         self.palette.as_ref()
@@ -197,8 +237,23 @@ impl ShellModel {
         if self.palette.is_some() {
             self.palette = None;
         } else {
-            self.palette = Some(PaletteModel::new(palette_items(&self.snapshot)));
+            self.open_palette(PaletteMode::Commands);
         }
+    }
+
+    /// Opens the palette in a mode over the current snapshot. The commands come with their Recent
+    /// rows; "Go to file" has no files to list yet (D-CP-02).
+    pub fn open_palette(&mut self, mode: PaletteMode) {
+        let items = match mode {
+            PaletteMode::Commands => {
+                let all = palette_items(&self.snapshot);
+                let mut items = self.recent.rows(&all);
+                items.extend(all);
+                items
+            }
+            PaletteMode::GoToFile => Vec::new(),
+        };
+        self.palette = Some(PaletteModel::new(items).with_mode(mode));
     }
 
     pub fn close_palette(&mut self) {
@@ -227,6 +282,7 @@ impl ShellModel {
     /// palette open and returns nothing.
     pub fn confirm_palette(&mut self) -> Option<PaletteAction> {
         let action = self.palette.as_ref()?.confirm()?.clone();
+        self.recent.record(&action);
         self.palette = None;
         Some(action)
     }

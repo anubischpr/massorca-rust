@@ -286,7 +286,10 @@ impl RemoveFlow {
                 message: refusal.message(),
             },
             // The call itself failed; the dialog stays and shows why.
-            Refusal::NameProblem { .. } | Refusal::Failed { .. } | Refusal::Unavailable { .. } => {
+            Refusal::NameProblem { .. }
+            | Refusal::PathProblem { .. }
+            | Refusal::Failed { .. }
+            | Refusal::Unavailable { .. } => {
                 self.error = Some(refusal.message());
                 return false;
             }

@@ -57,7 +57,11 @@ fn rig<'a>(
                 .iter()
                 .map(|(id, name)| project(id, name))
                 .collect(),
-            workspaces: vec![workspace("w1", projects[0].0, "fix-login", 1)],
+            workspaces: projects
+                .first()
+                .map(|(id, _)| workspace("w1", id, "fix-login", 1))
+                .into_iter()
+                .collect(),
         })
         .expect("the store listens");
     cx.run_until_parked();
@@ -230,18 +234,115 @@ fn the_project_menu_ends_with_no_project_which_cannot_create(cx: &mut TestAppCon
         let workspace_dialogs::MenuTarget::Projects(choices) = &menu.target else {
             panic!("a project menu was expected");
         };
-        assert_eq!(choices.len(), 3, "two projects and No project");
-        assert_eq!(choices.last(), Some(&ProjectChoice::NoProject));
+        assert_eq!(
+            choices.len(),
+            5,
+            "two projects, No project, a separator, Add a project"
+        );
+        assert_eq!(
+            choices.last(),
+            Some(&Some(workspace_dialogs::ProjectMenuChoice::AddProject))
+        );
     });
 
-    // Choosing the last row selects "No project": nothing can be created from it yet.
-    cx.simulate_keystrokes("end enter");
+    // Add a project is the last row, so one row up is "No project": nothing can be created from it.
+    cx.simulate_keystrokes("end up enter");
     rig.shell.read_with(cx, |shell, _| {
         let form = &shell.dialogs.create.as_ref().expect("open").form;
         assert_eq!(form.project, Some(ProjectChoice::NoProject));
         assert!(!form.can_submit());
         assert!(form.no_project_note().is_some());
         assert!(shell.dialogs.menu.is_none(), "the menu closed");
+    });
+}
+
+#[gpui::test]
+fn an_empty_project_menu_says_so_and_still_offers_add_a_project(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[]);
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.open_project_menu(window, cx);
+    });
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        let menu = shell.dialogs.menu.as_ref().expect("the menu is open");
+        let workspace_dialogs::MenuTarget::Projects(rows) = &menu.target else {
+            panic!("a project menu was expected");
+        };
+        // The caption, No project, a separator, then Add a project.
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.first(), Some(&None), "the caption is not a choice");
+        assert_eq!(
+            rows.last(),
+            Some(&Some(workspace_dialogs::ProjectMenuChoice::AddProject))
+        );
+    });
+}
+
+#[gpui::test]
+fn add_a_project_is_refused_under_its_path_then_added_and_chosen_in_the_create_form(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
+    cx.simulate_input("w");
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.open_project_menu(window, cx);
+    });
+    draw(cx);
+    // Add a project is the last row, so End and Enter open its dialog.
+    cx.simulate_keystrokes("end enter");
+    draw(cx);
+    rig.shell
+        .read_with(cx, |shell, _| assert!(shell.dialogs.add_project.is_some()));
+    cx.simulate_input("/missing");
+    cx.simulate_keystrokes("enter");
+    let Some(Command::AddProject { params, reply }) = rig.script.next() else {
+        panic!("a project.add call was expected");
+    };
+    assert_eq!(params.path, "/missing");
+    assert_eq!(params.name, None);
+    reply
+        .send(Err(Refusal::PathProblem {
+            message: "That folder does not exist.".into(),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell.dialogs.add_project.as_ref().expect("still open");
+        assert!(!dialog.form.busy);
+        assert_eq!(
+            dialog.form.path_error.as_deref(),
+            Some("That folder does not exist.")
+        );
+    });
+
+    // Typing clears the refusal; the next answer adds the project and chooses it.
+    cx.simulate_input("2");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell.dialogs.add_project.as_ref().expect("still open");
+        assert_eq!(dialog.form.path_error, None);
+    });
+    cx.simulate_keystrokes("enter");
+    let Some(Command::AddProject { reply, .. }) = rig.script.next() else {
+        panic!("a second project.add call was expected");
+    };
+    reply
+        .send(Ok(project("p9", "gamma")))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.dialogs.add_project.is_none());
+        let form = &shell
+            .dialogs
+            .create
+            .as_ref()
+            .expect("the create form stays open")
+            .form;
+        assert_eq!(form.project, Some(ProjectChoice::Project("p9".into())));
     });
 }
 

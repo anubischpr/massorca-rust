@@ -3,7 +3,7 @@
 
 use crate::model::shell::{
     Agent, AgentState, HostGroup, HostReach, ProjectGroup, SessionRow, ShellSnapshot,
-    StatusBarModel, UsageModel, WorkspaceRow,
+    StatusBarModel, UsageModel, UsageStatus, WorkspaceRow,
 };
 
 /// Fills the shell's view models.
@@ -109,19 +109,19 @@ impl DataSource for SampleDataSource {
             usage: vec![
                 UsageModel {
                     agent: Agent::Claude,
-                    percent: Some(62),
+                    status: UsageStatus::Percent(62),
                     slot: 1,
                     resets_in: "2 days".into(),
                 },
                 UsageModel {
                     agent: Agent::Codex,
-                    percent: Some(35),
+                    status: UsageStatus::Percent(35),
                     slot: 2,
                     resets_in: "5 days".into(),
                 },
                 UsageModel {
                     agent: Agent::OpenCode,
-                    percent: Some(10),
+                    status: UsageStatus::Percent(10),
                     slot: 3,
                     resets_in: "6 days".into(),
                 },

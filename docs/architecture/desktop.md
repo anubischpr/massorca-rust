@@ -17,10 +17,12 @@ parts fit; each choice has a record in `docs/decisions/` (0020 to 0029).
    bin        massorca-gallery: every component, dark and light side by side
                                                            │
  crates/desktop  (massorca-desktop)                        ▼
-   shell      Frame and Canvas, Title bar, Activity rail, Sidebar,
-              Status bar, command palette, service notice, workspace dialogs
-   model      view models (ShellModel, sidebar tree, status bar, palette) and
-              pure derivations: service_view, workspace_flow
+   shell      Frame and Canvas, Title bar, Activity rail with its usage popovers,
+              Sidebar, Status bar with its visibility menu, command palette (Recent
+              rows, Go to file), service notice, workspace and add-project dialogs
+   model      view models (ShellModel, sidebar tree, status bar, palette, usage) and
+              pure derivations: service_view, workspace_flow, project_add,
+              status_items, palette_recent
    service    ServiceBridge (tokio thread), connection states, StoreUpdate
               reducer, typed Refusal, launch options (0028)
    store      ServiceStore entity, ClientDataSource
@@ -75,9 +77,16 @@ store follows a service through the bridge (0028).
   `workspace.dirty` asks to discard changes, `workspace.ignored_files` and
   `workspace.orphan` have their own waivers, each retrying with exactly one
   more flag; `workspace.locked` and `workspace.main_worktree` only inform.
+  `project.add` works the same way: its refusals about the path
+  (`path.not_found`, `path.not_directory`, `project.exists`,
+  `project.not_git`) show under the path field of "Add a project".
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.
+
+Per-window UI state lives in `ShellModel`, not in the store: the open usage
+popover, the Status bar items the window hides, and the palette's Recent rows
+(the last five commands and workspaces run). None of it is saved to disk yet.
 
 ## Testing
 
