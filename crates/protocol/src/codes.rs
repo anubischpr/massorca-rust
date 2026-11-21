@@ -56,6 +56,15 @@ pub const GIT_PATH_IS_DIRECTORY: &str = "git.path_is_directory";
 pub const GIT_PATHS_REQUIRED: &str = "git.paths_required";
 /// Another process holds the index lock (`index.lock`); retry once it finishes.
 pub const GIT_INDEX_LOCKED: &str = "git.index_locked";
+/// A commit with nothing staged, or with an empty message.
+pub const GIT_NOTHING_TO_COMMIT: &str = "git.nothing_to_commit";
+pub const GIT_COMMIT_MESSAGE_EMPTY: &str = "git.commit_message_empty";
+/// An amend of a commit a remote-tracking branch contains, without `allow_published`.
+pub const GIT_COMMIT_PUBLISHED: &str = "git.commit_published";
+/// An amend before the first commit.
+pub const GIT_NO_COMMITS: &str = "git.no_commits";
+/// Git has no user name or email for the commit; set `user.name` and `user.email`.
+pub const GIT_IDENTITY_UNKNOWN: &str = "git.identity_unknown";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

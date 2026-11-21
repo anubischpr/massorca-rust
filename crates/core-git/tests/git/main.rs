@@ -1,5 +1,6 @@
 //! Integration tests against real git repositories in temporary directories.
 
+mod commit;
 mod diff;
 mod discovery;
 mod fixture;

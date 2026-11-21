@@ -100,6 +100,23 @@ impl Git {
         self.run_limited(cwd, args, self.mutation_timeout, false, None)
     }
 
+    /// Like `run_mutation`, bounded by `timeout` unless the configured mutation timeout is shorter.
+    pub(crate) fn run_mutation_within<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        timeout: Duration,
+    ) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let timeout = self
+            .mutation_timeout
+            .map_or(timeout, |own| own.min(timeout));
+        self.run_limited(cwd, args, Some(timeout), false, None)
+    }
+
     fn run_limited<I, S>(
         &self,
         cwd: Option<&Path>,
