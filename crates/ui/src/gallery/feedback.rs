@@ -7,7 +7,7 @@ use crate::components::card::{Card, CardPadding, CardVariant};
 use crate::components::empty_state::{EmptyState, EmptyStateVariant};
 use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::toast::{Toast, ToastKind};
+use crate::components::toast::{Toast, ToastKind, ToastSpec, Toasts};
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled};
@@ -89,6 +89,49 @@ fn toast_story(_: &mut Window, cx: &mut App) -> AnyElement {
             Toast::new("toast-busy", ToastKind::Error, "Setup script failed")
                 .action("Open log", |_, _| {})
                 .action_loading(true),
+            cx,
+        ))
+        .child(variant(
+            "Live stack: bottom right of the canvas, newest at the bottom, three visible",
+            div()
+                .relative()
+                .h(px(240.))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(SPACE_2))
+                        .child(
+                            Button::new("toast-demo-info", "Show toast")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    Toasts::show(cx, ToastSpec::new(ToastKind::Info, "Copied"));
+                                }),
+                        )
+                        .child(
+                            Button::new("toast-demo-undo", "Show with Undo")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    let spec =
+                                        ToastSpec::new(ToastKind::Success, "Removed from queue")
+                                            .with_action("Undo", true);
+                                    Toasts::show_with_action(cx, spec, |_, _| {});
+                                }),
+                        )
+                        .child(
+                            Button::new("toast-demo-error", "Show error")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    Toasts::show(
+                                        cx,
+                                        ToastSpec::new(
+                                            ToastKind::Error,
+                                            "Could not rename the session",
+                                        ),
+                                    );
+                                }),
+                        ),
+                )
+                .child(Toasts::stack(cx)),
             cx,
         ))
         .into_any_element()

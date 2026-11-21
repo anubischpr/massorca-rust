@@ -17,12 +17,14 @@ use crate::theme::{ActiveTheme, TextStyled, box_shadows};
 use crate::tokens::{
     Color, DURATION_BASE, DURATION_MODERATE, EASE_ENTER, EASE_EXIT, LAYOUT_TOAST_WIDTH_DEFAULT,
     LAYOUT_TOAST_WIDTH_MAX, LAYOUT_TOAST_WIDTH_MIN, Palette, RADIUS_LG, SIZE_TOUCH_DEFAULT,
-    SPACE_2, SPACE_3,
+    SPACE_2, SPACE_3, SPACE_4, Z_TOAST,
 };
 use gpui::{
-    Animation, AnimationExt, App, ElementId, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+    Animation, AnimationExt, AnyElement, App, AppContext, Context, ElementId, Entity, FocusHandle,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, deferred, div, px,
 };
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// Auto-dismiss time of an info, success or warning toast without an action (Toast.md).
@@ -551,6 +553,204 @@ impl RenderOnce for Toast {
     }
 }
 
+/// How often the stack reads the clock while toasts are up.
+const TICK: Duration = Duration::from_millis(100);
+
+/// The app's toast stack. It draws every toast bottom right of its nearest positioned ancestor
+/// (the canvas), `space.4` from the right edge and from the bottom, newest at the bottom. It runs
+/// its clock only while toasts are up.
+pub struct ToastStack {
+    queue: ToastQueue,
+    actions: HashMap<ToastId, ClickHandler>,
+    focus: HashMap<ToastId, FocusHandle>,
+    ticking: bool,
+}
+
+impl std::fmt::Debug for ToastStack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToastStack")
+            .field("queue", &self.queue)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The stack's clock: the executor's, which tests can move with `advance_clock`.
+fn now(cx: &App) -> Instant {
+    cx.background_executor().now()
+}
+
+impl ToastStack {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            queue: ToastQueue::new(now(cx)),
+            actions: HashMap::new(),
+            focus: HashMap::new(),
+            ticking: false,
+        }
+    }
+
+    /// Shows a toast. An identical toast within `DUPLICATE_WINDOW` counts as a repeat.
+    pub fn show(
+        &mut self,
+        spec: ToastSpec,
+        on_action: Option<ClickHandler>,
+        cx: &mut Context<Self>,
+    ) -> ToastId {
+        let id = self.queue.push(now(cx), spec);
+        if let Some(handler) = on_action {
+            self.actions.entry(id).or_insert(handler);
+        }
+        self.focus.entry(id).or_insert_with(|| cx.focus_handle());
+        self.start_ticking(cx);
+        cx.notify();
+        id
+    }
+
+    /// Starts a toast's leave animation, as its close button or Escape does.
+    pub fn dismiss(&mut self, id: ToastId, cx: &mut Context<Self>) {
+        self.queue.dismiss(now(cx), id);
+        self.prune();
+        cx.notify();
+    }
+
+    fn set_hovered(&mut self, id: ToastId, hovered: bool, cx: &mut Context<Self>) {
+        self.queue.set_hovered(now(cx), id, hovered);
+        cx.notify();
+    }
+
+    fn start_ticking(&mut self, cx: &mut Context<Self>) {
+        if self.ticking {
+            return;
+        }
+        self.ticking = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                let keep = this.update(cx, |stack, cx| stack.tick(cx)).unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Moves the clock on. Returns whether toasts are still up, so the ticker keeps running.
+    fn tick(&mut self, cx: &mut Context<Self>) -> bool {
+        self.queue.advance(now(cx));
+        self.prune();
+        cx.notify();
+        self.ticking = !self.queue.is_empty();
+        self.ticking
+    }
+
+    /// Forgets the actions and focus handles of toasts the queue has removed.
+    fn prune(&mut self) {
+        let queue = &self.queue;
+        self.actions.retain(|id, _| queue.contains(*id));
+        self.focus.retain(|id, _| queue.contains(*id));
+    }
+}
+
+impl Render for ToastStack {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let at = now(cx);
+        self.queue.set_reduced_motion(cx.reduce_motion());
+        self.queue.set_window_active(at, window.is_window_active());
+        for id in self.queue.displayed() {
+            if let Some(focus) = self.focus.get(&id) {
+                let focused = focus.contains_focused(window, cx);
+                self.queue.set_focused(at, id, focused);
+            }
+        }
+
+        let stack = cx.entity();
+        let slots: Vec<AnyElement> = self
+            .queue
+            .displayed()
+            .into_iter()
+            .filter_map(|id| {
+                let spec = self.queue.spec(id)?.clone();
+                let focus = self.focus.get(&id)?.clone();
+                let on_dismiss = stack.clone();
+                let mut toast = Toast::new(("toast", id), spec.kind, spec.message.clone())
+                    .repeats(self.queue.repeats(id).unwrap_or(1))
+                    .leaving(self.queue.is_leaving(id))
+                    .focus_handle(focus)
+                    .on_dismiss(move |_, cx| on_dismiss.update(cx, |s, cx| s.dismiss(id, cx)));
+                if let Some(action) = &spec.action {
+                    let handler = self.actions.get(&id).cloned();
+                    let on_action = stack.clone();
+                    toast = toast.action(action.label.clone(), move |window, cx| {
+                        if let Some(handler) = &handler {
+                            handler(window, cx);
+                        }
+                        on_action.update(cx, |s, cx| s.dismiss(id, cx));
+                    });
+                }
+                let on_hover = stack.clone();
+                Some(
+                    div()
+                        .id(("toast-slot", id))
+                        .on_hover(move |hovered, _, cx| {
+                            on_hover.update(cx, |s, cx| s.set_hovered(id, *hovered, cx))
+                        })
+                        .child(toast)
+                        .into_any_element(),
+                )
+            })
+            .collect();
+
+        deferred(
+            div()
+                .absolute()
+                .right(px(SPACE_4))
+                .bottom(px(SPACE_4))
+                .w(px(LAYOUT_TOAST_WIDTH_DEFAULT))
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap(px(SPACE_2))
+                .children(slots),
+        )
+        .with_priority(Z_TOAST as usize)
+    }
+}
+
+struct ToastStackGlobal(Entity<ToastStack>);
+
+impl Global for ToastStackGlobal {}
+
+/// Shows toasts from anywhere with `&mut App`. The shared stack is created on first use.
+#[derive(Debug)]
+pub struct Toasts;
+
+impl Toasts {
+    /// The shared stack. Put it inside the canvas, which must be positioned, so it sits bottom right.
+    pub fn stack(cx: &mut App) -> Entity<ToastStack> {
+        if let Some(global) = cx.try_global::<ToastStackGlobal>() {
+            return global.0.clone();
+        }
+        let stack = cx.new(ToastStack::new);
+        cx.set_global(ToastStackGlobal(stack.clone()));
+        stack
+    }
+
+    pub fn show(cx: &mut App, spec: ToastSpec) -> ToastId {
+        Self::stack(cx).update(cx, |stack, cx| stack.show(spec, None, cx))
+    }
+
+    /// Shows a toast whose action runs `on_action`; acting on the toast dismisses it.
+    pub fn show_with_action(
+        cx: &mut App,
+        spec: ToastSpec,
+        on_action: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> ToastId {
+        let handler: ClickHandler = std::rc::Rc::new(on_action);
+        Self::stack(cx).update(cx, |stack, cx| stack.show(spec, Some(handler), cx))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +931,109 @@ mod tests {
         let id = queue.push(t0, info("Copied"));
         assert!(queue.advance(at(t0, 8.0)).is_empty(), "still fading");
         assert_eq!(queue.advance(at(t0, 8.0) + DURATION_BASE), vec![id]);
+    }
+
+    /// Moves the test clock on in ticker-sized steps, letting the stack's timer run at each one.
+    fn advance_in_ticks(cx: &mut gpui::TestAppContext, by: Duration) {
+        let mut left = by;
+        while !left.is_zero() {
+            let step = left.min(TICK);
+            cx.executor().advance_clock(step);
+            cx.run_until_parked();
+            left -= step;
+        }
+    }
+
+    #[gpui::test]
+    fn an_info_toast_leaves_the_stack_on_the_test_clock(cx: &mut gpui::TestAppContext) {
+        let stack = cx.update(|cx| {
+            Toasts::show(cx, ToastSpec::new(ToastKind::Info, "Copied"));
+            Toasts::stack(cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(stack.read_with(cx, |s, _| s.queue.visible().len()), 1);
+
+        advance_in_ticks(cx, Duration::from_secs(8));
+        assert_eq!(
+            stack.read_with(cx, |s, _| s.queue.visible().len()),
+            0,
+            "fading"
+        );
+
+        advance_in_ticks(cx, DURATION_BASE + TICK);
+        assert!(stack.read_with(cx, |s, _| s.queue.is_empty()));
+        assert!(
+            !stack.read_with(cx, |s, _| s.ticking),
+            "the clock stops with the stack"
+        );
+    }
+
+    #[gpui::test]
+    fn an_error_toast_stays_on_the_test_clock(cx: &mut gpui::TestAppContext) {
+        let stack = cx.update(|cx| {
+            Toasts::show(
+                cx,
+                ToastSpec::new(ToastKind::Error, "Could not rename the session"),
+            );
+            Toasts::stack(cx)
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+        assert_eq!(stack.read_with(cx, |s, _| s.queue.visible().len()), 1);
+    }
+
+    #[gpui::test]
+    fn acting_on_a_toast_runs_its_handler_and_dismisses_it(cx: &mut gpui::TestAppContext) {
+        let acted = Rc::new(Cell::new(0_u32));
+        let (stack, cx) = cx.add_window_view(|_, cx| ToastStack::new(cx));
+        let handler: ClickHandler = {
+            let acted = acted.clone();
+            Rc::new(move |_, _| acted.set(acted.get() + 1))
+        };
+        let id = stack.update(cx, |s, cx| {
+            let spec =
+                ToastSpec::new(ToastKind::Success, "Removed from queue").with_action("Undo", true);
+            s.show(spec, Some(handler), cx)
+        });
+        cx.run_until_parked();
+
+        let center = cx
+            .debug_bounds("toast-action")
+            .expect("action is drawn")
+            .center();
+        cx.simulate_click(center, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(acted.get(), 1);
+        assert!(stack.read_with(cx, |s, _| s.queue.is_leaving(id)));
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_the_focused_toast_in_the_stack(cx: &mut gpui::TestAppContext) {
+        let (stack, cx) = cx.add_window_view(|_, cx| ToastStack::new(cx));
+        let id = stack.update(cx, |s, cx| {
+            s.show(
+                ToastSpec::new(ToastKind::Error, "Could not rename the session"),
+                None,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let focus = stack.read_with(cx, |s, _| s.focus[&id].clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "escape");
+        cx.run_until_parked();
+        assert!(stack.read_with(cx, |s, _| s.queue.is_leaving(id)));
+    }
+
+    #[gpui::test]
+    fn a_new_toast_takes_no_focus(cx: &mut gpui::TestAppContext) {
+        let (stack, cx) = cx.add_window_view(|_, cx| ToastStack::new(cx));
+        stack.update(cx, |s, cx| {
+            s.show(ToastSpec::new(ToastKind::Info, "Copied"), None, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| window.focused(cx)).is_none());
     }
 
     #[gpui::test]
