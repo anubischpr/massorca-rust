@@ -3,6 +3,7 @@
 //!
 //! Space toggles a focused checkbox and Enter does nothing (Checkbox.md, keyboard).
 
+use crate::a11y;
 use crate::components::button::{HOVER_GROUP, StatePreview, glyph};
 use crate::components::switch::{ToggleMotion, ease, helper_line};
 use crate::icon::{IconName, IconSize};
@@ -15,8 +16,8 @@ use crate::tokens::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, App, ClickEvent, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, KeyboardButton, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    IntoElement, KeyboardButton, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -294,6 +295,13 @@ impl RenderOnce for Checkbox {
             });
         }
 
+        let name = self.label.clone();
+        let description = self.error.clone().or_else(|| self.helper.clone());
+        let toggled = if self.indeterminate {
+            Toggled::Mixed
+        } else {
+            Toggled::from(checked)
+        };
         let mut stack = div()
             .flex_1()
             .min_w_0()
@@ -338,7 +346,14 @@ impl RenderOnce for Checkbox {
                 }
             });
         }
-        row
+        row = row.role(Role::CheckBox).aria_toggled(toggled);
+        if let Some(name) = name {
+            row = row.aria_label(name);
+        }
+        if let Some(text) = description {
+            row = row.aria_description(text);
+        }
+        a11y::disabled(row, self.disabled)
     }
 }
 
@@ -488,5 +503,61 @@ mod tests {
         focus_and_draw(cx, &focus);
         press_key(cx, "space");
         assert!(asked.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{
+        TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn a_checkbox_is_named_by_its_label_and_reports_its_checked_state(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Checkbox::new("notify", true)
+                    .label("Notify me")
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::CheckBox);
+        assert_eq!(node.label(), Some("Notify me"));
+        assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[gpui::test]
+    fn a_partly_checked_parent_reports_mixed(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Checkbox::new("all", false)
+                    .indeterminate(true)
+                    .label("All")
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.toggled(), Some(Toggled::Mixed));
+    }
+
+    #[gpui::test]
+    fn a_disabled_checkbox_is_disabled_and_its_helper_describes_it(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Checkbox::new("summary", false)
+                    .label("Daily summary")
+                    .helper("Sends one email a day")
+                    .disabled(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
+        assert_eq!(node.toggled(), Some(Toggled::False));
+        assert_eq!(node.description(), Some("Sends one email a day"));
     }
 }
