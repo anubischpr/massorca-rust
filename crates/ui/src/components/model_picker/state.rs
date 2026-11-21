@@ -317,7 +317,13 @@ impl PickerState {
 pub(crate) mod fixtures {
     use super::*;
 
-    pub(crate) fn model(id: &str, name: &str, efforts: &[&str], default: usize, fast: bool) -> ModelOption {
+    pub(crate) fn model(
+        id: &str,
+        name: &str,
+        efforts: &[&str],
+        default: usize,
+        fast: bool,
+    ) -> ModelOption {
         ModelOption {
             id: id.to_owned().into(),
             name: name.to_owned().into(),

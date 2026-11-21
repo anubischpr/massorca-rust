@@ -21,7 +21,13 @@ impl TextArea {
     }
 
     /// Up and Down move between visual rows; with nothing typed they ask the owner for history.
-    pub(super) fn move_vertical(&mut self, down: bool, extend: bool, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn move_vertical(
+        &mut self,
+        down: bool,
+        extend: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.buffer.is_empty() {
             let event = if down {
                 TextAreaEvent::HistoryNext
@@ -65,7 +71,13 @@ impl TextArea {
     }
 
     /// Home and End go to the visual row the caret is on.
-    pub(super) fn move_row_edge(&mut self, end: bool, extend: bool, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn move_row_edge(
+        &mut self,
+        end: bool,
+        extend: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let target = match self.shaped.as_ref() {
             Some(shaped) => {
                 let row = shaped.row_range(self.buffer.cursor());

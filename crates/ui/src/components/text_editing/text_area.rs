@@ -316,7 +316,10 @@ impl InputHost for TextArea {
         let top = element_bounds.top() - self.scroll;
         Some(Bounds::from_corners(
             point(element_bounds.left() + start.x, top + start.y),
-            point(element_bounds.left() + end.x, top + end.y + shaped.line_height),
+            point(
+                element_bounds.left() + end.x,
+                top + end.y + shaped.line_height,
+            ),
         ))
     }
 

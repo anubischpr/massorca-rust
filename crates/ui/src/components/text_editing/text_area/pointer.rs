@@ -21,7 +21,12 @@ impl TextArea {
         self.buffer.snap_to_grapheme(shaped.offset_for_point(at))
     }
 
-    pub(super) fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.disabled {
             return;
         }
@@ -43,7 +48,12 @@ impl TextArea {
         );
     }
 
-    pub(super) fn mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selecting {
             let index = self.index_at(event.position);
             self.move_caret(move |buffer| buffer.select_to(index), false, window, cx);
@@ -55,7 +65,12 @@ impl TextArea {
     }
 
     /// Wheel scrolling moves the text inside the area, between the top and the last row.
-    pub(super) fn scroll_wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn scroll_wheel(
+        &mut self,
+        event: &ScrollEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let delta = event.delta.pixel_delta(window.line_height()).y;
         let (Some(shaped), Some(bounds)) = (self.shaped.as_ref(), self.bounds) else {
             return;
