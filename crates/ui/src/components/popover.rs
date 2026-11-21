@@ -2,6 +2,7 @@
 //! Info popovers never take focus; form and picker popovers move focus into their first control.
 //! Escape returns focus to the trigger; a click outside dismisses without moving focus.
 
+use crate::a11y::framed;
 use crate::components::button::ButtonSize;
 use crate::components::icon_button::IconButton;
 use crate::components::switch::ease;
@@ -14,8 +15,9 @@ use crate::tokens::{
 };
 use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, App, Bounds, Div, ElementId, FocusHandle,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, RenderOnce, Role,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Window, anchored, deferred, div,
+    point, px,
 };
 use std::cell::Cell;
 use std::fmt;
@@ -313,6 +315,7 @@ impl RenderOnce for Popover {
 
         let outside = bounds.clone();
         let on_outside = self.on_dismiss.clone();
+        let name = self.title.clone();
         let mut panel = overlay_surface(&theme, RADIUS_LG, theme.shadows.e2)
             .w(px(self.width.px()))
             .flex()
@@ -377,7 +380,7 @@ impl RenderOnce for Popover {
             }
         };
         host.child(
-            deferred(layer.child(fade_in((self.id, "enter"), panel, cx)))
+            deferred(layer.child(popover_frame((self.id, "enter"), panel, name, cx)))
                 .priority(self.layer.priority()),
         )
     }
@@ -411,6 +414,17 @@ pub(crate) fn overlay_surface(
         .border_color(theme.palette.border.default)
         .rounded(px(radius))
         .shadow(box_shadows(shadow))
+}
+
+/// The popover panel's frame: it carries the dialog role and the title around the fading panel.
+fn popover_frame(
+    id: impl Into<ElementId>,
+    panel: Div,
+    name: Option<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let id = id.into();
+    framed(id.clone(), Role::Dialog, name, fade_in(id, panel, cx))
 }
 
 /// Fades a panel in and moves it up by 4 px over `duration.base` (`ease.enter`). Reduced
@@ -577,5 +591,22 @@ mod tests {
         cx.run_until_parked();
         let field = view.read_with(cx, |h, _| h.field.clone());
         cx.update(|window, _| assert!(field.is_focused(window)));
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_popover_panel_is_a_dialog_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            reported(popover_frame("filters", div(), Some("Filters".into()), cx))
+        })
+        .expect("the panel is reported");
+        assert_eq!(node.role(), Role::Dialog);
+        assert_eq!(node.label(), Some("Filters"));
     }
 }
