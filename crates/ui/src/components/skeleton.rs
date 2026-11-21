@@ -202,3 +202,18 @@ mod tests {
         assert_eq!(SKELETON_REVEAL_DELAY, Duration::from_millis(100));
     }
 }
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn skeleton_blocks_stay_out_of_the_tree(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Skeleton::new(SkeletonShape::Block).render(window, cx))
+        });
+        assert!(node.is_none());
+    }
+}

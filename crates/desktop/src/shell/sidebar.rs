@@ -1,31 +1,35 @@
 //! The Sidebar: Create, Search, the navigation rows, the project tree and its footer (D-SH-01).
-//! In Bot Teams it lists the team placeholders instead.
+//! In Bot Teams it lists the teams instead (D-WS-29).
 
 use super::Shell;
 use super::sidebar_rows::{nav_row, tree_row};
+use super::teams;
 use super::tooltip::with_tooltip;
+use crate::model::morph::ease;
 use crate::model::shell_state::ShellModel;
 use crate::model::sidebar::{NavRow, SidebarContent, TreeRow};
 use gpui::{
-    App, Context, Div, Entity, FocusHandle, IntoElement, MouseButton, SharedString, Stateful,
-    Window, div, prelude::*, px,
+    Animation, AnimationExt, AnyElement, App, Context, Div, Entity, FocusHandle, IntoElement,
+    MouseButton, SharedString, Stateful, Window, div, prelude::*, px,
 };
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
-    LAYOUT_SIDEBAR_DEFAULT, RADIUS_LG, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_HALF,
-    TYPE_BODY_SM, TYPE_OVERLINE,
+    DURATION_FAST, EASE_STANDARD, LAYOUT_SIDEBAR_DEFAULT, RADIUS_LG, SIZE_CONTROL_DEFAULT, SPACE_1,
+    SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_OVERLINE,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// The Sidebar column. Inline it sits beside the Canvas; as the overlay it floats over the
-/// Canvas when the window is too narrow for it (X1).
+/// Canvas when the window is too narrow for it (X1). `switch` is the mode switch in progress,
+/// if any: its content fades in over it.
 pub(super) fn sidebar(
     model: &ShellModel,
     search: &Entity<SearchField>,
     overlay: bool,
+    switch: Option<u64>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -57,16 +61,41 @@ pub(super) fn sidebar(
     } else {
         column.bg(theme.palette.surface.frame)
     };
-    match model.sidebar() {
+    let content = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .gap(px(SPACE_HALF));
+    let content = match model.sidebar() {
         SidebarContent::Workspaces { nav, tree } => {
-            let column = column.child(create_button()).child(search.clone());
-            let column = nav_rows(column, &nav, "nav", &shell, window, cx);
-            column
+            let content = content.child(create_button(&shell)).child(search.clone());
+            let content = nav_rows(content, &nav, "nav", &shell, window, cx);
+            content
                 .child(projects_header(&theme))
-                .child(tree_list(&tree, window, cx, &theme))
+                .child(tree_list(&tree, &shell, window, cx, &theme))
                 .child(footer())
         }
-        SidebarContent::BotTeams { rows } => nav_rows(column, &rows, "team", &shell, window, cx),
+        SidebarContent::BotTeams => {
+            let content = content.child(search.clone());
+            teams::teams_list(content, &model.bot_teams_sidebar(), &shell, window, cx)
+        }
+    };
+    column.child(fade_in(content, switch, cx))
+}
+
+/// The content of a Sidebar fades in over `duration.fast` when a mode switch starts (screens 3).
+/// Reduced motion swaps it at once. The outgoing content is replaced, not faded out.
+fn fade_in(content: Div, switch: Option<u64>, cx: &App) -> AnyElement {
+    match switch {
+        Some(generation) if !cx.reduce_motion() => content
+            .with_animation(
+                SharedString::from(format!("sidebar-fade-{generation}")),
+                Animation::new(DURATION_FAST).with_easing(|t| ease(EASE_STANDARD, t)),
+                |content, delta| content.opacity(delta),
+            )
+            .into_any_element(),
+        _ => content.into_any_element(),
     }
 }
 
@@ -88,21 +117,25 @@ fn nav_rows(
 
 /// The focus handle of the row with this key, kept across frames the way IconButton keeps its
 /// own, so Tab and the arrow keys reach every row.
-fn row_focus(window: &mut Window, cx: &mut App, key: String) -> FocusHandle {
+pub(super) fn row_focus(window: &mut Window, cx: &mut App, key: String) -> FocusHandle {
     window
         .use_keyed_state(SharedString::from(key), cx, |_, cx| cx.focus_handle())
         .read(cx)
         .clone()
 }
 
-fn create_button() -> impl IntoElement {
+fn create_button(shell: &gpui::WeakEntity<Shell>) -> impl IntoElement {
+    let shell = shell.clone();
     Button::new("sidebar-create", "Create")
         .variant(ButtonVariant::Primary)
         .size(ButtonSize::Default)
         .leading_icon(IconName::Plus)
+        .on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_create(window, cx));
+        })
 }
 
-fn projects_header(theme: &Theme) -> impl IntoElement {
+pub(super) fn projects_header(theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -154,7 +187,13 @@ fn header_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
 }
 
 /// The project tree, scrollable on its own. Empty, it says so (A10).
-fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme) -> Stateful<Div> {
+fn tree_list(
+    tree: &[TreeRow],
+    shell: &gpui::WeakEntity<Shell>,
+    window: &mut Window,
+    cx: &mut App,
+    theme: &Theme,
+) -> Stateful<Div> {
     let mut list = div()
         .id("sidebar-tree")
         .flex_1()
@@ -175,7 +214,7 @@ fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme)
     }
     for (index, row) in tree.iter().enumerate() {
         let focus = row_focus(window, cx, format!("tree-{index}"));
-        list = list.child(tree_row(row, index, &focus));
+        list = list.child(tree_row(row, index, &focus, shell));
     }
     list
 }
