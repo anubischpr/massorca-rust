@@ -7,6 +7,7 @@
 //! in [`ToastQueue`], a plain struct that takes the time it runs at, so tests
 //! drive it with explicit instants.
 
+use crate::a11y::framed;
 use crate::components::badge::Badge;
 use crate::components::button::{Button, ButtonSize, ButtonVariant, ClickHandler};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
@@ -20,9 +21,9 @@ use crate::tokens::{
     SPACE_2, SPACE_3, SPACE_4, Z_TOAST,
 };
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, AppContext, Context, ElementId, Entity, FocusHandle,
-    Global, InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, deferred, div, px,
+    Animation, AnimationExt, AnyElement, App, AppContext, Context, Div, ElementId, Entity,
+    FocusHandle, Global, InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, Role,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Window, deferred, div, px,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -51,6 +52,16 @@ pub enum ToastKind {
 }
 
 impl ToastKind {
+    /// The kind's word, which begins the accessible name ("Error: ...").
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Info => "Info",
+            Self::Success => "Success",
+            Self::Warning => "Warning",
+            Self::Error => "Error",
+        }
+    }
+
     fn icon(self) -> IconName {
         match self {
             Self::Info => IconName::Info,
@@ -453,6 +464,13 @@ impl RenderOnce for Toast {
         let on_dismiss = self.on_dismiss.clone();
         let leaving = self.leaving;
         let id = self.id.clone();
+        let frame_id = ElementId::from((self.id.clone(), "frame"));
+        let role = if matches!(self.kind, ToastKind::Error) {
+            Role::Alert
+        } else {
+            Role::Status
+        };
+        let name: SharedString = format!("{}: {}", self.kind.name(), self.message).into();
 
         let mut panel = div()
             .id(self.id.clone())
@@ -531,7 +549,7 @@ impl RenderOnce for Toast {
             });
         }
 
-        if reduced {
+        let content = if reduced {
             panel.into_any_element()
         } else if leaving {
             panel
@@ -549,7 +567,8 @@ impl RenderOnce for Toast {
                     |toast, t| toast.opacity(t).top(px(SPACE_2 * (1.0 - t))),
                 )
                 .into_any_element()
-        }
+        };
+        framed(frame_id, role, Some(name), content)
     }
 }
 
@@ -701,20 +720,25 @@ impl Render for ToastStack {
             })
             .collect();
 
-        deferred(
-            div()
-                .absolute()
-                .right(px(SPACE_4))
-                .bottom(px(SPACE_4))
-                .w(px(LAYOUT_TOAST_WIDTH_DEFAULT))
-                .flex()
-                .flex_col()
-                .items_end()
-                .gap(px(SPACE_2))
-                .children(slots),
-        )
-        .with_priority(Z_TOAST as usize)
+        deferred(stack_region(slots)).with_priority(Z_TOAST as usize)
     }
+}
+
+/// The stack's container: a region named "Notifications" that holds the toast slots.
+fn stack_region(slots: Vec<AnyElement>) -> Stateful<Div> {
+    div()
+        .id("toast-stack")
+        .role(Role::Region)
+        .aria_label("Notifications")
+        .absolute()
+        .right(px(SPACE_4))
+        .bottom(px(SPACE_4))
+        .w(px(LAYOUT_TOAST_WIDTH_DEFAULT))
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(px(SPACE_2))
+        .children(slots)
 }
 
 struct ToastStackGlobal(Entity<ToastStack>);
@@ -1099,5 +1123,39 @@ mod tests {
                     .on_dismiss(move |_, _| dismissed.set(dismissed.get() + 1)),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn an_error_toast_is_an_alert_named_by_its_kind_and_message(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Toast::new("save", ToastKind::Error, "Could not save").render(window, cx))
+        })
+        .expect("the toast is reported");
+        assert_eq!(node.role(), Role::Alert);
+        assert_eq!(node.label(), Some("Error: Could not save"));
+    }
+
+    #[gpui::test]
+    fn an_info_toast_is_a_status_message(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Toast::new("sync", ToastKind::Info, "Syncing").render(window, cx))
+        })
+        .expect("the toast is reported");
+        assert_eq!(node.role(), Role::Status);
+        assert_eq!(node.label(), Some("Info: Syncing"));
+    }
+
+    #[gpui::test]
+    fn the_stack_is_a_region_named_notifications(cx: &mut TestAppContext) {
+        let node = root(cx, |_, _| reported(stack_region(Vec::new()))).expect("reported");
+        assert_eq!(node.role(), Role::Region);
+        assert_eq!(node.label(), Some("Notifications"));
     }
 }

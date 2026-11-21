@@ -3,6 +3,7 @@
 //! failed and what is kept, and puts Retry first. "Show details" opens the
 //! error code and time in a mono block.
 
+use crate::a11y;
 use crate::components::button::{Button, ButtonSize, ButtonVariant, ClickHandler};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::icon::{Icon, IconName, IconSize};
@@ -12,9 +13,10 @@ use crate::tokens::{
     RADIUS_LG, RADIUS_MD, SPACE_2, SPACE_4, SPACE_8, TYPE_BODY_STRONG, TYPE_MONO_SM, TYPE_TITLE,
     TYPE_TITLE_SM, TextStyleToken,
 };
+use gpui::accesskit::Live;
 use gpui::{
     App, ClipboardItem, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, Styled, Window, div, px,
+    Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 /// Where an error state sits and how much of a panel it draws.
@@ -126,6 +128,14 @@ impl ErrorState {
 
 impl RenderOnce for ErrorState {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (name, live) = (
+            self.title.clone(),
+            if matches!(self.variant, ErrorStateVariant::Page) {
+                Live::Assertive
+            } else {
+                Live::Polite
+            },
+        );
         let theme = *cx.theme();
         let p = theme.palette;
         let inline = self.variant == ErrorStateVariant::Inline;
@@ -149,7 +159,14 @@ impl RenderOnce for ErrorState {
             retry = retry.on_click(move |window, cx| on_retry(window, cx));
         }
 
-        let mut panel = div().flex().flex_col().gap(px(SPACE_2)).min_w_0();
+        let mut panel = div()
+            .id(self.id.clone())
+            .role(Role::Alert)
+            .aria_label(name)
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .min_w_0();
         if let Some(padding) = self.variant.padding() {
             panel = panel
                 .p(px(padding))
@@ -242,7 +259,7 @@ impl RenderOnce for ErrorState {
                 });
             actions = actions.child(div().debug_selector(|| "error-toggle".into()).child(toggle));
         }
-        panel.child(actions).into_any_element()
+        a11y::annotate(panel.child(actions), move |node| node.set_live(live))
     }
 }
 
@@ -352,5 +369,40 @@ mod tests {
                     .on_retry(move |_, _| retries.set(retries.get() + 1)),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{
+        TestAppContext,
+        accesskit::{Live, Role},
+    };
+
+    #[gpui::test]
+    fn a_page_error_is_an_assertive_alert_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ErrorState::new("load", "Could not load sessions")
+                    .variant(ErrorStateVariant::Page)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Alert);
+        assert_eq!(node.label(), Some("Could not load sessions"));
+        assert_eq!(node.live(), Some(Live::Assertive));
+    }
+
+    #[gpui::test]
+    fn a_section_error_is_a_polite_alert(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(ErrorState::new("list", "Could not load").render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Alert);
+        assert_eq!(node.live(), Some(Live::Polite));
     }
 }
