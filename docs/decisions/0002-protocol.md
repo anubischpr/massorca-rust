@@ -41,7 +41,7 @@ frame kind behind a capability rather than base64 inside JSON.
 | type | direction | purpose |
 |---|---|---|
 | `hello` | client to server | first message: protocol range, client name and version, capabilities, optional auth |
-| `welcome` | server to client | chosen protocol version, server version, capabilities, connection id |
+| `welcome` | server to client | chosen protocol version, server version, capabilities, connection id, optional `max_frame_len` (absent means the default limit) |
 | `rejected` | server to client | sent instead of `welcome` when the handshake fails: `error` plus `supported` (the server's protocol range); the server then closes |
 | `request` | client to server | `id` (client-chosen u64), `method`, `params` |
 | `response` | server to client | `id` plus exactly one of `result` or `error` |

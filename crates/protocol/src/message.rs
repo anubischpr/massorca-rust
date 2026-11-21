@@ -1,7 +1,8 @@
 //! Wire messages: one JSON object per frame, tagged by `type`.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use serde_json::Value;
+use std::fmt;
 
 /// Name and version of a peer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,9 +38,37 @@ impl ErrorBody {
     }
 }
 
+/// Credentials a client sends in `hello`. `Debug` never prints them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Auth(Value);
+
+impl Auth {
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
+impl From<Value> for Auth {
+    fn from(value: Value) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Debug for Auth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 /// One protocol message. Unknown `type`s decode to [`Message::Unknown`].
+// `remote = "Self"` turns the derives into inherent fns, so the trait impls below can validate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(remote = "Self", tag = "type", rename_all = "snake_case")]
 pub enum Message {
     Hello {
         protocol: ProtocolRange,
@@ -47,7 +76,7 @@ pub enum Message {
         #[serde(default)]
         capabilities: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        auth: Option<Value>,
+        auth: Option<Auth>,
     },
     Welcome {
         protocol: u32,
@@ -55,6 +84,9 @@ pub enum Message {
         #[serde(default)]
         capabilities: Vec<String>,
         connection_id: String,
+        /// Largest frame body the server accepts; absent means the 0002 default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_frame_len: Option<u32>,
     },
     /// Sent instead of `welcome` when the handshake fails; the server then closes.
     Rejected {
@@ -94,6 +126,26 @@ pub enum Message {
     /// A `type` this build does not know; receivers ignore it.
     #[serde(other)]
     Unknown,
+}
+
+impl Serialize for Message {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Message {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let message = Self::deserialize(deserializer)?;
+        if let Self::Response { result, error, .. } = &message
+            && result.is_some() == error.is_some()
+        {
+            return Err(D::Error::custom(
+                "a response carries exactly one of `result` or `error`",
+            ));
+        }
+        Ok(message)
+    }
 }
 
 impl Message {

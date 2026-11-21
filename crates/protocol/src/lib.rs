@@ -12,7 +12,7 @@ pub mod version;
 pub use frame::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame};
 #[cfg(feature = "tokio")]
 pub use frame::{read_message, write_message};
-pub use message::{ErrorBody, Message, PeerInfo, ProtocolRange};
+pub use message::{Auth, ErrorBody, Message, PeerInfo, ProtocolRange};
 pub use version::negotiate;
 
 /// Highest protocol version this build speaks.

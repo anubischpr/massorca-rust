@@ -1,4 +1,4 @@
-use massorca_protocol::{ErrorBody, Message, PeerInfo, ProtocolRange};
+use massorca_protocol::{Auth, ErrorBody, Message, PeerInfo, ProtocolRange};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -45,7 +45,7 @@ fn hello_carries_auth_only_when_present() {
         protocol: ProtocolRange { min: 1, max: 1 },
         client: peer("massorca-cli"),
         capabilities: Vec::new(),
-        auth: Some(json!({ "kind": "local" })),
+        auth: Some(Auth::from(json!({ "kind": "local" }))),
     };
     assert_eq!(to_json(&with_auth)["auth"], json!({ "kind": "local" }));
     assert!(to_json(&hello_without_auth()).get("auth").is_none());
@@ -58,6 +58,7 @@ fn welcome_has_the_documented_wire_shape() {
         server: peer("massorca-service"),
         capabilities: vec!["service/1".to_owned(), "projects/1".to_owned()],
         connection_id: "conn-1".to_owned(),
+        max_frame_len: None,
     };
     assert_eq!(
         to_json(&message),
@@ -159,13 +160,14 @@ fn every_variant_round_trips_through_json() {
             protocol: ProtocolRange { min: 1, max: 2 },
             client: peer("massorca-cli"),
             capabilities: vec!["events/1".to_owned()],
-            auth: Some(json!({ "kind": "local" })),
+            auth: Some(Auth::from(json!({ "kind": "local" }))),
         },
         Message::Welcome {
             protocol: 1,
             server: peer("massorca-service"),
             capabilities: vec!["service/1".to_owned()],
             connection_id: "conn-1".to_owned(),
+            max_frame_len: Some(1_048_576),
         },
         Message::Request {
             id: 7,
@@ -350,4 +352,53 @@ fn an_older_receiver_decodes_rejected_as_unknown() {
     });
     let decoded: OldMessage = serde_json::from_value(rejected).expect("old receiver decodes");
     assert_eq!(decoded, OldMessage::Unknown);
+}
+
+#[test]
+fn response_with_both_result_and_error_fails_to_decode() {
+    let both = json!({
+        "type": "response",
+        "id": 1,
+        "result": true,
+        "error": { "code": "internal", "message": "boom" }
+    });
+    assert!(serde_json::from_value::<Message>(both).is_err());
+}
+
+#[test]
+fn response_with_neither_result_nor_error_fails_to_decode() {
+    let neither = json!({ "type": "response", "id": 1 });
+    assert!(serde_json::from_value::<Message>(neither).is_err());
+}
+
+#[test]
+fn welcome_carries_max_frame_len_only_when_set() {
+    let welcome = |max_frame_len| Message::Welcome {
+        protocol: 1,
+        server: peer("massorca-service"),
+        capabilities: Vec::new(),
+        connection_id: "conn-1".to_owned(),
+        max_frame_len,
+    };
+    let limited = to_json(&welcome(Some(1_048_576)));
+    assert_eq!(limited["max_frame_len"], json!(1_048_576));
+    assert_eq!(from_json(limited), welcome(Some(1_048_576)));
+
+    let default = to_json(&welcome(None));
+    assert!(default.get("max_frame_len").is_none());
+    assert_eq!(from_json(default), welcome(None));
+}
+
+#[test]
+fn hello_debug_redacts_auth() {
+    let hello = Message::Hello {
+        protocol: ProtocolRange { min: 1, max: 1 },
+        client: peer("massorca-cli"),
+        capabilities: Vec::new(),
+        auth: Some(Auth::from(json!({ "token": "s3cret-token" }))),
+    };
+    let printed = format!("{hello:?}");
+    assert!(!printed.contains("s3cret-token"), "{printed}");
+    assert!(printed.contains("<redacted>"), "{printed}");
+    assert_eq!(to_json(&hello)["auth"], json!({ "token": "s3cret-token" }));
 }
