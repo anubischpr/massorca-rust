@@ -20,10 +20,33 @@ use crate::registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 /// The items of a stream method. Each becomes an `event` frame; the stream ends when the sender is dropped.
 pub type StreamSource = mpsc::Receiver<Value>;
 
+/// One item of a stream: a JSON event, or raw bytes sent as a stream-bytes frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamItem {
+    Event(Value),
+    /// Needs the client's `binary-frames/1`; see [`MethodRegistry::register_byte_stream`].
+    Bytes(Vec<u8>),
+}
+
+impl From<Value> for StreamItem {
+    fn from(value: Value) -> Self {
+        Self::Event(value)
+    }
+}
+
+/// The items of a stream method that may send bytes. The stream ends when the sender is dropped.
+pub type ByteStreamSource = mpsc::Receiver<StreamItem>;
+
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type CallFn = dyn Fn(RequestCtx, Value) -> BoxFuture<Result<Value, ErrorBody>> + Send + Sync;
 type StreamFn =
-    dyn Fn(RequestCtx, Value) -> BoxFuture<Result<StreamSource, ErrorBody>> + Send + Sync;
+    dyn Fn(RequestCtx, Value) -> BoxFuture<Result<OpenedSource, ErrorBody>> + Send + Sync;
+
+/// The source a stream handler opened, as the dispatcher forwards it.
+pub(crate) enum OpenedSource {
+    Events(StreamSource),
+    Items(ByteStreamSource),
+}
 
 /// What runs when a method is called.
 #[derive(Clone)]
@@ -106,7 +129,32 @@ impl MethodRegistry {
             method,
             capability,
             permission,
-            stream_handler(handler),
+            stream_handler(handler, OpenedSource::Events),
+        )
+    }
+
+    /// Registers a method that opens a stream whose items may be bytes. Like `register_stream`, but `Bytes` items go out
+    /// as stream-bytes frames. The dispatcher does not check the client's `binary-frames/1`: a handler that opens one must
+    /// check `ctx.client_capabilities` first and refuse otherwise.
+    pub fn register_byte_stream<P, F, Fut>(
+        &self,
+        owner: Owner,
+        method: &str,
+        capability: &str,
+        permission: Permission,
+        handler: F,
+    ) -> Result<RegistrationHandle, MethodError>
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(RequestCtx, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ByteStreamSource, ErrorBody>> + Send + 'static,
+    {
+        self.insert(
+            owner,
+            method,
+            capability,
+            permission,
+            stream_handler(handler, OpenedSource::Items),
         )
     }
 
@@ -173,20 +221,21 @@ where
     ))
 }
 
-/// Wraps a stream handler: decodes the params and hands back the stream's source.
-fn stream_handler<P, F, Fut>(handler: F) -> Handler
+/// Wraps a stream handler: decodes the params and hands back the stream's source, tagged by `wrap`.
+fn stream_handler<P, S, F, Fut>(handler: F, wrap: fn(S) -> OpenedSource) -> Handler
 where
     P: DeserializeOwned + Send + 'static,
+    S: Send + 'static,
     F: Fn(RequestCtx, P) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<StreamSource, ErrorBody>> + Send + 'static,
+    Fut: Future<Output = Result<S, ErrorBody>> + Send + 'static,
 {
     let handler = Arc::new(handler);
     Handler::Stream(Arc::new(
-        move |ctx: RequestCtx, params: Value| -> BoxFuture<Result<StreamSource, ErrorBody>> {
+        move |ctx: RequestCtx, params: Value| -> BoxFuture<Result<OpenedSource, ErrorBody>> {
             let handler = Arc::clone(&handler);
             Box::pin(async move {
                 let params = decode_params::<P>(params)?;
-                handler(ctx, params).await
+                handler(ctx, params).await.map(wrap)
             })
         },
     ))

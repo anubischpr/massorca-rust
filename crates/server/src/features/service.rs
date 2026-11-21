@@ -18,6 +18,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::SERVICE, Owner::Core)?,
+        // Offered to every client: the frame kind is the transport's, so the service offers it as its own capability.
+        registries
+            .capabilities
+            .register(capabilities::BINARY_FRAMES, Owner::Core)?,
         registries.methods.register(
             Owner::Core,
             service::INFO,

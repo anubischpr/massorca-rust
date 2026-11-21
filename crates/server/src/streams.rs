@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use massorca_protocol::{ErrorBody, MAX_FRAME_LEN_LOCAL, Message, codes, fits_frame};
+use massorca_protocol::{
+    ErrorBody, Frame, MAX_FRAME_LEN_LOCAL, Message, codes, fits_frame, fits_stream_bytes,
+};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::method::StreamSource;
+use crate::method::StreamItem;
 
 /// The open streams of one connection. Removing a stream drops its cancel sender, which stops its forwarder.
 #[derive(Clone, Default)]
@@ -66,14 +68,16 @@ impl WeakStreamTable {
     }
 }
 
-/// Pushes one stream's items as `event` frames and closes it with `end`. A cancel, or a connection that is gone, stops it silently.
-pub(crate) async fn forward(
+/// Pushes one stream's items as `event` frames (bytes as stream-bytes frames) and closes it with `end`. A cancel, or a connection that is gone, stops it silently.
+pub(crate) async fn forward<T>(
     stream: u64,
-    mut source: StreamSource,
-    outbound: mpsc::Sender<Message>,
+    mut source: mpsc::Receiver<T>,
+    outbound: mpsc::Sender<Frame>,
     mut cancelled: oneshot::Receiver<()>,
     table: WeakStreamTable,
-) {
+) where
+    T: Into<StreamItem> + Send + 'static,
+{
     loop {
         // Cancellation is checked first, so a cancelled stream never sends another item.
         let item = tokio::select! {
@@ -81,40 +85,52 @@ pub(crate) async fn forward(
             _ = &mut cancelled => return,
             item = source.recv() => item,
         };
-        let Some(data) = item else {
+        let Some(item) = item else {
             table.release(stream);
             let _ = outbound
-                .send(Message::End {
+                .send(Frame::Message(Message::End {
                     stream,
                     error: None,
-                })
+                }))
                 .await;
             return;
         };
-        let event = Message::Event { stream, data };
+        let item: StreamItem = item.into();
+        let frame = match item {
+            StreamItem::Event(data) => Frame::Message(Message::Event { stream, data }),
+            StreamItem::Bytes(payload) => Frame::StreamBytes { stream, payload },
+        };
         // An item that cannot be framed ends its stream; the client would otherwise see the connection drop.
-        if !fits_frame(&event, MAX_FRAME_LEN_LOCAL) {
+        if !fits_item(&frame) {
             table.release(stream);
             let error = ErrorBody::new(
                 codes::STREAM_ITEM_TOO_LARGE,
                 "a stream item is larger than one frame may hold",
             );
             let _ = outbound
-                .send(Message::End {
+                .send(Frame::Message(Message::End {
                     stream,
                     error: Some(error),
-                })
+                }))
                 .await;
             return;
         }
         let sent = tokio::select! {
             biased;
             _ = &mut cancelled => return,
-            sent = outbound.send(event) => sent,
+            sent = outbound.send(frame) => sent,
         };
         if sent.is_err() {
             return;
         }
+    }
+}
+
+/// Whether one stream item's frame fits the local frame limit.
+fn fits_item(frame: &Frame) -> bool {
+    match frame {
+        Frame::Message(message) => fits_frame(message, MAX_FRAME_LEN_LOCAL),
+        Frame::StreamBytes { payload, .. } => fits_stream_bytes(payload, MAX_FRAME_LEN_LOCAL),
     }
 }
 

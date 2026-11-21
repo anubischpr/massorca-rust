@@ -212,6 +212,12 @@ pub fn fits_frame(message: &Message, max_len: u32) -> bool {
     u64::try_from(body).is_ok_and(|body| body <= u64::from(max_len))
 }
 
+/// Whether stream bytes of `payload` fit in one frame of `max_len` bytes, the check [`write_frame`] makes for them.
+pub fn fits_stream_bytes(payload: &[u8], max_len: u32) -> bool {
+    let body = STREAM_BYTES_HEADER_LEN + payload.len();
+    u64::try_from(body).is_ok_and(|body| body <= u64::from(max_len))
+}
+
 /// Reads the 4-byte length prefix; `None` if the stream ends before its first byte.
 #[cfg(feature = "tokio")]
 async fn read_length_prefix<R>(reader: &mut R) -> Result<Option<[u8; 4]>, FrameError>

@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use massorca_core_store::new_id;
 use massorca_protocol::{
-    ErrorBody, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, ProtocolRange,
-    codes, negotiate,
+    ErrorBody, Frame, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION,
+    ProtocolRange, codes, negotiate,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -36,8 +36,8 @@ pub(crate) struct Negotiated {
 
 /// Answers the first frame. `None` closes the connection; a refusal, when one is due, is already queued.
 pub(crate) async fn accept(
-    inbound: &mut mpsc::Receiver<Message>,
-    outbound: &mpsc::Sender<Message>,
+    inbound: &mut mpsc::Receiver<Frame>,
+    outbound: &mpsc::Sender<Frame>,
     state: &AppState,
 ) -> Option<Negotiated> {
     let first = match timeout(HELLO_TIMEOUT, inbound.recv()).await {
@@ -53,11 +53,11 @@ pub(crate) async fn accept(
             return None;
         }
     };
-    let Message::Hello {
+    let Frame::Message(Message::Hello {
         protocol,
         capabilities: offered,
         ..
-    } = first
+    }) = first
     else {
         refuse(
             outbound,
@@ -83,7 +83,7 @@ pub(crate) async fn accept(
         connection_id: connection_id.clone(),
         max_frame_len: Some(MAX_FRAME_LEN_LOCAL),
     };
-    outbound.send(welcome).await.ok()?;
+    outbound.send(Frame::Message(welcome)).await.ok()?;
     Some(Negotiated {
         connection_id,
         capabilities: capabilities.into_iter().collect(),
@@ -93,11 +93,11 @@ pub(crate) async fn accept(
 }
 
 /// The one place a handshake refusal is written: a `rejected` message names the range this service speaks.
-async fn refuse(outbound: &mpsc::Sender<Message>, error: ErrorBody) {
+async fn refuse(outbound: &mpsc::Sender<Frame>, error: ErrorBody) {
     let _ = outbound
-        .send(Message::Rejected {
+        .send(Frame::Message(Message::Rejected {
             error,
             supported: SUPPORTED,
-        })
+        }))
         .await;
 }
