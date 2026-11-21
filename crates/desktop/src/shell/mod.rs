@@ -62,6 +62,10 @@ pub struct Shell {
     /// The Settings search field; the text it settles on becomes `settings.query`.
     settings_search: Entity<SearchField>,
     _settings_search_changes: Subscription,
+    /// The workspace folder's text field, shown on the Settings page.
+    settings_folder: Entity<TextField>,
+    _settings_folder_changes: Subscription,
+    _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
     palette_input: Option<Entity<TextField>>,
     /// The control that had focus when the palette opened; focus returns to it.
@@ -136,6 +140,23 @@ impl Shell {
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let settings_folder =
+            cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
+        let folder_changes = cx.subscribe(
+            &settings_folder,
+            |shell, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Changed => {
+                    let text = field.read(cx).text().to_owned();
+                    shell.settings.folder.typed(&text);
+                    cx.notify();
+                }
+                TextFieldEvent::Submitted => shell.save_folder(cx),
+            },
+        );
+        let folder_focus = settings_folder.read(cx).focus_handle(cx);
+        let folder_blur = cx.on_blur(&folder_focus, window, |shell, window, cx| {
+            shell.save_folder_on_blur(window, cx);
+        });
         let settings_search_changes = cx.subscribe(
             &settings_search,
             |shell, _, event: &SearchFieldEvent, cx| {
@@ -154,6 +175,9 @@ impl Shell {
             settings: SettingsModel::default(),
             settings_search,
             _settings_search_changes: settings_search_changes,
+            settings_folder,
+            _settings_folder_changes: folder_changes,
+            _settings_folder_blur: folder_blur,
             palette_input: None,
             palette_restore: None,
             palette_events: None,
@@ -299,12 +323,16 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
+        self.refresh_folder(cx);
+        self.sync_folder_field(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
             connection,
             shell: shell.clone(),
+            folder: &self.settings.folder,
+            folder_field: &self.settings_folder,
         };
         let canvas = canvas::canvas(&self.model, &self.zones, settings, window, cx);
         let status = status_bar::status_bar(
@@ -424,6 +452,8 @@ impl Render for Shell {
                 } else if shell.model.usage_popover().is_some() {
                     shell.model.close_usage_popover();
                     cx.notify();
+                } else if shell.settings.folder.dirty() {
+                    shell.revert_folder(window, cx);
                 } else {
                     shell.model.close_overlay();
                     cx.notify();

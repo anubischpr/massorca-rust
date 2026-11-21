@@ -4,12 +4,17 @@
 
 use std::path::Path;
 
+use massorca_protocol::codes;
 use massorca_protocol::methods::config::ConfigValue;
+
+use crate::service::Refusal;
 
 use super::settings_sections::SettingsSection;
 
 /// The reason the folder row is off while the service is not connected.
 pub const NOT_CONNECTED: &str = "Connect to the service to change this.";
+/// The reason the folder row is off when the service could not be asked for the value.
+pub const READ_FAILED: &str = "Could not read the setting from the service.";
 /// The reason the folder row is off while the service has not answered yet.
 pub const LOADING: &str = "Loading from the service.";
 
@@ -29,10 +34,29 @@ pub fn folder_request(draft: &str) -> Result<String, &'static str> {
 pub fn folder_reason(connected: bool, folder: &FolderSetting) -> Option<&'static str> {
     if !connected {
         Some(NOT_CONNECTED)
-    } else if folder.stored.is_none() {
-        Some(LOADING)
-    } else {
+    } else if folder.stored.is_some() {
         None
+    } else if matches!(folder.status, Some(FolderStatus::Failed(_))) {
+        Some(READ_FAILED)
+    } else {
+        Some(LOADING)
+    }
+}
+
+/// The words for a refused folder write. The service's own message stays in the logs; the row
+/// says what the user can do.
+pub fn folder_refusal_text(refusal: &Refusal) -> String {
+    match refusal {
+        Refusal::Failed { code, .. } if code == codes::CONFIG_INVALID_VALUE => {
+            "Enter a full folder path.".to_owned()
+        }
+        Refusal::Failed { code, .. } if code == codes::CONFIG_UNKNOWN_KEY => {
+            "This setting is not available in this version.".to_owned()
+        }
+        Refusal::Unavailable { .. } => {
+            "The service is not connected. Nothing was saved.".to_owned()
+        }
+        other => other.message(),
     }
 }
 
@@ -74,6 +98,8 @@ pub struct FolderSetting {
     /// What the text field holds. It differs from the stored value while the user types.
     pub draft: String,
     pub status: Option<FolderStatus>,
+    /// A `config.list` is in flight, so the page does not ask again.
+    pub loading: bool,
 }
 
 impl FolderSetting {
@@ -97,6 +123,19 @@ impl FolderSetting {
     /// The service refused the draft: the draft stays, the stored value stays in effect.
     pub fn refused(&mut self, message: impl Into<String>) {
         self.status = Some(FolderStatus::Failed(message.into()));
+    }
+
+    /// The text field changed: the draft follows it and an old refusal no longer applies.
+    pub fn typed(&mut self, text: &str) {
+        text.clone_into(&mut self.draft);
+        if matches!(self.status, Some(FolderStatus::Failed(_))) {
+            self.status = None;
+        }
+    }
+
+    /// A save is with the service; the row says so until it answers.
+    pub fn begin_save(&mut self) {
+        self.status = Some(FolderStatus::Saving);
     }
 
     /// Escape: the draft goes back to the stored value.
@@ -200,5 +239,43 @@ mod tests {
         assert_eq!(folder.draft, "/srv/a");
         assert_eq!(folder.status, None);
         assert_eq!(folder.default_path(), DEFAULT);
+    }
+
+    #[test]
+    fn a_typed_draft_drops_an_old_refusal_and_a_failed_read_says_so() {
+        let mut folder = FolderSetting::default();
+        folder.refused("Enter a full folder path.");
+        folder.typed("/srv/next");
+        assert_eq!(folder.draft, "/srv/next");
+        assert_eq!(folder.status, None);
+        folder.refused("The service is not connected.");
+        assert_eq!(folder_reason(true, &folder), Some(READ_FAILED));
+        assert_eq!(folder_reason(false, &folder), Some(NOT_CONNECTED));
+    }
+
+    #[test]
+    fn a_refusal_says_what_the_user_can_do() {
+        let invalid = Refusal::Failed {
+            code: codes::CONFIG_INVALID_VALUE.into(),
+            message: "workspaces.default_root expects an absolute path".into(),
+        };
+        assert_eq!(folder_refusal_text(&invalid), "Enter a full folder path.");
+        let unknown = Refusal::Failed {
+            code: codes::CONFIG_UNKNOWN_KEY.into(),
+            message: "there is no setting".into(),
+        };
+        assert_eq!(
+            folder_refusal_text(&unknown),
+            "This setting is not available in this version."
+        );
+        assert_eq!(
+            folder_refusal_text(&Refusal::unavailable("the link is down")),
+            "The service is not connected. Nothing was saved."
+        );
+        let other = Refusal::Failed {
+            code: "config.other".into(),
+            message: "Boom.".into(),
+        };
+        assert_eq!(folder_refusal_text(&other), "Boom.");
     }
 }

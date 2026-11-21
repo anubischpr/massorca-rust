@@ -3,26 +3,37 @@
 //! others are drawn off with the reason, and nothing claims a change the service has not confirmed.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Entity, SharedString, WeakEntity, Window, div, px};
+use std::time::Duration;
+
+use gpui::{
+    AnyElement, App, Context, Entity, Focusable, KeyDownEvent, SharedString, WeakEntity, Window,
+    div, px,
+};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
+use massorca_ui::components::settings_row::RowStatus;
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection as SettingsGroup};
 use massorca_ui::components::switch::Switch;
+use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{
     LAYOUT_PAGE_SETTINGS, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_BODY_SM,
 };
 use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 
 use super::Shell;
-use crate::model::settings::SettingsModel;
+use crate::model::settings::{
+    FolderSetting, FolderStatus, FolderValue, SettingsModel, folder_reason, folder_refusal_text,
+    folder_request,
+};
 use crate::model::settings_sections::{
-    CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, Planned, RowBody, RowSpec, SettingsSection, hit_line,
-    rows, search,
+    CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, Planned, RowBody, RowSpec, SettingsSection,
+    WORKSPACE_FOLDER_KEY, hit_line, rows, search,
 };
 use crate::service::ConnectionState;
+use massorca_protocol::methods::config::ConfigSet;
 
 /// The navigation column's width (`layout.settings.nav`, 232 px, owner 2026-11-13).
 const NAV_WIDTH: f32 = 232.0;
@@ -34,6 +45,8 @@ pub(super) struct SettingsFrame<'a> {
     /// The state of This PC's service, for the Hosts section.
     pub connection: ConnectionState,
     pub shell: WeakEntity<Shell>,
+    pub folder: &'a FolderSetting,
+    pub folder_field: &'a Entity<TextField>,
 }
 
 /// The Settings page: navigation, search and the rows of the chosen section.
@@ -121,12 +134,14 @@ fn nav_item(
         item = item.trailing(Icon::new(IconName::ChevronRight));
     }
     let shell = shell.clone();
-    item.on_click(move |_, _, cx| {
-        let _ = shell.update(cx, |shell, cx| {
-            shell.settings.section = section;
-            cx.notify();
-        });
-    })
+    div()
+        .debug_selector(move || format!("settings-nav-{section:?}"))
+        .child(item.on_click(move |_, _, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.settings.section = section;
+                cx.notify();
+            });
+        }))
 }
 
 /// The Lucide icon of each navigation item (A69): person, bot, palette and so on.
@@ -254,10 +269,7 @@ fn row(
             row.disabled_reason(NOT_AVAILABLE),
             value_box(CONVERSATIONS_FOLDER, &theme),
         ),
-        RowBody::WorkspaceFolder => (
-            row.disabled_reason(NOT_AVAILABLE),
-            value_box("Not loaded", &theme),
-        ),
+        RowBody::WorkspaceFolder => folder_row(row, frame),
         RowBody::ThisPc => (row, value_box(host_word(&frame.connection), &theme)),
         RowBody::SetupChecklist => (
             row.disabled_reason(NOT_AVAILABLE),
@@ -295,5 +307,186 @@ fn host_word(connection: &ConnectionState) -> &'static str {
         ConnectionState::Connected { .. } => "Connected",
         ConnectionState::Reconnecting { .. } => "Reconnecting",
         ConnectionState::Unreachable { .. } => "Unreachable",
+    }
+}
+
+/// The workspace folder: the field the service's value fills, with the row's reason, status and reset.
+fn folder_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyElement) {
+    let mut row = row;
+    if let Some(reason) = folder_reason(frame.connection.is_connected(), frame.folder) {
+        row = row.disabled_reason(reason);
+    }
+    if let Some(status) = folder_status(frame.folder) {
+        row = row.status(status);
+    }
+    if frame.folder.modified() {
+        let shell = frame.shell.clone();
+        row = row.reset(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.reset_folder(cx));
+        });
+    }
+    // Escape puts the typed text back to the stored folder; the key reaches here from the field.
+    let shell = frame.shell.clone();
+    let control = div()
+        .debug_selector(|| "settings-folder".to_owned())
+        .w_full()
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if event.keystroke.key == "escape" {
+                let _ = shell.update(cx, |shell, cx| shell.revert_folder(window, cx));
+            }
+        })
+        .child(frame.folder_field.clone())
+        .into_any_element();
+    (row, control)
+}
+
+/// The status line the row shows for the folder's last change.
+fn folder_status(folder: &FolderSetting) -> Option<RowStatus> {
+    match folder.status.as_ref()? {
+        FolderStatus::Saving => Some(RowStatus::Saving),
+        FolderStatus::Saved => Some(RowStatus::Saved),
+        FolderStatus::Failed(message) => Some(RowStatus::Error(message.clone().into())),
+    }
+}
+
+/// How long "Saved" stays on the row (SettingsRow.md: about two seconds).
+const SAVED_FOR: Duration = Duration::from_secs(2);
+
+impl Shell {
+    /// Reads the workspace folder once the service is connected and the value is not known yet.
+    pub(super) fn refresh_folder(&mut self, cx: &mut Context<Self>) {
+        let connected = self.store.read(cx).state().connection.is_connected();
+        if !connected || self.settings.folder.stored.is_some() || self.settings.folder.loading {
+            return;
+        }
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        self.settings.folder.loading = true;
+        cx.spawn(async move |this, cx| {
+            let result = service.config_list().await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.settings.folder.loading = false;
+                match result {
+                    Ok(list) => match list
+                        .values
+                        .iter()
+                        .find(|value| value.key == WORKSPACE_FOLDER_KEY)
+                    {
+                        Some(value) => shell
+                            .settings
+                            .folder
+                            .loaded(FolderValue::from_config(value)),
+                        None => shell
+                            .settings
+                            .folder
+                            .refused("This setting is not available in this version."),
+                    },
+                    Err(refusal) => shell.settings.folder.refused(folder_refusal_text(&refusal)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Enter in the field: check the typed folder, then ask the service to store it.
+    pub(super) fn save_folder(&mut self, cx: &mut Context<Self>) {
+        match folder_request(&self.settings.folder.draft) {
+            Ok(path) => self.send_folder(path, cx),
+            Err(message) => {
+                self.settings.folder.refused(message);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Leaving the field applies what was typed, as the Settings apply model says.
+    pub(super) fn save_folder_on_blur(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.folder.dirty() {
+            self.save_folder(cx);
+        }
+    }
+
+    /// Reset to default: the service stores the default folder it reported.
+    pub(super) fn reset_folder(&mut self, cx: &mut Context<Self>) {
+        if let Some(default) = self
+            .settings
+            .folder
+            .stored
+            .as_ref()
+            .map(|value| value.default.clone())
+        {
+            self.send_folder(default, cx);
+        }
+    }
+
+    /// Escape: the field shows the stored folder again and the row forgets its last refusal.
+    pub(super) fn revert_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.folder.revert();
+        let draft = self.settings.folder.draft.clone();
+        let field = self.settings_folder.clone();
+        field.update(cx, |field, cx| field.set_text(&draft, window, cx));
+        cx.notify();
+    }
+
+    /// Keeps the field in step with the model: off while the setting cannot change, and showing the
+    /// stored folder when the user is not typing in it.
+    pub(super) fn sync_folder_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let connected = self.store.read(cx).state().connection.is_connected();
+        let reason = folder_reason(connected, &self.settings.folder);
+        let draft = self.settings.folder.draft.clone();
+        let field = self.settings_folder.clone();
+        field.update(cx, |field, cx| {
+            field.set_disabled(reason.is_some(), cx);
+            if !field.focus_handle(cx).is_focused(window) && field.text() != draft {
+                field.set_text(&draft, window, cx);
+            }
+        });
+    }
+
+    /// Stores the folder with the service. The row says "Saved" only once the service answers so.
+    fn send_folder(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            self.settings
+                .folder
+                .refused("The service is not connected. Nothing was saved.");
+            cx.notify();
+            return;
+        };
+        self.settings.folder.begin_save();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = service
+                .config_set(ConfigSet {
+                    owner: None,
+                    key: WORKSPACE_FOLDER_KEY.to_owned(),
+                    value: path.into(),
+                })
+                .await;
+            let _ = this.update(cx, |shell, cx| {
+                match result {
+                    Ok(value) => {
+                        shell
+                            .settings
+                            .folder
+                            .saved(FolderValue::from_config(&value));
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(SAVED_FOR).await;
+                            let _ = this.update(cx, |shell, cx| {
+                                if shell.settings.folder.status == Some(FolderStatus::Saved) {
+                                    shell.settings.folder.status = None;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                    Err(refusal) => shell.settings.folder.refused(folder_refusal_text(&refusal)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
