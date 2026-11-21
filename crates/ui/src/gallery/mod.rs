@@ -1,6 +1,6 @@
 //! The component gallery: every component with its states, in the current
 //! theme, with a toggle to the other theme (decision 0025). Opened only by a
-//! person; automated runs use `render_all_headless` instead.
+//! person; automated runs shoot every story headlessly (`crates/ui/tests/screenshots.rs`).
 
 mod controls;
 mod feedback;
