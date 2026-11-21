@@ -44,6 +44,16 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::CONFIG_UNKNOWN_KEY, "config.unknown_key"),
     (codes::CONFIG_INVALID_VALUE, "config.invalid_value"),
     (codes::STORE_NEWER_SCHEMA, "store.newer_schema"),
+    (codes::TERMINAL_NOT_FOUND, "terminal.not_found"),
+    (codes::TERMINAL_EXITED, "terminal.exited"),
+    (codes::TERMINAL_SPAWN_FAILED, "terminal.spawn_failed"),
+    (codes::TERMINAL_INPUT_TOO_LARGE, "terminal.input_too_large"),
+    (
+        codes::TERMINAL_BINARY_FRAMES_REQUIRED,
+        "terminal.binary_frames_required",
+    ),
+    (codes::TERMINAL_INVALID_SIZE, "terminal.invalid_size"),
+    (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 

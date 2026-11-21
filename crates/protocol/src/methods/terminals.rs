@@ -1,5 +1,6 @@
 //! Terminal methods: shells in pseudo-terminals that outlive their clients (capability `terminals/1`, decision 0035).
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -102,6 +103,36 @@ pub struct TerminalAttachParams {
 pub struct TerminalInputParams {
     pub terminal: String,
     pub data: String,
+}
+
+impl TerminalInputParams {
+    /// Params that type `bytes` into `terminal`.
+    pub fn from_bytes(terminal: impl Into<String>, bytes: &[u8]) -> Self {
+        Self {
+            terminal: terminal.into(),
+            data: STANDARD.encode(bytes),
+        }
+    }
+
+    /// The bytes to write. Fails on bad base64 and on more than [`MAX_INPUT_BYTES`] decoded bytes.
+    pub fn decode_data(&self) -> Result<Vec<u8>, InputDecodeError> {
+        let bytes = STANDARD
+            .decode(&self.data)
+            .map_err(|_| InputDecodeError::InvalidBase64)?;
+        if bytes.len() > MAX_INPUT_BYTES {
+            return Err(InputDecodeError::TooLarge { len: bytes.len() });
+        }
+        Ok(bytes)
+    }
+}
+
+/// Why the `data` of `terminal.input` cannot be written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InputDecodeError {
+    #[error("terminal input is not padded standard base64")]
+    InvalidBase64,
+    #[error("terminal input decodes to {len} bytes, above the per-call limit")]
+    TooLarge { len: usize },
 }
 
 /// Params of `terminal.resize`.
@@ -218,4 +249,65 @@ pub enum AttachEvent {
     /// A kind this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
+}
+
+/// Bytes before a chunk's data: the tag and the `u64` offset.
+const CHUNK_HEADER_LEN: usize = 9;
+
+/// What a binary chunk carries, read from its tag byte (0035).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkKind {
+    /// Tag `0x00`: PTY output starting at the chunk's offset.
+    Output,
+    /// Tag `0x01`: part of the snapshot that the preceding `snapshot` event announced.
+    Snapshot,
+    /// Any other tag; readers ignore these.
+    Unknown(u8),
+}
+
+impl ChunkKind {
+    fn tag(self) -> u8 {
+        match self {
+            Self::Output => 0x00,
+            Self::Snapshot => 0x01,
+            Self::Unknown(tag) => tag,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Self {
+        match tag {
+            0x00 => Self::Output,
+            0x01 => Self::Snapshot,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+/// One decoded binary chunk. `bytes` borrows from the frame payload it came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chunk<'a> {
+    pub kind: ChunkKind,
+    /// Offset of `bytes[0]`; for a snapshot part, the snapshot's offset.
+    pub offset: u64,
+    pub bytes: &'a [u8],
+}
+
+/// Encodes a chunk: tag, `offset` (u64 big-endian), then `bytes`.
+pub fn encode_chunk(kind: ChunkKind, offset: u64, bytes: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(CHUNK_HEADER_LEN + bytes.len());
+    payload.push(kind.tag());
+    payload.extend_from_slice(&offset.to_be_bytes());
+    payload.extend_from_slice(bytes);
+    payload
+}
+
+/// Decodes a chunk; `None` when the payload is shorter than the 9-byte header.
+pub fn decode_chunk(payload: &[u8]) -> Option<Chunk<'_>> {
+    let (&tag, rest) = payload.split_first()?;
+    let (offset, bytes) = rest.split_first_chunk::<8>()?;
+    Some(Chunk {
+        kind: ChunkKind::from_tag(tag),
+        offset: u64::from_be_bytes(*offset),
+        bytes,
+    })
 }
