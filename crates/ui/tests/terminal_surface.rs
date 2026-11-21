@@ -97,3 +97,27 @@ fn keys_the_app_keeps_are_not_sent_to_the_program(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("f6 ctrl-tab");
     assert!(sent.borrow().is_empty());
 }
+
+#[gpui::test]
+fn drawing_the_surface_reports_the_grid_its_pane_fits(cx: &mut TestAppContext) {
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&reported);
+    let (surface, cx) = cx.add_window_view(|_, cx| {
+        TerminalSurface::new(80, 24, cx).on_resize(move |cols, rows, _, _| {
+            recorder.borrow_mut().push((cols, rows));
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let (columns, lines) = surface.update(cx, |surface, _| {
+        (surface.feed().columns(), surface.feed().lines())
+    });
+    assert!(
+        columns >= 2 && lines >= 1,
+        "the grid is {columns} x {lines}"
+    );
+    assert_eq!(
+        reported.borrow().last().copied(),
+        Some((columns as u16, lines as u16)),
+    );
+}
