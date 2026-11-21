@@ -21,6 +21,7 @@ pub mod segmented_control;
 pub mod select;
 pub mod sidebar_row;
 pub mod skeleton;
+pub mod splitter;
 pub mod switch;
 pub mod text_field;
 pub mod toast;
