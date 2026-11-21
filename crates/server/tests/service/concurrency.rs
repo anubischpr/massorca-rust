@@ -262,3 +262,27 @@ async fn a_disconnected_client_cancels_the_requests_it_left_in_flight() {
     .expect("the handler is cancelled once the service sees the disconnect");
     stop(running).await;
 }
+
+/// Calls beyond what the client's queues hold wait their turn; every one of them is answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_calls_larger_than_the_queues_completes_every_call() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let calls: Vec<_> = (0..600)
+        .map(|_| {
+            let client = client.clone();
+            tokio::spawn(async move { client.service_info().await.map(|info| info.profile) })
+        })
+        .collect();
+    for call in calls {
+        let profile = timeout(Duration::from_secs(20), call)
+            .await
+            .expect("the burst drains in time")
+            .expect("the task finishes")
+            .expect("service.info answers");
+        assert_eq!(profile, "default");
+    }
+    stop(running).await;
+}

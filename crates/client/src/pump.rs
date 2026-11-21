@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use massorca_protocol::{ErrorBody, Message};
+use massorca_protocol::{ErrorBody, Message, codes};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -23,7 +23,7 @@ pub(crate) enum Pending {
     /// The answer names the stream. Its items are routed from the moment the answer is read, so none can arrive unrouted.
     Subscribe {
         reply: oneshot::Sender<Reply>,
-        items: mpsc::UnboundedSender<Item>,
+        items: mpsc::Sender<Item>,
     },
 }
 
@@ -31,7 +31,7 @@ pub(crate) enum Pending {
 struct Routes {
     closed: bool,
     pending: HashMap<u64, Pending>,
-    streams: HashMap<u64, mpsc::UnboundedSender<Item>>,
+    streams: HashMap<u64, mpsc::Sender<Item>>,
 }
 
 /// State shared by the client handles and the pump of one connection.
@@ -99,22 +99,28 @@ impl Shared {
         }
     }
 
+    /// Queues one event for its subscriber. A subscriber whose queue is full is ended with `stream.overflow`. The last
+    /// slot is kept back for that error, so it always fits, and events never take it.
     fn deliver(&self, stream: u64, data: Value) {
         let mut routes = lock(&self.routes);
-        let gone = match routes.streams.get(&stream) {
-            Some(items) => items.send(Ok(data)).is_err(),
+        let ended = match routes.streams.get(&stream) {
+            Some(items) if items.capacity() > 1 => items.try_send(Ok(data)).is_err(),
+            Some(items) => {
+                let _ = items.try_send(Err(overflow()));
+                true
+            }
             None => false,
         };
-        if gone {
+        if ended {
             routes.streams.remove(&stream);
         }
     }
 
     fn end(&self, stream: u64, error: Option<ErrorBody>) {
         let ended = lock(&self.routes).streams.remove(&stream);
-        // Dropping the sender ends the subscription; an error is delivered just before that.
+        // Dropping the sender ends the subscription; an error is delivered just before that, in the slot kept for it.
         if let (Some(items), Some(error)) = (ended, error) {
-            let _ = items.send(Err(error));
+            let _ = items.try_send(Err(error));
         }
     }
 }
@@ -139,6 +145,13 @@ pub(crate) async fn run(
     shared.close();
     reader.abort();
     writer.abort();
+}
+
+fn overflow() -> ErrorBody {
+    ErrorBody::new(
+        codes::STREAM_OVERFLOW,
+        "the subscriber fell behind, so the stream ended",
+    )
 }
 
 fn reply(result: Option<Value>, error: Option<ErrorBody>) -> Reply {

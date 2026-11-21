@@ -10,6 +10,7 @@ use massorca_protocol::methods::events::Subscribed;
 use massorca_protocol::{MAX_FRAME_LEN_LOCAL, Message, fits_frame};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::connect;
@@ -21,13 +22,17 @@ use crate::subscription::Subscription;
 use crate::transport;
 
 const INBOUND_CAPACITY: usize = 64;
+/// Requests and cancels queued for the writer. A caller waits for room rather than queueing without limit.
+const OUTBOUND_CAPACITY: usize = 256;
+/// Items a subscriber may leave unread before its stream ends with `stream.overflow`.
+const SUBSCRIPTION_CAPACITY: usize = 256;
 
 /// A connection to a service. Clones share it, and it ends when the last clone is dropped.
 #[derive(Clone)]
 pub struct Client {
     shared: Arc<Shared>,
     welcome: Arc<Welcome>,
-    outbound: mpsc::UnboundedSender<Message>,
+    outbound: mpsc::Sender<Message>,
 }
 
 impl fmt::Debug for Client {
@@ -64,7 +69,8 @@ impl Client {
         R: DeserializeOwned,
     {
         let (reply, answer) = oneshot::channel();
-        self.send_request(method, params, Pending::Call(reply))?;
+        self.send_request(method, encode_params(params)?, Pending::Call(reply))
+            .await?;
         let value = answer
             .await
             .map_err(|_| ClientError::Disconnected)?
@@ -78,8 +84,14 @@ impl Client {
         P: Serialize + ?Sized,
     {
         let (reply, answer) = oneshot::channel();
-        let (items, received) = mpsc::unbounded_channel();
-        self.send_request(method, params, Pending::Subscribe { reply, items })?;
+        // One slot beyond the limit is kept for the error that ends a subscriber which falls behind.
+        let (items, received) = mpsc::channel(SUBSCRIPTION_CAPACITY + 1);
+        self.send_request(
+            method,
+            encode_params(params)?,
+            Pending::Subscribe { reply, items },
+        )
+        .await?;
         let value = answer
             .await
             .map_err(|_| ClientError::Disconnected)?
@@ -93,12 +105,12 @@ impl Client {
         ))
     }
 
-    fn send_request<P>(&self, method: &str, params: &P, pending: Pending) -> Result<(), ClientError>
-    where
-        P: Serialize + ?Sized,
-    {
-        let params = serde_json::to_value(params)
-            .map_err(|error| ClientError::Protocol(error.to_string()))?;
+    async fn send_request(
+        &self,
+        method: &str,
+        params: Value,
+        pending: Pending,
+    ) -> Result<(), ClientError> {
         let id = self.shared.next_id();
         let request = Message::Request {
             id,
@@ -115,7 +127,7 @@ impl Client {
             )));
         }
         self.shared.register(id, pending)?;
-        if self.outbound.send(request).is_err() {
+        if self.outbound.send(request).await.is_err() {
             self.shared.forget(id);
             return Err(ClientError::Disconnected);
         }
@@ -126,7 +138,7 @@ impl Client {
     pub(crate) fn open(stream: Stream, welcome: Welcome) -> Self {
         let stream = Arc::new(stream);
         let (inbound_tx, inbound) = mpsc::channel(INBOUND_CAPACITY);
-        let (outbound, outbound_rx) = mpsc::unbounded_channel();
+        let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
         let reader = tokio::spawn(transport::read_frames(Arc::clone(&stream), inbound_tx));
         let writer = tokio::spawn(transport::write_frames(stream, outbound_rx));
         let shared = Arc::new(Shared::default());
@@ -137,4 +149,9 @@ impl Client {
             outbound,
         }
     }
+}
+
+/// Encodes call params. A value that cannot be encoded is reported before anything is sent.
+fn encode_params<P: Serialize + ?Sized>(params: &P) -> Result<Value, ClientError> {
+    serde_json::to_value(params).map_err(|error| ClientError::Protocol(error.to_string()))
 }
