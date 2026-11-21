@@ -25,8 +25,9 @@ pub use snapshot::{RenderCell, RenderCursor, RenderSnapshot};
 /// Scrollback kept per terminal: the default of the desktop setting.
 const SCROLLBACK_LINES: usize = 10_000;
 /// The service's size limits (decision 0033), so a resize cannot ask for more.
-const MAX_COLUMNS: usize = 1000;
-const MAX_LINES: usize = 500;
+pub const MAX_COLUMNS: usize = 1000;
+/// The service's line limit (decision 0033).
+pub const MAX_LINES: usize = 500;
 /// Replies the program has not taken yet. A cursor report is 6 bytes, so this is generous.
 const MAX_REPLY_BYTES: usize = 4096;
 

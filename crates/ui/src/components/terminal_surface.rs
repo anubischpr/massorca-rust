@@ -3,4 +3,6 @@
 
 pub mod colors;
 pub mod feed;
+pub mod geometry;
+pub mod grid_paint;
 pub mod keys;
