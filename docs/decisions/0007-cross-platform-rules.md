@@ -45,3 +45,5 @@ Status: accepted, 2026-11-20.
 
 - A test suite that passes on Windows and Linux is the gate for every pull
   request (CI runs both).
+- The core-git tests also run on a Git 2.25.5 build in CI (job
+  `core-git-baseline`), so the baseline is checked, not only declared.
