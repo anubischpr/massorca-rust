@@ -1,8 +1,38 @@
 use std::fs;
+use std::path::PathBuf;
 
+use massorca_core_store::new_id;
 use massorca_protocol::codes;
+use massorca_protocol::methods::projects::ProjectKind;
 
 use crate::fixture::{Fixture, expect_code, project_add, text};
+
+/// A directory in the service's working directory, named by a fresh id and removed on drop. A
+/// bare word selector that names it must not select it, because a bare word is never a path.
+struct ProbeDir(PathBuf);
+
+impl ProbeDir {
+    fn create() -> Self {
+        let path = std::env::current_dir()
+            .expect("working directory")
+            .join(format!("selector-probe-{}", new_id()));
+        fs::create_dir_all(&path).expect("create probe directory");
+        Self(path)
+    }
+
+    fn name(&self) -> &str {
+        self.0
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("probe name is UTF-8")
+    }
+}
+
+impl Drop for ProbeDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 #[test]
 fn a_project_resolves_by_id_then_name_then_path() {
@@ -124,5 +154,40 @@ fn a_relative_path_selector_is_refused_rather_than_resolved_against_the_service_
     expect_code(
         fx.workspaces.show_project("../repo"),
         massorca_protocol::codes::REQUEST_INVALID_PARAMS,
+    );
+}
+
+#[test]
+fn a_bare_word_naming_a_directory_in_the_service_directory_is_not_a_project_path() {
+    let fx = Fixture::new();
+    let probe = ProbeDir::create();
+    let mut params = project_add(&probe.0);
+    params.kind = Some(ProjectKind::Folder);
+    params.name = Some("elsewhere-project".into());
+    fx.workspaces
+        .add_project(params)
+        .expect("add the probe as a folder project");
+
+    expect_code(
+        fx.workspaces.show_project(probe.name()),
+        codes::PROJECT_NOT_FOUND,
+    );
+}
+
+#[test]
+fn a_bare_word_naming_a_directory_in_the_service_directory_is_not_a_workspace_path() {
+    let fx = Fixture::new();
+    let probe = ProbeDir::create();
+    let mut params = project_add(&probe.0);
+    params.kind = Some(ProjectKind::Folder);
+    params.name = Some("elsewhere-project".into());
+    fx.workspaces
+        .add_project(params)
+        .expect("add the probe as a folder project");
+    fx.create("elsewhere-project", "elsewhere");
+
+    expect_code(
+        fx.workspaces.show_workspace(probe.name()),
+        codes::WORKSPACE_NOT_FOUND,
     );
 }
