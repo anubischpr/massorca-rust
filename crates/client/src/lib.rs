@@ -1,12 +1,18 @@
 //! The client of the MassOrca service: connects to a profile's endpoint, starts the service when allowed, and makes typed
 //! calls and subscriptions over one connection (ADR 0002, 0003).
 
+mod client;
+mod connect;
 mod error;
 mod handshake;
 mod options;
+mod pump;
 mod spawn;
+mod subscription;
 mod transport;
 
+pub use client::Client;
 pub use error::ClientError;
 pub use handshake::Welcome;
 pub use options::{Autostart, ConnectOptions};
+pub use subscription::Subscription;
