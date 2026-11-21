@@ -25,24 +25,45 @@ pub(crate) async fn connect(
     options: ConnectOptions,
 ) -> Result<Client, ClientError> {
     let name = local_socket_name(profile)?;
-    let mut stream = match Stream::connect(name.clone()).await {
-        Ok(stream) => stream,
+    let deadline = Instant::now() + options.connect_timeout;
+    loop {
+        let mut stream = establish(profile, name.clone(), &options).await?;
+        ensure_trusted_endpoint(&stream)?;
+        match handshake::exchange(&mut stream, &options.client).await {
+            Ok(welcome) => return Ok(Client::open(stream, welcome)),
+            // A service that is letting go of the endpoint may close a connection before welcome. With autostart allowed,
+            // the next attempt reaches its successor or starts one.
+            Err(ClientError::Disconnected)
+                if options.autostart.is_some() && Instant::now() < deadline =>
+            {
+                sleep(INITIAL_PAUSE).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// The first connection of a client: reaches the endpoint, or starts the service when nothing listens and autostart is set.
+async fn establish(
+    profile: &Profile,
+    name: Name<'static>,
+    options: &ConnectOptions,
+) -> Result<Stream, ClientError> {
+    match Stream::connect(name.clone()).await {
+        Ok(stream) => Ok(stream),
         Err(error) if nobody_listens(&error) => match &options.autostart {
             Some(autostart) => {
                 spawn::service_run(profile, autostart)?;
-                wait_for_listener(name, options.connect_timeout).await?
+                wait_for_listener(name, options.connect_timeout).await
             }
-            None => return Err(ClientError::Unavailable(error)),
+            None => Err(ClientError::Unavailable(error)),
         },
         // The endpoint is still held by a service that is letting go of it, so wait for it as a start would.
         Err(error) if options.autostart.is_some() && is_busy(&error) => {
-            wait_for_listener(name, options.connect_timeout).await?
+            wait_for_listener(name, options.connect_timeout).await
         }
-        Err(error) => return Err(ClientError::Unavailable(error)),
-    };
-    ensure_trusted_endpoint(&stream)?;
-    let welcome = handshake::exchange(&mut stream, &options.client).await?;
-    Ok(Client::open(stream, welcome))
+        Err(error) => Err(ClientError::Unavailable(error)),
+    }
 }
 
 /// Refuses an endpoint another user serves, or whose owner cannot be read. Runs before the first `hello`, so no request
