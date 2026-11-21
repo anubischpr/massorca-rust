@@ -13,7 +13,7 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
     TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
-use massorca_protocol::methods::projects::ProjectRef;
+use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
@@ -47,6 +47,10 @@ pub(crate) enum Command {
     Remove {
         params: WorkspaceRemoveParams,
         reply: oneshot::Sender<Result<WorkspaceRemoved, Refusal>>,
+    },
+    AddProject {
+        params: ProjectAddParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
     },
     Stop,
 }
@@ -115,6 +119,17 @@ impl ServiceHandle {
         let (reply, answer) = oneshot::channel();
         self.commands
             .send(Command::Create { params, reply })
+            .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
+        answer
+            .await
+            .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `project.add`. The project list changes through the resulting event, not from this answer.
+    pub async fn add_project(&self, params: ProjectAddParams) -> Result<Project, Refusal> {
+        let (reply, answer) = oneshot::channel();
+        self.commands
+            .send(Command::AddProject { params, reply })
             .map_err(|_| Refusal::unavailable(BRIDGE_STOPPED))?;
         answer
             .await
@@ -426,6 +441,15 @@ fn spawn_call(client: &Client, command: Command) {
                 let _ = reply.send(result);
             });
         }
+        Command::AddProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .project_add(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         Command::RetryNow | Command::Stop => {}
     }
 }
@@ -438,6 +462,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Remove { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AddProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::RetryNow | Command::Stop => {}

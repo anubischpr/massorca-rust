@@ -18,6 +18,9 @@ pub enum Refusal {
     MainWorktree { message: String },
     /// The name is taken or not usable. Shown under the name field.
     NameProblem { message: String },
+    /// The folder is missing, not a folder, already a project, or not a Git repository. Shown
+    /// under the path field of "Add a project".
+    PathProblem { message: String },
     /// Any other answer of the service.
     Failed { code: String, message: String },
     /// The service could not be reached for this call.
@@ -40,6 +43,7 @@ impl Refusal {
             Self::Locked { message }
             | Self::MainWorktree { message }
             | Self::NameProblem { message }
+            | Self::PathProblem { message }
             | Self::Failed { message, .. }
             | Self::Unavailable { message } => message.clone(),
         }
@@ -62,6 +66,12 @@ impl From<&ClientError> for Refusal {
                 codes::WORKSPACE_NAME_TAKEN
                 | codes::WORKSPACE_NAME_INVALID
                 | codes::WORKSPACE_PATH_TAKEN => Self::NameProblem {
+                    message: body.message.clone(),
+                },
+                codes::PATH_NOT_FOUND
+                | codes::PATH_NOT_DIRECTORY
+                | codes::PROJECT_EXISTS
+                | codes::PROJECT_NOT_GIT => Self::PathProblem {
                     message: body.message.clone(),
                 },
                 code => Self::Failed {
@@ -150,5 +160,20 @@ mod tests {
             Refusal::from(&ClientError::Disconnected),
             Refusal::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn path_and_project_refusals_show_under_the_path_field() {
+        for code in [
+            codes::PATH_NOT_FOUND,
+            codes::PATH_NOT_DIRECTORY,
+            codes::PROJECT_EXISTS,
+            codes::PROJECT_NOT_GIT,
+        ] {
+            assert!(
+                matches!(Refusal::from(&remote(code)), Refusal::PathProblem { .. }),
+                "{code} belongs under the path field"
+            );
+        }
     }
 }

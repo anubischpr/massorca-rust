@@ -320,6 +320,11 @@ impl Render for Shell {
             .create
             .as_ref()
             .map(|dialog| workspace_dialog_views::create_dialog(dialog, &projects, &shell, cx));
+        let add_project = self
+            .dialogs
+            .add_project
+            .as_ref()
+            .map(|dialog| workspace_dialog_views::add_project_dialog(dialog, &shell, cx));
         let remove = self
             .dialogs
             .remove
@@ -380,6 +385,7 @@ impl Render for Shell {
             )
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(create, |el, dialog| el.child(dialog))
+            .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
     }

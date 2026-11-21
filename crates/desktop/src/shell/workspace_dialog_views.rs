@@ -1,7 +1,7 @@
 //! The create-workspace and remove-workspace dialogs, drawn from their flows (decision 0028).
 
 use super::Shell;
-use super::workspace_dialogs::CreateDialog;
+use super::workspace_dialogs::{AddProjectDialog, CreateDialog};
 use crate::model::workspace_flow::{DialogKind, ProjectChoice, RemoveFlow};
 use gpui::{App, Focusable, WeakEntity, div, prelude::*, px};
 use massorca_protocol::methods::projects::Project;
@@ -90,6 +90,35 @@ pub(super) fn create_dialog(
         dialog_view = dialog_view.error(error.clone());
     }
     dialog_view
+}
+
+/// "Add a project…": one path field. A refusal about the path shows under it, any other refusal in
+/// the dialog (A38).
+pub(super) fn add_project_dialog(
+    dialog: &AddProjectDialog,
+    shell: &WeakEntity<Shell>,
+    cx: &App,
+) -> Dialog {
+    let form = &dialog.form;
+    let (on_action, on_dismiss) = (shell.clone(), shell.clone());
+    let mut view = Dialog::new("add-project", "Add a project")
+        .open(true)
+        .variant(DialogVariant::OneField)
+        .child(dialog.path.clone())
+        .field(dialog.path.read(cx).focus_handle(cx))
+        .action("Add project")
+        .action_disabled(!form.can_submit())
+        .busy(form.busy)
+        .on_action(move |_, cx| {
+            let _ = on_action.update(cx, |shell, cx| shell.submit_add_project(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = on_dismiss.update(cx, |shell, cx| shell.close_add_project(cx));
+        });
+    if let Some(error) = &form.error {
+        view = view.error(error.clone());
+    }
+    view
 }
 
 /// The remove dialog for the flow's current stage: confirm, one waiver, or a plain refusal.
