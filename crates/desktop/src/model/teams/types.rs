@@ -216,10 +216,36 @@ pub struct WebAddress {
     pub token: String,
 }
 
+impl WebAddress {
+    /// The address with its token hidden: only the host and the path prefix show (decision 7).
+    pub fn masked(&self) -> String {
+        format!("https://{}/hook/••••••", self.host.to_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_web_address_never_shows_its_token() {
+        let address = WebAddress {
+            id: AddressId(1),
+            name: "Release hook".into(),
+            host: "VPS".into(),
+            created: "11 Nov 2026".into(),
+            token: "9f2c7d1e0ab84c6f".into(),
+        };
+        assert_eq!(address.masked(), "https://vps/hook/••••••");
+        assert!(!address.masked().contains(&address.token));
+    }
+}
+
 /// Which tab of the memory an entry sits under (D-AG-26).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MemoryTab {
     Bot,
+    #[default]
     Team,
 }
 

@@ -3,8 +3,8 @@
 
 use super::page::TeamPage;
 use super::types::{
-    AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, Pick, Project, ProjectId, RoutineId,
-    Task, Team, TeamId,
+    AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
+    RoutineId, Task, Team, TeamId,
 };
 use crate::model::shell::Agent;
 
@@ -67,6 +67,8 @@ pub struct TeamsState {
     selected: Option<TeamId>,
     /// A Board card picked up with the keyboard and not yet dropped.
     pick: Option<Pick>,
+    /// The memory tab the Memory page shows.
+    memory_tab: MemoryTab,
     next_id: u32,
 }
 
@@ -85,6 +87,7 @@ impl TeamsState {
             teams,
             selected: None,
             pick: None,
+            memory_tab: MemoryTab::default(),
             next_id,
         }
     }
@@ -118,6 +121,14 @@ impl TeamsState {
 
     pub fn pick(&self) -> Option<&Pick> {
         self.pick.as_ref()
+    }
+
+    pub fn memory_tab(&self) -> MemoryTab {
+        self.memory_tab
+    }
+
+    pub fn set_memory_tab(&mut self, tab: MemoryTab) {
+        self.memory_tab = tab;
     }
 
     pub fn create_team(&mut self, new: NewTeam) -> Result<TeamId, TeamError> {

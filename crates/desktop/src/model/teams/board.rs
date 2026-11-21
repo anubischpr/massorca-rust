@@ -2,7 +2,34 @@
 //! places, then drop it or cancel. A move changes the column only; it starts and stops nothing.
 
 use super::state::{TeamError, TeamsState};
-use super::types::{BoardOwner, Column, Pick, TaskId};
+use super::types::{BoardOwner, Column, Pick, Task, TaskId};
+use crate::model::shell::HostReach;
+
+/// One card of a Board column, as the page draws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CardView {
+    pub id: TaskId,
+    pub title: String,
+    pub bot: Option<String>,
+    pub time: Option<String>,
+    pub note: Option<String>,
+    pub reach: HostReach,
+    /// The card is picked up for a move and drawn raised.
+    pub lifted: bool,
+}
+
+/// One column of a Board and its cards, in the order they show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColumnView {
+    pub column: Column,
+    pub cards: Vec<CardView>,
+}
+
+/// A Board as the page draws it: its four columns, with a picked card already in its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardView {
+    pub columns: Vec<ColumnView>,
+}
 
 /// An arrow key, as the Board reads it while a card is picked up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +152,46 @@ impl TeamsState {
         })
     }
 
+    /// The Board as the page draws it. A picked card sits where the keys would drop it.
+    pub fn board_view(&self, board: BoardOwner) -> Option<BoardView> {
+        let team = match board {
+            BoardOwner::Team(team) | BoardOwner::Project(team, _) => self.team(team)?,
+        };
+        let tasks = self.tasks(board)?;
+        let pick = self.pick().filter(|pick| pick.board == board);
+        let card = |task: &Task| CardView {
+            id: task.id,
+            title: task.title.clone(),
+            bot: task
+                .bot
+                .and_then(|id| team.bot(id))
+                .map(|bot| bot.name.clone()),
+            time: task.time.clone(),
+            note: task.note.clone(),
+            reach: task.reach,
+            lifted: pick.is_some_and(|pick| pick.task == task.id),
+        };
+        let columns = Column::ALL
+            .into_iter()
+            .map(|column| {
+                let mut cards: Vec<CardView> = tasks
+                    .iter()
+                    .filter(|task| {
+                        task.column == column && pick.is_none_or(|pick| pick.task != task.id)
+                    })
+                    .map(card)
+                    .collect();
+                if let Some(pick) = pick.filter(|pick| pick.column == column)
+                    && let Some(task) = tasks.iter().find(|task| task.id == pick.task)
+                {
+                    cards.insert(pick.index.min(cards.len()), card(task));
+                }
+                ColumnView { column, cards }
+            })
+            .collect();
+        Some(BoardView { columns })
+    }
+
     /// Puts the picked card back without a change.
     pub fn cancel_pick(&mut self) {
         self.set_pick(None);
@@ -223,5 +290,24 @@ mod tests {
             total: 3,
         };
         assert_eq!(landing.announcement(), "Moved to Running, position 2 of 3.");
+    }
+
+    #[test]
+    fn the_board_view_draws_a_picked_card_in_the_place_the_keys_chose() {
+        let mut state = SampleTeamsSource.teams();
+        let board = BoardOwner::Team(team());
+        let before = state.board_view(board).unwrap();
+        assert_eq!(before.columns[0].cards.len(), 1);
+        state.pick_task(board, TaskId(1)).unwrap();
+        state.step_pick(PickStep::Right);
+        let during = state.board_view(board).unwrap();
+        assert!(
+            during.columns[0].cards.is_empty(),
+            "the source column keeps the others only"
+        );
+        let running = &during.columns[1].cards;
+        assert_eq!(running.len(), 4);
+        assert!(running[0].lifted && running[0].title == "Write release notes for oppm");
+        assert_eq!(running[1].bot.as_deref(), Some("Mara"));
     }
 }

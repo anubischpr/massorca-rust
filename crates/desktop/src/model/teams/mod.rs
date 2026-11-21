@@ -8,7 +8,7 @@ mod sidebar;
 mod state;
 mod types;
 
-pub use board::{Landing, PickStep};
+pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
 pub use page::TeamPage;
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{
