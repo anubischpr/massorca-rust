@@ -9,6 +9,7 @@ mod support;
 
 use gpui::{AnyWindowHandle, AppContext, px, size};
 use massorca_desktop::data::SampleDataSource;
+use massorca_desktop::model::teams::SampleTeamsSource;
 use massorca_desktop::shell::{self, Shell};
 use massorca_ui::{Appearance, Assets, Theme};
 use std::sync::Arc;
@@ -27,7 +28,7 @@ fn shell_screenshots() -> anyhow::Result<()> {
     for (theme, appearance) in [("dark", Appearance::Dark), ("light", Appearance::Light)] {
         cx.update(|app| Theme::set(appearance, app));
         let handle = cx.open_window(size(px(1440.), px(900.)), |window, cx| {
-            cx.new(|cx| Shell::new(&SampleDataSource, window, cx))
+            cx.new(|cx| Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx))
         })?;
         let window: AnyWindowHandle = *handle;
         // The test platform paints at 2x by default; 1x makes each PNG the artboard's pixel size.
