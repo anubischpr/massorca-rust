@@ -7,8 +7,10 @@ use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
+use std::time::{Duration, Instant};
 
 use win32job::{ExtendedLimitInfo, Job};
+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
 // One system call resumes every thread of a process; enumerating threads with a Toolhelp snapshot instead
@@ -49,4 +51,19 @@ pub(crate) fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Chi
         )));
     }
     Ok((child, job))
+}
+
+/// Terminates every process in `job` and waits, up to `wait`, until none is left. Closing the job alone also kills
+/// them, but returns before they exit.
+pub(crate) fn terminate_and_wait(job: &Job, wait: Duration) {
+    // SAFETY: `job.handle()` is the job's open handle, valid for as long as `job` lives.
+    unsafe { TerminateJobObject(job.handle() as *mut c_void, 1) };
+    let deadline = Instant::now() + wait;
+    while job
+        .query_basic_and_io_accounting_info()
+        .is_ok_and(|info| info.active_processes > 0)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
