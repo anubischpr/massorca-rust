@@ -58,6 +58,35 @@ fn the_shell_opens_on_home_with_sample_data(cx: &mut TestAppContext) {
     });
 }
 
+/// Draws the current state once in each theme, so a broken paint in either shows up here.
+fn draw_in_both_themes(cx: &mut VisualTestContext) {
+    for appearance in [Appearance::Dark, Appearance::Light] {
+        cx.update(|_, cx| Theme::set(appearance, cx));
+        draw(cx);
+    }
+}
+
+#[gpui::test]
+fn every_shell_surface_renders_in_both_themes(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw_in_both_themes(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw_in_both_themes(cx);
+    cx.simulate_keystrokes("escape");
+    click(cx, "rail-tasks");
+    draw_in_both_themes(cx);
+    click(cx, "rail-mode");
+    click(cx, "rail-mode");
+    draw_in_both_themes(cx);
+    cx.simulate_resize(size(px(900.), px(600.)));
+    shell.update(cx, |shell, cx| {
+        shell.model.toggle_sidebar();
+        cx.notify();
+    });
+    draw_in_both_themes(cx);
+}
+
 #[gpui::test]
 fn the_landing_view_with_a_region_open_renders_in_both_themes(cx: &mut TestAppContext) {
     setup(cx);
