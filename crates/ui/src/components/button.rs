@@ -413,6 +413,7 @@ impl RenderOnce for Button {
 mod tests {
     use super::*;
     use crate::tokens::Appearance;
+    use std::cell::Cell;
 
     fn dark() -> Theme {
         Theme::new(Appearance::Dark)
@@ -513,5 +514,98 @@ mod tests {
     fn spinner_angle_stays_within_one_turn() {
         let angle = spinner_angle();
         assert!((0.0..std::f32::consts::TAU).contains(&angle), "{angle}");
+    }
+
+    #[gpui::test]
+    fn pointer_click_and_enter_and_space_each_fire_once(cx: &mut gpui::TestAppContext) {
+        let clicks = Rc::new(Cell::new(0_u32));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness::new(cx, clicks.clone(), false, false));
+        cx.run_until_parked();
+
+        let center = cx.debug_bounds("button").expect("button is drawn").center();
+        cx.simulate_click(center, gpui::Modifiers::none());
+        assert_eq!(clicks.get(), 1);
+
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "enter");
+        assert_eq!(clicks.get(), 2);
+        press_key(cx, "space");
+        assert_eq!(clicks.get(), 3);
+    }
+
+    #[gpui::test]
+    fn disabled_and_loading_buttons_ignore_pointer_and_keys(cx: &mut gpui::TestAppContext) {
+        for (disabled, loading) in [(true, false), (false, true)] {
+            let clicks = Rc::new(Cell::new(0_u32));
+            let (view, cx) =
+                cx.add_window_view(|_, cx| Harness::new(cx, clicks.clone(), disabled, loading));
+            cx.run_until_parked();
+            let center = cx.debug_bounds("button").expect("button is drawn").center();
+            cx.simulate_click(center, gpui::Modifiers::none());
+            let focus = view.read_with(cx, |h, _| h.focus.clone());
+            focus_and_draw(cx, &focus);
+            press_key(cx, "enter");
+            press_key(cx, "space");
+            assert_eq!(clicks.get(), 0, "disabled={disabled} loading={loading}");
+        }
+    }
+
+    /// Focuses `focus`, then paints, so the button registers its key handlers.
+    fn focus_and_draw(cx: &mut gpui::VisualTestContext, focus: &FocusHandle) {
+        cx.update(|window, cx| window.focus(focus, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// Presses and releases one key: GPUI turns a focused Enter or Space release into a click.
+    fn press_key(cx: &mut gpui::VisualTestContext, key: &str) {
+        let os = cx.update(|_, cx| cx.platform_info().os);
+        let keystroke = gpui::Keystroke::parse_with_os(key, os).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    }
+
+    /// Hosts one button with a focus handle and a click counter.
+    struct Harness {
+        focus: FocusHandle,
+        clicks: Rc<Cell<u32>>,
+        disabled: bool,
+        loading: bool,
+    }
+
+    impl Harness {
+        fn new(
+            cx: &mut gpui::Context<Self>,
+            clicks: Rc<Cell<u32>>,
+            disabled: bool,
+            loading: bool,
+        ) -> Self {
+            Self {
+                focus: cx.focus_handle(),
+                clicks,
+                disabled,
+                loading,
+            }
+        }
+    }
+
+    impl gpui::Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div().child(
+                div().debug_selector(|| "button".into()).child(
+                    Button::new("under-test", "Save")
+                        .focus_handle(self.focus.clone())
+                        .disabled(self.disabled)
+                        .loading(self.loading)
+                        .on_click(move |_, _| clicks.set(clicks.get() + 1)),
+                ),
+            )
+        }
     }
 }
