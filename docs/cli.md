@@ -40,6 +40,9 @@ letters, digits, `-` or `_`.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
+| `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -69,6 +72,16 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+
+### Terminals
+
+A terminal belongs to one workspace and runs in the service, so it keeps running after
+the command that started it exits. `terminal list` and `show` each connect and
+disconnect on their own.
+
+- `--cwd` is relative to the workspace root, or absolute. Unlike the paths above, a
+  relative `--cwd` is not taken from the directory the command runs in.
+- `--shell` names the program the terminal runs.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the
