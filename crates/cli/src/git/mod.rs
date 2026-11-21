@@ -1,5 +1,6 @@
 //! `massorca git ...`: the `git/1` methods on a workspace, one module per command group (decision 0010).
 
+mod diff;
 mod status;
 
 use clap::{Args, Subcommand};
@@ -14,6 +15,10 @@ use crate::output::Output;
 pub enum GitCommand {
     /// Shows the changed files: staged, unstaged, untracked and conflicted.
     Status(status::StatusArgs),
+    /// Lists the files a comparison changes, with line counts.
+    Diff(diff::DiffArgs),
+    /// Shows the patch of one file.
+    Patch(diff::PatchArgs),
 }
 
 /// The workspace a git command acts on.
@@ -41,5 +46,7 @@ pub async fn execute(
     let client = connect(profile, autostart).await?;
     match command {
         GitCommand::Status(args) => status::run(&client, args, output).await,
+        GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
+        GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
     }
 }

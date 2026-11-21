@@ -2,6 +2,7 @@
 //!
 //! Paths are workspace-relative, UTF-8, with `/` separators.
 
+pub mod diff;
 pub mod status;
 
 use serde::{Deserialize, Serialize};

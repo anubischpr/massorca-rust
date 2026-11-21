@@ -1,5 +1,6 @@
 //! The `git/1` capability (decisions 0010-0015): one module per command group, sharing workspace resolution here.
 
+mod diff;
 mod status;
 
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             .register(capabilities::GIT, Owner::Core)?,
     ];
     handles.extend(status::register(registries)?);
+    handles.extend(diff::register(registries)?);
     Ok(handles)
 }
 
@@ -75,6 +77,40 @@ pub(crate) async fn repository(
         git,
         dir: PathBuf::from(workspace.path),
     })
+}
+
+/// Checks a workspace-relative path from a request: no absolute path, no `..` segment, no NUL (decision 0010).
+pub(crate) fn relative_path(path: &str) -> Result<&str, ErrorBody> {
+    let outside = path.is_empty()
+        || path.contains('\0')
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || std::path::Path::new(path).is_absolute()
+        || path.get(1..2) == Some(":")
+        || path.split(['/', '\\']).any(|segment| segment == "..");
+    if outside {
+        return Err(ErrorBody::new(
+            codes::GIT_PATH_OUTSIDE_WORKTREE,
+            format!("`{path}` is not a path inside the workspace"),
+        ));
+    }
+    Ok(path)
+}
+
+/// Checks that `revision` names a commit; a leading dash is refused before git can read it as an option.
+pub(crate) fn require_commit(repository: &Repository, revision: &str) -> Result<(), ErrorBody> {
+    if repository
+        .git
+        .ref_exists(&repository.dir, revision)
+        .map_err(git_error)?
+    {
+        Ok(())
+    } else {
+        Err(ErrorBody::new(
+            codes::GIT_REVISION_NOT_FOUND,
+            format!("`{revision}` does not name a commit"),
+        ))
+    }
 }
 
 /// Runs one git call on the blocking pool and maps its error to the protocol.

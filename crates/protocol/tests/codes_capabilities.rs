@@ -29,6 +29,11 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::PROJECT_NOT_GIT, "project.not_git"),
     (codes::PROJECT_HAS_WORKSPACES, "project.has_workspaces"),
     (codes::GIT_NOT_A_REPOSITORY, "git.not_a_repository"),
+    (
+        codes::GIT_PATH_OUTSIDE_WORKTREE,
+        "git.path_outside_worktree",
+    ),
+    (codes::GIT_REVISION_NOT_FOUND, "git.revision_not_found"),
     (codes::WORKSPACE_NOT_FOUND, "workspace.not_found"),
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),

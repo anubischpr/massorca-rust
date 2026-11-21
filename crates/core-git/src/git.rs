@@ -70,7 +70,21 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, Some(self.timeout), true)
+        self.run_limited(cwd, args, Some(self.timeout), true, None)
+    }
+
+    /// Like `run`, keeping at most `max_stdout` bytes of output; `Captured::truncated` says whether more existed.
+    pub(crate) fn run_capped<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        max_stdout: usize,
+    ) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run_limited(cwd, args, Some(self.timeout), true, Some(max_stdout))
     }
 
     /// Like `run`, for a command that changes the repository or belongs to one that does.
@@ -83,7 +97,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_limited(cwd, args, self.mutation_timeout, false)
+        self.run_limited(cwd, args, self.mutation_timeout, false, None)
     }
 
     fn run_limited<I, S>(
@@ -92,6 +106,7 @@ impl Git {
         args: I,
         timeout: Option<Duration>,
         read_only: bool,
+        max_stdout: Option<usize>,
     ) -> Result<Captured, GitError>
     where
         I: IntoIterator<Item = S>,
@@ -123,7 +138,7 @@ impl Git {
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        match run_bounded(&mut command, timeout) {
+        match run_bounded(&mut command, timeout, max_stdout) {
             Ok(Bounded::Finished(output)) => Ok(Captured {
                 args: shown,
                 output,
@@ -171,6 +186,11 @@ impl Captured {
     /// Reads git's message text. Only `Git::toplevel` may use it (ADR 0008).
     pub(crate) fn stderr_contains(&self, needle: &str) -> bool {
         String::from_utf8_lossy(&self.output.stderr).contains(needle)
+    }
+
+    /// The output stopped at the byte budget of `Git::run_capped`; the process was killed, so its status is not git's.
+    pub(crate) fn truncated(&self) -> bool {
+        self.output.truncated
     }
 
     pub(crate) fn bytes(&self) -> &[u8] {

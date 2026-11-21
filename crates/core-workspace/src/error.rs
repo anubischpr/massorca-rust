@@ -58,9 +58,10 @@ impl From<GitError> for DomainError {
     fn from(error: GitError) -> Self {
         let code = match error {
             GitError::NotFound | GitError::Spawn(_) => codes::GIT_UNAVAILABLE,
-            GitError::Timeout { .. } | GitError::Failed { .. } | GitError::InvalidOutput { .. } => {
-                codes::GIT_FAILED
-            }
+            GitError::Timeout { .. }
+            | GitError::Failed { .. }
+            | GitError::InvalidOutput { .. }
+            | GitError::File { .. } => codes::GIT_FAILED,
             // The caller named a path git cannot record; nothing ran.
             GitError::UnsupportedPath { .. } => codes::REQUEST_INVALID_PARAMS,
         };

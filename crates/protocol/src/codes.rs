@@ -40,6 +40,10 @@ pub const GIT_FAILED: &str = "git.failed";
 pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 /// A git method named a folder workspace, or a path git does not treat as a repository.
 pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
+/// A request path is absolute, has a `..` segment or a NUL, so it could leave the workspace.
+pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
+/// A revision does not resolve to a commit.
+pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
