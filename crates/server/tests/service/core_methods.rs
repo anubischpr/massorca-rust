@@ -32,6 +32,18 @@ const PHASE1_METHODS: [&str; 14] = [
     workspaces::REMOVE,
 ];
 
+/// Phase 2 terminal methods (decision 0035).
+const TERMINAL_METHODS: [&str; 8] = [
+    "terminal.create",
+    "terminal.list",
+    "terminal.show",
+    "terminal.attach",
+    "terminal.input",
+    "terminal.resize",
+    "terminal.kill",
+    "terminal.close",
+];
+
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: [&str; 15] = [
     "service.info",
@@ -193,9 +205,9 @@ async fn every_core_method_has_a_command_descriptor() {
             info.method
         );
     }
-    for method in PHASE1_METHODS {
+    for method in PHASE1_METHODS.iter().chain(&TERMINAL_METHODS) {
         assert!(
-            commands.iter().any(|command| command.method == method),
+            commands.iter().any(|command| command.method == *method),
             "no command runs {method}"
         );
     }

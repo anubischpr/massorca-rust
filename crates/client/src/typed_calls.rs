@@ -6,6 +6,10 @@ use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef,
 };
 use massorca_protocol::methods::service::{self, ServiceInfo};
+use massorca_protocol::methods::terminals::{
+    self, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalInputParams,
+    TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
+};
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
     WorkspaceRemoveParams, WorkspaceRemoved,
@@ -14,6 +18,7 @@ use massorca_protocol::methods::workspaces::{
 use crate::client::Client;
 use crate::error::ClientError;
 use crate::subscription::Subscription;
+use crate::terminal_attach::TerminalAttachment;
 
 impl Client {
     /// `service.info`: the service's identity, protocol version, capabilities and process.
@@ -93,5 +98,76 @@ impl Client {
         params: &WorkspaceRemoveParams,
     ) -> Result<WorkspaceRemoved, ClientError> {
         self.call(workspaces::REMOVE, params).await
+    }
+
+    /// `terminal.create`: starts a terminal in a workspace.
+    pub async fn terminal_create(
+        &self,
+        params: &TerminalCreateParams,
+    ) -> Result<Terminal, ClientError> {
+        self.call(terminals::CREATE, params).await
+    }
+
+    /// `terminal.list`: every terminal, or only those of one workspace (a selector).
+    pub async fn terminal_list(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<TerminalList, ClientError> {
+        let params = TerminalListParams {
+            workspace: workspace.map(str::to_owned),
+        };
+        self.call(terminals::LIST, &params).await
+    }
+
+    /// `terminal.show`: one terminal by id.
+    pub async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError> {
+        self.call(terminals::SHOW, &terminal_ref(terminal)).await
+    }
+
+    /// `terminal.attach`: follows a terminal's output; see [`TerminalAttachment`].
+    pub async fn terminal_attach(
+        &self,
+        params: &TerminalAttachParams,
+    ) -> Result<TerminalAttachment, ClientError> {
+        let subscription = self.subscribe(terminals::ATTACH, params).await?;
+        Ok(TerminalAttachment::new(subscription))
+    }
+
+    /// `terminal.input`: types `bytes` into a terminal.
+    pub async fn terminal_input(&self, terminal: &str, bytes: &[u8]) -> Result<(), ClientError> {
+        let params = TerminalInputParams::from_bytes(terminal, bytes);
+        self.call(terminals::INPUT, &params).await
+    }
+
+    /// `terminal.resize`: sets the terminal's size.
+    pub async fn terminal_resize(
+        &self,
+        params: &TerminalResizeParams,
+    ) -> Result<Terminal, ClientError> {
+        self.call(terminals::RESIZE, params).await
+    }
+
+    /// `terminal.kill`: ends the terminal's process tree; `force` skips the grace period.
+    pub async fn terminal_kill(
+        &self,
+        terminal: &str,
+        force: bool,
+    ) -> Result<Terminal, ClientError> {
+        let params = TerminalKillParams {
+            terminal: terminal.to_owned(),
+            force,
+        };
+        self.call(terminals::KILL, &params).await
+    }
+
+    /// `terminal.close`: kills the terminal if it is live, then forgets it.
+    pub async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError> {
+        self.call(terminals::CLOSE, &terminal_ref(terminal)).await
+    }
+}
+
+fn terminal_ref(terminal: &str) -> TerminalRef {
+    TerminalRef {
+        terminal: terminal.to_owned(),
     }
 }
