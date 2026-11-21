@@ -6,7 +6,7 @@
 use crate::components::menu::{
     MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay, type_ahead,
 };
-use crate::components::popover::TriggerBounds;
+use crate::components::popover::{OverlayLayer, TriggerBounds};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::{FocusRing, StateFill, Surface};
 use crate::theme::{ActiveTheme, TextStyled};
@@ -60,6 +60,7 @@ pub struct SelectView {
     menu: Option<Entity<MenuView>>,
     _menu_events: Option<Subscription>,
     bounds: TriggerBounds,
+    layer: OverlayLayer,
 }
 
 impl EventEmitter<SelectEvent> for SelectView {}
@@ -91,6 +92,7 @@ impl SelectView {
             menu: None,
             _menu_events: None,
             bounds: TriggerBounds::default(),
+            layer: OverlayLayer::default(),
         }
     }
 
@@ -103,6 +105,12 @@ impl SelectView {
     /// Shown in the trigger while nothing is chosen, naming the choice.
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
+        self
+    }
+
+    /// The layer the menu paints on; a select inside a dialog takes [`OverlayLayer::Dialog`].
+    pub fn layer(mut self, layer: OverlayLayer) -> Self {
+        self.layer = layer;
         self
     }
 
@@ -154,6 +162,7 @@ impl SelectView {
         let entries = option_entries(&self.options, self.selected);
         let selected = self.selected;
         let empty = self.empty_text.clone();
+        let layer = self.layer;
         let width = self
             .bounds
             .get()
@@ -163,6 +172,7 @@ impl SelectView {
                 .with_min_width(width)
                 .with_empty_text(empty)
                 .with_highlight(selected)
+                .with_layer(layer)
         });
         self._menu_events = Some(cx.subscribe(
             &menu,
