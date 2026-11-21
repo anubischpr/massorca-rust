@@ -5,6 +5,7 @@ mod canvas;
 mod rail;
 mod sidebar;
 mod sidebar_rows;
+mod status_bar;
 mod title_bar;
 mod tooltip;
 
@@ -78,6 +79,7 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme);
         let rail = rail::rail(&self.model, &self.rail, cx);
         let canvas = canvas::canvas(&self.model, cx);
+        let status = status_bar::status_bar(&self.model.snapshot().status, &theme);
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -95,7 +97,16 @@ impl Render for Shell {
                     cx,
                 ))
             })
-            .child(canvas)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(canvas)
+                    .child(status),
+            )
             .when(self.model.sidebar_overlay(), |el| {
                 el.child(sidebar::sidebar(
                     &self.model,

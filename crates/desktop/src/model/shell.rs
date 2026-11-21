@@ -107,6 +107,29 @@ impl StatusBarModel {
         plural(self.ports, "port", "No ports")
     }
 
+    /// The agents item's tooltip, with the running count spelled out (D-SH-05).
+    pub fn agents_tooltip(&self) -> String {
+        match (self.waiting, self.running) {
+            (0, 0) => "Agents: none running".into(),
+            (0, r) => format!("Agents: {r} running"),
+            (w, 0) => format!("Agents: {w} waiting for you"),
+            (w, r) => format!("Agents: {w} waiting for you, {r} running"),
+        }
+    }
+
+    /// The hosts item's tooltip, which names the disconnected count.
+    pub fn hosts_tooltip(&self) -> String {
+        if self.hosts_unreachable > 0 {
+            format!(
+                "Hosts: {} connected, {} disconnected",
+                self.hosts_total.saturating_sub(self.hosts_unreachable),
+                self.hosts_unreachable
+            )
+        } else {
+            format!("Hosts: {} connected", self.hosts_total)
+        }
+    }
+
     pub fn hosts_text(&self) -> String {
         if self.hosts_unreachable > 0 {
             format!(
@@ -155,6 +178,15 @@ mod tests {
             hosts_total: 2,
             hosts_unreachable: 0,
         }
+    }
+
+    #[test]
+    fn status_tooltips_spell_out_the_counts() {
+        let mut s = status();
+        assert_eq!(s.agents_tooltip(), "Agents: 1 waiting for you, 2 running");
+        assert_eq!(s.hosts_tooltip(), "Hosts: 2 connected");
+        s.hosts_unreachable = 1;
+        assert_eq!(s.hosts_tooltip(), "Hosts: 1 connected, 1 disconnected");
     }
 
     #[test]

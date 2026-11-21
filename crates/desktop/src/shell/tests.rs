@@ -134,6 +134,19 @@ fn a_click_on_the_canvas_closes_the_sidebar_overlay(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_status_bar_sits_under_the_canvas_and_names_the_hosts(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    let canvas = cx.debug_bounds("canvas").expect("the canvas is drawn");
+    let hosts = cx
+        .debug_bounds("status-hosts")
+        .expect("the hosts item is drawn");
+    assert!(f32::from(hosts.top()) >= f32::from(canvas.bottom()) - 0.5);
+    assert!(f32::from(hosts.left()) > f32::from(canvas.left()));
+}
+
+#[gpui::test]
 fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppContext) {
     setup(cx);
     let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
