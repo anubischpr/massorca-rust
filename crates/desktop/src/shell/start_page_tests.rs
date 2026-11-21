@@ -118,7 +118,8 @@ fn choosing_no_project_in_the_page_menu_returns_to_the_start_page_with_no_worksp
         cx.debug_bounds("menu-panel").is_some(),
         "the project menu opens"
     );
-    cx.simulate_keystrokes("end enter");
+    // The menu ends with "Add a project…", so "No project" is the row above the last one.
+    cx.simulate_keystrokes("end up enter");
     rig.shell.read_with(cx, |shell, _| {
         assert_eq!(shell.model().selected_workspace(), None);
         assert!(shell.dialogs.menu.is_none(), "the menu closed");
