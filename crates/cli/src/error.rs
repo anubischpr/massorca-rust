@@ -71,6 +71,11 @@ impl From<ClientError> for CliError {
             ClientError::Disconnected => "service.disconnected",
             ClientError::Protocol(_) => "client.protocol",
             ClientError::Io(_) => "client.io",
+            ClientError::HostUnreachable(_) => "host.unreachable",
+            ClientError::ServerIdentityMismatch => "host.identity_mismatch",
+            ClientError::HostNotFound(_) => "host.not_found",
+            ClientError::HostExists(_) => "host.exists",
+            ClientError::InvalidHostName(_) => "host.invalid_name",
         };
         Self::new(code, message, exit_code)
     }
