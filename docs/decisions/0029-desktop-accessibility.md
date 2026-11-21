@@ -45,7 +45,7 @@ extra information, so an animated root loses its role in real frames.
   | Agent mark and status glyph | Image, named by the agent or the state word |
   | Kbd | Label, named by its spoken words |
   | Splitter | Splitter, with orientation and value |
-  | Terminal | Terminal |
+  | Terminal | Application, as TerminalSurface.md asks |
 
   Badges, skeleton blocks and other decorative parts have no id and no role,
   so they stay out of the tree.
