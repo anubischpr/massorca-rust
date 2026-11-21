@@ -1,6 +1,7 @@
 //! Core features. Each registers its capabilities, methods, commands and settings through the registries, and the service keeps the handles for its lifetime.
 
 mod config;
+mod events;
 mod service;
 
 pub(crate) use service::info_of;
@@ -20,6 +21,7 @@ pub(crate) fn register_core(
     registries: &Registries,
 ) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = service::register(registries)?;
+    handles.extend(events::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
