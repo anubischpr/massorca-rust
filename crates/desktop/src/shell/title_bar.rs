@@ -1,6 +1,6 @@
 //! The Title bar: Sidebar toggle, navigation, title, region toggles and window controls (D-SH-03).
 
-use super::tooltip::tooltip;
+use super::tooltip::{tooltip, with_tooltip};
 use super::{Shell, change};
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
@@ -12,8 +12,8 @@ use gpui::{
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::tokens::{
-    DURATION_TOOLTIP_DELAY, SIZE_ICON_SM, SIZE_TITLEBAR_CONTROL_WIDTH, SIZE_TITLEBAR_MACOS,
-    SIZE_TITLEBAR_WINDOWS, SPACE_1, SPACE_2, SPACE_HALF, TYPE_TITLE_SM,
+    SIZE_ICON_SM, SIZE_TITLEBAR_CONTROL_WIDTH, SIZE_TITLEBAR_MACOS, SIZE_TITLEBAR_WINDOWS, SPACE_1,
+    SPACE_2, SPACE_HALF, TYPE_TITLE_SM,
 };
 use massorca_ui::{IconName, TextStyled, Theme};
 
@@ -243,14 +243,4 @@ fn window_control(
                 .group_hover(id, move |style| style.text_color(hover_icon)),
         );
     with_tooltip(control, label)
-}
-
-/// Wraps a control in a hover area that shows its tooltip after the standard delay.
-fn with_tooltip(control: impl IntoElement, label: &'static str) -> impl IntoElement {
-    div()
-        .id(label)
-        .flex_none()
-        .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
-        .tooltip(tooltip(label))
-        .child(control)
 }

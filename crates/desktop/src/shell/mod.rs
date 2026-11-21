@@ -2,6 +2,7 @@
 
 mod actions;
 mod canvas;
+mod rail;
 mod title_bar;
 mod tooltip;
 
@@ -11,6 +12,7 @@ use actions::CloseOverlay;
 use gpui::{App, Context, FocusHandle, IntoElement, Render, WeakEntity, Window, div, prelude::*};
 use massorca_ui::components::text_field;
 use massorca_ui::{ActiveTheme, TextStyled};
+use rail::RailState;
 
 #[cfg(test)]
 mod tests;
@@ -21,6 +23,7 @@ pub struct Shell {
     model: ShellModel,
     /// Holds keyboard focus when no control does, so shell keys reach the root.
     focus: FocusHandle,
+    rail: RailState,
 }
 
 impl Shell {
@@ -29,9 +32,12 @@ impl Shell {
         let width = f32::from(window.viewport_size().width);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        let snapshot = data.snapshot();
+        let rail = RailState::new(snapshot.usage.len(), cx);
         Self {
-            model: ShellModel::new(data.snapshot(), width),
+            model: ShellModel::new(snapshot, width),
             focus,
+            rail,
         }
     }
 
@@ -61,6 +67,7 @@ impl Render for Shell {
             .set_window_width(f32::from(window.viewport_size().width));
         let shell = cx.entity().downgrade();
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme);
+        let rail = rail::rail(&self.model, &self.rail, cx);
         let canvas = canvas::canvas(&self.model, cx);
         div()
             .size_full()
@@ -74,6 +81,7 @@ impl Render for Shell {
                 shell.model.close_overlay();
                 cx.notify();
             }))
+            .child(rail)
             .child(
                 div()
                     .flex_1()
