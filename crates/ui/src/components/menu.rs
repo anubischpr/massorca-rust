@@ -874,3 +874,215 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::Button;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use gpui::{AppContext, Context, Render, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Events = Rc<RefCell<Vec<MenuEvent>>>;
+
+    /// Hosts an opener button and, once opened, the menu placed at a window point.
+    struct Harness {
+        opener: FocusHandle,
+        menu: Option<Entity<MenuView>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let overlay = self
+                .menu
+                .clone()
+                .map(|menu| menu_overlay(&menu, MenuOrigin::At(point(px(8.), px(48.))), cx));
+            div()
+                .p(px(SPACE_2))
+                .child(Button::new("opener", "Actions").focus_handle(self.opener.clone()))
+                .children(overlay)
+        }
+    }
+
+    fn entries() -> Vec<MenuEntry> {
+        vec![
+            MenuItem::new("Rename").icon(IconName::Pencil).into(),
+            MenuItem::new("Duplicate").into(),
+            MenuEntry::Separator,
+            MenuItem::new("Stop agent")
+                .disabled("Nothing is running")
+                .into(),
+            MenuItem::new("Open with")
+                .submenu(vec![
+                    MenuItem::new("Terminal").into(),
+                    MenuItem::new("Editor").into(),
+                ])
+                .into(),
+            MenuItem::new("Delete workspace (uncommitted changes lost)")
+                .destructive()
+                .into(),
+        ]
+    }
+
+    /// Opens a menu over `view`, records its events and draws it.
+    fn open(
+        view: &Entity<Harness>,
+        cx: &mut VisualTestContext,
+        events: &Events,
+    ) -> Entity<MenuView> {
+        let menu = cx.update(|window, cx| cx.new(|cx| MenuView::new(entries(), window, cx)));
+        let log = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&menu, move |_, event: &MenuEvent, _| {
+                log.borrow_mut().push(*event);
+            })
+            .detach();
+        });
+        view.update(cx, |harness, cx| {
+            harness.menu = Some(menu.clone());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        menu
+    }
+
+    #[gpui::test]
+    fn arrows_skip_disabled_rows_enter_opens_a_submenu_and_choosing_returns_focus(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let menu = open(&view, cx, &events);
+
+        let panel = menu.read_with(cx, |m, _| m.focus.clone());
+        cx.update(|window, _| assert!(panel.is_focused(window), "the menu takes focus"));
+        assert_eq!(menu.read_with(cx, |m, _| m.highlighted()), Some(0));
+
+        press_key(cx, "down");
+        press_key(cx, "down");
+        assert_eq!(
+            menu.read_with(cx, |m, _| m.highlighted()),
+            Some(4),
+            "skips rows 2 and 3"
+        );
+
+        press_key(cx, "enter");
+        assert!(menu.read_with(cx, |m, _| m.submenu_open()));
+        press_key(cx, "down");
+        press_key(cx, "enter");
+        assert_eq!(
+            *events.borrow(),
+            vec![MenuEvent::Chosen(MenuChoice {
+                row: 4,
+                child: Some(1),
+            })]
+        );
+        cx.update(|window, _| assert!(opener.is_focused(window), "focus returns to the opener"));
+    }
+
+    #[gpui::test]
+    fn escape_closes_one_level_at_a_time_and_returns_focus(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let menu = open(&view, cx, &events);
+
+        menu.update(cx, |m, cx| {
+            m.open_submenu(4, cx);
+        });
+        cx.run_until_parked();
+        press_key(cx, "escape");
+        assert!(!menu.read_with(cx, |m, _| m.submenu_open()));
+        assert!(
+            events.borrow().is_empty(),
+            "the first Escape only closes the submenu"
+        );
+
+        press_key(cx, "escape");
+        assert_eq!(*events.borrow(), vec![MenuEvent::Dismissed]);
+        cx.update(|window, _| assert!(opener.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn typing_a_letter_moves_to_the_next_row_that_starts_with_it(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let menu = open(&view, cx, &events);
+
+        press_key(cx, "d");
+        assert_eq!(menu.read_with(cx, |m, _| m.highlighted()), Some(1));
+        press_key(cx, "d");
+        assert_eq!(menu.read_with(cx, |m, _| m.highlighted()), Some(5));
+    }
+
+    #[gpui::test]
+    fn clicking_an_enabled_row_chooses_it_and_a_disabled_row_does_nothing(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let _menu = open(&view, cx, &events);
+
+        let disabled = cx
+            .debug_bounds("menu-item-3")
+            .expect("disabled row is drawn")
+            .center();
+        cx.simulate_click(disabled, gpui::Modifiers::none());
+        assert!(events.borrow().is_empty());
+
+        let duplicate = cx
+            .debug_bounds("menu-item-1")
+            .expect("enabled row is drawn")
+            .center();
+        cx.simulate_click(duplicate, gpui::Modifiers::none());
+        assert_eq!(
+            *events.borrow(),
+            vec![MenuEvent::Chosen(MenuChoice {
+                row: 1,
+                child: None
+            })]
+        );
+    }
+
+    #[gpui::test]
+    fn the_panel_draws_every_row_of_the_entries(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let _menu = open(&view, cx, &events);
+        assert!(cx.debug_bounds("menu-panel").is_some());
+        assert!(
+            cx.debug_bounds("menu-item-5").is_some(),
+            "the last row is drawn"
+        );
+    }
+}
