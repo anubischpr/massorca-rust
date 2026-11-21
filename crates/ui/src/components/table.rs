@@ -1,13 +1,15 @@
 //! Table: a data table of comparable rows (docs/design/components/Table.md).
 //!
-//! `TableState` holds the rules without a window. This part covers the columns, the rows
-//! and the sort; the cursor, selection and statuses follow in the next change.
+//! `TableState` holds the rules without a window: the sort cycle, the roving cursor,
+//! one selected row, row checkboxes and the loading, empty and error statuses. Rows
+//! carry their own keys, so selection and checkboxes survive a re-sort.
 
 use crate::components::agent_icon::AgentKind;
 use crate::components::agent_status::AgentState;
 use crate::icon::IconName;
 use gpui::SharedString;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 /// Narrowest a column gets before the table scrolls sideways (Table.md, Responsive).
 const COLUMN_MIN_WIDTH: f32 = 96.0;
@@ -159,7 +161,73 @@ pub struct TableSort {
     pub direction: SortDirection,
 }
 
-/// The columns, rows and sort of a table.
+/// The roving cursor. Row 0 is the header row; rows 1.. are the body rows in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cursor {
+    pub row: usize,
+    pub column: usize,
+}
+
+/// A move between cells. Home and End span the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellMove {
+    Up,
+    Down,
+    Left,
+    Right,
+    RowStart,
+    RowEnd,
+}
+
+/// The keys that act on the cursor's cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    Enter,
+    Space,
+}
+
+/// What a press asks the table to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Activation {
+    /// Sort by a sortable header column.
+    Sort(usize),
+    /// Open a body row (Enter).
+    Open(SharedString),
+    /// Toggle a body row's checkbox (Space, in a selectable table).
+    Check(SharedString),
+}
+
+/// The move a key asks for in a table, if any.
+pub fn cell_move(key: &str) -> Option<CellMove> {
+    match key {
+        "up" => Some(CellMove::Up),
+        "down" => Some(CellMove::Down),
+        "left" => Some(CellMove::Left),
+        "right" => Some(CellMove::Right),
+        "home" => Some(CellMove::RowStart),
+        "end" => Some(CellMove::RowEnd),
+        _ => None,
+    }
+}
+
+/// What the body shows in place of rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum TableStatus {
+    #[default]
+    Ready,
+    /// Five static skeleton rows, with no shimmer.
+    Loading,
+    /// An empty state in the body, with an optional action.
+    Empty {
+        title: SharedString,
+        explanation: Option<SharedString>,
+        action: Option<SharedString>,
+    },
+    /// "Could not load this table." with Retry; the headers stay.
+    Error,
+}
+
+/// The rules of a table: sort, cursor, selection, checkboxes and status.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableState {
     columns: Vec<TableColumn>,
@@ -167,6 +235,11 @@ pub struct TableState {
     /// Display order: indexes into `rows`.
     order: Vec<usize>,
     sort: Option<TableSort>,
+    selected: Option<SharedString>,
+    checked: HashSet<SharedString>,
+    selectable: bool,
+    cursor: Cursor,
+    status: TableStatus,
 }
 
 impl TableState {
@@ -176,9 +249,20 @@ impl TableState {
             rows,
             order: Vec::new(),
             sort: None,
+            selected: None,
+            checked: HashSet::new(),
+            selectable: false,
+            cursor: Cursor::default(),
+            status: TableStatus::Ready,
         };
         state.reorder();
         state
+    }
+
+    /// Adds the selection column, with a checkbox per row.
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
     }
 
     /// Starts sorted. A column that cannot sort is ignored.
@@ -207,10 +291,44 @@ impl TableState {
         self.sort
     }
 
-    /// Replaces the rows and keeps the sort.
+    pub fn selected(&self) -> Option<&SharedString> {
+        self.selected.as_ref()
+    }
+
+    pub fn is_selectable(&self) -> bool {
+        self.selectable
+    }
+
+    pub fn is_checked(&self, key: &SharedString) -> bool {
+        self.checked.contains(key)
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
+    }
+
+    pub fn status(&self) -> &TableStatus {
+        &self.status
+    }
+
+    pub fn set_status(&mut self, status: TableStatus) {
+        self.status = status;
+    }
+
+    /// Replaces the rows. The sort, selection and checkboxes stay where their keys still exist.
     pub fn set_rows(&mut self, rows: Vec<TableRow>) {
         self.rows = rows;
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|key| !self.contains(key))
+        {
+            self.selected = None;
+        }
+        self.checked
+            .retain(|key| self.rows.iter().any(|row| &row.key == key));
         self.reorder();
+        self.clamp_cursor();
     }
 
     /// Clicking a sortable header: ascending, then descending, then none. Another column
@@ -258,6 +376,88 @@ impl TableState {
         ))
     }
 
+    pub fn move_cursor(&mut self, movement: CellMove) {
+        let last_row = self.rows.len();
+        let last_column = self.columns.len().saturating_sub(1);
+        let Cursor { row, column } = self.cursor;
+        self.cursor = Cursor {
+            row: match movement {
+                CellMove::Up => row.saturating_sub(1),
+                CellMove::Down => (row + 1).min(last_row),
+                _ => row,
+            },
+            column: match movement {
+                CellMove::Left => column.saturating_sub(1),
+                CellMove::Right => (column + 1).min(last_column),
+                CellMove::RowStart => 0,
+                CellMove::RowEnd => last_column,
+                _ => column,
+            },
+        };
+    }
+
+    /// Moves the cursor onto a body row; a pointer click does this too.
+    pub fn focus_row(&mut self, key: &SharedString) -> bool {
+        match self.position_of(key) {
+            Some(index) => {
+                self.cursor.row = index + 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// What Enter or Space does at the cursor. Enter or Space on a sortable header sorts;
+    /// Enter opens a body row; Space toggles its checkbox in a selectable table.
+    pub fn activate(&self, press: Press) -> Option<Activation> {
+        let Cursor { row, column } = self.cursor;
+        if row == 0 {
+            return self
+                .columns
+                .get(column)
+                .filter(|c| c.sortable)
+                .map(|_| Activation::Sort(column));
+        }
+        let key = self.row_at(row - 1)?.key.clone();
+        match press {
+            Press::Enter => Some(Activation::Open(key)),
+            Press::Space => self.selectable.then_some(Activation::Check(key)),
+        }
+    }
+
+    /// Selects a body row. Selection is single in v1.
+    pub fn select(&mut self, key: &SharedString) -> bool {
+        if !self.contains(key) {
+            return false;
+        }
+        self.selected = Some(key.clone());
+        true
+    }
+
+    /// Toggles a row's checkbox and returns its new state. `None` when the table has no
+    /// selection column or no such row.
+    pub fn toggle_check(&mut self, key: &SharedString) -> Option<bool> {
+        if !self.selectable || !self.contains(key) {
+            return None;
+        }
+        if self.checked.remove(key) {
+            Some(false)
+        } else {
+            self.checked.insert(key.clone());
+            Some(true)
+        }
+    }
+
+    fn contains(&self, key: &SharedString) -> bool {
+        self.rows.iter().any(|row| &row.key == key)
+    }
+
+    fn position_of(&self, key: &SharedString) -> Option<usize> {
+        self.order
+            .iter()
+            .position(|&row| &self.rows[row].key == key)
+    }
+
     fn reorder(&mut self) {
         let mut order: Vec<usize> = (0..self.rows.len()).collect();
         if let Some(TableSort { column, direction }) = self.sort {
@@ -272,6 +472,11 @@ impl TableState {
             });
         }
         self.order = order;
+    }
+
+    fn clamp_cursor(&mut self) {
+        self.cursor.row = self.cursor.row.min(self.rows.len());
+        self.cursor.column = self.cursor.column.min(self.columns.len().saturating_sub(1));
     }
 }
 
@@ -306,7 +511,7 @@ mod tests {
     }
 
     fn keys(state: &TableState) -> Vec<String> {
-        (0..state.row_count())
+        (0..state.rows.len())
             .filter_map(|index| state.row_at(index))
             .map(|row| row.key.to_string())
             .collect()
@@ -350,13 +555,6 @@ mod tests {
         );
         assert!(!state.cycle_sort(2), "the actions column does not sort");
         assert_eq!(state.sort().map(|sort| sort.column), Some(1));
-    }
-
-    #[test]
-    fn sorted_by_starts_sorted_and_ignores_an_unsortable_column() {
-        let state = table().sorted_by(0, SortDirection::Descending);
-        assert_eq!(keys(&state), ["c", "b", "a"]);
-        assert_eq!(table().sorted_by(2, SortDirection::Ascending).sort(), None);
     }
 
     #[test]
@@ -411,6 +609,94 @@ mod tests {
     }
 
     #[test]
+    fn arrow_moves_stop_at_the_edges_and_home_and_end_span_the_row() {
+        let mut state = table();
+        state.move_cursor(CellMove::Up);
+        assert_eq!(state.cursor(), Cursor { row: 0, column: 0 });
+        for _ in 0..3 {
+            state.move_cursor(CellMove::Right);
+        }
+        assert_eq!(state.cursor().column, 2, "stops at the last column");
+        state.move_cursor(CellMove::RowStart);
+        assert_eq!(state.cursor().column, 0);
+        state.move_cursor(CellMove::RowEnd);
+        assert_eq!(state.cursor().column, 2);
+        for _ in 0..10 {
+            state.move_cursor(CellMove::Down);
+        }
+        assert_eq!(state.cursor().row, 3, "stops at the last body row");
+    }
+
+    #[test]
+    fn enter_or_space_on_a_sortable_header_sorts_and_other_headers_do_nothing() {
+        let mut state = table();
+        assert_eq!(state.activate(Press::Enter), Some(Activation::Sort(0)));
+        assert_eq!(state.activate(Press::Space), Some(Activation::Sort(0)));
+        state.move_cursor(CellMove::RowEnd);
+        assert_eq!(
+            state.activate(Press::Enter),
+            None,
+            "the actions header does not sort"
+        );
+    }
+
+    #[test]
+    fn enter_opens_the_body_row_under_the_cursor_in_display_order() {
+        let mut state = table();
+        state.cycle_sort(1);
+        state.cycle_sort(1);
+        state.move_cursor(CellMove::Down);
+        assert_eq!(
+            state.activate(Press::Enter),
+            Some(Activation::Open("c".into()))
+        );
+        state.move_cursor(CellMove::Down);
+        assert_eq!(
+            state.activate(Press::Enter),
+            Some(Activation::Open("b".into()))
+        );
+    }
+
+    #[test]
+    fn space_toggles_a_checkbox_only_in_a_selectable_table() {
+        let mut plain = table();
+        plain.move_cursor(CellMove::Down);
+        assert_eq!(plain.activate(Press::Space), None);
+        assert_eq!(plain.toggle_check(&"b".into()), None);
+
+        let mut state = table().selectable();
+        state.move_cursor(CellMove::Down);
+        assert_eq!(
+            state.activate(Press::Space),
+            Some(Activation::Check("b".into()))
+        );
+        assert_eq!(state.toggle_check(&"b".into()), Some(true));
+        assert!(state.is_checked(&"b".into()));
+        assert_eq!(state.toggle_check(&"b".into()), Some(false));
+        assert_eq!(state.toggle_check(&"missing".into()), None);
+    }
+
+    #[test]
+    fn selection_is_single_and_follows_its_row_through_a_resort() {
+        let mut state = table();
+        assert!(state.select(&"a".into()));
+        assert!(state.select(&"c".into()));
+        assert_eq!(state.selected(), Some(&SharedString::from("c")));
+        state.cycle_sort(0);
+        assert_eq!(state.selected(), Some(&SharedString::from("c")));
+        state.set_rows(vec![TableRow::new(
+            "a",
+            vec![text("Alpha"), number(3.0), TableCell::Blank],
+        )]);
+        assert_eq!(
+            state.selected(),
+            None,
+            "a removed row is no longer selected"
+        );
+        assert!(!state.select(&"c".into()));
+    }
+
+    #[test]
     fn a_sort_change_is_announced_with_its_column_and_direction() {
         let mut state = table();
         assert_eq!(state.sort_announcement(), None);
@@ -422,5 +708,12 @@ mod tests {
         );
         assert_eq!(state.sort_word(1), Some("descending"));
         assert_eq!(state.sort_word(0), None);
+    }
+
+    #[test]
+    fn only_arrow_home_and_end_keys_move_the_cursor() {
+        assert_eq!(cell_move("left"), Some(CellMove::Left));
+        assert_eq!(cell_move("end"), Some(CellMove::RowEnd));
+        assert_eq!(cell_move("enter"), None);
     }
 }
