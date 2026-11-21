@@ -308,3 +308,185 @@ impl Composer {
         self._hint_timer = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::policy::{PrimaryAction, primary_action};
+    use super::*;
+    use crate::components::agent_icon::AgentKind;
+    use crate::components::model_picker::{AgentAvailability, AgentOption, ModelList, ModelOption};
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::{cell::RefCell, rc::Rc};
+
+    fn picker_state() -> PickerState {
+        let levels: Vec<SharedString> = vec!["Low".into(), "Medium".into()];
+        PickerState::new(
+            vec![AgentOption {
+                kind: AgentKind::Claude,
+                availability: AgentAvailability::Ready,
+                list: ModelList::Loaded,
+                models: vec![ModelOption {
+                    id: "opus".into(),
+                    name: "Opus 5.5".into(),
+                    efforts: levels,
+                    default_effort: 1,
+                    fast: false,
+                }],
+            }],
+            Choice {
+                model: "opus".into(),
+                effort: Some(1),
+                fast: false,
+            },
+        )
+    }
+
+    fn access() -> Vec<AccessMode> {
+        vec![
+            AccessMode {
+                name: "Ask for approval".into(),
+                icon: IconName::Lock,
+            },
+            AccessMode {
+                name: "Workspace write".into(),
+                icon: IconName::Shield,
+            },
+        ]
+    }
+
+    fn composer_in(cx: &mut TestAppContext) -> (Entity<Composer>, &mut VisualTestContext) {
+        cx.update(bind_keys);
+        cx.add_window_view(|_, cx| Composer::new(picker_state(), access(), cx))
+    }
+
+    /// Subscribes to a composer and collects its events, except the per-keystroke draft changes.
+    fn record(
+        composer: &Entity<Composer>,
+        cx: &mut VisualTestContext,
+    ) -> Rc<RefCell<Vec<ComposerEvent>>> {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(composer, move |_, event: &ComposerEvent, _| {
+                if !matches!(event, ComposerEvent::DraftChanged) {
+                    sink.borrow_mut().push(event.clone());
+                }
+            })
+            .detach();
+        });
+        events
+    }
+
+    fn focus_and_draw(composer: &Entity<Composer>, cx: &mut VisualTestContext) {
+        composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+        cx.run_until_parked();
+    }
+
+    fn draft_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
+        composer.read_with(cx, |composer, cx| composer.draft(cx))
+    }
+
+    #[gpui::test]
+    fn typing_then_enter_sends_the_text_and_clears_the_draft(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Send("hello".into())]);
+        assert_eq!(draft_of(&composer, cx), "");
+    }
+
+    #[gpui::test]
+    fn enter_while_the_agent_runs_queues_instead(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| composer.set_busy(true, cx));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("later");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Queue("later".into())]);
+    }
+
+    #[gpui::test]
+    fn shift_enter_adds_a_line_and_mod_enter_sends(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("a");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("b");
+        assert_eq!(draft_of(&composer, cx), "a\nb");
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .all(|e| !matches!(e, ComposerEvent::Send(_)))
+        );
+        cx.simulate_keystrokes("secondary-enter");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Send("a\nb".into())]);
+    }
+
+    #[gpui::test]
+    fn an_unreachable_host_keeps_the_message_in_the_composer(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| composer.set_host_confirmed(false, cx));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("keep me");
+        cx.simulate_keystrokes("enter");
+        assert!(events.borrow().is_empty());
+        assert_eq!(draft_of(&composer, cx), "keep me");
+    }
+
+    #[gpui::test]
+    fn escape_hints_first_and_stops_the_run_on_the_second_press(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| composer.set_busy(true, cx));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_keystrokes("escape");
+        assert!(composer.read_with(cx, |composer, _| composer.hint_shown));
+        assert!(events.borrow().is_empty());
+        cx.simulate_keystrokes("escape");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Stop]);
+    }
+
+    #[gpui::test]
+    fn up_in_an_empty_composer_recalls_the_last_sent_message(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("first");
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("up");
+        assert_eq!(draft_of(&composer, cx), "first");
+    }
+
+    #[gpui::test]
+    fn the_newline_setting_makes_enter_a_line_break(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_enter_inserts_newline(true, cx)
+        });
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("x");
+        cx.simulate_keystrokes("enter");
+        assert!(events.borrow().is_empty());
+        assert_eq!(draft_of(&composer, cx), "x\n");
+    }
+
+    #[gpui::test]
+    fn the_primary_action_reads_send_queue_stop_and_disabled(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let action = |cx: &mut VisualTestContext| {
+            composer.read_with(cx, |composer, cx| primary_action(composer.situation(cx)))
+        };
+        assert_eq!(action(cx), PrimaryAction::Disabled);
+        composer.update(cx, |composer, cx| composer.set_busy(true, cx));
+        assert_eq!(action(cx), PrimaryAction::Stop);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("q");
+        assert_eq!(action(cx), PrimaryAction::Queue);
+    }
+}
