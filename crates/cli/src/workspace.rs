@@ -1,6 +1,5 @@
 //! `massorca workspace create|list|show|rm` (alias `ws`): creating and removing workspaces through the service.
 
-use massorca_profile::Profile;
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
 };
@@ -10,16 +9,17 @@ use crate::connect::connect;
 use crate::cwd_path;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::target::Target;
 use crate::workspace_text;
 
-/// Runs one `workspace` subcommand against the service of `profile`.
+/// Runs one `workspace` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: WorkspaceCommand,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         WorkspaceCommand::Create(args) => {
             let params = create_params(args)?;

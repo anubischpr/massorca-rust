@@ -1,7 +1,7 @@
 //! `massorca service run`: the service in this process, until it is stopped.
 
 use massorca_profile::{Profile, ensure_dir};
-use massorca_server::{Service, ServiceConfig, ShutdownHandle};
+use massorca_server::{ListenSpec, NetworkConfig, Service, ServiceConfig, ShutdownHandle};
 use tokio::runtime::Builder;
 
 use crate::args::RunArgs;
@@ -11,19 +11,30 @@ use crate::output::Output;
 
 /// Runs the service of `profile` until a stop request or a stop signal arrives.
 pub fn run(profile: &Profile, args: &RunArgs, output: Output) -> Result<(), CliError> {
+    let network = network_config(args)?;
     ensure_dir(profile)?;
     let _logging = init_service_logging(profile, args.log_stderr)?;
     let runtime = Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(serve(profile, output))
+    runtime.block_on(serve(profile, network, output))
 }
 
-async fn serve(profile: &Profile, output: Output) -> Result<(), CliError> {
+/// The `--listen` addresses, checked as decision 0045 says. None means the local socket only.
+fn network_config(args: &RunArgs) -> Result<NetworkConfig, CliError> {
+    let listen: Vec<ListenSpec> = args
+        .listen
+        .iter()
+        .map(|address| ListenSpec::parse(address, args.allow_all_interfaces))
+        .collect::<Result<_, _>>()?;
+    Ok(NetworkConfig { listen })
+}
+
+async fn serve(profile: &Profile, network: NetworkConfig, output: Output) -> Result<(), CliError> {
     let config = ServiceConfig {
         profile: profile.clone(),
         server_name: "massorca".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
-    let running = Service::start(config).await?;
+    let running = Service::start_with_network(config, network).await?;
     let info = running.info();
     tracing::info!(profile = %info.profile, pid = info.pid, "service started");
     output.success(

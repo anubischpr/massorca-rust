@@ -166,10 +166,7 @@ fn happy_path_runs_each_step_in_order_and_keeps_the_offer_out_of_view() {
         "systemctl --user daemon-reload && systemctl --user enable massorca.service && systemctl --user restart massorca.service"
     );
     assert!(commands[4].contains("--no-autostart --json service status"));
-    assert!(
-        commands[5]
-            .ends_with("--no-autostart --json pair offer --admin --ttl 120 --device-name 'laptop'")
-    );
+    assert!(commands[5].ends_with("--no-autostart --json pair offer --admin --ttl 120"));
 
     assert_eq!(
         shell.stdin(1),

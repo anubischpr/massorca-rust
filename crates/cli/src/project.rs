@@ -1,6 +1,5 @@
 //! `massorca project add|list|show|rm`: registering and unregistering projects through the service.
 
-use massorca_profile::Profile;
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind, ProjectRef};
 
 use crate::args::{ProjectAddArgs, ProjectCommand};
@@ -8,16 +7,17 @@ use crate::connect::connect;
 use crate::cwd_path;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::target::Target;
 use crate::workspace_text;
 
-/// Runs one `project` subcommand against the service of `profile`.
+/// Runs one `project` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: ProjectCommand,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         ProjectCommand::Add(args) => {
             let params = add_params(args)?;

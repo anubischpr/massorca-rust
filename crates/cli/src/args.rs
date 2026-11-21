@@ -16,9 +16,14 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME", env = "MASSORCA_PROFILE")]
     pub profile: Option<String>,
 
+    // No env attribute: `Profile` reads MASSORCA_HOME itself, so `service unit` never takes it.
     /// Directory that holds the profiles. Defaults to the platform data directory.
-    #[arg(long, global = true, value_name = "DIR", env = "MASSORCA_HOME")]
+    #[arg(long, global = true, value_name = "DIR")]
     pub home: Option<PathBuf>,
+
+    /// Host to address: a paired host name, or local (the default).
+    #[arg(long, global = true, value_name = "NAME", env = "MASSORCA_HOST")]
+    pub host: Option<String>,
 
     /// Print one JSON document on stdout instead of text.
     #[arg(long, global = true)]
@@ -74,6 +79,21 @@ pub enum Commands {
         #[command(subcommand)]
         command: TerminalCommand,
     },
+    /// Makes pairing offers for other computers, and pairs this computer with a server.
+    Pair {
+        #[command(subcommand)]
+        command: PairCommand,
+    },
+    /// Lists, revokes and identifies the devices paired with the service.
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
+    /// Shows the network state of the service, and this computer's Tailscale state.
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
@@ -94,6 +114,8 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Prints the systemd user unit that runs the service on a Linux server.
+    Unit(UnitArgs),
 }
 
 #[derive(Debug, Args)]
@@ -101,6 +123,27 @@ pub struct RunArgs {
     /// Also write log lines to stderr.
     #[arg(long)]
     pub log_stderr: bool,
+    /// Address for network clients, repeatable: tailscale[:PORT], localhost:PORT or IP:PORT. Also MASSORCA_LISTEN.
+    #[arg(
+        long = "listen",
+        value_name = "ADDR",
+        env = "MASSORCA_LISTEN",
+        value_delimiter = ','
+    )]
+    pub listen: Vec<String>,
+    /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
+    #[arg(long)]
+    pub allow_all_interfaces: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct UnitArgs {
+    /// Listen address the unit passes to `service run`, repeatable. Defaults to tailscale.
+    #[arg(long = "listen", value_name = "ADDR")]
+    pub listen: Vec<String>,
+    /// Binary the unit runs. Defaults to %h/.massorca/bin/massorca.
+    #[arg(long, value_name = "PATH")]
+    pub exe: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -225,4 +268,53 @@ pub struct ConfigSetArgs {
     /// Owner of the setting: core (default) or ext:<id>.
     #[arg(long, value_name = "OWNER")]
     pub owner: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PairCommand {
+    /// Makes a pairing offer on the service. Only its owner or a device-admin can, and it works once.
+    Offer(PairOfferArgs),
+    /// Pairs this computer with the server of an offer, and stores the server as a host.
+    Accept(PairAcceptArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PairOfferArgs {
+    /// The new device may also manage hosts and devices (host-admin and device-admin).
+    #[arg(long)]
+    pub admin: bool,
+    /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
+    #[arg(long, value_name = "SECS")]
+    pub ttl: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub struct PairAcceptArgs {
+    /// The offer string, or - to read it from stdin, which keeps it out of shell history.
+    pub offer: String,
+    /// Host name to store the server as. Defaults to the server's name in the offer.
+    #[arg(long, value_name = "HOST")]
+    pub name: Option<String>,
+    /// Name this computer has on the server. Defaults to this computer's host name.
+    #[arg(long, value_name = "NAME")]
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceCommand {
+    /// Lists the paired devices, their scopes and state. Needs device-admin.
+    List,
+    /// Revokes a device: its connections close at once and it is refused afterwards.
+    Revoke {
+        /// Device id, or its name when that is unique.
+        device: String,
+    },
+    /// Shows the device this command runs as.
+    Whoami,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerCommand {
+    /// Shows the listeners, server pin, devices and pending offers; on this computer also Tailscale.
+    Status,
 }
