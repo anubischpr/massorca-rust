@@ -146,6 +146,7 @@ impl RenderOnce for SettingsRow {
         let p = &theme.palette;
         let disabled = self.disabled_reason.is_some();
         let helper = self.disabled_reason.clone().or(self.helper.clone());
+        let described = helper.clone();
         let row_id: ElementId = self.id.clone().into();
 
         let mut label_column = div().flex().flex_col().gap(px(SPACE_HALF)).min_w_0().child(
@@ -227,6 +228,9 @@ impl RenderOnce for SettingsRow {
             .when(self.selected, |el| el.bg(p.accent.subtle_raised));
         if let Some(status) = self.status {
             row = row.child(status_line(&self.id, &status, &theme));
+        }
+        if let Some(text) = described {
+            row = row.aria_description(text);
         }
         row
     }
@@ -473,5 +477,45 @@ mod tests {
             control.origin.y > row.origin.y + row.size.height / 2.0,
             "under the label"
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_settings_row_is_a_group_named_by_its_label_and_described_by_its_helper(
+        cx: &mut TestAppContext,
+    ) {
+        let node = root(cx, |window, cx| {
+            reported(
+                SettingsRow::new("row", "Show usage")
+                    .helper("Counts the agents you run.")
+                    .control(div())
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.label(), Some("Show usage"));
+        assert_eq!(node.description(), Some("Counts the agents you run."));
+    }
+
+    #[gpui::test]
+    fn a_row_that_is_off_is_described_by_the_reason(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                SettingsRow::new("row", "Usage data")
+                    .helper("Counts what you use.")
+                    .disabled_reason("Not available yet")
+                    .control(div())
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.description(), Some("Not available yet"));
     }
 }

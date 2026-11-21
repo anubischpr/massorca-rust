@@ -4,6 +4,7 @@
 //! The group is one tab stop. Arrow keys move the selection to the next or previous enabled
 //! option (selection follows the arrows) and a click on a circle or its label selects it.
 
+use crate::a11y;
 use crate::components::button::HOVER_GROUP;
 use crate::components::switch::helper_line;
 use crate::icon::IconName;
@@ -12,6 +13,7 @@ use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     Color, Palette, RADIUS_FULL, SIZE_HIT_POINTER, SIZE_ICON_SM, SPACE_2, SPACE_HALF,
 };
+use gpui::accesskit::Toggled;
 use gpui::{
     App, ClickEvent, ElementId, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
@@ -151,6 +153,7 @@ pub struct RadioGroup {
     options: Vec<RadioOption>,
     selected: Option<usize>,
     error: Option<SharedString>,
+    label: Option<SharedString>,
     disabled: bool,
     focus: Option<FocusHandle>,
     on_change: Option<ChangeHandler>,
@@ -174,6 +177,7 @@ impl RadioGroup {
             options,
             selected: None,
             error: None,
+            label: None,
             disabled: false,
             focus: None,
             on_change: None,
@@ -183,6 +187,12 @@ impl RadioGroup {
     /// The option chosen now, if any.
     pub fn selected(mut self, index: Option<usize>) -> Self {
         self.selected = index;
+        self
+    }
+
+    /// What the group chooses, such as "Theme"; it names the group for assistive technology.
+    pub fn label(mut self, text: impl Into<SharedString>) -> Self {
+        self.label = Some(text.into());
         self
     }
 
@@ -223,7 +233,8 @@ impl RenderOnce for RadioGroup {
         let theme = *cx.theme();
         let p = &theme.palette;
         let enabled = self.enabled();
-        let error = self.error.is_some();
+        let invalid = self.error.is_some();
+        let all_disabled = !enabled.iter().any(|on| *on);
         let element_id: ElementId = self.id.clone().into();
         // GPUI reads a tracked handle's Tab stop from the handle, not the element.
         let focus = self
@@ -235,81 +246,23 @@ impl RenderOnce for RadioGroup {
                     .read(cx)
                     .clone()
             })
-            .tab_stop(enabled.iter().any(|on| *on));
+            .tab_stop(!all_disabled);
 
         let mut options = div().flex().flex_col().gap(px(SPACE_2));
         for (index, option) in self.options.iter().enumerate() {
-            let chosen = self.selected == Some(index);
-            let visual = if !enabled[index] {
-                Visual::Disabled
-            } else {
-                Visual::Rest
+            let state = OptionState {
+                index,
+                chosen: self.selected == Some(index),
+                enabled: enabled[index],
+                invalid,
             };
-            let shown = paint(chosen, visual, error, p);
-            let hover = paint(chosen, Visual::Hover, error, p);
-            let mut circle = div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .mt(px(SPACE_HALF))
-                .size(px(SIZE_ICON_SM))
-                .rounded(px(RADIUS_FULL))
-                .border_1()
-                .border_color(shown.border)
-                .bg(shown.fill);
-            if chosen {
-                circle = circle.child(div().size(px(DOT)).rounded(px(RADIUS_FULL)).bg(shown.dot));
-            }
-            if enabled[index] {
-                circle = circle.group_hover(HOVER_GROUP, move |style| {
-                    style.bg(hover.fill).border_color(hover.border)
-                });
-            }
-
-            let mut stack = div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_HALF))
-                .child(
-                    div()
-                        .text_body()
-                        .text_color(if enabled[index] {
-                            p.text.primary
-                        } else {
-                            p.text.secondary
-                        })
-                        .child(option.label.clone()),
-                );
-            if let Some(helper) = option.helper.clone() {
-                stack = stack.child(helper_line(helper, p.text.secondary, None));
-            }
-
-            let option_id = SharedString::from(format!("{}-option-{index}", self.id));
-            let mut row = div()
-                .id(option_id.clone())
-                .group(HOVER_GROUP)
-                .role(Role::RadioButton)
-                .aria_label(option.label.clone())
-                .aria_selected(chosen)
-                .debug_selector(move || format!("radio-option-{index}"))
-                .flex()
-                .items_start()
-                .gap(px(SPACE_2))
-                .min_h(px(SIZE_HIT_POINTER))
-                .child(circle)
-                .child(stack);
-            if enabled[index] {
-                row = row.cursor_pointer();
-                if let Some(on_change) = self.on_change.clone().filter(|_| !chosen) {
-                    row = row.on_click(move |_: &ClickEvent, window, cx| {
-                        on_change(index, window, cx);
-                    });
-                }
-            }
-            options = options.child(row);
+            options = options.child(option_row(
+                state,
+                option,
+                &self.id,
+                self.on_change.clone(),
+                p,
+            ));
         }
 
         let mut group = div()
@@ -321,7 +274,14 @@ impl RenderOnce for RadioGroup {
             .flex_col()
             .gap(px(SPACE_2))
             .child(options);
-        if let Some(on_change) = self.on_change.filter(|_| enabled.iter().any(|on| *on)) {
+        if let Some(label) = self.label.clone() {
+            group = group.aria_label(label);
+        }
+        if let Some(on_change) = self
+            .on_change
+            .clone()
+            .filter(|_| enabled.iter().any(|on| *on))
+        {
             let selected = self.selected;
             group = group.on_key_down(move |event: &KeyDownEvent, window, cx| {
                 if let Some(next) = arrow_target(&enabled, selected, &event.keystroke.key) {
@@ -329,15 +289,120 @@ impl RenderOnce for RadioGroup {
                 }
             });
         }
-        if let Some(error) = self.error {
-            group = group.child(helper_line(
-                error,
+        if let Some(text) = self.error {
+            group = group.aria_description(text.clone()).child(helper_line(
+                text,
                 p.status.danger_fg,
                 Some(IconName::OctagonAlert),
             ));
         }
-        group
+        a11y::annotate(group, move |node| {
+            if all_disabled {
+                node.set_disabled();
+            }
+            if invalid {
+                node.set_invalid(gpui::accesskit::Invalid::True);
+            }
+        })
     }
+}
+
+/// How one option is drawn: its place in the group, whether it is chosen, whether it can be chosen,
+/// and whether the group failed.
+#[derive(Clone, Copy, Debug)]
+struct OptionState {
+    index: usize,
+    chosen: bool,
+    enabled: bool,
+    invalid: bool,
+}
+
+/// One option: a radio button named by its label, checked when chosen. A click on an option that is
+/// not chosen asks for it; a disabled option ignores the pointer.
+fn option_row(
+    state: OptionState,
+    option: &RadioOption,
+    group: &SharedString,
+    on_change: Option<ChangeHandler>,
+    p: &Palette,
+) -> impl IntoElement {
+    let OptionState {
+        index,
+        chosen,
+        enabled,
+        invalid,
+    } = state;
+    let visual = if enabled {
+        Visual::Rest
+    } else {
+        Visual::Disabled
+    };
+    let shown = paint(chosen, visual, invalid, p);
+    let hover = paint(chosen, Visual::Hover, invalid, p);
+    let mut circle = div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .mt(px(SPACE_HALF))
+        .size(px(SIZE_ICON_SM))
+        .rounded(px(RADIUS_FULL))
+        .border_1()
+        .border_color(shown.border)
+        .bg(shown.fill);
+    if chosen {
+        circle = circle.child(div().size(px(DOT)).rounded(px(RADIUS_FULL)).bg(shown.dot));
+    }
+    if enabled {
+        circle = circle.group_hover(HOVER_GROUP, move |style| {
+            style.bg(hover.fill).border_color(hover.border)
+        });
+    }
+    let helper = option.helper.clone();
+    let mut stack = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_HALF))
+        .child(
+            div()
+                .text_body()
+                .text_color(if enabled {
+                    p.text.primary
+                } else {
+                    p.text.secondary
+                })
+                .child(option.label.clone()),
+        );
+    if let Some(text) = helper.clone() {
+        stack = stack.child(helper_line(text, p.text.secondary, None));
+    }
+
+    let mut row = div()
+        .id(SharedString::from(format!("{group}-option-{index}")))
+        .group(HOVER_GROUP)
+        .role(Role::RadioButton)
+        .aria_label(option.label.clone())
+        .aria_toggled(Toggled::from(chosen))
+        .flex()
+        .items_start()
+        .gap(px(SPACE_2))
+        .min_h(px(SIZE_HIT_POINTER))
+        .child(circle)
+        .child(stack);
+    if let Some(text) = helper {
+        row = row.aria_description(text);
+    }
+    if enabled {
+        row = row.cursor_pointer();
+        if let Some(on_change) = on_change.filter(|_| !chosen) {
+            row = row.on_click(move |_: &ClickEvent, window, cx| {
+                on_change(index, window, cx);
+            });
+        }
+    }
+    a11y::disabled(row, !enabled)
 }
 
 #[cfg(test)]
@@ -455,20 +520,61 @@ mod tests {
         (view, cx, asked)
     }
 
+    /// Hosts two option rows, the chosen one first, each in a block the test can point at.
+    struct Options {
+        asked: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Render for Options {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let asked = self.asked.clone();
+            let on_change: ChangeHandler =
+                Rc::new(move |index, _, _| asked.borrow_mut().push(index));
+            let palette = Theme::new(Appearance::Dark).palette;
+            let group = SharedString::from("theme");
+            div()
+                .child(div().debug_selector(|| "chosen".into()).child(option_row(
+                    OptionState {
+                        index: 0,
+                        chosen: true,
+                        enabled: true,
+                        invalid: false,
+                    },
+                    &RadioOption::new("System"),
+                    &group,
+                    Some(on_change.clone()),
+                    &palette,
+                )))
+                .child(div().debug_selector(|| "other".into()).child(option_row(
+                    OptionState {
+                        index: 1,
+                        chosen: false,
+                        enabled: true,
+                        invalid: false,
+                    },
+                    &RadioOption::new("Dark"),
+                    &group,
+                    Some(on_change),
+                    &palette,
+                )))
+        }
+    }
+
     #[gpui::test]
     fn a_click_on_the_chosen_option_asks_for_nothing_and_another_option_asks_for_it(
         cx: &mut gpui::TestAppContext,
     ) {
-        let (_view, cx, asked) = harness(cx, Some(0));
-        let system = cx
-            .debug_bounds("radio-option-0")
-            .expect("the System option is drawn");
-        cx.simulate_click(system.center(), gpui::Modifiers::none());
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let shared = asked.clone();
+        let (_view, cx) = cx.add_window_view(|_, _| Options { asked: shared });
+        cx.run_until_parked();
+        let chosen = cx
+            .debug_bounds("chosen")
+            .expect("the chosen option is drawn");
+        cx.simulate_click(chosen.center(), gpui::Modifiers::none());
         assert!(asked.borrow().is_empty(), "System is already chosen");
-        let dark = cx
-            .debug_bounds("radio-option-1")
-            .expect("the Dark option is drawn");
-        cx.simulate_click(dark.center(), gpui::Modifiers::none());
+        let other = cx.debug_bounds("other").expect("the other option is drawn");
+        cx.simulate_click(other.center(), gpui::Modifiers::none());
         assert_eq!(*asked.borrow(), vec![1]);
     }
 
@@ -489,5 +595,101 @@ mod tests {
             vec![1],
             "Light is disabled, so nothing moves"
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use crate::theme::Theme;
+    use crate::tokens::Appearance;
+    use gpui::{
+        TestAppContext,
+        accesskit::{Invalid, Role, Toggled},
+    };
+
+    fn palette() -> Palette {
+        Theme::new(Appearance::Dark).palette
+    }
+
+    #[gpui::test]
+    fn a_radio_group_is_named_by_its_label_and_reports_its_error(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                RadioGroup::new(
+                    "theme",
+                    vec![RadioOption::new("System"), RadioOption::new("Dark")],
+                )
+                .label("Theme")
+                .error("Choose a theme.")
+                .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::RadioGroup);
+        assert_eq!(node.label(), Some("Theme"));
+        assert_eq!(node.description(), Some("Choose a theme."));
+        assert_eq!(node.invalid(), Some(Invalid::True));
+    }
+
+    #[gpui::test]
+    fn a_radio_group_with_every_option_disabled_reports_disabled(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                RadioGroup::new("theme", vec![RadioOption::new("System").disabled(true)])
+                    .label("Theme")
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
+    }
+
+    #[gpui::test]
+    fn a_radio_option_is_a_radio_button_named_by_its_label_and_reports_what_it_is(
+        cx: &mut TestAppContext,
+    ) {
+        let node = root(cx, |_, _| {
+            reported(option_row(
+                OptionState {
+                    index: 1,
+                    chosen: true,
+                    enabled: true,
+                    invalid: false,
+                },
+                &RadioOption::new("Dark").helper("The default look."),
+                &SharedString::from("theme"),
+                None,
+                &palette(),
+            ))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::RadioButton);
+        assert_eq!(node.label(), Some("Dark"));
+        assert_eq!(node.toggled(), Some(Toggled::True));
+        assert_eq!(node.description(), Some("The default look."));
+        assert!(!node.is_disabled());
+    }
+
+    #[gpui::test]
+    fn an_unchosen_disabled_option_reports_unchecked_and_disabled(cx: &mut TestAppContext) {
+        let node = root(cx, |_, _| {
+            reported(option_row(
+                OptionState {
+                    index: 2,
+                    chosen: false,
+                    enabled: false,
+                    invalid: false,
+                },
+                &RadioOption::new("Light").disabled(true),
+                &SharedString::from("theme"),
+                None,
+                &palette(),
+            ))
+        })
+        .expect("reported");
+        assert_eq!(node.toggled(), Some(Toggled::False));
+        assert!(node.is_disabled());
     }
 }
