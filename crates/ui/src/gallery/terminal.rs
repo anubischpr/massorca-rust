@@ -69,14 +69,14 @@ mod tests {
             bytes: session,
         })
         .expect("replay");
-        assert_eq!(feed.title().as_deref(), Some("dev@sample: ~/massorca"));
+        assert_eq!(feed.title().as_deref(), Some("me@vps: ~/massorca"));
         let palette = Palette::DARK.terminal;
         let snapshot = feed.snapshot(&palette);
         let first_line: String = snapshot.cells[..snapshot.columns]
             .iter()
             .map(|cell| cell.ch)
             .collect();
-        assert!(first_line.starts_with("dev@sample:~/massorca$ ls --color=always"));
+        assert!(first_line.starts_with("me@vps:~/massorca$ ls --color=always"));
         assert_eq!(snapshot.cells[0].fg, palette.ansi_green);
     }
 }

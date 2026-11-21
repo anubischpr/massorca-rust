@@ -1,15 +1,15 @@
-]2;dev@sample: ~/massorca[1G[1;32mdev@sample[0m:[1;34m~/massorca[0m$ ls --color=always
+]2;me@vps: ~/massorca[1G[1;32mme@vps[0m:[1;34m~/massorca[0m$ ls --color=always
 [1G[1;34mcrates[0m  [1;34mdocs[0m  [1;32mbuild.sh[0m  Cargo.toml  README.md
-[1G[1;32mdev@sample[0m:[1;34m~/massorca[0m$ git status --short
+[1G[1;32mme@vps[0m:[1;34m~/massorca[0m$ git status --short
 [1G [32mA[0m  crates/ui/src/components/terminal_surface.rs
 [1G [31mM[0m  crates/ui/src/components/mod.rs
-[1G[1;32mdev@sample[0m:[1;34m~/massorca[0m$ echo styles
+[1G[1;32mme@vps[0m:[1;34m~/massorca[0m$ echo styles
 [1G[1mbold[0m [3mitalic[0m [4munderline[0m [9mstrike[0m [7minverse[0m
 [1G[38;5;208morange[0m [38;5;39mazure[0m [48;5;236m block [0m
 [1G[38;2;255;136;0mtruecolor[0m [48;2;20;60;120m background [0m
-[1G[1;32mdev@sample[0m:[1;34m~/massorca[0m$ cargo test -q
+[1G[1;32mme@vps[0m:[1;34m~/massorca[0m$ cargo test -q
 [1G   [1;32mCompiling[0m 3/12[2K[1G   [1;32mCompiling[0m 12/12
 [1G    [1;32mFinished[0m test profile in 0.42s
 [1Gwide 日本語 and an emoji 🙂 in the grid
 [1Gpartial line[2K[1Gdone
-[1G[1;32mdev@sample[0m:[1;34m~/massorca[0m$ 
+[1G[1;32mme@vps[0m:[1;34m~/massorca[0m$ 
