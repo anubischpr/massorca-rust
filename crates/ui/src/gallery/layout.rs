@@ -1,25 +1,39 @@
 //! Gallery stories for the layout group: the splitter, the scroll area and the sheet.
 
 use super::{Story, variant};
+use crate::components::scroll_area::{ROW_STEP_PX, ScrollArea, ScrollAxis, ScrollPreview};
 use crate::components::splitter::{
     Extent, RegionSide, Splitter, SplitterLimits, SplitterModel, SplitterPreview,
 };
-use crate::theme::ActiveTheme;
+use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     LAYOUT_SIDEBAR_DEFAULT, LAYOUT_SIDEBAR_MAX, LAYOUT_SIDEBAR_MIN, LAYOUT_WORKPANEL_DEFAULT,
-    LAYOUT_WORKPANEL_MIN, SPACE_3,
+    LAYOUT_WORKPANEL_MIN, SPACE_2, SPACE_3,
 };
-use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
+
+/// The fixed size of one scroll area in the stories.
+const SCROLL_BOX_WIDTH: f32 = 240.0;
+const SCROLL_BOX_HEIGHT: f32 = 160.0;
+/// Width of one cell in the horizontal story.
+const CELL_WIDTH: f32 = 96.0;
 
 /// Height of one lane in the splitter stories.
 const LANE_HEIGHT: f32 = 48.0;
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Splitter",
-        spec: "Splitter.md",
-        render: splitter_story,
-    }]
+    vec![
+        Story {
+            name: "Splitter",
+            spec: "Splitter.md",
+            render: splitter_story,
+        },
+        Story {
+            name: "ScrollArea",
+            spec: "ScrollArea.md",
+            render: scroll_story,
+        },
+    ]
 }
 
 /// The Sidebar's width rules from the layout tokens, on the left of its splitter.
@@ -146,6 +160,101 @@ fn splitter_story(window: &mut Window, cx: &mut App) -> AnyElement {
     column = column.child(variant(
         "Live: drag, double-click or press Left and Right",
         live_lane,
+        cx,
+    ));
+    column.into_any_element()
+}
+
+/// `count` rows of one row height each, `width` px wide, with a line of text in each.
+fn rows(count: usize, width: f32) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w(px(width))
+        .children((0..count).map(|row| {
+            div()
+                .h(px(ROW_STEP_PX))
+                .px(px(SPACE_2))
+                .text_body()
+                .child(format!("Row {row}"))
+        }))
+}
+
+/// `cells` cells side by side, wider than a scroll box.
+fn cells(count: usize) -> Div {
+    div()
+        .flex()
+        .w(px(CELL_WIDTH * count as f32))
+        .h(px(ROW_STEP_PX))
+        .children((0..count).map(|cell| {
+            div()
+                .w(px(CELL_WIDTH))
+                .h_full()
+                .px(px(SPACE_2))
+                .text_body()
+                .child(format!("Cell {cell}"))
+        }))
+}
+
+fn scroll_box(content: impl IntoElement) -> impl IntoElement {
+    div()
+        .w(px(SCROLL_BOX_WIDTH))
+        .h(px(SCROLL_BOX_HEIGHT))
+        .child(content)
+}
+
+fn scroll_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let mut column = div().flex().flex_col().gap(px(SPACE_3));
+    column = column.child(variant(
+        "Thumb shown while scrolling or hovering",
+        scroll_box(
+            ScrollArea::new("story-scroll-thumbs")
+                .preview(ScrollPreview::Thumbs)
+                .child(rows(40, SCROLL_BOX_WIDTH)),
+        ),
+        cx,
+    ));
+    column = column.child(variant(
+        "Keyboard focus: inset ring",
+        scroll_box(
+            ScrollArea::new("story-scroll-focus")
+                .preview(ScrollPreview::Focus)
+                .child(rows(40, SCROLL_BOX_WIDTH)),
+        ),
+        cx,
+    ));
+    column = column.child(variant(
+        "Horizontal overflow",
+        scroll_box(
+            ScrollArea::new("story-scroll-horizontal")
+                .axis(ScrollAxis::Horizontal)
+                .preview(ScrollPreview::Thumbs)
+                .child(cells(12)),
+        ),
+        cx,
+    ));
+    column = column.child(variant(
+        "Both axes",
+        scroll_box(
+            ScrollArea::new("story-scroll-both")
+                .axis(ScrollAxis::Both)
+                .preview(ScrollPreview::Thumbs)
+                .child(rows(40, SCROLL_BOX_WIDTH * 1.5)),
+        ),
+        cx,
+    ));
+    column = column.child(variant(
+        "Content fits: no thumb",
+        scroll_box(
+            ScrollArea::new("story-scroll-fits")
+                .preview(ScrollPreview::Thumbs)
+                .child(rows(3, SCROLL_BOX_WIDTH)),
+        ),
+        cx,
+    ));
+    column = column.child(variant(
+        "Live: wheel, Up and Down, or drag the thumb",
+        scroll_box(ScrollArea::new("story-scroll-live").child(rows(40, SCROLL_BOX_WIDTH))),
         cx,
     ));
     column.into_any_element()
