@@ -2,10 +2,12 @@
 //! starts it when it can; `--sample` opens the shell on sample data instead (decision 0023).
 //!
 //! Flags: `--sample`, `--profile <name>`, `--home <dir>`, `--no-autostart`. Like the CLI, it reads
-//! `MASSORCA_HOME`, `MASSORCA_PROFILE` and `MASSORCA_NO_AUTOSTART`.
+//! `MASSORCA_HOME`, `MASSORCA_PROFILE` and `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1`
+//! opens the window hidden and unfocused for automated checks (see `launch_options`).
 
 use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
 use massorca_desktop::data::SampleDataSource;
+use massorca_desktop::launch_options::WindowLaunch;
 use massorca_desktop::service::LaunchOptions;
 use massorca_desktop::shell::{self, Shell};
 use massorca_desktop::store::ClientDataSource;
@@ -22,6 +24,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
+    let launch = WindowLaunch::from_env(|key| std::env::var(key).ok());
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx| {
@@ -56,6 +59,8 @@ fn main() {
                         traffic_light_position: cfg!(target_os = "macos")
                             .then(|| point(px(16.), px(14.))),
                     }),
+                    focus: launch.focus(),
+                    show: launch.show(),
                     ..Default::default()
                 },
                 |window, cx| {
@@ -66,6 +71,7 @@ fn main() {
                 },
             );
             match opened {
+                Ok(_) if launch.background => {}
                 Ok(_) => cx.activate(true),
                 Err(error) => {
                     report(&format!("{error:#}"));

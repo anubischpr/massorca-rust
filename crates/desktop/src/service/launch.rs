@@ -81,7 +81,7 @@ fn value_of(flag: &str, value: Option<OsString>) -> Result<String, String> {
 }
 
 /// The CLI reads this variable with clap's falsey rule: these spellings mean off.
-fn truthy(value: &str) -> bool {
+pub(crate) fn truthy(value: &str) -> bool {
     !matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "" | "0" | "false" | "no" | "off" | "n" | "f"

@@ -15,6 +15,7 @@ pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
+pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 pub use update::{StoreState, StoreUpdate};
