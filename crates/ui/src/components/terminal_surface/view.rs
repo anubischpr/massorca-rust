@@ -513,12 +513,44 @@ fn scroll_key(key: &str, mods: Modifiers) -> Option<Scroll> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::a11y::probe;
+    use gpui::TestAppContext;
 
     #[test]
     fn the_pane_is_an_application_named_after_its_title() {
         assert_eq!(ACCESSIBILITY_ROLE, Role::Application);
-        assert_eq!(accessible_name(Some("zsh, oppm")), "Terminal: zsh, oppm");
+        assert_eq!(
+            accessible_name(Some("zsh, project")),
+            "Terminal: zsh, project"
+        );
         assert_eq!(accessible_name(Some("")), "Terminal");
         assert_eq!(accessible_name(None), "Terminal");
+    }
+
+    #[gpui::test]
+    fn the_rendered_pane_is_reported_as_an_application_with_its_name(cx: &mut TestAppContext) {
+        let titled = probe::view(cx, |cx| {
+            let mut surface = TerminalSurface::new(80, 24, cx);
+            surface
+                .apply(FeedEvent::Attached { offset: 0 }, cx)
+                .expect("attach");
+            surface
+                .apply(
+                    FeedEvent::Output {
+                        offset: 0,
+                        bytes: b"\x1b]2;zsh, project\x07",
+                    },
+                    cx,
+                )
+                .expect("title");
+            surface
+        })
+        .expect("the pane reports a node");
+        assert_eq!(titled.role(), Role::Application);
+        assert_eq!(titled.label(), Some("Terminal: zsh, project"));
+
+        let untitled = probe::view(cx, |cx| TerminalSurface::new(80, 24, cx))
+            .expect("the pane reports a node");
+        assert_eq!(untitled.label(), Some("Terminal"));
     }
 }
