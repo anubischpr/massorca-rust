@@ -14,6 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment};
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
@@ -351,6 +352,7 @@ impl TerminalManager {
                 size: spec.size,
                 status: Status::Live,
                 kill_reason: None,
+                attachments: Vec::new(),
                 query_match: 0,
             }),
             changed: Condvar::new(),
@@ -422,7 +424,7 @@ impl TerminalManager {
         })
     }
 
-    /// Sets the terminal's one size.
+    /// Sets the terminal's one size; every attachment hears `Resized`.
     pub fn resize(&self, id: &str, size: PtySize) -> Result<TerminalInfo> {
         validate_size(size)?;
         let terminal = self.inner.find(id)?;
@@ -442,6 +444,12 @@ impl TerminalManager {
         let mut core = lock(&terminal.core);
         core.screen.resize(size.cols, size.rows);
         core.size = size;
+        for attachment in &core.attachments {
+            attachment.push(AttachItem::Resized {
+                cols: size.cols,
+                rows: size.rows,
+            });
+        }
         Ok(terminal.info_locked(&core))
     }
 
@@ -459,6 +467,47 @@ impl TerminalManager {
         let forgotten = lock(&self.inner.registry).forget(id);
         drop(forgotten);
         Ok(info)
+    }
+
+    /// Starts following the terminal's output: from `since` when the ring still holds it,
+    /// else from a snapshot. Works on exited terminals: the snapshot, then `Exited`.
+    pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
+        let terminal = self.inner.find(id)?;
+        let shared = Arc::new(AttachShared::default());
+        {
+            let mut core = lock(&terminal.core);
+            let info = terminal.info_locked(&core);
+            let resume = since.and_then(|since| Some((since, core.ring.read_from(since)?)));
+            let mut queue = lock(&shared.queue);
+            match resume {
+                Some((offset, bytes)) => {
+                    queue.items.push_back(AttachItem::Attached {
+                        info: info.clone(),
+                        mode: AttachMode::Resume,
+                        offset,
+                    });
+                    if !bytes.is_empty() {
+                        queue.items.push_back(AttachItem::Output { offset, bytes });
+                    }
+                }
+                None => {
+                    let (offset, snapshot) = core.snapshot();
+                    queue.items.push_back(AttachItem::Attached {
+                        info: info.clone(),
+                        mode: AttachMode::Snapshot,
+                        offset,
+                    });
+                    queue.items.push_back(snapshot);
+                }
+            }
+            if matches!(core.status, Status::Live) {
+                core.attachments.push(Arc::clone(&shared));
+            } else {
+                queue.items.push_back(AttachItem::Exited { info });
+                queue.ended = true;
+            }
+        }
+        Ok(Attachment::new(terminal, shared))
     }
 
     /// Kills every live terminal at once (reason `ServiceStopped`), bounded by the shutdown
@@ -555,13 +604,27 @@ struct Core {
     status: Status,
     /// Set by the first kill, read when the exit is recorded.
     kill_reason: Option<ExitReason>,
+    attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
 }
 
 impl Core {
-    /// Applies one PTY read to the screen and the ring. Returns the replies to cursor queries,
-    /// which are written after the lock is released.
+    /// The snapshot item and the offset output continues from.
+    fn snapshot(&mut self) -> (u64, AttachItem) {
+        let offset = self.ring.end_offset();
+        let item = AttachItem::Snapshot {
+            offset,
+            cols: self.size.cols,
+            rows: self.size.rows,
+            bytes: self.screen.snapshot(),
+        };
+        (offset, item)
+    }
+
+    /// Applies one PTY read to the screen, the ring and the attachments. Returns the
+    /// replies to cursor queries nobody attached can answer; they are written after the
+    /// lock is released.
     fn ingest(&mut self, chunk: &[u8]) -> Vec<u8> {
         let mut replies = Vec::new();
         let mut fed = 0;
@@ -576,14 +639,23 @@ impl Core {
                 // The answer is the cursor as of the query, not as of the end of the read.
                 self.screen.process(&chunk[fed..=index]);
                 fed = index + 1;
-                let (row, col) = self.screen.cursor_position();
-                replies.extend_from_slice(
-                    format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
-                );
+                if self.attachments.is_empty() {
+                    let (row, col) = self.screen.cursor_position();
+                    replies.extend_from_slice(
+                        format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
+                    );
+                }
             }
         }
         self.screen.process(&chunk[fed..]);
+        let offset = self.ring.end_offset();
         self.ring.push(chunk);
+        for attachment in &self.attachments {
+            attachment.push(AttachItem::Output {
+                offset,
+                bytes: chunk.to_vec(),
+            });
+        }
         replies
     }
 }
@@ -609,6 +681,10 @@ pub(crate) struct Terminal {
 }
 
 impl Terminal {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
     fn is_live(&self) -> bool {
         matches!(lock(&self.core).status, Status::Live)
     }
@@ -691,7 +767,33 @@ impl Terminal {
                 Status::Unverifiable
             }
         };
+        let info = self.info_locked(&core);
+        for attachment in core.attachments.drain(..) {
+            attachment.push(AttachItem::Exited { info: info.clone() });
+        }
         self.changed.notify_all();
+    }
+
+    /// The recovery of a lagging attachment: a fresh snapshot, atomically with its queue.
+    pub(crate) fn resnapshot(&self, shared: &AttachShared) -> AttachItem {
+        let mut core = lock(&self.core);
+        let (_, snapshot) = core.snapshot();
+        let mut queue = lock(&shared.queue);
+        queue.items.clear();
+        queue.lagging = false;
+        if !matches!(core.status, Status::Live) {
+            queue.items.push_back(AttachItem::Exited {
+                info: self.info_locked(&core),
+            });
+            queue.ended = true;
+        }
+        snapshot
+    }
+
+    pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
+        lock(&self.core)
+            .attachments
+            .retain(|attachment| !Arc::ptr_eq(attachment, shared));
     }
 }
 

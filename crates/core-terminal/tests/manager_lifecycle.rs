@@ -5,7 +5,7 @@ mod manager_support;
 
 use std::time::{Duration, Instant};
 
-use manager_support::{Managed, SIZE, script_shell, spec, wait_until};
+use manager_support::{Managed, SIZE, marker_command, script_shell, spec, wait_until, watch};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{ExitReason, ShellChoice, TerminalError, TerminalState};
 
@@ -58,6 +58,19 @@ async fn list_is_ordered_by_creation() {
 
     let ids: Vec<String> = manager.list(None).into_iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![first.id, second.id, third.id]);
+}
+
+#[tokio::test]
+async fn input_reaches_the_shell() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+
+    let (command, expected) = marker_command("marker-1");
+    manager.input(&info.id, &command).expect("input");
+
+    watch.wait_for_text(&expected).await;
 }
 
 #[tokio::test]
