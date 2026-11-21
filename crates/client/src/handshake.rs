@@ -44,7 +44,9 @@ pub(crate) async fn exchange(
         capabilities: OFFERED.iter().map(|name| (*name).to_owned()).collect(),
         auth: None,
     };
-    write_message(stream, &hello).await.map_err(frame_error)?;
+    write_message(stream, &hello, MAX_FRAME_LEN_LOCAL)
+        .await
+        .map_err(frame_error)?;
 
     let answer = match timeout(HANDSHAKE_TIMEOUT, read_message(stream, MAX_FRAME_LEN_LOCAL)).await {
         Ok(read) => read.map_err(frame_error)?,

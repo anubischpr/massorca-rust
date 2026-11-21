@@ -149,7 +149,7 @@ impl Raw {
 
     pub async fn send(&mut self, message: &Message) {
         let mut writer: &Stream = &self.stream;
-        write_message(&mut writer, message)
+        write_message(&mut writer, message, MAX_FRAME_LEN_LOCAL)
             .await
             .expect("the frame is sent");
     }

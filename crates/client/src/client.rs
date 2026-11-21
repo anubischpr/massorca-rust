@@ -1,12 +1,13 @@
 //! A connected client: calls and subscriptions over one connection, and the welcome the service answered with.
 
 use std::fmt;
+use std::io;
 use std::sync::Arc;
 
 use interprocess::local_socket::tokio::Stream;
 use massorca_profile::Profile;
-use massorca_protocol::Message;
 use massorca_protocol::methods::events::Subscribed;
+use massorca_protocol::{MAX_FRAME_LEN_LOCAL, Message, fits_frame};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::{mpsc, oneshot};
@@ -99,12 +100,21 @@ impl Client {
         let params = serde_json::to_value(params)
             .map_err(|error| ClientError::Protocol(error.to_string()))?;
         let id = self.shared.next_id();
-        self.shared.register(id, pending)?;
         let request = Message::Request {
             id,
             method: method.to_owned(),
             params,
         };
+        // Refused before it is registered: the service would close the connection on a frame it cannot read.
+        if !fits_frame(&request, MAX_FRAME_LEN_LOCAL) {
+            return Err(ClientError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the request is larger than one frame may hold ({MAX_FRAME_LEN_LOCAL} bytes)"
+                ),
+            )));
+        }
+        self.shared.register(id, pending)?;
         if self.outbound.send(request).is_err() {
             self.shared.forget(id);
             return Err(ClientError::Disconnected);

@@ -28,7 +28,10 @@ pub(crate) async fn write_frames(
 ) {
     let mut send: &Stream = &stream;
     while let Some(message) = outbound.recv().await {
-        if write_message(&mut send, &message).await.is_err() {
+        if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
+            .await
+            .is_err()
+        {
             return;
         }
     }

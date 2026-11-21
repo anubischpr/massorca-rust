@@ -29,9 +29,13 @@ The owner, principal, reserved-prefix and handle rules below come from
 **Framing (stream transports).** `u32` big-endian length, then the frame body.
 The body's first byte is the frame kind; `0x01` is a UTF-8 JSON message. Any
 other kind must be enabled by a negotiated capability first, because a peer
-that does not know a kind cannot do anything sensible with it. Frames above
-the negotiated limit (default 8 MiB local, 1 MiB network) close the
-connection rather than being truncated.
+that does not know a kind cannot do anything sensible with it. A frame above
+the negotiated limit (default 8 MiB local, 1 MiB network) is never written, and
+a peer that receives one closes the connection rather than truncating it. A
+reply too large for a frame fails only its request with `response.too_large`;
+an oversized stream item ends only its stream with `stream.item_too_large`. The
+connection stays open in both cases, and a client refuses an oversized request
+before it sends it.
 
 **Serialization.** JSON with `serde`. Readers ignore unknown fields; writers
 omit `None` fields. Every enum that crosses the wire decodes an unknown value

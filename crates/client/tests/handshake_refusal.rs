@@ -42,7 +42,7 @@ async fn a_refused_handshake_reports_the_range_the_service_speaks() {
             ),
             supported: ProtocolRange { min: 1, max: 1 },
         };
-        write_message(&mut stream, &refusal)
+        write_message(&mut stream, &refusal, MAX_FRAME_LEN_LOCAL)
             .await
             .expect("the refusal is sent");
     });

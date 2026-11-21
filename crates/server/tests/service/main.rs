@@ -7,6 +7,7 @@ mod concurrency;
 mod config;
 mod core_methods;
 mod events;
+mod frames;
 mod handshake;
 mod lifecycle;
 mod registries;

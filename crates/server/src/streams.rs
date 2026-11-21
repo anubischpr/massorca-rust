@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use massorca_protocol::Message;
+use massorca_protocol::{ErrorBody, MAX_FRAME_LEN_LOCAL, Message, codes, fits_frame};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::method::StreamSource;
@@ -91,10 +91,26 @@ pub(crate) async fn forward(
                 .await;
             return;
         };
+        let event = Message::Event { stream, data };
+        // An item that cannot be framed ends its stream; the client would otherwise see the connection drop.
+        if !fits_frame(&event, MAX_FRAME_LEN_LOCAL) {
+            table.release(stream);
+            let error = ErrorBody::new(
+                codes::STREAM_ITEM_TOO_LARGE,
+                "a stream item is larger than one frame may hold",
+            );
+            let _ = outbound
+                .send(Message::End {
+                    stream,
+                    error: Some(error),
+                })
+                .await;
+            return;
+        }
         let sent = tokio::select! {
             biased;
             _ = &mut cancelled => return,
-            sent = outbound.send(Message::Event { stream, data }) => sent,
+            sent = outbound.send(event) => sent,
         };
         if sent.is_err() {
             return;
