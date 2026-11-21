@@ -31,6 +31,8 @@ pub const GIT_FAILED: &str = "git.failed";
 pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
+/// The store was written by a newer build; it is left untouched (decision 0005).
+pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

@@ -40,6 +40,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::SELECTOR_AMBIGUOUS, "selector.ambiguous"),
     (codes::CONFIG_UNKNOWN_KEY, "config.unknown_key"),
     (codes::CONFIG_INVALID_VALUE, "config.invalid_value"),
+    (codes::STORE_NEWER_SCHEMA, "store.newer_schema"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
