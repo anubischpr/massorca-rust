@@ -1,14 +1,16 @@
-//! Single-line text input: the editing model, and the entity that edits it through
-//! the platform input handler (typing and IME).
+//! Single-line text input: the editing model, the element that paints it, the
+//! entity that owns it and its platform input handler (typing and IME).
 
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ShapedLine, SharedString,
-    Styled, UTF16Selection, Window, actions, div, point, px,
+    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
+    SharedString, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
+    actions, div, fill, point, px, relative, size,
 };
 
 use crate::theme::{ActiveTheme, TextStyled};
@@ -687,10 +689,200 @@ impl Render for TextField {
             .border_color(outline)
             .text_color(text_color)
             .text_style(TYPE_BODY);
-        if width > 1. {
+        let field = if width > 1. {
             field.border_2()
         } else {
             field.border_1()
+        };
+        field.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(TextElement { input: cx.entity() }),
+        )
+    }
+}
+
+/// Paints the line, selection and caret, and registers the platform input handler.
+struct TextElement {
+    input: Entity<TextField>,
+}
+
+struct Prepaint {
+    line: ShapedLine,
+    scroll: Pixels,
+    selection: Option<PaintQuad>,
+    caret: Option<PaintQuad>,
+}
+
+impl Element for TextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = Prepaint;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = window.line_height().into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Prepaint {
+        let palette = cx.theme().palette;
+        let field = self.input.read(cx);
+        let focused = field.focus_handle.is_focused(window);
+        let editable = field.editable();
+        let empty = field.buffer.is_empty();
+        let text = if empty {
+            field.placeholder.clone()
+        } else {
+            SharedString::from(field.buffer.text().to_owned())
+        };
+        let selected = field.buffer.selected();
+        let cursor = field.buffer.cursor();
+        let marked = field.buffer.marked();
+        let scroll_x = field.scroll_x;
+        let color = Hsla::from(if empty {
+            palette.text.tertiary
+        } else if field.disabled {
+            palette.text.disabled
+        } else {
+            palette.text.primary
+        });
+
+        let style = window.text_style();
+        let run = TextRun {
+            len: text.len(),
+            font: style.font(),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = match marked {
+            Some(range) if !empty => [
+                TextRun {
+                    len: range.start,
+                    ..run.clone()
+                },
+                TextRun {
+                    len: range.end - range.start,
+                    underline: Some(UnderlineStyle {
+                        color: Some(color),
+                        thickness: px(1.),
+                        wavy: false,
+                    }),
+                    ..run.clone()
+                },
+                TextRun {
+                    len: text.len() - range.end,
+                    ..run
+                },
+            ]
+            .into_iter()
+            .filter(|run| run.len > 0)
+            .collect(),
+            _ => vec![run],
+        };
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line = window
+            .text_system()
+            .shape_line(text, font_size, &runs, None);
+
+        let caret_x = line.x_for_index(cursor);
+        let content_width = line.x_for_index(line.text.len());
+        let scroll = px(visible_scroll(
+            f32::from(scroll_x),
+            f32::from(caret_x),
+            f32::from(bounds.size.width),
+            f32::from(content_width),
+        ));
+        let origin = bounds.left() - scroll;
+        let (selection, caret) = if !selected.is_empty() {
+            let span = Bounds::from_corners(
+                point(origin + line.x_for_index(selected.start), bounds.top()),
+                point(origin + line.x_for_index(selected.end), bounds.bottom()),
+            );
+            (Some(fill(span, Hsla::from(palette.selection.bg))), None)
+        } else if focused && editable {
+            let bar = Bounds::new(
+                point(origin + caret_x, bounds.top()),
+                size(px(1.), bounds.size.height),
+            );
+            (None, Some(fill(bar, Hsla::from(palette.text.primary))))
+        } else {
+            (None, None)
+        };
+
+        let layout = line.clone();
+        self.input.update(cx, |field, _| {
+            field.scroll_x = scroll;
+            field.last_layout = Some(layout);
+            field.last_bounds = Some(bounds);
+        });
+        Prepaint {
+            line,
+            scroll,
+            selection,
+            caret,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        prepaint: &mut Prepaint,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus_handle = self.input.read(cx).focus_handle.clone();
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        if let Some(selection) = prepaint.selection.take() {
+            window.paint_quad(selection);
+        }
+        let origin = point(bounds.left() - prepaint.scroll, bounds.top());
+        prepaint
+            .line
+            .paint(
+                origin,
+                window.line_height(),
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .ok();
+        if let Some(caret) = prepaint.caret.take() {
+            window.paint_quad(caret);
         }
     }
 }
@@ -827,6 +1019,18 @@ fn single_line(text: &str) -> String {
         .replace(['\r', '\n'], " ")
 }
 
+/// Scroll offset that keeps the caret in view and leaves no empty space at the end.
+fn visible_scroll(scroll: f32, caret: f32, viewport: f32, content: f32) -> f32 {
+    let scroll = if caret < scroll {
+        caret
+    } else if caret > scroll + viewport {
+        caret - viewport
+    } else {
+        scroll
+    };
+    scroll.clamp(0., (content - viewport).max(0.))
+}
+
 /// Byte offsets where extended grapheme clusters start. Approximates UAX #29 for
 /// combining marks, variation selectors, emoji modifiers, ZWJ sequences and flags.
 fn grapheme_starts(text: &str) -> Vec<usize> {
@@ -891,6 +1095,8 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::{cell::RefCell, rc::Rc};
 
     #[test]
     fn new_puts_the_cursor_at_the_end() {
@@ -1060,5 +1266,134 @@ mod tests {
     fn line_breaks_follow_the_single_line_rules() {
         assert_eq!(single_line("a\r\nb\n"), "a b");
         assert_eq!(strip_line_breaks("a\nb"), "ab");
+    }
+
+    #[test]
+    fn scroll_keeps_the_caret_in_view_without_empty_space_at_the_end() {
+        assert_eq!(visible_scroll(0., 150., 100., 200.), 50.);
+        assert_eq!(visible_scroll(50., 20., 100., 200.), 20.);
+        assert_eq!(visible_scroll(80., 300., 100., 200.), 100.);
+        assert_eq!(visible_scroll(40., 10., 100., 50.), 0.);
+    }
+
+    /// Subscribes to a field and collects the events it emits.
+    fn record_events(
+        field: &Entity<TextField>,
+        cx: &mut VisualTestContext,
+    ) -> Rc<RefCell<Vec<TextFieldEvent>>> {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(field, move |_, event: &TextFieldEvent, _| {
+                sink.borrow_mut().push(*event)
+            })
+            .detach();
+        });
+        events
+    }
+
+    /// Focuses a field and redraws, so the platform input handler is installed.
+    fn focus_and_draw(field: &Entity<TextField>, cx: &mut VisualTestContext) {
+        field.update_in(cx, |field, window, cx| {
+            field.focus(window, cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+    }
+
+    fn text_of(field: &Entity<TextField>, cx: &VisualTestContext) -> String {
+        field.read_with(cx, |field, _| field.text().to_owned())
+    }
+
+    #[gpui::test]
+    fn typing_edits_the_focused_field(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        focus_and_draw(&field, cx);
+        cx.simulate_input("abc");
+        assert_eq!(text_of(&field, cx), "abc");
+    }
+
+    #[gpui::test]
+    fn enter_submits_without_inserting_a_line_break(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm"));
+        let events = record_events(&field, cx);
+        focus_and_draw(&field, cx);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*events.borrow(), vec![TextFieldEvent::Submitted]);
+        assert_eq!(text_of(&field, cx), "oppm");
+    }
+
+    #[gpui::test]
+    fn select_all_then_typing_replaces_the_text(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("old"));
+        focus_and_draw(&field, cx);
+        cx.simulate_keystrokes("secondary-a");
+        cx.simulate_input("new");
+        assert_eq!(text_of(&field, cx), "new");
+    }
+
+    #[gpui::test]
+    fn read_only_field_keeps_its_text(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm").read_only(true));
+        focus_and_draw(&field, cx);
+        cx.simulate_input("x");
+        assert_eq!(text_of(&field, cx), "oppm");
+        field.update_in(cx, |field, window, cx| {
+            assert!(!field.accepts_text_input(window, cx));
+        });
+    }
+
+    #[gpui::test]
+    fn disabled_field_never_takes_focus(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).disabled(true));
+        field.update_in(cx, |field, window, cx| field.focus(window, cx));
+        cx.run_until_parked();
+        field.update_in(cx, |field, window, _| {
+            assert!(!field.focus_handle.is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn composition_is_marked_then_committed_through_the_input_handler(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+            assert_eq!(field.marked_text_range(window, cx), Some(0..2));
+        });
+        field.update_in(cx, |field, window, cx| {
+            field.replace_text_in_range(None, "你", window, cx);
+            assert_eq!(field.text(), "你");
+            assert_eq!(field.marked_text_range(window, cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn edits_emit_changed_but_identical_text_does_not(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        let events = record_events(&field, cx);
+        focus_and_draw(&field, cx);
+        cx.simulate_input("a");
+        field.update_in(cx, |field, window, cx| field.set_text("a", window, cx));
+        field.update_in(cx, |field, window, cx| field.set_text("ab", window, cx));
+        assert_eq!(
+            *events.borrow(),
+            vec![TextFieldEvent::Changed, TextFieldEvent::Changed]
+        );
+    }
+
+    #[gpui::test]
+    fn copy_and_paste_round_trip_and_flatten_line_breaks(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("abc"));
+        focus_and_draw(&field, cx);
+        cx.simulate_keystrokes("secondary-a secondary-c end secondary-v");
+        assert_eq!(text_of(&field, cx), "abcabc");
+        cx.write_to_clipboard(ClipboardItem::new_string("x\ny".to_owned()));
+        cx.simulate_keystrokes("secondary-v");
+        assert_eq!(text_of(&field, cx), "abcabcx y");
     }
 }
