@@ -5,6 +5,7 @@ mod canvas;
 mod palette;
 mod rail;
 mod service_banner;
+mod settings;
 mod sidebar;
 mod sidebar_rows;
 mod status_bar;
@@ -19,6 +20,7 @@ use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -32,7 +34,7 @@ use gpui::{
     Subscription, WeakEntity, Window, div, prelude::*,
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
-use massorca_ui::components::search_field::SearchField;
+use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
@@ -55,6 +57,11 @@ pub struct Shell {
     /// One focus handle per frame zone, which F6 moves between.
     zones: ZoneFocus,
     search: Entity<SearchField>,
+    /// The Settings page: its section, its search text and the workspace folder.
+    settings: SettingsModel,
+    /// The Settings search field; the text it settles on becomes `settings.query`.
+    settings_search: Entity<SearchField>,
+    _settings_search_changes: Subscription,
     /// The palette's query field, present while the palette is open.
     palette_input: Option<Entity<TextField>>,
     /// The control that had focus when the palette opened; focus returns to it.
@@ -128,12 +135,25 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let settings_search_changes = cx.subscribe(
+            &settings_search,
+            |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.settings.query = query.to_string();
+                    cx.notify();
+                }
+            },
+        );
         Self {
             model,
             focus,
             rail,
             zones,
             search,
+            settings: SettingsModel::default(),
+            settings_search,
+            _settings_search_changes: settings_search_changes,
             palette_input: None,
             palette_restore: None,
             palette_events: None,
@@ -279,7 +299,14 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
-        let canvas = canvas::canvas(&self.model, &self.zones, window, cx);
+        let connection = self.store.read(cx).state().connection.clone();
+        let settings = settings::SettingsFrame {
+            model: &self.settings,
+            search: &self.settings_search,
+            connection,
+            shell: shell.clone(),
+        };
+        let canvas = canvas::canvas(&self.model, &self.zones, settings, window, cx);
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),

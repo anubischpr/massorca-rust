@@ -1,10 +1,11 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::settings::{self, SettingsFrame};
 use super::teams;
 use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
-use crate::model::navigation::Mode;
+use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
@@ -24,6 +25,7 @@ use massorca_ui::{ActiveTheme, TextStyled, Theme};
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
+    settings: SettingsFrame<'_>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -42,7 +44,7 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, window, cx, &theme))
+        .child(conversation(model, &shell, settings, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -56,10 +58,15 @@ pub(super) fn canvas(
 fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
+    settings: SettingsFrame<'_>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
-) -> impl IntoElement {
+) -> AnyElement {
+    // The Settings page fills the Canvas, so it is not centred in a box.
+    if model.canvas() == Canvas::Page(Page::Settings) {
+        return settings::settings_page(settings, window, cx);
+    }
     let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
         Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
@@ -99,6 +106,7 @@ fn conversation(
         .items_center()
         .justify_center()
         .child(body)
+        .into_any_element()
 }
 
 /// The start page with no session open: the rose logo and the question (A40).
