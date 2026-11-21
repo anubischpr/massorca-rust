@@ -9,9 +9,12 @@ pub mod message;
 pub mod methods;
 pub mod version;
 
-pub use frame::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame, fits_frame};
+pub use frame::{
+    Frame, FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame, encode_stream_bytes,
+    fits_frame,
+};
 #[cfg(feature = "tokio")]
-pub use frame::{read_message, write_message};
+pub use frame::{read_frame, read_message, write_frame, write_message};
 pub use message::{Auth, ErrorBody, Message, PeerInfo, ProtocolRange};
 pub use version::negotiate;
 
