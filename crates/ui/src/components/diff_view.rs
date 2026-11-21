@@ -4,8 +4,22 @@
 //! blocks, split pairs, notes and counts derived from them. The core computes the hunks off the
 //! render path; the view only draws what the model says.
 
-use gpui::SharedString;
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::FocusRing;
+use crate::theme::{ActiveTheme, TextStyled, Theme};
+use crate::tokens::{
+    Color, Palette, SIZE_DIFF_GUTTER, SIZE_DIFF_MARKER, SPACE_1, SPACE_2, SPACE_3, TYPE_CAPTION,
+    TYPE_MONO, TYPE_MONO_SM,
+};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, HighlightStyle, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, RenderOnce, Role, ScrollStrategy, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, StyledText, UniformListScrollHandle, Window, div,
+    px, relative, uniform_list,
+};
 use std::ops::Range;
+use std::rc::Rc;
 
 /// Unchanged lines that one click on a collapsed block reveals.
 pub const REVEAL_STEP: usize = 20;
@@ -531,6 +545,542 @@ fn flush_pairs(out: &mut Vec<SplitRow>, removed: &mut Vec<usize>, added: &mut Ve
     }));
     removed.clear();
     added.clear();
+}
+
+/// The layout of the diff body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    /// One column: removed lines above added lines.
+    #[default]
+    Inline,
+    /// The old file on the left, the new file on the right.
+    Split,
+}
+
+/// What the reader asked for. The owner of the diff acts on it; cursor and layout stay in the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffAction {
+    Reveal { gap: usize },
+    Comment { hunk: usize, line: usize },
+    SendToAgent,
+    Edit,
+    More,
+    Retry,
+    ShowFile,
+    ShowAnyway,
+    OpenAsSource,
+}
+
+/// Receives the actions of a DiffView.
+pub type DiffActionHandler = Rc<dyn Fn(DiffAction, &mut Window, &mut App)>;
+
+/// Height of every body row, so the list virtualises with `uniform_list`.
+const ROW_HEIGHT: f32 = 20.0;
+/// Rows that Page Up and Page Down move the cursor by.
+const PAGE_ROWS: usize = 20;
+/// Width of the change ruler on the right edge.
+const RULER_WIDTH: f32 = 8.0;
+
+/// The view's own state, kept by its element id: the cursor, the current change and the layout.
+struct ViewState {
+    focus: FocusHandle,
+    scroll: UniformListScrollHandle,
+    cursor: usize,
+    change: Option<usize>,
+    mode: ViewMode,
+}
+
+/// What a body row needs from the view: colours, the cursor, the current change and the handler.
+#[derive(Clone)]
+struct Look {
+    p: Palette,
+    cursor: usize,
+    change: Option<usize>,
+    focused: bool,
+    handler: Option<DiffActionHandler>,
+    theme: Theme,
+}
+
+/// The changes of one file: toolbar, review bar, body and change ruler (DiffView.md).
+#[derive(IntoElement)]
+pub struct DiffView {
+    id: ElementId,
+    model: Rc<DiffModel>,
+    on_action: Option<DiffActionHandler>,
+}
+
+impl std::fmt::Debug for DiffView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffView").field("id", &self.id).finish()
+    }
+}
+
+impl DiffView {
+    pub fn new(id: impl Into<ElementId>, model: impl Into<Rc<DiffModel>>) -> Self {
+        Self {
+            id: id.into(),
+            model: model.into(),
+            on_action: None,
+        }
+    }
+
+    pub fn on_action(
+        mut self,
+        listener: impl Fn(DiffAction, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_action = Some(Rc::new(listener));
+        self
+    }
+}
+
+fn emit(
+    handler: &Option<DiffActionHandler>,
+    action: DiffAction,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(handler) = handler {
+        handler(action, window, cx);
+    }
+}
+
+/// Moves the cursor to the first row of a change and centres it.
+fn select_change(model: &DiffModel, state: &mut ViewState, index: usize) {
+    if let Some(block) = model.changes().get(index) {
+        state.change = Some(index);
+        state.cursor = block.first;
+        state
+            .scroll
+            .scroll_to_item(block.first, ScrollStrategy::Center);
+    }
+}
+
+fn move_cursor(model: &DiffModel, state: &mut ViewState, to: usize) {
+    state.cursor = to.min(model.rows().len().saturating_sub(1));
+    state
+        .scroll
+        .scroll_to_item(state.cursor, ScrollStrategy::Center);
+}
+
+/// Applies a key to the view state. Returns whether the key was used, and the action it asks for.
+fn handle_key(
+    model: &DiffModel,
+    state: &mut ViewState,
+    key: &str,
+    shift: bool,
+    comment: bool,
+) -> (bool, Option<DiffAction>) {
+    let cursor = state.cursor;
+    let last = model.rows().len().saturating_sub(1);
+    match key {
+        "down" => move_cursor(model, state, cursor + 1),
+        "up" => move_cursor(model, state, cursor.saturating_sub(1)),
+        "pagedown" => move_cursor(model, state, cursor + PAGE_ROWS),
+        "pageup" => move_cursor(model, state, cursor.saturating_sub(PAGE_ROWS)),
+        "home" => move_cursor(model, state, 0),
+        "end" => move_cursor(model, state, last),
+        "f7" => {
+            let target = if shift {
+                model.previous_change(state.change)
+            } else {
+                model.next_change(state.change)
+            };
+            if let Some(index) = target {
+                select_change(model, state, index);
+            }
+        }
+        "enter" => {
+            let action = match model.rows().get(cursor) {
+                Some(Row::Collapsed { gap, .. }) => Some(DiffAction::Reveal { gap: *gap }),
+                _ => None,
+            };
+            return (action.is_some(), action);
+        }
+        "m" if comment => {
+            let action = match model.rows().get(cursor) {
+                Some(Row::Line { hunk, line }) => model
+                    .line(*hunk, *line)
+                    .filter(|line| line.kind.is_change())
+                    .map(|_| DiffAction::Comment {
+                        hunk: *hunk,
+                        line: *line,
+                    }),
+                _ => None,
+            };
+            return (action.is_some(), action);
+        }
+        _ => return (false, None),
+    }
+    (true, None)
+}
+
+fn gutter_cell(number: Option<u32>, bg: Color, p: &Palette) -> Div {
+    div()
+        .flex_none()
+        .w(px(SIZE_DIFF_GUTTER))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_end()
+        .px(px(SPACE_1))
+        .bg(bg)
+        .text_style(TYPE_MONO)
+        .tabular_figures()
+        .text_color(p.text.secondary)
+        .child(number.map(|n| n.to_string()).unwrap_or_default())
+}
+
+fn marker_cell(kind: LineKind, p: &Palette) -> Div {
+    let color = match kind {
+        LineKind::Added => p.diff.add_fg,
+        LineKind::Removed => p.diff.remove_fg,
+        LineKind::Context => p.text.tertiary,
+    };
+    div()
+        .flex_none()
+        .w(px(SIZE_DIFF_MARKER))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_style(TYPE_MONO)
+        .text_color(color)
+        .child(kind.marker())
+}
+
+/// The code of a line, with its changed ranges behind the text (word-level diff).
+fn code_cell(line: &DiffLine, p: &Palette) -> Div {
+    let word = match line.kind {
+        LineKind::Added => p.diff.add_word,
+        LineKind::Removed => p.diff.remove_word,
+        LineKind::Context => p.surface.sunken,
+    };
+    let highlights = line.changed.iter().map(|range| {
+        (
+            range.clone(),
+            HighlightStyle {
+                background_color: Some(word.into()),
+                ..Default::default()
+            },
+        )
+    });
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .px(px(SPACE_1))
+        .text_style(TYPE_MONO)
+        .text_color(p.text.primary)
+        .child(StyledText::new(line.text.clone()).with_highlights(highlights))
+}
+
+/// The row fill and the gutter fill of a line kind.
+fn line_colours(kind: LineKind, p: &Palette) -> (Color, Color) {
+    match kind {
+        LineKind::Added => (p.diff.add_bg, p.diff.add_gutter),
+        LineKind::Removed => (p.diff.remove_bg, p.diff.remove_gutter),
+        LineKind::Context => (p.surface.sunken, p.surface.sunken),
+    }
+}
+
+/// An inline line row. `current` marks it as part of the current change.
+fn line_row(index: usize, line: &DiffLine, look: &Look, current: bool) -> Stateful<Div> {
+    let p = &look.p;
+    let (bg, gutter) = line_colours(line.kind, p);
+    let mut row = div()
+        .id(("diff-row", index))
+        .relative()
+        .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .min_w_0()
+        .bg(bg)
+        .role(Role::ListItem)
+        .aria_label(format!("{}: {}", line.kind.spoken(), line.text))
+        .child(gutter_cell(line.old_no, gutter, p))
+        .child(gutter_cell(line.new_no, gutter, p))
+        .child(marker_cell(line.kind, p))
+        .child(code_cell(line, p));
+    if current {
+        row = row.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(2.))
+                .bg(p.accent.fg),
+        );
+    }
+    if look.focused && look.cursor == index {
+        row = row.border_2().border_color(p.border.focus);
+    }
+    row
+}
+
+/// The collapsed "Show N unchanged lines" row; a click reveals the next block.
+fn collapsed_row(gap: usize, hidden: usize, look: &Look) -> AnyElement {
+    let p = &look.p;
+    let handler = look.handler.clone();
+    div()
+        .id(("diff-collapsed", gap))
+        .debug_selector(move || format!("diff-collapsed-{gap}"))
+        .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .px(px(SPACE_3))
+        .cursor_pointer()
+        .hover(move |s| s.bg(p.fill.hover_canvas))
+        .role(Role::Button)
+        .aria_label(format!("Show {hidden} unchanged lines"))
+        .on_click(move |_, window, cx| emit(&handler, DiffAction::Reveal { gap }, window, cx))
+        .child(
+            Icon::new(IconName::ChevronsUpDown)
+                .size(IconSize::XSmall)
+                .color(p.text.secondary),
+        )
+        .child(
+            div()
+                .text_style(TYPE_CAPTION)
+                .text_color(p.text.secondary)
+                .child(format!("Show {hidden} unchanged lines")),
+        )
+        .into_any_element()
+}
+
+/// A hunk header row: the `@@` line on the sunken surface.
+fn hunk_row(index: usize, model: &DiffModel, hunk: usize, look: &Look) -> AnyElement {
+    let title = model
+        .file()
+        .hunks
+        .get(hunk)
+        .map(hunk_title)
+        .unwrap_or_default();
+    div()
+        .id(("diff-hunk", index))
+        .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .px(px(SPACE_3))
+        .bg(look.p.surface.sunken)
+        .text_style(TYPE_MONO_SM)
+        .text_color(look.p.text.tertiary)
+        .whitespace_nowrap()
+        .role(Role::Group)
+        .child(title)
+        .into_any_element()
+}
+
+/// Whether a display row belongs to the current change block.
+fn in_change(model: &DiffModel, change: Option<usize>, row: usize) -> bool {
+    change
+        .and_then(|index| model.changes().get(index))
+        .is_some_and(|block| block.first <= row && row <= block.last)
+}
+
+/// One row of the inline layout.
+fn inline_row(model: &DiffModel, index: usize, look: &Look) -> AnyElement {
+    let Some(row) = model.rows().get(index).copied() else {
+        return div().into_any_element();
+    };
+    match row {
+        Row::Hunk { hunk } => hunk_row(index, model, hunk, look),
+        Row::Collapsed { gap, hidden } => collapsed_row(gap, hidden, look),
+        Row::Line { .. } | Row::Revealed { .. } => match model.row_line(row) {
+            Some(line) => {
+                let current = in_change(model, look.change, index);
+                line_row(index, line, look, current).into_any_element()
+            }
+            None => div().into_any_element(),
+        },
+    }
+}
+
+/// One half of a split row: a line on one side, or an empty cell.
+fn split_side(model: &DiffModel, row: Option<usize>, old: bool, look: &Look) -> AnyElement {
+    let line = row
+        .and_then(|r| model.rows().get(r).copied())
+        .and_then(|r| model.row_line(r));
+    let Some(line) = line else {
+        return div()
+            .flex_1()
+            .h(px(ROW_HEIGHT))
+            .bg(look.p.surface.sunken)
+            .into_any_element();
+    };
+    let number = if old { line.old_no } else { line.new_no };
+    let (bg, gutter) = line_colours(line.kind, &look.p);
+    div()
+        .flex_1()
+        .min_w_0()
+        .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .bg(bg)
+        .child(gutter_cell(number, gutter, &look.p))
+        .child(marker_cell(line.kind, &look.p))
+        .child(code_cell(line, &look.p))
+        .into_any_element()
+}
+
+/// One row of the split layout.
+fn split_row(model: &DiffModel, index: usize, row: SplitRow, look: &Look) -> AnyElement {
+    match row {
+        SplitRow::Hunk { hunk } => hunk_row(index, model, hunk, look),
+        SplitRow::Collapsed { gap, hidden } => collapsed_row(gap, hidden, look),
+        SplitRow::Pair { left, right } => div()
+            .id(("diff-split", index))
+            .h(px(ROW_HEIGHT))
+            .flex()
+            .child(split_side(model, left, true, look))
+            .child(div().w(px(1.)).h_full().bg(look.p.border.subtle))
+            .child(split_side(model, right, false, look))
+            .into_any_element(),
+    }
+}
+
+/// The change ruler: one mark per change block, the current one outlined.
+fn ruler_strip(model: &DiffModel, change: Option<usize>, p: &Palette) -> Div {
+    let marks = model.ruler(change).into_iter().map(|mark| {
+        let color = if mark.added {
+            p.diff.add_fg
+        } else {
+            p.diff.remove_fg
+        };
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(relative(mark.top))
+            .h(relative(mark.height))
+            .min_h(px(2.))
+            .bg(color)
+            .when(mark.current, |el| {
+                el.border_1().border_color(p.text.primary)
+            })
+    });
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .w(px(RULER_WIDTH))
+        .children(marks)
+}
+
+/// The scrolling body of a file that is ready to draw, with its keyboard handling.
+fn ready_body(
+    id: &ElementId,
+    model: Rc<DiffModel>,
+    state: Entity<ViewState>,
+    look: Look,
+    mode: ViewMode,
+    focus: &FocusHandle,
+    scroll: UniformListScrollHandle,
+) -> AnyElement {
+    let p = look.p;
+    let theme = look.theme;
+    let split_rows = match mode {
+        ViewMode::Split => model.split_rows(),
+        ViewMode::Inline => Vec::new(),
+    };
+    let count = match mode {
+        ViewMode::Split => split_rows.len(),
+        ViewMode::Inline => model.rows().len(),
+    };
+    let change = look.change;
+    let key_handler = look.handler.clone();
+    let ruler = ruler_strip(&model, change, &p);
+    let rows_model = model.clone();
+    let rows = uniform_list((id.clone(), "lines"), count, move |range, _, _| {
+        range
+            .map(|index| match mode {
+                ViewMode::Split => match split_rows.get(index) {
+                    Some(row) => split_row(&rows_model, index, *row, &look),
+                    None => div().into_any_element(),
+                },
+                ViewMode::Inline => inline_row(&rows_model, index, &look),
+            })
+            .collect::<Vec<AnyElement>>()
+    })
+    .track_scroll(&scroll)
+    .size_full();
+    let key_model = model.clone();
+    div()
+        .id((id.clone(), "body"))
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .bg(p.surface.sunken)
+        .track_focus(focus)
+        .tab_stop(true)
+        .focus_ring(&theme)
+        .role(Role::Document)
+        .aria_label(model.file().path.clone())
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let modifiers = event.keystroke.modifiers;
+            let comment = modifiers.alt && modifiers.secondary(cx);
+            let key = event.keystroke.key.as_str();
+            let (used, action) = state.update(cx, |s, _| {
+                handle_key(&key_model, s, key, modifiers.shift, comment)
+            });
+            if used {
+                cx.stop_propagation();
+                window.refresh();
+                if let Some(action) = action {
+                    emit(&key_handler, action, window, cx);
+                }
+            }
+        })
+        .child(rows)
+        .child(ruler)
+        .into_any_element()
+}
+
+impl RenderOnce for DiffView {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let id = self.id.clone();
+        let state = window.use_keyed_state(id.clone(), cx, |_, cx| ViewState {
+            focus: cx.focus_handle(),
+            scroll: UniformListScrollHandle::new(),
+            cursor: 0,
+            change: None,
+            mode: ViewMode::Inline,
+        });
+        let (focus, scroll, cursor, change, mode) = {
+            let s = state.read(cx);
+            (
+                s.focus.clone(),
+                s.scroll.clone(),
+                s.cursor,
+                s.change,
+                s.mode,
+            )
+        };
+        let look = Look {
+            p,
+            cursor,
+            change,
+            focused: focus.is_focused(window),
+            handler: self.on_action.clone(),
+            theme,
+        };
+        let body = ready_body(&id, self.model, state, look, mode, &focus, scroll);
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .bg(p.surface.canvas)
+            .child(body)
+    }
 }
 
 #[cfg(test)]
