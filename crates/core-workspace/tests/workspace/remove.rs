@@ -9,7 +9,7 @@ use massorca_core_store::{
 };
 use massorca_core_workspace::RemovalWaivers;
 use massorca_protocol::codes;
-use massorca_protocol::methods::workspaces::WorkspaceState;
+use massorca_protocol::methods::workspaces::{WorkspaceRemoved, WorkspaceState};
 
 use crate::fixture::{
     Fixture, branch_exists, commit_file, create_params, entries, expect_code, run_git,
@@ -366,7 +366,7 @@ fn an_unregistered_directory_is_forgotten_and_kept_untouched() {
     fs::create_dir_all(&stray.path).expect("recreate directory");
     fs::write(Path::new(&stray.path).join("notes.txt"), "keep me").expect("write notes");
 
-    let removed = fx.remove("stray");
+    let removed = remove_with(&fx, "stray", forget_orphan());
 
     assert!(removed.directory_kept);
     assert_eq!(entries(Path::new(&stray.path)), ["notes.txt"]);
@@ -385,7 +385,7 @@ fn an_unregistered_directory_with_changes_is_kept_without_force() {
     fs::create_dir_all(&stray.path).expect("recreate directory");
     fs::write(Path::new(&stray.path).join("untracked.txt"), "work").expect("write file");
 
-    let removed = fx.remove("dirty-stray");
+    let removed = remove_with(&fx, "dirty-stray", forget_orphan());
 
     assert!(removed.directory_kept);
     assert!(Path::new(&stray.path).join("untracked.txt").exists());
@@ -464,4 +464,69 @@ fn a_check_that_git_cannot_run_returns_the_row_to_ready() {
 
     assert!(outcome.is_err(), "git cannot read the worktree");
     assert_eq!(state_of(&fx, &ws.id), WorkspaceState::Ready);
+}
+
+fn forget_orphan() -> RemovalWaivers {
+    RemovalWaivers {
+        force: false,
+        discard_ignored: false,
+        forget_orphan: true,
+    }
+}
+
+fn remove_with(fx: &Fixture, selector: &str, waivers: RemovalWaivers) -> WorkspaceRemoved {
+    let begun = fx
+        .workspaces
+        .begin_remove(selector, waivers)
+        .expect("begin removal");
+    fx.workspaces
+        .finish_remove(&begun.id, waivers)
+        .expect("finish removal")
+}
+
+#[test]
+fn an_orphan_directory_is_refused_even_with_force_and_kept_with_forget_orphan() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let stray = fx.create(&project.name, "orphan");
+    run_git(&fx.repo(), &["worktree", "remove", "--force", &stray.path]);
+    fs::create_dir_all(&stray.path).expect("recreate directory");
+    fs::write(Path::new(&stray.path).join("notes.txt"), "keep me").expect("write notes");
+
+    expect_code(
+        fx.workspaces.begin_remove("orphan", RemovalWaivers::FORCE),
+        codes::WORKSPACE_ORPHAN,
+    );
+    assert_eq!(state_of(&fx, &stray.id), WorkspaceState::Ready);
+
+    let removed = remove_with(&fx, "orphan", forget_orphan());
+    assert!(removed.directory_kept);
+    assert_eq!(entries(Path::new(&stray.path)), ["notes.txt"]);
+}
+
+#[test]
+fn a_worktree_git_no_longer_recognises_is_an_orphan_and_its_files_are_never_deleted() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let lost = fx.create(&project.name, "lost");
+    fs::write(
+        Path::new(&lost.path).join(".git"),
+        "gitdir: /no/such/git/dir
+",
+    )
+    .expect("break the .git file");
+    fs::write(Path::new(&lost.path).join("work.txt"), "keep me").expect("write work");
+
+    expect_code(
+        fx.workspaces.begin_remove("lost", RemovalWaivers::FORCE),
+        codes::WORKSPACE_ORPHAN,
+    );
+
+    let removed = remove_with(&fx, "lost", forget_orphan());
+    assert!(removed.directory_kept);
+    assert_eq!(entries(Path::new(&lost.path)), [".git", "README.md", "work.txt"]);
+    expect_code(
+        fx.workspaces.show_workspace(&lost.id),
+        codes::WORKSPACE_NOT_FOUND,
+    );
 }

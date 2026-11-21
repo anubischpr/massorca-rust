@@ -9,6 +9,8 @@ use massorca_core_store::{
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceRemoved};
 
+use massorca_core_git::GitError;
+
 use crate::error::DomainError;
 use crate::paths;
 use crate::views;
@@ -82,10 +84,24 @@ impl Workspaces {
         let project = self.project_of(&row)?;
         let (branch_deleted, branch_kept_reason, directory_kept) = match row.kind {
             StoreWorkspaceKind::Worktree => {
-                let directory_kept = self.remove_worktree(&project, &row, waivers.force)?;
+                // An orphan is kept whole, so its branch stays with it.
+                let orphan = self.is_orphan(&project, &row)?;
+                let directory_kept = if orphan {
+                    true
+                } else {
+                    self.remove_worktree(&project, &row, waivers.force)?
+                };
                 self.store.delete_workspace(&row.id)?;
-                let (deleted, reason) = self.delete_created_branch(&project, &row);
-                (deleted, reason, directory_kept)
+                if orphan {
+                    (
+                        false,
+                        Some("the worktree directory is kept".to_owned()),
+                        true,
+                    )
+                } else {
+                    let (deleted, reason) = self.delete_created_branch(&project, &row);
+                    (deleted, reason, directory_kept)
+                }
             }
             StoreWorkspaceKind::Folder => {
                 self.store.delete_workspace(&row.id)?;
@@ -142,6 +158,18 @@ impl Workspaces {
         let path = Path::new(&row.path);
         let key = paths::path_key(path);
         let entries = self.git.worktree_list(repo)?;
+        if path.is_dir() && !self.is_recognised(&project, row)? {
+            if !waivers.forget_orphan {
+                return Err(DomainError::new(
+                    codes::WORKSPACE_ORPHAN,
+                    format!(
+                        "{} is not a worktree git recognises; remove with forget_orphan to forget the row and keep the directory",
+                        row.path
+                    ),
+                ));
+            }
+            return Ok(());
+        }
         if entries
             .first()
             .is_some_and(|main| paths::path_key(&main.path) == key)
@@ -189,6 +217,34 @@ impl Workspaces {
             }
         }
         Ok(())
+    }
+
+    /// Whether git recognises the row's directory as its worktree: the worktree is registered,
+    /// and git reports the directory as its own top. A directory whose .git file is gone, or one
+    /// inside another repository, is not recognised. Git errors about the directory itself count
+    /// as not recognised; a git that cannot run at all is still an error.
+    fn is_recognised(&self, project: &ProjectRow, row: &WorkspaceRow) -> Result<bool, DomainError> {
+        let repo = Path::new(&project.path);
+        let path = Path::new(&row.path);
+        let key = paths::path_key(path);
+        let registered = self
+            .git
+            .worktree_list(repo)?
+            .iter()
+            .any(|entry| paths::path_key(&entry.path) == key);
+        if !registered {
+            return Ok(false);
+        }
+        match self.git.toplevel(path) {
+            Ok(Some(top)) => Ok(paths::path_key(&top) == key),
+            Ok(None) | Err(GitError::Failed { .. }) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// A directory that exists but that git does not recognise as the row's worktree.
+    fn is_orphan(&self, project: &ProjectRow, row: &WorkspaceRow) -> Result<bool, DomainError> {
+        Ok(Path::new(&row.path).is_dir() && !self.is_recognised(project, row)?)
     }
 
     /// Removes the worktree git registers at the row's path; a registered worktree whose
