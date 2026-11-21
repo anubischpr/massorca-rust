@@ -92,6 +92,9 @@ touching each handler.
 **Reserved names.** The method prefix `ext.` is reserved for extension
 methods: the core refuses to register a method under it, and an extension
 method must carry it. Error codes under `extension.` are reserved the same way.
+Owner ids and setting keys use lower-case letters, digits, `.`, `_` and `-`,
+starting with a letter or digit. A name outside that set is refused at
+registration, and a config request that names one gets `config.unknown_key`.
 
 **Capabilities.** Capabilities are registered with an owner through the same
 registry type the core features use. Registration returns a handle; dropping

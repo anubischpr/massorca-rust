@@ -15,6 +15,7 @@ mod features;
 mod handshake;
 mod instance_lock;
 mod method;
+mod names;
 mod owner;
 mod permission;
 mod registry;

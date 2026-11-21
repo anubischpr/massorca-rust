@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::names;
+
 /// The owner of a method, capability, command or setting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Owner {
@@ -10,13 +12,13 @@ pub enum Owner {
 }
 
 impl Owner {
-    /// Reads the wire form; `None` for anything other than `core` or `ext:<id>` with a non-empty id.
+    /// Reads the wire form; `None` for anything other than `core` or `ext:<id>` with an id that follows the name rule.
     pub fn parse(text: &str) -> Option<Self> {
         if text == "core" {
             return Some(Self::Core);
         }
         text.strip_prefix("ext:")
-            .filter(|id| !id.is_empty())
+            .filter(|id| names::is_valid(id))
             .map(|id| Self::Extension(id.to_owned()))
     }
 }
