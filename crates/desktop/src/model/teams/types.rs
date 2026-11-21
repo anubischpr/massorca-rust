@@ -232,9 +232,9 @@ mod tests {
         let address = WebAddress {
             id: AddressId(1),
             name: "Release hook".into(),
-            host: "VPS".into(),
+            host: "vps".into(),
             created: "11 Nov 2026".into(),
-            token: "9f2c7d1e0ab84c6f".into(),
+            token: "sample-token".into(),
         };
         assert_eq!(address.masked(), "https://vps/hook/••••••");
         assert!(!address.masked().contains(&address.token));

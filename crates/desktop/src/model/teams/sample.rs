@@ -42,7 +42,7 @@ fn sample_hosts() -> Vec<HostChoice> {
             reach: HostReach::Connected,
         },
         HostChoice {
-            name: "VPS".into(),
+            name: "vps".into(),
             reach: HostReach::Connected,
         },
     ]
@@ -88,7 +88,7 @@ fn routine(
         cadence,
         time: time.into(),
         bot: Some(bot),
-        host: "VPS".into(),
+        host: "vps".into(),
         enabled: true,
         last_run: None,
     }
@@ -152,7 +152,7 @@ fn desarrollo() -> Team {
         id: TeamId(1),
         name: "Desarrollo".into(),
         purpose: "Sign-in and copy for oppm.".into(),
-        host: "VPS".into(),
+        host: "vps".into(),
         reach: HostReach::Connected,
         bots: vec![
             bot(
@@ -204,9 +204,9 @@ fn desarrollo() -> Team {
         addresses: vec![WebAddress {
             id: AddressId(1),
             name: "Release hook".into(),
-            host: "VPS".into(),
+            host: "vps".into(),
             created: "11 Nov 2026".into(),
-            token: "9f2c7d1e0ab84c6f".into(),
+            token: "sample-token".into(),
         }],
         memory: vec![
             MemoryEntry {
