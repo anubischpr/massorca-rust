@@ -5,13 +5,35 @@
 //! Up, Down, Home and End pass through to the list, which owns the roving focus
 //! (`list_move` and `move_index`).
 
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind, NameTooltip};
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
+use crate::components::button::StatePreview;
+use crate::components::skeleton::{Skeleton, SkeletonShape};
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::Surface;
+use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
+    BORDER_WIDTH_THICK, Color, DURATION_TOOLTIP_DELAY, Palette, RADIUS_MD,
     SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ROW_TWO_LINE,
-    SPACE_3,
+    SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
 };
+use gpui::{
+    AnyElement, App, AppContext, ClickEvent, ElementId, FocusHandle, InteractiveElement,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, Visibility, Window, div, px,
+};
+use std::fmt;
+use std::rc::Rc;
+use std::sync::Arc;
+
+/// Group the root sets, so the hover action shows while the row is hovered.
+const ROW_GROUP: &str = "list-row";
 
 /// Indent of one tree level (`space.3`).
 pub const TREE_INDENT: f32 = SPACE_3;
+
+/// Fully transparent: a row at rest shows its surface.
+const NONE: Color = Color::rgba8(0, 0, 0, 0.0);
 
 /// Lines of text in a row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,9 +113,544 @@ pub fn tree_toggle(expanded: Option<bool>, key: &str) -> Option<bool> {
     }
 }
 
+/// The fills of a row at rest, on hover and when pressed (solid, handoff 2.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fills {
+    rest: Color,
+    hover: Color,
+    pressed: Color,
+}
+
+fn row_fills(surface: Surface, selected: bool, theme: &Theme) -> Fills {
+    let state = surface.fills(theme);
+    if selected {
+        Fills {
+            rest: state.selected,
+            hover: state.selected,
+            pressed: state.pressed,
+        }
+    } else {
+        Fills {
+            rest: NONE,
+            hover: state.hover,
+            pressed: state.pressed,
+        }
+    }
+}
+
+/// The text colours of a row. Disabled wins over dimmed, and a usage colour tints
+/// only an enabled title.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Ink {
+    title: Color,
+    secondary: Color,
+    icon: Color,
+}
+
+fn row_ink(p: &Palette, disabled: bool, dimmed: bool, title: Option<Color>) -> Ink {
+    if disabled {
+        Ink {
+            title: p.text.disabled,
+            secondary: p.text.disabled,
+            icon: p.text.disabled,
+        }
+    } else if dimmed {
+        Ink {
+            title: p.text.tertiary,
+            secondary: p.text.tertiary,
+            icon: p.text.tertiary,
+        }
+    } else {
+        Ink {
+            title: title.unwrap_or(p.text.primary),
+            secondary: p.text.secondary,
+            icon: p.text.secondary,
+        }
+    }
+}
+
+/// What a row shows at its leading edge.
+pub enum RowLeading {
+    /// A Lucide icon at `size.icon.sm`.
+    Icon(IconName),
+    /// An agent's status glyph at the given size.
+    Status(AgentState, AgentStatusSize),
+    /// An agent's own mark (A17, A84).
+    Agent(AgentKind, AgentIconSize),
+    /// Any element, such as an avatar or a dot.
+    Element(AnyElement),
+}
+
+impl RowLeading {
+    fn element(self, ink: Ink) -> AnyElement {
+        match self {
+            Self::Icon(name) => Icon::new(name)
+                .size(IconSize::Small)
+                .color(ink.icon)
+                .into_any_element(),
+            Self::Status(state, size) => AgentStatus::new(state).size(size).into_any_element(),
+            Self::Agent(kind, size) => AgentIcon::new(kind).size(size).into_any_element(),
+            Self::Element(element) => element,
+        }
+    }
+}
+
+impl fmt::Debug for RowLeading {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Icon(name) => f.debug_tuple("Icon").field(name).finish(),
+            Self::Status(state, size) => f.debug_tuple("Status").field(state).field(size).finish(),
+            Self::Agent(kind, size) => f.debug_tuple("Agent").field(kind).field(size).finish(),
+            Self::Element(_) => f.write_str("Element"),
+        }
+    }
+}
+
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+type MenuHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// One row of a list or tree. The caller keeps the state (selection, expansion) and
+/// answers `on_click`, `on_toggle` and `on_context_menu`.
+#[derive(IntoElement)]
+pub struct ListRow {
+    id: ElementId,
+    title: SharedString,
+    secondary: Option<SharedString>,
+    leading: Vec<RowLeading>,
+    trailing: Option<AnyElement>,
+    hover_action: Option<AnyElement>,
+    surface: Surface,
+    lines: RowLines,
+    density: RowDensity,
+    level: usize,
+    indent: f32,
+    expanded: Option<bool>,
+    selected: bool,
+    disabled: bool,
+    dimmed: bool,
+    loading: bool,
+    error: Option<SharedString>,
+    title_strong: bool,
+    title_colour: Option<Color>,
+    tooltip: Option<SharedString>,
+    preview: Option<StatePreview>,
+    tab_stop: bool,
+    focus: Option<FocusHandle>,
+    on_click: Option<ClickHandler>,
+    on_toggle: Option<ToggleHandler>,
+    on_context_menu: Option<MenuHandler>,
+}
+
+impl fmt::Debug for ListRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ListRow")
+            .field("id", &self.id)
+            .field("title", &self.title)
+            .field("selected", &self.selected)
+            .field("disabled", &self.disabled)
+            .field("loading", &self.loading)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ListRow {
+    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            secondary: None,
+            leading: Vec::new(),
+            trailing: None,
+            hover_action: None,
+            surface: Surface::default(),
+            lines: RowLines::default(),
+            density: RowDensity::default(),
+            level: 0,
+            indent: 0.0,
+            expanded: None,
+            selected: false,
+            disabled: false,
+            dimmed: false,
+            loading: false,
+            error: None,
+            title_strong: false,
+            title_colour: None,
+            tooltip: None,
+            preview: None,
+            tab_stop: true,
+            focus: None,
+            on_click: None,
+            on_toggle: None,
+            on_context_menu: None,
+        }
+    }
+
+    /// The line under the title (one line beside it, or under it in a two-line row).
+    pub fn secondary(mut self, text: impl Into<SharedString>) -> Self {
+        self.secondary = Some(text.into());
+        self
+    }
+
+    /// Adds an item to the leading edge; items sit in the order they are added.
+    pub fn leading(mut self, item: RowLeading) -> Self {
+        self.leading.push(item);
+        self
+    }
+
+    /// The trailing slot, always shown.
+    pub fn trailing(mut self, element: impl IntoElement) -> Self {
+        self.trailing = Some(element.into_any_element());
+        self
+    }
+
+    /// An action shown only while the row is hovered or focused (desktop).
+    pub fn hover_action(mut self, element: impl IntoElement) -> Self {
+        self.hover_action = Some(element.into_any_element());
+        self
+    }
+
+    pub fn surface(mut self, surface: Surface) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    pub fn lines(mut self, lines: RowLines) -> Self {
+        self.lines = lines;
+        self
+    }
+
+    pub fn density(mut self, density: RowDensity) -> Self {
+        self.density = density;
+        self
+    }
+
+    /// The tree level: indents by `TREE_INDENT` per level and reports the level to assistive tech.
+    pub fn level(mut self, level: usize) -> Self {
+        self.level = level;
+        self.indent = level as f32 * TREE_INDENT;
+        self
+    }
+
+    /// Extra indent in pixels, beyond the padding (for example a child session, A85).
+    pub fn indent(mut self, pixels: f32) -> Self {
+        self.indent = pixels;
+        self
+    }
+
+    /// Makes the row a tree row with a disclosure chevron. `true` means expanded.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Dims the row to tertiary text, for example a host that cannot be reached (A10).
+    pub fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
+        self
+    }
+
+    /// Shows a skeleton in place of the content while the row's data loads.
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    /// A failed row: an octagon-alert glyph replaces the leading items and the
+    /// reason becomes the secondary line. The row keeps its fills.
+    pub fn error(mut self, reason: impl Into<SharedString>) -> Self {
+        self.error = Some(reason.into());
+        self
+    }
+
+    /// Titles in `body-strong` even when the row is not selected (for example a project).
+    pub fn title_strong(mut self, strong: bool) -> Self {
+        self.title_strong = strong;
+        self
+    }
+
+    /// Colours an enabled title, for example with a usage colour (P29).
+    pub fn title_colour(mut self, colour: Color) -> Self {
+        self.title_colour = Some(colour);
+        self
+    }
+
+    /// The full name, shown on hover when a long title is truncated.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    /// Forces a visual state (gallery and visual checks only).
+    pub fn preview(mut self, state: StatePreview) -> Self {
+        self.preview = Some(state);
+        self
+    }
+
+    /// Whether the list gives this row its Tab stop (roving focus keeps one per list).
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Keyboard focus lives with the caller; without a handle the row keeps its own.
+    pub fn focus_handle(mut self, handle: FocusHandle) -> Self {
+        self.focus = Some(handle);
+        self
+    }
+
+    /// Called on a pointer click, and on Enter or Space (a keyboard click).
+    pub fn on_click(
+        mut self,
+        listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Rc::new(listener));
+        self
+    }
+
+    /// Called with the value Right or Left asks for on a tree row.
+    pub fn on_toggle(mut self, listener: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_toggle = Some(Rc::new(listener));
+        self
+    }
+
+    /// Called on a right click, and on Shift+F10 or the Menu key.
+    pub fn on_context_menu(mut self, listener: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_context_menu = Some(Rc::new(listener));
+        self
+    }
+
+    /// Whether a click or key reaches the row's listeners.
+    pub fn activates(&self) -> bool {
+        !self.disabled && !self.loading
+    }
+}
+
+/// A trailing slot that takes its own clicks, so clicking it does not also open the row.
+fn slot(id: &ElementId, part: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(ElementId::NamedChild(Arc::new(id.clone()), part.into()))
+        .flex_none()
+        .on_click(|_, _, cx| cx.stop_propagation())
+}
+
+fn shown(mut style: StyleRefinement) -> StyleRefinement {
+    style.visibility = Some(Visibility::Visible);
+    style
+}
+
+/// An action hidden at rest and shown while its row is hovered or has keyboard focus.
+fn hover_slot(id: &ElementId, action: AnyElement) -> impl IntoElement {
+    let mut slot = slot(id, "hover-action").child(action);
+    slot.style().visibility = Some(Visibility::Hidden);
+    slot.group_hover(ROW_GROUP, shown).in_focus(shown)
+}
+
+impl RenderOnce for ListRow {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let height = row_height(self.lines, self.density);
+        if self.loading {
+            return div()
+                .flex()
+                .items_center()
+                .h(px(height))
+                .px(px(SPACE_2))
+                .child(Skeleton::new(SkeletonShape::Row))
+                .into_any_element();
+        }
+        let interactive = self.activates();
+        let fills = row_fills(self.surface, self.selected, &theme);
+        let ink = row_ink(&p, self.disabled, self.dimmed, self.title_colour);
+        let focus = self.focus.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        });
+        let (rest, border) = match self.preview {
+            Some(StatePreview::Hover) => (fills.hover, NONE),
+            Some(StatePreview::Pressed) => (fills.pressed, NONE),
+            Some(StatePreview::Focus) => (fills.rest, p.border.focus),
+            None => (fills.rest, NONE),
+        };
+        let name = match &self.secondary {
+            Some(text) => format!("{}, {text}", self.title),
+            None => self.title.to_string(),
+        };
+        let chevron = if self.disabled {
+            p.text.disabled
+        } else {
+            p.text.tertiary
+        };
+
+        let mut root = div()
+            .id(self.id.clone())
+            .group(ROW_GROUP)
+            .track_focus(&focus)
+            .tab_stop(self.tab_stop && interactive)
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .h(px(height))
+            .pl(px(SPACE_2 + self.indent))
+            .pr(px(SPACE_2))
+            .rounded(px(RADIUS_MD))
+            .border_2()
+            .border_color(border)
+            .focus_visible(move |s| s.border_color(p.border.focus))
+            .bg(rest)
+            .role(if self.expanded.is_some() {
+                Role::TreeItem
+            } else {
+                Role::ListItem
+            })
+            .aria_label(name)
+            .aria_selected(self.selected);
+        if let Some(open) = self.expanded {
+            root = root.aria_expanded(open).aria_level(self.level + 1);
+        }
+        if interactive && self.preview.is_none() {
+            root = root
+                .cursor_pointer()
+                .hover(move |s| s.bg(fills.hover))
+                .active(move |s| s.bg(fills.pressed));
+        }
+        if let Some(on_click) = self.on_click.clone().filter(|_| interactive) {
+            root = root.on_click(move |event: &ClickEvent, window, cx| on_click(event, window, cx));
+        }
+        if interactive {
+            let menu = self.on_context_menu.clone();
+            let toggle = self.on_toggle.clone();
+            let expanded = self.expanded;
+            if let Some(open) = menu.clone() {
+                root =
+                    root.on_mouse_down(MouseButton::Right, move |_, window, cx| open(window, cx));
+            }
+            root = root.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                let opens_menu = key == "menu" || (key == "f10" && event.keystroke.modifiers.shift);
+                if opens_menu {
+                    if let Some(menu) = &menu {
+                        menu(window, cx);
+                        cx.stop_propagation();
+                    }
+                } else if let (Some(next), Some(toggle)) = (tree_toggle(expanded, key), &toggle) {
+                    toggle(next, window, cx);
+                    cx.stop_propagation();
+                }
+            });
+        }
+        if let Some(text) = self.tooltip {
+            root = root
+                .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
+                .tooltip(move |_, cx| cx.new(|_| NameTooltip(text.clone())).into());
+        }
+
+        let (leading, secondary) = match self.error {
+            Some(reason) => (
+                vec![
+                    Icon::new(IconName::OctagonAlert)
+                        .size(IconSize::Small)
+                        .color(p.status.danger_fg)
+                        .into_any_element(),
+                ],
+                Some(reason),
+            ),
+            None => (
+                self.leading
+                    .into_iter()
+                    .map(|item| item.element(ink))
+                    .collect(),
+                self.secondary,
+            ),
+        };
+        let secondary = secondary.map(|text| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_BODY_SM)
+                .text_color(ink.secondary)
+                .child(text)
+        });
+        let title_style = if self.selected || self.title_strong {
+            TYPE_BODY_STRONG
+        } else {
+            TYPE_BODY
+        };
+        let title = div()
+            .min_w_0()
+            .truncate()
+            .text_style(title_style)
+            .text_color(ink.title)
+            .child(self.title);
+        let body = match self.lines {
+            RowLines::One => div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .flex_1()
+                .min_w_0()
+                .child(title)
+                .children(secondary),
+            RowLines::Two => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(title)
+                .children(secondary),
+        };
+
+        root = root.children(leading).child(body);
+        if let Some(trailing) = self.trailing {
+            root = root.child(slot(&self.id, "trailing").child(trailing));
+        }
+        if let Some(action) = self.hover_action {
+            root = root.child(hover_slot(&self.id, action));
+        }
+        if let Some(open) = self.expanded {
+            let glyph = if open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            };
+            root = root.child(Icon::new(glyph).size(IconSize::XSmall).color(chevron));
+        }
+        if self.selected {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(BORDER_WIDTH_THICK))
+                    .bg(p.accent.fg),
+            );
+        }
+        root.into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::Appearance;
+
+    fn dark() -> Theme {
+        Theme::new(Appearance::Dark)
+    }
 
     #[test]
     fn one_line_rows_follow_the_density_and_two_line_rows_are_44_px() {
@@ -147,5 +704,37 @@ mod tests {
             None,
             "a plain row does not toggle"
         );
+    }
+
+    #[test]
+    fn tree_levels_indent_by_space_three() {
+        assert_eq!(TREE_INDENT, 12.0);
+        let row = ListRow::new("a", "b").level(2);
+        assert_eq!(row.indent, 24.0);
+        assert_eq!(row.level, 2);
+    }
+
+    #[test]
+    fn selected_rows_take_the_selected_fill_and_others_stay_transparent() {
+        let t = dark();
+        let selected = row_fills(Surface::Frame, true, &t);
+        assert_eq!(selected.rest, t.palette.fill.selected_frame);
+        assert_eq!(selected.hover, t.palette.fill.selected_frame);
+        let rest = row_fills(Surface::Frame, false, &t);
+        assert_eq!(rest.rest, NONE);
+        assert_eq!(rest.hover, t.palette.fill.hover_frame);
+        assert_eq!(rest.pressed, t.palette.fill.pressed_frame);
+    }
+
+    #[test]
+    fn disabled_wins_over_dimmed_and_a_usage_colour_tints_only_an_enabled_title() {
+        let p = Palette::DARK;
+        let usage = p.usage.ring_2;
+        assert_eq!(row_ink(&p, false, false, None).title, p.text.primary);
+        assert_eq!(row_ink(&p, false, false, Some(usage)).title, usage);
+        assert_eq!(row_ink(&p, false, true, Some(usage)).title, p.text.tertiary);
+        let disabled = row_ink(&p, true, true, Some(usage));
+        assert_eq!(disabled.title, p.text.disabled);
+        assert_eq!(disabled.icon, p.text.disabled);
     }
 }
