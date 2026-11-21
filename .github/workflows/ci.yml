@@ -14,7 +14,42 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: -D warnings
 
+# Two crate groups: `core` (everything except the desktop UI) and `ui`
+# (massorca-ui and massorca-desktop, which build GPUI). A pull request runs
+# only the group it touches; workspace-wide files run both. Pushes to main
+# run both. To add a job, give it `needs: changes` and an `if:` on the
+# group it belongs to. When `desktop` starts depending on `client`, add the
+# crates it uses to the `ui` pattern so a core change also rebuilds the app.
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.groups.outputs.core }}
+      ui: ${{ steps.groups.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: groups
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+          echo "$files"
+          all=false; core=false; ui=false
+          while IFS= read -r f; do
+            case "$f" in
+              Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|.github/workflows/*) all=true ;;
+              crates/ui/*|crates/desktop/*) ui=true ;;
+              crates/*) core=true ;;
+            esac
+          done <<< "$files"
+          if [ "$all" = true ]; then core=true; ui=true; fi
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -22,7 +57,9 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
 
-  test:
+  core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -31,12 +68,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
-      - name: Install GPUI system packages (Linux)
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: core
+      - run: cargo clippy --workspace --exclude massorca-ui --exclude massorca-desktop --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --exclude massorca-ui --exclude massorca-desktop --locked
+
+  ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - name: Install GPUI system packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libglib2.0-dev libasound2-dev libva-dev
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+        with:
+          key: ui
+      # Clippy runs on Linux only: on Windows it would compile GPUI a second
+      # time (check artefacts are not reused by the test build), at double
+      # minute cost. The UI crates have almost no Windows-only code.
+      - if: runner.os == 'Linux'
+        run: cargo clippy -p massorca-ui -p massorca-desktop --all-targets --locked -- -D warnings
+      - run: cargo test -p massorca-ui -p massorca-desktop --locked
