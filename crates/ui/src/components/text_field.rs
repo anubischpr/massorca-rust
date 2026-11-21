@@ -3,6 +3,7 @@
 
 use std::ops::Range;
 
+use gpui::accesskit::Role;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, Div, Element, ElementId,
@@ -13,6 +14,7 @@ use gpui::{
     Window, actions, div, fill, point, px, relative, size,
 };
 
+use crate::a11y;
 use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
@@ -408,6 +410,8 @@ pub struct TextField {
     clearable: bool,
     disabled: bool,
     read_only: bool,
+    /// A search box: its root carries the searchbox role instead of the textbox role.
+    search: bool,
     /// The last paint, for pointer hit tests and IME geometry.
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
@@ -438,6 +442,7 @@ impl TextField {
             clearable: false,
             disabled: false,
             read_only: false,
+            search: false,
             last_layout: None,
             last_bounds: None,
             scroll_x: px(0.),
@@ -495,6 +500,12 @@ impl TextField {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Makes the field a search box: its root carries the searchbox role.
+    pub fn search(mut self) -> Self {
+        self.search = true;
         self
     }
 
@@ -838,14 +849,51 @@ impl Render for TextField {
                     .clone()
                     .map(|helper| note_line(helper, palette.text.secondary, None))
             });
-        div()
+        let role = if self.search {
+            Role::SearchInput
+        } else {
+            Role::TextInput
+        };
+        let name = self.label.clone();
+        let description = self.error.clone().or_else(|| self.helper.clone());
+        let placeholder = self.placeholder.clone();
+        let value = SharedString::from(self.text().to_owned());
+        let (disabled, read_only, invalid) = (self.disabled, self.read_only, self.error.is_some());
+        let root = div()
+            .id(ElementId::from(format!("text-field-{}", cx.entity_id())))
+            .role(role)
+            .aria_value(value)
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
             .w_full()
             .when_some(label, |root, label| root.child(label))
             .child(field)
-            .when_some(note, |root, note| root.child(note))
+            .when_some(note, |root, note| root.child(note));
+        let root = match name {
+            Some(name) => root.aria_label(name),
+            None => root,
+        };
+        let root = match description {
+            Some(text) => root.aria_description(text),
+            None => root,
+        };
+        let root = if placeholder.is_empty() {
+            root
+        } else {
+            root.aria_placeholder(placeholder)
+        };
+        a11y::annotate(root, move |node| {
+            if disabled {
+                node.set_disabled();
+            }
+            if read_only {
+                node.set_read_only();
+            }
+            if invalid {
+                node.set_invalid(gpui::accesskit::Invalid::True);
+            }
+        })
     }
 }
 
@@ -1506,5 +1554,41 @@ mod tests {
         field.update_in(cx, |field, window, cx| field.clear(window, cx));
         assert_eq!(text_of(&field, cx), "");
         assert!(field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)));
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::view;
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_text_field_is_a_textbox_named_by_its_label_with_its_value(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| TextField::new(cx).label("Name").with_text("oppm"))
+            .expect("the field is reported");
+        assert_eq!(node.role(), Role::TextInput);
+        assert_eq!(node.label(), Some("Name"));
+        assert_eq!(node.value(), Some("oppm"));
+    }
+
+    #[gpui::test]
+    fn a_read_only_field_with_an_error_reports_both(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| {
+            TextField::new(cx)
+                .label("Name")
+                .read_only(true)
+                .error("Required")
+        })
+        .expect("the field is reported");
+        assert!(node.is_read_only());
+        assert!(node.invalid().is_some());
+        assert_eq!(node.description(), Some("Required"));
+    }
+
+    #[gpui::test]
+    fn a_search_field_is_a_searchbox(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| TextField::new(cx).search()).expect("the field is reported");
+        assert_eq!(node.role(), Role::SearchInput);
     }
 }
