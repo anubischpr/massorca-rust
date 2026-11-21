@@ -39,7 +39,7 @@ letters, digits, `-` or `_`.
 | `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
-| `workspace rm <WORKSPACE> [--force]` | Removes a workspace. `--force` discards uncommitted changes in a worktree. |
+| `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -48,18 +48,25 @@ which must be an absolute path.
 ### Projects and workspaces
 
 A relative path given to `project add`, `workspace create --path`, or `--workspaces-root`
-is taken from the directory the command runs in. Workspaces of a project go under its
+is taken from the directory the command runs in. A selector that is a path (it contains a
+separator, or starts with a dot, such as `.` or `../wt`) is made absolute the same way; ids and
+names are sent as typed. Workspaces of a project go under its
 workspaces root, which defaults to `workspaces.default_root` (a folder named after the
 project) at the time the project is added.
 
 `workspace rm` behaves as follows:
 
-- A worktree is removed with its directory. Uncommitted changes refuse the removal with
-  `workspace.dirty` and exit 1; `--force` discards them.
+- A worktree is removed with its directory. Uncommitted or untracked changes refuse the removal
+  with `workspace.dirty` and exit 1; `--force` discards them.
+- Ignored files refuse the removal with `workspace.ignored_files`, even with `--force`. Git
+  does not list them, and removing the worktree deletes them, so only `--discard-ignored`
+  removes them.
 - Its branch is deleted only when git proves the branch is merged. Otherwise the output
   says `kept branch <B>: not merged`.
 - A folder workspace is forgotten and its directory stays (`kept directory <PATH>`).
-- A directory that git no longer registers as a worktree is forgotten and left in place.
+- A directory that git does not recognise as its worktree refuses with `workspace.orphan`, even
+  with `--force`. `--forget-orphan` forgets the row and keeps the directory; git keeps its record
+  of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
 
