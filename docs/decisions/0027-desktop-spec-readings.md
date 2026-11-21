@@ -24,6 +24,14 @@ place.
 | Skeleton delay | Handoff row 200 ms; Skeleton.md and design-system 4.8: 100 ms | 100 ms (`SKELETON_DELAY_MS`) | 4.8 is the resolved constant |
 | Agent marks when dimmed | Specs: `text.disabled` mark; P32: full colour | Full colour | P32, and GPUI cannot tint PNG images |
 | Overlays inside a dialog | Popover `z.popover` (40) is below `z.dialog` (50) | Overlays take a layer; inside a dialog they paint above it | Otherwise a Select in a dialog paints under the scrim |
+| PlanView progress | "N of M steps" counts only Done; or Done and Skipped | Done and Skipped | A skipped step is finished; the total is every step |
+| PlanView done glyph | PlanView.md: check circle in `status.success.fg`; AgentStatus: ring with check in `agent.done` | AgentStatus | One done mark across the app |
+| PlanView "Jump to current step" | Only when the step is out of view; always | Always, while a current step exists | Visibility of a row inside a list is not observable here yet |
+| DelegationTree long child lists | "Show more" past 12 shows 8 (rule); the example "Show 4 more" | First 8, then "Show N more" | The rule; the example contradicts it |
+| DelegationTree depth | Unlimited; spec fold | Rows below depth 3 fold into "+N deeper" | Spec fold, 28 px indent per level (icon plus gap) |
+| SessionSummaryCard icons | Spec silent for Child sessions and Plan | `git-branch`, `list` | Closest Lucide meaning |
+| Bot Teams characters | Team character art; agent icons | Agent icons | No character assets yet |
+| Composer on an unreachable host | Composer.md behaviour: the message queues; state table: it does not | State table: the message stays in the composer, Send is disabled, nothing is queued | Owner decision, 2026-11-21; Composer.md behaviour section corrected |
 
 ## What GPUI cannot do here (at the pinned commit)
 
@@ -40,6 +48,14 @@ place.
 - **Selectable text.** Error details offer a Copy button instead of a
   selectable mono block.
 - **Tinting images.** PNG agent marks are drawn as supplied.
+- **Rows of different heights in a virtual list.** `uniform_list` takes one
+  row height, so DiffView hunk and collapsed rows are 20 px instead of 24 px
+  and inline note cards are not drawn between lines.
+- **Live regions and sort state.** No live-region politeness and no
+  `aria-sort`: announcements use `Role::Status` (or `Role::Alert` for
+  errors) and a table header carries "sorted ascending" in its label.
+- **Animated roots.** `AnimationElement` forwards no accessibility role, so a
+  role sits on a plain wrapper around an animated root.
 
 ## Literal values without a token
 

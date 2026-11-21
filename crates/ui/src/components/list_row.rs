@@ -5,6 +5,7 @@
 //! Up, Down, Home and End pass through to the list, which owns the roving focus
 //! (`list_move` and `move_index`).
 
+use crate::a11y;
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind, NameTooltip};
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::button::StatePreview;
@@ -462,13 +463,17 @@ impl RenderOnce for ListRow {
         let p = theme.palette;
         let height = row_height(self.lines, self.density);
         if self.loading {
-            return div()
-                .flex()
-                .items_center()
-                .h(px(height))
-                .px(px(SPACE_2))
-                .child(Skeleton::new(SkeletonShape::Row))
-                .into_any_element();
+            // A placeholder: it has an id, so it can take the row's type, but no role.
+            return a11y::disabled(
+                div()
+                    .id(self.id.clone())
+                    .flex()
+                    .items_center()
+                    .h(px(height))
+                    .px(px(SPACE_2))
+                    .child(Skeleton::new(SkeletonShape::Row)),
+                self.disabled,
+            );
         }
         let interactive = self.activates();
         let fills = row_fills(self.surface, self.selected, &theme);
@@ -643,7 +648,7 @@ impl RenderOnce for ListRow {
                     .bg(p.accent.fg),
             );
         }
-        root.into_any_element()
+        a11y::disabled(root, self.disabled)
     }
 }
 
@@ -874,5 +879,64 @@ mod tests {
         cx.simulate_click(bounds.center(), Modifiers::none());
         cx.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::none());
         assert!(log.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_row_is_a_list_item_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(ListRow::new("row", "oppm-api").render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::ListItem);
+        assert_eq!(node.label(), Some("oppm-api"));
+    }
+
+    #[gpui::test]
+    fn a_selected_row_reports_its_selection(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ListRow::new("row", "oppm-api")
+                    .selected(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[gpui::test]
+    fn an_expandable_row_is_a_tree_item_with_its_level_and_state(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ListRow::new("group", "Prototypes")
+                    .level(1)
+                    .expanded(false)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::TreeItem);
+        assert_eq!(node.is_expanded(), Some(false));
+        assert_eq!(node.level(), Some(2));
+    }
+
+    #[gpui::test]
+    fn a_disabled_row_is_disabled(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                ListRow::new("row", "oppm-api")
+                    .disabled(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
     }
 }
