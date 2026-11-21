@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use massorca_core_store::ProjectRow;
+use massorca_core_store::{ProjectRow, WorkspaceRow};
 use massorca_protocol::codes;
 
 use crate::error::DomainError;
@@ -28,4 +28,37 @@ impl Workspaces {
             })
     }
 
+    /// Names are unique only within a project, so a bare name can match one workspace in each
+    /// of several projects; that is `selector.ambiguous`, and the id or path still selects one.
+    pub(crate) fn resolve_workspace(&self, selector: &str) -> Result<WorkspaceRow, DomainError> {
+        if let Some(row) = self.store.get_workspace(selector)? {
+            return Ok(row);
+        }
+        let mut named: Vec<WorkspaceRow> = self
+            .store
+            .list_workspaces(None)?
+            .into_iter()
+            .filter(|row| row.name == selector)
+            .collect();
+        if named.len() > 1 {
+            return Err(DomainError::new(
+                codes::SELECTOR_AMBIGUOUS,
+                format!(
+                    "workspace name {selector:?} is used in {} projects; select it by id or path",
+                    named.len()
+                ),
+            ));
+        }
+        if let Some(row) = named.pop() {
+            return Ok(row);
+        }
+        self.store
+            .find_workspace_by_path_key(&paths::path_key(Path::new(selector)))?
+            .ok_or_else(|| {
+                DomainError::new(
+                    codes::WORKSPACE_NOT_FOUND,
+                    format!("no workspace named {selector:?}"),
+                )
+            })
+    }
 }

@@ -3,7 +3,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use massorca_core_git::Git;
 use massorca_core_store::Store;
+use massorca_protocol::methods::workspaces::Workspace;
 
+use crate::error::DomainError;
+use crate::views;
 
 /// The projects and workspaces domain API. Share one value across threads behind an `Arc`.
 #[derive(Debug)]
@@ -25,6 +28,26 @@ impl Workspaces {
             default_root,
             mutations: Mutex::new(()),
         }
+    }
+
+    /// Every workspace, or only those of `project` (a selector), oldest first.
+    pub fn list_workspaces(&self, project: Option<&str>) -> Result<Vec<Workspace>, DomainError> {
+        let project_id = match project {
+            Some(selector) => Some(self.resolve_project(selector)?.id),
+            None => None,
+        };
+        Ok(self
+            .store
+            .list_workspaces(project_id.as_deref())?
+            .iter()
+            .map(views::workspace)
+            .collect())
+    }
+
+    /// The workspace `selector` names: id, then exact name (unique within a project only),
+    /// then path.
+    pub fn show_workspace(&self, selector: &str) -> Result<Workspace, DomainError> {
+        Ok(views::workspace(&self.resolve_workspace(selector)?))
     }
 
     /// Holds the mutation lock. A poisoned lock is still usable: it guards no data.
