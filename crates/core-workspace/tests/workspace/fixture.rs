@@ -110,6 +110,34 @@ impl Fixture {
             .expect("drop trigger");
     }
 
+    /// Makes every workspace row delete fail, as a store that rejects the delete would.
+    pub fn fail_workspace_deletes(&self) {
+        self.connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_workspace_delete BEFORE DELETE ON workspaces                  BEGIN SELECT RAISE(ABORT, 'simulated delete failure'); END;",
+            )
+            .expect("install trigger");
+    }
+
+    /// Lets workspace row deletes succeed again.
+    pub fn allow_workspace_deletes(&self) {
+        self.connection()
+            .execute_batch("DROP TRIGGER fail_workspace_delete;")
+            .expect("drop trigger");
+    }
+
+    /// Deletes project `id` underneath its workspaces, with foreign key enforcement off, as a
+    /// damaged store would be left.
+    pub fn delete_project_row(&self, id: &str) {
+        let connection = self.connection();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("turn foreign keys off");
+        connection
+            .execute("DELETE FROM projects WHERE id = ?1", [id])
+            .expect("delete project row");
+    }
+
     /// A second connection to the store file, used only for fault injection.
     fn connection(&self) -> rusqlite::Connection {
         rusqlite::Connection::open(self.root.path().join("store.db")).expect("open store file")

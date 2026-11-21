@@ -533,3 +533,53 @@ fn a_worktree_git_no_longer_recognises_is_an_orphan_and_its_files_are_never_dele
         codes::WORKSPACE_NOT_FOUND,
     );
 }
+
+#[test]
+fn a_folder_workspace_whose_project_disappears_mid_removal_returns_to_ready() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("notes");
+    let ws = fx.create(&project.name, "main");
+    fx.workspaces
+        .begin_remove("main", RemovalWaivers::NONE)
+        .expect("begin removal");
+    fx.delete_project_row(&project.id);
+
+    expect_code(
+        fx.workspaces.finish_remove(&ws.id, RemovalWaivers::NONE),
+        codes::PROJECT_NOT_FOUND,
+    );
+
+    let row = fx
+        .store
+        .get_workspace(&ws.id)
+        .expect("read row")
+        .expect("the row is kept");
+    assert_eq!(row.state, StoreWorkspaceState::Ready);
+}
+
+#[test]
+fn a_failure_after_git_removed_the_worktree_keeps_the_row_removing_until_a_retry_finishes() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = fx.create(&project.name, "half");
+    fx.workspaces
+        .begin_remove("half", RemovalWaivers::NONE)
+        .expect("begin removal");
+    fx.fail_workspace_deletes();
+
+    assert!(
+        fx.workspaces
+            .finish_remove(&ws.id, RemovalWaivers::NONE)
+            .is_err()
+    );
+
+    assert!(!Path::new(&ws.path).exists(), "git already removed it");
+    assert_eq!(state_of(&fx, &ws.id), WorkspaceState::Removing);
+    fx.allow_workspace_deletes();
+    let removed = fx
+        .workspaces
+        .finish_remove(&ws.id, RemovalWaivers::NONE)
+        .expect("a retry finishes the removal");
+    assert!(removed.branch_deleted);
+    assert_eq!(worktree_count(&fx.repo()), 1);
+}

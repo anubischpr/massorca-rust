@@ -56,7 +56,7 @@ impl Workspaces {
         let _guard = self.lock_mutations();
         let row = self.resolve_workspace(selector)?;
         let row = self.mark_removing(row)?;
-        self.check_or_restore(&row, waivers)?;
+        self.settle(&row, |_| self.check_removable(&row, waivers))?;
         Ok(views::workspace(&row))
     }
 
@@ -65,8 +65,9 @@ impl Workspaces {
     /// when `force`), deletes the row, and deletes the branch the workspace created when git
     /// proves it merged. A folder workspace is forgotten and its files stay.
     ///
-    /// A failure after the row is marked `removing` leaves it that way; calling
-    /// [`Workspaces::begin_remove`] again finishes the job.
+    /// A failure before git acts returns the row to `ready`. A failure after git has removed
+    /// the worktree leaves it `removing`; calling [`Workspaces::finish_remove`] again completes
+    /// the removal, because each step accepts a directory or registration that is already gone.
     pub fn finish_remove(
         &self,
         id: &str,
@@ -80,16 +81,28 @@ impl Workspaces {
             )
         })?;
         let row = self.mark_removing(row)?;
-        self.check_or_restore(&row, waivers)?;
-        let project = self.project_of(&row)?;
+        self.settle(&row, |git_acted| {
+            self.remove_marked(&row, waivers, git_acted)
+        })
+    }
+
+    /// The second half after `mark_removing`: the checks, then git, then the row, then the branch.
+    fn remove_marked(
+        &self,
+        row: &WorkspaceRow,
+        waivers: RemovalWaivers,
+        git_acted: &mut bool,
+    ) -> Result<WorkspaceRemoved, DomainError> {
+        self.check_removable(row, waivers)?;
+        let project = self.project_of(row)?;
         let (branch_deleted, branch_kept_reason, directory_kept) = match row.kind {
             StoreWorkspaceKind::Worktree => {
                 // An orphan is kept whole, so its branch stays with it.
-                let orphan = self.is_orphan(&project, &row)?;
+                let orphan = self.is_orphan(&project, row)?;
                 let directory_kept = if orphan {
                     true
                 } else {
-                    self.remove_worktree(&project, &row, waivers.force)?
+                    self.remove_worktree(&project, row, waivers.force, git_acted)?
                 };
                 self.store.delete_workspace(&row.id)?;
                 if orphan {
@@ -99,7 +112,7 @@ impl Workspaces {
                         true,
                     )
                 } else {
-                    let (deleted, reason) = self.delete_created_branch(&project, &row);
+                    let (deleted, reason) = self.delete_created_branch(&project, row);
                     (deleted, reason, directory_kept)
                 }
             }
@@ -109,7 +122,7 @@ impl Workspaces {
             }
         };
         Ok(WorkspaceRemoved {
-            workspace: views::workspace(&row),
+            workspace: views::workspace(row),
             branch_deleted,
             branch_kept_reason,
             directory_kept,
@@ -126,18 +139,25 @@ impl Workspaces {
         Ok(row)
     }
 
-    /// Runs the checks. The checks touch no file, so any failure, a refusal or git unable to run,
-    /// puts the row back to `ready`. Only a failure after git has acted leaves it `removing`.
-    fn check_or_restore(
+    /// Runs one removal step on a row already marked `removing`, and settles the row on every
+    /// error path here, so no step restores it by hand. Until git acts, nothing is removed and
+    /// the row returns to `ready`. Once git has acted, the row stays `removing`: a new removal
+    /// resumes it, and it still holds the work to finish.
+    fn settle<T>(
         &self,
         row: &WorkspaceRow,
-        waivers: RemovalWaivers,
-    ) -> Result<(), DomainError> {
-        match self.check_removable(row, waivers) {
-            Ok(()) => Ok(()),
+        step: impl FnOnce(&mut bool) -> Result<T, DomainError>,
+    ) -> Result<T, DomainError> {
+        let mut git_acted = false;
+        match step(&mut git_acted) {
+            Ok(value) => Ok(value),
             Err(error) => {
-                self.store
-                    .set_workspace_state(&row.id, StoreWorkspaceState::Ready)?;
+                if !git_acted {
+                    // A failed restore leaves the row `removing`, which a new removal resumes.
+                    let _ = self
+                        .store
+                        .set_workspace_state(&row.id, StoreWorkspaceState::Ready);
+                }
                 Err(error)
             }
         }
@@ -259,6 +279,7 @@ impl Workspaces {
         project: &ProjectRow,
         row: &WorkspaceRow,
         force: bool,
+        git_acted: &mut bool,
     ) -> Result<bool, DomainError> {
         let repo = Path::new(&project.path);
         let path = Path::new(&row.path);
@@ -271,16 +292,15 @@ impl Workspaces {
         if !registered {
             return Ok(path.is_dir());
         }
+        *git_acted = true;
         if let Err(error) = self.git.worktree_remove(repo, path, force) {
+            // A refusal that leaves git's record in place removed nothing.
             let still_registered = self.git.worktree_list(repo).is_ok_and(|entries| {
                 entries
                     .iter()
                     .any(|entry| paths::path_key(&entry.path) == key)
             });
-            if still_registered {
-                self.store
-                    .set_workspace_state(&row.id, StoreWorkspaceState::Ready)?;
-            }
+            *git_acted = !still_registered;
             return Err(error.into());
         }
         Ok(false)
