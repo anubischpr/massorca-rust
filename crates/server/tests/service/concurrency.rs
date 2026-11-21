@@ -1,4 +1,4 @@
-//! Concurrency on one connection: many requests at once, and a slow request that does not hold up the others.
+//! Concurrency on one connection: requests overlap, and a slow request does not hold up the others.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +6,7 @@ use std::time::Duration;
 use massorca_protocol::ErrorBody;
 use massorca_server::{Owner, Permission, RequestCtx};
 use serde_json::{Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 use tokio::time::timeout;
 
 use super::common::{connect, start, stop, temp_home};
@@ -33,18 +33,74 @@ async fn many_requests_share_one_connection() {
     stop(running).await;
 }
 
+/// Every call waits at a barrier for the others, so the test completes only if they all run at once. A service that
+/// ran requests one after another would hold the first call at the barrier forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn requests_on_one_connection_run_at_the_same_time() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let demo = Owner::Extension("demo".to_owned());
+    let _capability = running
+        .registries()
+        .capabilities
+        .register("demo/1", demo.clone())
+        .expect("the capability registers");
+    const PARTIES: usize = 4;
+    let meeting = Arc::new(Barrier::new(PARTIES));
+    let _rendezvous = running
+        .registries()
+        .methods
+        .register(
+            demo,
+            "ext.demo.rendezvous",
+            "demo/1",
+            Permission::Read,
+            move |_ctx: RequestCtx, _params: Value| {
+                let meeting = Arc::clone(&meeting);
+                async move {
+                    meeting.wait().await;
+                    Ok::<Value, ErrorBody>(json!("met"))
+                }
+            },
+        )
+        .expect("the method registers");
+
+    let client = connect(home.path(), "default").await;
+    let calls: Vec<_> = (0..PARTIES)
+        .map(|_| {
+            let client = client.clone();
+            tokio::spawn(async move {
+                client
+                    .call::<_, Value>("ext.demo.rendezvous", &Value::Null)
+                    .await
+            })
+        })
+        .collect();
+    for call in calls {
+        let met = timeout(Duration::from_secs(5), call)
+            .await
+            .expect("the calls reached the barrier together")
+            .expect("the task finishes")
+            .expect("the call completes");
+        assert_eq!(met, json!("met"));
+    }
+    stop(running).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_slow_request_does_not_hold_up_the_others() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
     let demo = Owner::Extension("demo".to_owned());
     let gate = Arc::new(Notify::new());
+    let entered = Arc::new(Notify::new());
     let _capability = running
         .registries()
         .capabilities
         .register("demo/1", demo.clone())
         .expect("the capability registers");
     let held = Arc::clone(&gate);
+    let started = Arc::clone(&entered);
     let _gated = running
         .registries()
         .methods
@@ -54,8 +110,9 @@ async fn a_slow_request_does_not_hold_up_the_others() {
             "demo/1",
             Permission::Read,
             move |_ctx: RequestCtx, _params: Value| {
-                let held = Arc::clone(&held);
+                let (held, started) = (Arc::clone(&held), Arc::clone(&started));
                 async move {
+                    started.notify_one();
                     held.notified().await;
                     Ok::<Value, ErrorBody>(json!("released"))
                 }
@@ -70,8 +127,11 @@ async fn a_slow_request_does_not_hold_up_the_others() {
             .call::<_, Value>("ext.demo.gate", &Value::Null)
             .await
     });
+    // The gated request has started before the other one is sent, so the other one can only overtake it.
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the gated request started");
 
-    // The gate is still shut, yet other requests on the same connection complete.
     let info = timeout(Duration::from_secs(5), client.service_info())
         .await
         .expect("the other request is not held up")
