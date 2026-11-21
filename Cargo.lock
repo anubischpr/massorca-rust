@@ -3201,6 +3201,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-core-workspace"
+version = "0.1.0"
+dependencies = [
+ "dunce",
+ "massorca-core-git",
+ "massorca-core-store",
+ "massorca-protocol",
+ "rusqlite",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "massorca-desktop"
 version = "0.1.0"
 dependencies = [
