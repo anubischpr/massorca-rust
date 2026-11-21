@@ -10,9 +10,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
@@ -25,6 +25,8 @@ pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 /// How long the reader may drain after the program exits (0030).
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
+/// How long a kill waits for the exit after the tree is killed.
+const EXIT_MARGIN: Duration = Duration::from_secs(2);
 /// The cursor position query (DSR 6). ConPTY renders nothing until it is answered.
 const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
@@ -49,6 +51,10 @@ pub struct ManagerConfig {
     pub massorca_profile: Option<String>,
     pub max_live: usize,
     pub max_exited: usize,
+    /// How long a graceful kill waits before killing the tree (0031).
+    pub kill_grace: Duration,
+    /// The same wait during `shutdown`, shorter so it fits the service's 5 s shutdown budget (0033).
+    pub shutdown_grace: Duration,
 }
 
 impl ManagerConfig {
@@ -60,6 +66,8 @@ impl ManagerConfig {
             massorca_profile: None,
             max_live: 256,
             max_exited: 64,
+            kill_grace: Duration::from_secs(5),
+            shutdown_grace: Duration::from_secs(2),
         }
     }
 }
@@ -112,6 +120,8 @@ pub enum TerminalState {
 pub enum ExitReason {
     /// It ended on its own.
     Exited,
+    Killed,
+    ServiceStopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,8 +350,11 @@ impl TerminalManager {
                 ring: ByteRing::new(RING_CAPACITY),
                 size: spec.size,
                 status: Status::Live,
+                kill_reason: None,
                 query_match: 0,
             }),
+            changed: Condvar::new(),
+            resize_gate: Mutex::new(()),
         });
         {
             // Registered before the waiter starts, so its `retire` finds the terminal.
@@ -389,6 +402,89 @@ impl TerminalManager {
 
     pub fn get(&self, id: &str) -> Result<TerminalInfo> {
         Ok(self.inner.find(id)?.info())
+    }
+
+    /// Writes `bytes` to the terminal's input, in call order.
+    pub fn input(&self, id: &str, bytes: &[u8]) -> Result<()> {
+        if bytes.len() > MAX_INPUT_BYTES {
+            return Err(TerminalError::InputTooLarge);
+        }
+        let terminal = self.inner.find(id)?;
+        if !terminal.is_live() {
+            return Err(TerminalError::Exited);
+        }
+        terminal.master.write_all(bytes).map_err(|error| {
+            if error.kind() == io::ErrorKind::BrokenPipe || !terminal.is_live() {
+                TerminalError::Exited
+            } else {
+                TerminalError::Io(error)
+            }
+        })
+    }
+
+    /// Sets the terminal's one size.
+    pub fn resize(&self, id: &str, size: PtySize) -> Result<TerminalInfo> {
+        validate_size(size)?;
+        let terminal = self.inner.find(id)?;
+        let _gate = lock(&terminal.resize_gate);
+        if !terminal.is_live() {
+            return Err(TerminalError::Exited);
+        }
+        // Outside the terminal lock: a closing pseudoconsole holds the master until the
+        // reader, which needs that lock, drains it.
+        terminal.master.resize(size).map_err(|error| {
+            if terminal.is_live() {
+                TerminalError::Io(io::Error::other(error.to_string()))
+            } else {
+                TerminalError::Exited
+            }
+        })?;
+        let mut core = lock(&terminal.core);
+        core.screen.resize(size.cols, size.rows);
+        core.size = size;
+        Ok(terminal.info_locked(&core))
+    }
+
+    /// Ends the terminal's process tree (0031). Blocks until the exit is recorded or the
+    /// grace and a short margin have passed.
+    pub fn kill(&self, id: &str, force: bool) -> Result<TerminalInfo> {
+        let terminal = self.inner.find(id)?;
+        Ok(terminal.kill(force, ExitReason::Killed, self.inner.config.kill_grace))
+    }
+
+    /// Kills the terminal if it is live, then forgets it.
+    pub fn close(&self, id: &str) -> Result<TerminalInfo> {
+        let terminal = self.inner.find(id)?;
+        let info = terminal.kill(false, ExitReason::Killed, self.inner.config.kill_grace);
+        let forgotten = lock(&self.inner.registry).forget(id);
+        drop(forgotten);
+        Ok(info)
+    }
+
+    /// Kills every live terminal at once (reason `ServiceStopped`), bounded by the shutdown
+    /// grace plus a short margin.
+    pub fn shutdown(&self) {
+        let terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
+            .terminals
+            .values()
+            .filter(|terminal| terminal.is_live())
+            .cloned()
+            .collect();
+        let grace = self.inner.config.shutdown_grace;
+        thread::scope(|scope| {
+            for terminal in &terminals {
+                let kill = move || {
+                    terminal.kill(false, ExitReason::ServiceStopped, grace);
+                };
+                if thread::Builder::new()
+                    .name("terminal-shutdown".to_owned())
+                    .spawn_scoped(scope, kill)
+                    .is_err()
+                {
+                    terminal.kill(true, ExitReason::ServiceStopped, grace);
+                }
+            }
+        });
     }
 
     /// Live terminals, counting creates in progress.
@@ -457,6 +553,8 @@ struct Core {
     ring: ByteRing,
     size: PtySize,
     status: Status,
+    /// Set by the first kill, read when the exit is recorded.
+    kill_reason: Option<ExitReason>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
 }
@@ -504,9 +602,17 @@ pub(crate) struct Terminal {
     master: Arc<PtyMaster>,
     tree: ProcessTree,
     core: Mutex<Core>,
+    /// Signalled when the exit is recorded.
+    changed: Condvar,
+    /// Keeps the PTY and the screen sizes in the same order.
+    resize_gate: Mutex<()>,
 }
 
 impl Terminal {
+    fn is_live(&self) -> bool {
+        matches!(lock(&self.core).status, Status::Live)
+    }
+
     fn info(&self) -> TerminalInfo {
         self.info_locked(&lock(&self.core))
     }
@@ -535,13 +641,49 @@ impl Terminal {
         }
     }
 
+    /// Graceful: hang up and close the terminal, wait up to `grace`, then kill the tree.
+    /// Force: kill the tree at once. Either way, what is left of the tree is killed.
+    fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
+        {
+            let mut core = lock(&self.core);
+            if !matches!(core.status, Status::Live) {
+                return self.info_locked(&core);
+            }
+            core.kill_reason.get_or_insert(reason);
+        }
+        if !force {
+            self.tree.hangup();
+            close_off_thread(&self.master);
+            self.wait_for_exit(grace);
+        }
+        self.tree.kill();
+        self.wait_for_exit(EXIT_MARGIN)
+    }
+
+    fn wait_for_exit(&self, timeout: Duration) -> TerminalInfo {
+        let deadline = Instant::now() + timeout;
+        let mut core = lock(&self.core);
+        while matches!(core.status, Status::Live) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            core = self
+                .changed
+                .wait_timeout(core, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        self.info_locked(&core)
+    }
+
     fn record_exit(&self, result: io::Result<ExitInfo>) {
         let mut core = lock(&self.core);
         core.status = match result {
             Ok(exit) => Status::Exited(ExitRecord {
                 code: exit.code,
                 signal: exit.signal,
-                reason: ExitReason::Exited,
+                reason: core.kill_reason.unwrap_or(ExitReason::Exited),
                 at_ms: now_ms(),
             }),
             Err(error) => {
@@ -549,6 +691,7 @@ impl Terminal {
                 Status::Unverifiable
             }
         };
+        self.changed.notify_all();
     }
 }
 

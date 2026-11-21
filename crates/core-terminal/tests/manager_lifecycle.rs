@@ -3,9 +3,13 @@
 
 mod manager_support;
 
+use std::time::{Duration, Instant};
+
 use manager_support::{Managed, SIZE, script_shell, spec, wait_until};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{ExitReason, ShellChoice, TerminalError, TerminalState};
+
+const GRACE: Duration = Duration::from_secs(5);
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -54,6 +58,28 @@ async fn list_is_ordered_by_creation() {
 
     let ids: Vec<String> = manager.list(None).into_iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![first.id, second.id, third.id]);
+}
+
+#[tokio::test]
+async fn force_kill_ends_the_shell_at_once() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+
+    let started = Instant::now();
+    let killed = manager.kill(&info.id, true).expect("kill");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(killed.state, TerminalState::Exited);
+    assert_eq!(
+        killed.exit.expect("an exit record").reason,
+        ExitReason::Killed
+    );
+    assert_eq!(manager.live_count(), 0);
 }
 
 #[tokio::test]
@@ -106,6 +132,71 @@ async fn invalid_requests_spawn_nothing() {
         Err(TerminalError::ShellNotFound(name)) if name == "massorca-no-such-shell"
     ));
     assert!(manager.list(None).is_empty());
+    assert_eq!(manager.live_count(), 0);
+}
+
+#[tokio::test]
+async fn the_live_limit_refuses_more_terminals() {
+    let dir = temp_dir();
+    let manager = Managed::with(|config| config.max_live = 1);
+    let first = manager.create(spec("ws", dir.path())).expect("create");
+
+    assert!(matches!(
+        manager.create(spec("ws", dir.path())),
+        Err(TerminalError::LimitReached)
+    ));
+
+    manager.kill(&first.id, true).expect("kill");
+    manager
+        .create(spec("ws", dir.path()))
+        .expect("a slot frees once the first terminal exited");
+}
+
+#[tokio::test]
+async fn input_is_bounded_and_needs_a_live_terminal() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+
+    assert!(matches!(
+        manager.input(&info.id, &vec![b'a'; 1024 * 1024 + 1]),
+        Err(TerminalError::InputTooLarge)
+    ));
+
+    manager.kill(&info.id, true).expect("kill");
+    assert!(matches!(
+        manager.input(&info.id, b"echo late"),
+        Err(TerminalError::Exited)
+    ));
+    assert!(matches!(
+        manager.resize(&info.id, PtySize { cols: 80, rows: 24 }),
+        Err(TerminalError::Exited)
+    ));
+}
+
+#[tokio::test]
+async fn shutdown_kills_every_terminal() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let first = manager.create(spec("ws", dir.path())).expect("create");
+    let second = manager.create(spec("other", dir.path())).expect("create");
+
+    let started = Instant::now();
+    manager.shutdown();
+
+    assert!(
+        started.elapsed() < GRACE + Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    for id in [&first.id, &second.id] {
+        let info = manager.get(id).expect("listed after shutdown");
+        assert_eq!(info.state, TerminalState::Exited);
+        assert_eq!(
+            info.exit.expect("an exit record").reason,
+            ExitReason::ServiceStopped
+        );
+    }
     assert_eq!(manager.live_count(), 0);
 }
 

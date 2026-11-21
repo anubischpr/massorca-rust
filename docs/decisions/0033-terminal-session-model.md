@@ -42,7 +42,8 @@ proof that its work died.
   request first, then forced after 5 s, or forced at once with `force`.
   `terminal.close` kills if needed and forgets the terminal.
 - **Service stop ends terminals.** `service.shutdown`, Ctrl+C or SIGTERM kill
-  every terminal (graceful, bounded by the service's 5 s shutdown budget) and
+  every terminal (graceful with a 2 s grace, so it fits the service's 5 s
+  shutdown budget) and
   nothing is restored on the next start. If the service process dies
   abruptly, the operating system ends the trees: the job object closes on
   Windows, the PTY hangs up on Unix (0031).

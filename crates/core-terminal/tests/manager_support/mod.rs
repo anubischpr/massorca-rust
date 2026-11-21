@@ -46,6 +46,12 @@ impl Deref for Managed {
     }
 }
 
+impl Drop for Managed {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
 /// The platform's interactive shell: `cmd.exe` on Windows, `sh` elsewhere.
 pub fn shell() -> ShellChoice {
     if cfg!(windows) {
