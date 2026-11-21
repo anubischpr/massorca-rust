@@ -40,6 +40,8 @@ lineage) comes later; the model must not block it.
 - **Remove.** The workspace row is first set to `removing`, then git runs
   `worktree remove` (with `--force` only when the user passes `--force`), then
   the row is deleted. A dirty or locked worktree is refused with a typed code.
+  Git before 2.31 prints no `locked` line, so the lock is read from git's
+  `locked` file in the worktree's admin record, which carries the same reason.
   The main worktree is never removed. A branch the workspace created is
   deleted with `git branch -d` (only if git proves it merged); otherwise it is
   kept and the result says so. A folder workspace is forgotten; its directory
