@@ -5,6 +5,8 @@
 
 pub mod state;
 
+mod columns;
+
 pub use state::{
     AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState, PickerView, RowRef,
 };
@@ -13,20 +15,21 @@ use std::fmt;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, Role, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, div, px,
+    Anchor, App, AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, ParentElement, Render, Role,
+    StatefulInteractiveElement, Styled, Subscription, Window, actions, anchored, deferred, div,
+    point, px,
 };
 
 use crate::components::agent_icon::{AgentIcon, AgentIconSize};
-use crate::components::popover::TriggerBounds;
+use crate::components::popover::{OverlayLayer, TriggerBounds, fade_in, overlay_surface};
 use crate::components::text_field::{TextField, TextFieldEvent};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
-    LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH, RADIUS_FULL, SIZE_CONTROL_COMPACT, SPACE_1, SPACE_2,
-    TYPE_LABEL,
+    LAYOUT_MODEL_PICKER_CHIP_MAX_WIDTH, LAYOUT_MODEL_PICKER_MAX_HEIGHT, LAYOUT_MODEL_PICKER_WIDTH,
+    RADIUS_FULL, RADIUS_XL, SIZE_CONTROL_COMPACT, SPACE_1, SPACE_2, TYPE_LABEL,
 };
 
 actions!(
@@ -93,7 +96,6 @@ impl fmt::Debug for ModelPicker {
 }
 
 impl EventEmitter<ModelPickerEvent> for ModelPicker {}
-
 impl ModelPicker {
     pub fn new(state: PickerState, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| {
@@ -177,7 +179,7 @@ impl ModelPicker {
 }
 
 impl Render for ModelPicker {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let p = theme.palette;
         let (name, effort) = self.state.chip_labels();
@@ -234,6 +236,90 @@ impl Render for ModelPicker {
             );
 
         let host = self.trigger_bounds.track(div().relative()).child(chip);
-        host
+        let overlay = open.then(|| self.overlay(window, cx));
+        host.when_some(overlay, |host, overlay| host.child(overlay))
+    }
+}
+
+impl ModelPicker {
+    /// The popover, anchored above the trigger and right-aligned to it. It is deferred so it
+    /// paints over the composer and the transcript.
+    fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let panel = self.panel(cx);
+        let layer = match self.trigger_bounds.get() {
+            Some(target) => anchored()
+                .attach(target, Anchor::TopRight)
+                .anchor(Anchor::BottomRight)
+                .offset(point(px(0.), px(-SPACE_2))),
+            None => {
+                window.request_animation_frame();
+                anchored().anchor(Anchor::BottomRight)
+            }
+        };
+        // The dialog role sits on a stateful wrapper; the animated panel is its child.
+        let dialog = div()
+            .id("model-picker-dialog")
+            .role(Role::Dialog)
+            .aria_label("Choose model")
+            .child(fade_in("model-picker-enter", panel, cx));
+        deferred(layer.child(dialog))
+            .priority(OverlayLayer::Page.priority())
+            .into_any_element()
+    }
+
+    fn panel(&self, cx: &mut Context<Self>) -> Div {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let body = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .child(self.rail(cx))
+            .child(self.model_column(cx))
+            .child(self.reasoning_column(cx));
+        let footer = self.footer(cx);
+        let trigger = self.trigger_bounds.clone();
+        overlay_surface(&theme, RADIUS_XL, theme.shadows.e2)
+            .key_context(KEY_CONTEXT)
+            .occlude()
+            .w(px(LAYOUT_MODEL_PICKER_WIDTH))
+            .max_h(px(LAYOUT_MODEL_PICKER_MAX_HEIGHT))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .text_color(p.text.primary)
+            .on_mouse_down_out(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                // A click on the trigger is the trigger's own toggle.
+                let on_trigger = trigger
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position));
+                if !on_trigger && this.open {
+                    this.open = false;
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &MoveUp, _, cx| {
+                this.state.move_highlight(-1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &MoveDown, _, cx| {
+                this.state.move_highlight(1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFavourite, _, cx| {
+                if let Some(row) = this.state.highlighted_row()
+                    && let Some(id) = this.state.model(row).map(|model| model.id.clone())
+                {
+                    this.state.toggle_favourite(&id);
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Shortcut1, _, cx| this.shortcut(1, cx)))
+            .on_action(cx.listener(|this, _: &Shortcut2, _, cx| this.shortcut(2, cx)))
+            .on_action(cx.listener(|this, _: &Shortcut3, _, cx| this.shortcut(3, cx)))
+            .on_action(cx.listener(|this, _: &Shortcut4, _, cx| this.shortcut(4, cx)))
+            .child(body)
+            .child(footer)
     }
 }
