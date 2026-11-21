@@ -21,6 +21,7 @@ mod service_json;
 mod session;
 mod settings;
 mod shutdown;
+mod store_blocking;
 mod streams;
 mod transport;
 
