@@ -14,6 +14,8 @@ pub mod logging;
 pub mod output;
 pub mod project;
 pub mod service;
+pub mod terminal;
+pub mod terminal_attach;
 pub mod workspace;
 pub mod workspace_text;
 

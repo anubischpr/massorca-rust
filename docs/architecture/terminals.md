@@ -85,6 +85,18 @@ An attach is a stream. It starts in one of two ways:
   cursor, colours and input modes, as escape sequences any VT emulator
   accepts. Output then continues from the snapshot's offset.
 
+A client that attaches must answer terminal queries such as the
+cursor-position request `ESC [ 6 n`, as any terminal emulator does; the
+service answers it only while nobody is attached (0034). ConPTY and
+PowerShell stall until it is answered.
+
+The CLI's `terminal attach` is the first interactive client, in
+`crates/cli/src/terminal_attach.rs`. On Unix it forwards raw stdin bytes, so the
+cursor-position answer reaches the program: crossterm's Unix reader drops that reply.
+On Windows raw console reads carry no arrow keys, so key events are turned back into
+the bytes a terminal sends. `terminal screen` replays one snapshot through a `vt100`
+parser of the same scrollback size and prints the rows as text.
+
 Attachments never slow the shell. Each attachment has a bounded queue; one
 that falls behind (a slow or stalled client) has its queue dropped and gets a
 fresh snapshot when it catches up. Memory per terminal is therefore bounded
