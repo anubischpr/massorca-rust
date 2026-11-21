@@ -90,9 +90,14 @@ impl From<Color> for Hsla {
 }
 
 /// Turns a shadow token into GPUI box shadows (spike S3: blur maps one to one).
+/// Layers are listed top first, as in CSS; GPUI paints them in list order and
+/// does not clip a drop shadow under its element, so the list is reversed.
+/// Otherwise the focus ring's outer layer covers the gap and fills a
+/// transparent (ghost) control.
 pub fn box_shadows(layers: &[ShadowToken]) -> Vec<BoxShadow> {
     layers
         .iter()
+        .rev()
         .map(|l| BoxShadow {
             color: l.color.into(),
             offset: point(px(l.x), px(l.y)),
@@ -148,6 +153,11 @@ mod tests {
         assert_eq!(box_shadows(t.shadows.e2).len(), 1);
         assert_eq!(box_shadows(t.shadows.focus).len(), 2);
         assert!(box_shadows(t.shadows.e0).is_empty());
+        let focus = box_shadows(t.shadows.focus);
+        assert!(
+            focus[0].spread_radius > focus[1].spread_radius,
+            "the wide focus ring paints first, the gap on top of it"
+        );
     }
 
     #[gpui::test]
