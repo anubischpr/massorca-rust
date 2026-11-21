@@ -15,6 +15,7 @@ use tempfile::TempDir;
 
 pub struct Fixture {
     root: TempDir,
+    #[allow(dead_code)] // used by the removal tests, which land later
     pub store: Store,
     pub workspaces: Arc<Workspaces>,
 }
@@ -49,6 +50,7 @@ impl Fixture {
     }
 
     /// Another repository beside the main one, with its own commit.
+    #[allow(dead_code)] // used by the read tests, which land later
     pub fn second_repo(&self, name: &str) -> PathBuf {
         let repo = self.path(name);
         init_repo(&repo, "other.md", "other\n");
