@@ -323,3 +323,88 @@ impl ModelPicker {
             .child(footer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::state::fixtures::sample;
+    use super::*;
+
+    use gpui::{TestAppContext, VisualTestContext};
+    use std::{cell::RefCell, rc::Rc};
+
+    /// Subscribes to a picker and collects the choices it reports.
+    fn record_choices(
+        picker: &Entity<ModelPicker>,
+        cx: &mut VisualTestContext,
+    ) -> Rc<RefCell<Vec<Choice>>> {
+        let choices = Rc::new(RefCell::new(Vec::new()));
+        let sink = choices.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(picker, move |_, event: &ModelPickerEvent, _| {
+                let ModelPickerEvent::Changed(choice) = event;
+                sink.borrow_mut().push(choice.clone());
+            })
+            .detach();
+        });
+        choices
+    }
+
+    fn picker_in(cx: &mut TestAppContext) -> (Entity<ModelPicker>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            crate::components::text_field::bind_keys(cx);
+            bind_keys(cx);
+        });
+        cx.add_window_view(|_, cx| ModelPicker::new(sample(), cx))
+    }
+
+    /// Opens the popover, focuses its search and redraws so its key bindings are live.
+    fn open_and_draw(picker: &Entity<ModelPicker>, cx: &mut VisualTestContext) {
+        picker.update_in(cx, |picker, window, cx| picker.open(window, cx));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_trigger_opens_the_popover_and_escape_closes_it(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        assert!(picker.read_with(cx, |picker, _| picker.is_open()));
+        cx.simulate_keystrokes("escape");
+        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    #[gpui::test]
+    fn typing_in_the_search_filters_the_rows(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        open_and_draw(&picker, cx);
+        cx.simulate_input("gpt");
+        let rows = picker.read_with(cx, |picker, _| picker.state().rows().len());
+        assert_eq!(rows, 1);
+    }
+
+    #[gpui::test]
+    fn enter_in_the_search_chooses_the_highlighted_row_and_closes(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        cx.simulate_input("gpt");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            choices.borrow().last().map(|c| c.model.to_string()),
+            Some("gpt".into())
+        );
+        assert!(!picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+
+    #[gpui::test]
+    fn mod_digit_chooses_the_shortcut_row_while_open(cx: &mut TestAppContext) {
+        let (picker, cx) = picker_in(cx);
+        let choices = record_choices(&picker, cx);
+        open_and_draw(&picker, cx);
+        cx.simulate_keystrokes("secondary-2");
+        assert_eq!(
+            choices.borrow().last().map(|c| c.model.to_string()),
+            Some("sonnet".into())
+        );
+        assert!(picker.read_with(cx, |picker, _| picker.is_open()));
+    }
+}
