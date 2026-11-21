@@ -16,6 +16,7 @@ pub mod settings_sections;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
+pub mod start_page;
 pub mod status_items;
 pub mod teams;
 pub mod title_bar;
