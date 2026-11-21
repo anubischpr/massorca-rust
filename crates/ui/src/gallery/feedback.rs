@@ -1,7 +1,216 @@
 //! Gallery stories for the feedback group.
 
-use super::Story;
+use super::{Story, variant};
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::card::{Card, CardPadding, CardVariant};
+use crate::components::empty_state::{EmptyState, EmptyStateVariant};
+use crate::components::error_state::{ErrorState, ErrorStateVariant};
+use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::icon::IconName;
+use crate::style::Surface;
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{SPACE_3, TYPE_BODY_SM};
+use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    Vec::new()
+    vec![
+        Story {
+            name: "Card",
+            spec: "Card.md",
+            render: card_story,
+        },
+        Story {
+            name: "Empty state",
+            spec: "EmptyState.md",
+            render: empty_state_story,
+        },
+        Story {
+            name: "Error state",
+            spec: "ErrorState.md",
+            render: error_state_story,
+        },
+    ]
+}
+
+fn error_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Page: title, explanation, Retry and Show details",
+            ErrorState::new("error-page", "Could not load routines")
+                .variant(ErrorStateVariant::Page)
+                .explanation("Your changes are kept.")
+                .details("E_TIMEOUT at 10:14:03"),
+            cx,
+        ))
+        .child(variant(
+            "Section: a danger panel with Retry",
+            ErrorState::new("error-section", "Could not load sessions")
+                .explanation("The list shows the last loaded sessions."),
+            cx,
+        ))
+        .child(variant(
+            "Retrying: a spinner and Retry cannot be activated",
+            ErrorState::new("error-retrying", "Could not load sessions").retrying(true),
+            cx,
+        ))
+        .child(variant(
+            "Inline: no panel, Retry as a text button",
+            ErrorState::new("error-inline", "Could not delete").variant(ErrorStateVariant::Inline),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn empty_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Page: display title, centred, one primary action",
+            EmptyState::new("empty-page", "No routines yet")
+                .variant(EmptyStateVariant::Page)
+                .icon(IconName::Workflow)
+                .explanation("Routines run a task on a schedule. Create one to start.")
+                .action(
+                    Button::new("empty-page-new", "New routine")
+                        .variant(ButtonVariant::Primary)
+                        .leading_icon(IconName::Plus),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Section: title-sm and one secondary action",
+            EmptyState::new("empty-section", "No files found")
+                .icon(IconName::Folder)
+                .explanation("This folder has no files that match the view.")
+                .action(
+                    Button::new("empty-section-add", "Add web address")
+                        .leading_icon(IconName::Globe),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Filtered: the title names the filter and Clear search clears it",
+            EmptyState::filtered("empty-filtered", "docs", |_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Compact: a label and one line inside a list",
+            EmptyState::new("empty-compact", "Nothing open")
+                .variant(EmptyStateVariant::Compact)
+                .explanation("Open a file to see it here.")
+                .action(
+                    Button::new("empty-compact-open", "Open file")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Work panel (A43): a centred column of four actions, no panel or title",
+            EmptyState::work_panel(
+                "empty-work",
+                [
+                    ("New terminal", IconName::SquareTerminal),
+                    ("New browser tab", IconName::Globe),
+                    ("New Markdown", IconName::FileText),
+                    ("New mobile emulator", IconName::Smartphone),
+                ]
+                .map(|(label, icon)| {
+                    Button::new(label, label)
+                        .variant(ButtonVariant::Secondary)
+                        .leading_icon(icon)
+                }),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Host unreachable: say what is unknown, with no create action",
+            EmptyState::new("empty-host", "Host unreachable")
+                .explanation("Last known state, 5 min ago")
+                .note("Runs on the VPS host."),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn card_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let p = cx.theme().palette;
+    let note = |text: &'static str| {
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(p.text.secondary)
+            .child(text)
+    };
+    let overflow = || {
+        IconButton::new("card-overflow", IconName::Ellipsis, "More actions")
+            .variant(IconButtonVariant::Ghost)
+            .size(ButtonSize::Compact)
+            .surface(Surface::Raised)
+    };
+    let open = || {
+        Button::new("card-open", "Open")
+            .variant(ButtonVariant::Ghost)
+            .size(ButtonSize::Compact)
+            .surface(Surface::Raised)
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Static summary card: icon, value, overflow action and footer",
+            Card::new("card-static")
+                .icon(IconName::ListChecks)
+                .title("Checklist")
+                .value("2 of 5")
+                .header_action(overflow())
+                .child(note("Two items left"))
+                .footer_action(open()),
+            cx,
+        ))
+        .child(variant(
+            "Interactive routine card, comfortable padding",
+            Card::new("card-routine")
+                .variant(CardVariant::Interactive)
+                .padding(CardPadding::Comfortable)
+                .icon(IconName::Workflow)
+                .title("Nightly build")
+                .child(note("Runs at 02:00 on weekdays")),
+            cx,
+        ))
+        .child(variant(
+            "Selected: accent bar on the leading edge",
+            Card::new("card-selected")
+                .variant(CardVariant::Interactive)
+                .selected(true)
+                .title("Selected workspace")
+                .child(note("Two sessions running")),
+            cx,
+        ))
+        .child(variant(
+            "Disabled interactive card",
+            Card::new("card-disabled")
+                .variant(CardVariant::Interactive)
+                .disabled(true)
+                .title("Unavailable host")
+                .child(note("Last known state, 5 min ago")),
+            cx,
+        ))
+        .child(variant(
+            "Loading: skeleton lines in the body",
+            Card::new("card-loading").title("Plan").loading(true),
+            cx,
+        ))
+        .child(variant(
+            "No content: the card draws nothing (A35)",
+            Card::new("card-empty").icon(IconName::Server),
+            cx,
+        ))
+        .into_any_element()
 }
