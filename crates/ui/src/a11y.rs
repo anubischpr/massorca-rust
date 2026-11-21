@@ -6,8 +6,9 @@
 //! after GPUI has written its own properties.
 
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    LayoutId, Pixels, Window, accesskit::Node,
+    A11ySubtreeBuilder, App, Bounds, Div, Element, ElementId, GlobalElementId, InspectorElementId,
+    InteractiveElement, IntoElement, LayoutId, ParentElement, Pixels, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Window, accesskit::Node, div,
 };
 use std::{fmt, panic::Location};
 
@@ -41,6 +42,24 @@ pub fn busy<E: Element>(element: E, busy: bool) -> Annotated<E> {
             node.set_busy();
         }
     })
+}
+
+/// A plain element that carries `role` and `name` around `content`, for content that GPUI
+/// animates: `with_animation` forwards no role, so the role sits on this frame instead. The
+/// frame has no style of its own, so the content keeps its size and place as long as the
+/// frame takes the content's place in its parent.
+pub fn framed(
+    id: ElementId,
+    role: Role,
+    name: Option<SharedString>,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    let frame = div().id(id).role(role);
+    let frame = match name {
+        Some(name) => frame.aria_label(name),
+        None => frame,
+    };
+    frame.child(content)
 }
 
 impl<E> fmt::Debug for Annotated<E> {
@@ -131,8 +150,8 @@ impl<E: Element> Element for Annotated<E> {
 #[cfg(test)]
 pub(crate) mod probe {
     use gpui::{
-        App, Context, Element, IntoElement, Render, TestAppContext, VisualTestContext, Window,
-        accesskit::Node, div,
+        App, AppContext, Context, Element, Entity, IntoElement, Render, TestAppContext,
+        VisualTestContext, Window, accesskit::Node, div,
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -161,6 +180,20 @@ pub(crate) mod probe {
         let mut node = Node::new(role);
         element.write_a11y_info(&mut node);
         Some(node)
+    }
+
+    /// Reports the node of the element that the view built by `create` renders to.
+    pub(crate) fn view<V: Render + 'static>(
+        cx: &mut TestAppContext,
+        create: impl FnOnce(&mut Context<V>) -> V,
+    ) -> Option<Node> {
+        cx.update(|app| {
+            crate::init(crate::Appearance::Dark, app).expect("design system initialises")
+        });
+        let entity: Entity<V> = cx.new(create);
+        root(cx, move |window, cx| {
+            entity.update(cx, |view, cx| reported(view.render(window, cx)))
+        })
     }
 
     /// Draws `build` in a test window with the design system installed and returns its node.
@@ -244,5 +277,29 @@ mod tests {
         })
         .expect("reported");
         assert!(stuck.is_disabled() && stuck.is_busy());
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::{
+        ElementId, framed,
+        probe::{reported, root},
+    };
+    use gpui::{TestAppContext, accesskit::Role, div};
+
+    #[gpui::test]
+    fn a_frame_carries_the_role_and_name_of_the_content_it_holds(cx: &mut TestAppContext) {
+        let node = root(cx, |_, _| {
+            reported(framed(
+                ElementId::from("toast"),
+                Role::Status,
+                Some("Saved".into()),
+                div(),
+            ))
+        })
+        .expect("the frame is reported");
+        assert_eq!(node.role(), Role::Status);
+        assert_eq!(node.label(), Some("Saved"));
     }
 }
