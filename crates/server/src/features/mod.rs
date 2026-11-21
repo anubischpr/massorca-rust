@@ -2,8 +2,12 @@
 
 mod config;
 mod events;
+mod projects;
 mod service;
+mod workspace_domain;
+mod workspaces;
 
+pub(crate) use config::default_workspace_root;
 pub(crate) use service::info_of;
 
 use serde::Deserialize;
@@ -23,6 +27,8 @@ pub(crate) fn register_core(
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
     handles.extend(config::register(registries)?);
+    handles.extend(projects::register(registries)?);
+    handles.extend(workspaces::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

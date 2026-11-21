@@ -29,19 +29,13 @@ async fn welcome_offers_the_registered_capabilities() {
         [
             capabilities::CONFIG,
             capabilities::EVENTS,
-            capabilities::SERVICE
+            capabilities::PROJECTS,
+            capabilities::SERVICE,
+            capabilities::WORKSPACES,
         ]
     );
     assert!(!welcome.connection_id.is_empty());
     assert!(client.has_capability(capabilities::SERVICE));
-    assert!(
-        !client.has_capability(capabilities::PROJECTS),
-        "projects/1 waits for its handlers"
-    );
-    assert!(
-        !client.has_capability(capabilities::WORKSPACES),
-        "workspaces/1 waits for its handlers"
-    );
     stop(running).await;
 }
 
