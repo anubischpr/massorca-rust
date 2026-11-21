@@ -3,6 +3,7 @@
 use super::{Story, variant};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::progress::{ProgressBar, ProgressState, Spinner};
+use crate::components::skeleton::{LineWidth, Skeleton, SkeletonShape};
 use crate::icon::IconSize;
 use crate::theme::TextStyled;
 use crate::tokens::{SPACE_2, SPACE_4};
@@ -19,6 +20,11 @@ pub fn stories() -> Vec<Story> {
             name: "Progress",
             spec: "Progress.md",
             render: progress,
+        },
+        Story {
+            name: "Skeleton",
+            spec: "Skeleton.md",
+            render: skeleton,
         },
     ]
 }
@@ -116,6 +122,50 @@ fn progress(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant(
             "Spinner, shown after 200 ms",
             Spinner::new().delayed("gallery-progress-spinner"),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn skeleton(_: &mut Window, cx: &mut App) -> AnyElement {
+    let width = px(320.);
+    let lines = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .w(width)
+        .child(Skeleton::line(LineWidth::Full))
+        .child(Skeleton::line(LineWidth::Most))
+        .child(Skeleton::line(LineWidth::Partial));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant("Text lines, 100, 80 and 60 percent", lines, cx))
+        .child(variant(
+            "Row",
+            div().w(width).child(Skeleton::new(SkeletonShape::Row)),
+            cx,
+        ))
+        .child(variant(
+            "Card",
+            div().w(width).child(Skeleton::new(SkeletonShape::Card)),
+            cx,
+        ))
+        .child(variant("Avatar", Skeleton::new(SkeletonShape::Avatar), cx))
+        .child(variant(
+            "Block",
+            div()
+                .w(width)
+                .h(px(120.))
+                .child(Skeleton::new(SkeletonShape::Block)),
+            cx,
+        ))
+        .child(variant(
+            "Shown after 100 ms",
+            div()
+                .w(width)
+                .child(Skeleton::new(SkeletonShape::Row).delayed("gallery-skeleton-row")),
             cx,
         ))
         .into_any_element()
