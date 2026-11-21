@@ -1,0 +1,30 @@
+[package]
+name = "massorca-net"
+description = "Network transport of MassOrca: TLS identities and pins, mutual TLS, WebSocket frame transport (decisions 0040, 0041)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+futures-util.workspace = true
+massorca-protocol.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true
