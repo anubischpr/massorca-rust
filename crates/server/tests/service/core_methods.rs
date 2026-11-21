@@ -33,7 +33,15 @@ const PHASE1_METHODS: [&str; 14] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
-const TERMINAL_METHODS: [&str; 3] = ["terminal.create", "terminal.list", "terminal.show"];
+const TERMINAL_METHODS: [&str; 7] = [
+    "terminal.create",
+    "terminal.list",
+    "terminal.show",
+    "terminal.input",
+    "terminal.resize",
+    "terminal.kill",
+    "terminal.close",
+];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: [&str; 15] = [

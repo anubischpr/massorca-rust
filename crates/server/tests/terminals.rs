@@ -10,8 +10,8 @@ use massorca_client::{Client, ClientError, ConnectOptions};
 use massorca_profile::Profile;
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::{
-    self, Terminal, TerminalCreateParams, TerminalList, TerminalListParams, TerminalRef,
-    TerminalState,
+    self, MAX_INPUT_BYTES, Terminal, TerminalCreateParams, TerminalInputParams, TerminalKillParams,
+    TerminalList, TerminalListParams, TerminalRef, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{PeerInfo, codes};
@@ -141,6 +141,9 @@ trait TerminalCalls {
     -> Result<Terminal, ClientError>;
     async fn terminal_list(&self, workspace: Option<&str>) -> Result<TerminalList, ClientError>;
     async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError>;
+    async fn terminal_input(&self, terminal: &str, bytes: &[u8]) -> Result<(), ClientError>;
+    async fn terminal_kill(&self, terminal: &str, force: bool) -> Result<Terminal, ClientError>;
+    async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError>;
 }
 
 fn terminal_ref(terminal: &str) -> TerminalRef {
@@ -166,6 +169,23 @@ impl TerminalCalls for Client {
 
     async fn terminal_show(&self, terminal: &str) -> Result<Terminal, ClientError> {
         self.call(terminals::SHOW, &terminal_ref(terminal)).await
+    }
+
+    async fn terminal_input(&self, terminal: &str, bytes: &[u8]) -> Result<(), ClientError> {
+        let params = TerminalInputParams::from_bytes(terminal, bytes);
+        self.call(terminals::INPUT, &params).await
+    }
+
+    async fn terminal_kill(&self, terminal: &str, force: bool) -> Result<Terminal, ClientError> {
+        let params = TerminalKillParams {
+            terminal: terminal.to_owned(),
+            force,
+        };
+        self.call(terminals::KILL, &params).await
+    }
+
+    async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError> {
+        self.call(terminals::CLOSE, &terminal_ref(terminal)).await
     }
 }
 
@@ -228,6 +248,10 @@ async fn a_terminal_is_created_in_its_workspace_listed_and_shown() {
         .expect("the terminal is shown");
     assert_eq!(shown, created);
 
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
     stop(running).await;
 }
 
@@ -242,6 +266,102 @@ async fn an_unknown_workspace_is_refused_as_the_workspace_show_would_refuse_it()
         .await
         .expect_err("there is no such workspace");
     assert_eq!(remote_code(&error), codes::WORKSPACE_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_oversized_or_badly_encoded_input_is_refused() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let oversized = vec![b'a'; MAX_INPUT_BYTES + 1];
+    let error = client
+        .terminal_input(&created.id, &oversized)
+        .await
+        .expect_err("the input is over the limit");
+    assert_eq!(remote_code(&error), codes::TERMINAL_INPUT_TOO_LARGE);
+    let error = client
+        .call::<_, serde_json::Value>(
+            "terminal.input",
+            &serde_json::json!({ "terminal": created.id, "data": "not base64!" }),
+        )
+        .await
+        .expect_err("the data is not base64");
+    assert_eq!(remote_code(&error), codes::REQUEST_INVALID_PARAMS);
+
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn kill_ends_the_process_with_reason_killed_and_input_then_fails() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let killed = client
+        .terminal_kill(&created.id, true)
+        .await
+        .expect("the kill is accepted");
+    assert_eq!(killed.state, TerminalState::Exited);
+    let exit = killed.exit.expect("an exited terminal says how it ended");
+    assert_eq!(
+        exit.reason,
+        massorca_protocol::methods::terminals::ExitReason::Killed
+    );
+
+    let error = client
+        .terminal_input(&created.id, b"x")
+        .await
+        .expect_err("input to an exited terminal fails");
+    assert_eq!(remote_code(&error), codes::TERMINAL_EXITED);
+    let shown = client
+        .terminal_show(&created.id)
+        .await
+        .expect("an exited terminal stays listed");
+    assert_eq!(shown.state, TerminalState::Exited);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn close_forgets_the_terminal() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("the close is accepted");
+    let error = client
+        .terminal_show(&created.id)
+        .await
+        .expect_err("a closed terminal is gone");
+    assert_eq!(remote_code(&error), codes::TERMINAL_NOT_FOUND);
+    let listed = client
+        .terminal_list(None)
+        .await
+        .expect("the terminals are listed");
+    assert!(listed.terminals.is_empty());
     stop(running).await;
 }
 

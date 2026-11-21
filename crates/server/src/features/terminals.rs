@@ -10,7 +10,8 @@ use massorca_core_terminal::{
 };
 use massorca_protocol::methods::terminals::{
     self, DEFAULT_COLS, DEFAULT_ROWS, ExitReason, Terminal, TerminalCreateParams, TerminalExit,
-    TerminalList, TerminalListParams, TerminalRef, TerminalState,
+    TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
+    TerminalResizeParams, TerminalState,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -46,6 +47,34 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::TERMINALS,
             Permission::Read,
             show,
+        )?,
+        registries.methods.register(
+            Owner::Core,
+            terminals::INPUT,
+            capabilities::TERMINALS,
+            Permission::Workspace,
+            input,
+        )?,
+        registries.methods.register(
+            Owner::Core,
+            terminals::RESIZE,
+            capabilities::TERMINALS,
+            Permission::Workspace,
+            resize,
+        )?,
+        registries.methods.register(
+            Owner::Core,
+            terminals::KILL,
+            capabilities::TERMINALS,
+            Permission::Workspace,
+            kill,
+        )?,
+        registries.methods.register(
+            Owner::Core,
+            terminals::CLOSE,
+            capabilities::TERMINALS,
+            Permission::Workspace,
+            close,
         )?,
     ])
 }
@@ -104,6 +133,45 @@ async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBod
         .get(&params.terminal)
         .map(terminal_of)
         .map_err(error_of)
+}
+
+async fn input(ctx: RequestCtx, params: TerminalInputParams) -> Result<(), ErrorBody> {
+    let bytes = params.decode_data().map_err(|error| {
+        let code = match error {
+            terminals::InputDecodeError::InvalidBase64 => codes::REQUEST_INVALID_PARAMS,
+            terminals::InputDecodeError::TooLarge { .. } => codes::TERMINAL_INPUT_TOO_LARGE,
+        };
+        ErrorBody::new(code, error.to_string())
+    })?;
+    let id = params.terminal;
+    let manager = ctx.state.terminals.clone();
+    on_manager(move || manager.input(&id, &bytes)).await
+}
+
+async fn resize(ctx: RequestCtx, params: TerminalResizeParams) -> Result<Terminal, ErrorBody> {
+    let id = params.terminal;
+    let size = PtySize {
+        cols: params.cols,
+        rows: params.rows,
+    };
+    let manager = ctx.state.terminals.clone();
+    let info = on_manager(move || manager.resize(&id, size)).await?;
+    Ok(terminal_of(info))
+}
+
+async fn kill(ctx: RequestCtx, params: TerminalKillParams) -> Result<Terminal, ErrorBody> {
+    let id = params.terminal;
+    let force = params.force;
+    let manager = ctx.state.terminals.clone();
+    let info = on_manager(move || manager.kill(&id, force)).await?;
+    Ok(terminal_of(info))
+}
+
+async fn close(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBody> {
+    let id = params.terminal;
+    let manager = ctx.state.terminals.clone();
+    let info = on_manager(move || manager.close(&id)).await?;
+    Ok(terminal_of(info))
 }
 
 /// `cwd` relative to the workspace root, or absolute as given (`Path::join` keeps an absolute path as is).

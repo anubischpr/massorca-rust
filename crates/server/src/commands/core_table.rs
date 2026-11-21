@@ -160,6 +160,42 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "terminal.show",
             selector("terminal"),
         ),
+        command(
+            "terminal.send",
+            "Type into a terminal",
+            "terminal.input",
+            json!({
+                "type": "object",
+                "required": ["terminal", "data"],
+                "properties": { "terminal": { "type": "string" }, "data": { "type": "string" } }
+            }),
+        ),
+        command(
+            "terminal.resize",
+            "Resize a terminal",
+            "terminal.resize",
+            json!({
+                "type": "object",
+                "required": ["terminal", "cols", "rows"],
+                "properties": { "terminal": { "type": "string" }, "cols": { "type": "integer" }, "rows": { "type": "integer" } }
+            }),
+        ),
+        command(
+            "terminal.kill",
+            "Stop a terminal's process",
+            "terminal.kill",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": { "terminal": { "type": "string" }, "force": { "type": "boolean" } }
+            }),
+        ),
+        command(
+            "terminal.close",
+            "Stop a terminal and forget it",
+            "terminal.close",
+            selector("terminal"),
+        ),
     ]
 }
 
