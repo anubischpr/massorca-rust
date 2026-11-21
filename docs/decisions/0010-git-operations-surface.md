@@ -93,8 +93,11 @@ remote operations need more, because git reports a rejected push, a
 non-fast-forward pull or an overwrite refusal only in text.
 
 - Classification reads stderr under `LC_ALL=C`.
-- Each pattern lives in one table in `core-git::classify`, and each pattern
-  has a test that runs real git and produces it.
+- Each pattern lives in one table in `core-git::classify`. Each pattern a
+  test can produce locally has a test that runs real git and produces it.
+  The SSH-only patterns (an unknown host key, a refused public key) and some
+  network failures (name resolution, a timed-out connection) cannot be
+  produced without a real remote, and are listed in the table as untested.
 - Text that matches no pattern is not guessed at. It becomes `git.failed`,
   carrying the redacted stderr (0013).
 

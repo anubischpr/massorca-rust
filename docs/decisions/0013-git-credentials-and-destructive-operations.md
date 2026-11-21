@@ -32,8 +32,13 @@ Every git child runs with:
 - `SSH_ASKPASS_REQUIRE=never`, which OpenSSH 8.4 and later honour;
 - `GCM_INTERACTIVE=never`, so Git Credential Manager never opens a sign-in
   window;
-- stdin closed. On Unix, the child also runs in its own session with no
-  controlling terminal, so `ssh` cannot open `/dev/tty`.
+- stdin closed.
+
+On Unix, a service the CLI started is detached from any terminal. A service
+started in the foreground with `service run` keeps its terminal, and a
+user-configured SSH command or credential helper that opens `/dev/tty` itself
+could still ask there. The operation timeout bounds that case. Putting each
+child in a session of its own needs `unsafe` (`setsid`) and is deferred.
 
 SSH runs in batch mode:
 
@@ -50,8 +55,10 @@ Credentials that the user's git setup already supplies keep working:
 
 The service never reads, stores or forwards a credential.
 
-Remote operations have a timeout of 5 minutes, which the caller can lower, and
-they can be cancelled. Both kill the process tree.
+Remote operations have a timeout of 5 minutes, which the caller can lower.
+The timeout kills the process tree. Cancelling a running git command when its
+client disconnects is not built yet: the command runs to completion or to its
+timeout.
 
 ### Typed outcomes, not text
 
