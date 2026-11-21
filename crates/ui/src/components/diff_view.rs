@@ -1237,7 +1237,7 @@ impl RenderOnce for DiffView {
             theme,
         };
 
-        let split_toggle = IconButton::new("diff-split", IconName::PanelLeft, "Split view")
+        let split_toggle = IconButton::new("diff-split", IconName::Columns2, "Split view")
             .toggle(mode == ViewMode::Split)
             .disabled(!self.split_available)
             .disabled_reason("Widen the Work panel to use split view")
@@ -1320,12 +1320,12 @@ impl RenderOnce for DiffView {
             .child(div().flex_1())
             .child(split_toggle)
             .child(
-                IconButton::new("diff-previous", IconName::ChevronUp, "Previous change")
+                IconButton::new("diff-previous", IconName::ArrowUp, "Previous change")
                     .disabled(model.previous_change(change).is_none())
                     .on_click(step(false)),
             )
             .child(
-                IconButton::new("diff-next", IconName::ChevronDown, "Next change")
+                IconButton::new("diff-next", IconName::ArrowDown, "Next change")
                     .disabled(model.next_change(change).is_none())
                     .on_click(step(true)),
             )
