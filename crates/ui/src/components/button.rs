@@ -217,7 +217,8 @@ pub(crate) fn loading_slot(
     )
 }
 
-type ClickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+/// The activation callback a button runs on click, Enter or Space.
+pub(crate) type ClickHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// A text button with an optional leading and trailing icon.
 #[derive(IntoElement)]
