@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use massorca_core_git::{Git, GitError, WorktreeAdd, WorktreeEntry};
+use massorca_core_git::{Git, GitError, GitVersion, WorktreeAdd, WorktreeEntry};
 
 use crate::fixture::{Fixture, canonical, commit_file, commit_on_branch, rev, run_git, text};
 
@@ -15,6 +15,17 @@ fn entry_at<'a>(entries: &'a [WorktreeEntry], path: &Path) -> &'a WorktreeEntry 
         .iter()
         .find(|entry| canonical(&entry.path) == wanted)
         .unwrap_or_else(|| panic!("no worktree at {}", path.display()))
+}
+
+/// Git 2.31 added the `locked` and `prunable` lines to `worktree list --porcelain`; older
+/// git prints neither, so only newer git can report lock reasons or prune state.
+fn porcelain_reports_lock_and_prune_state(git: &Git) -> bool {
+    let since = GitVersion {
+        major: 2,
+        minor: 31,
+        patch: 0,
+    };
+    git.version().expect("git --version") >= since
 }
 
 fn add_new_branch(repo: &Path, path: &Path, branch: &str) {
@@ -264,11 +275,14 @@ fn list_reports_a_locked_worktree_with_its_reason() {
         ],
     );
 
-    let entries = git().worktree_list(&repo).expect("list");
-    assert_eq!(
-        entry_at(&entries, &linked).locked.as_deref(),
-        Some("agent running")
-    );
+    let git = git();
+    let entries = git.worktree_list(&repo).expect("list");
+    let locked = &entry_at(&entries, &linked).locked;
+    if porcelain_reports_lock_and_prune_state(&git) {
+        assert_eq!(locked.as_deref(), Some("agent running"));
+    } else {
+        assert_eq!(*locked, None);
+    }
 }
 
 #[test]
@@ -279,8 +293,14 @@ fn list_reports_a_lock_without_a_reason_as_an_empty_reason() {
     add_new_branch(&repo, &linked, "quiet");
     run_git(&repo, &["worktree", "lock", text(&linked)]);
 
-    let entries = git().worktree_list(&repo).expect("list");
-    assert_eq!(entry_at(&entries, &linked).locked.as_deref(), Some(""));
+    let git = git();
+    let entries = git.worktree_list(&repo).expect("list");
+    let locked = &entry_at(&entries, &linked).locked;
+    if porcelain_reports_lock_and_prune_state(&git) {
+        assert_eq!(locked.as_deref(), Some(""));
+    } else {
+        assert_eq!(*locked, None);
+    }
 }
 
 #[test]
@@ -308,8 +328,13 @@ fn list_reports_an_unlocked_worktree_whose_directory_is_gone_as_prunable() {
     add_new_branch(&repo, &linked, "gone");
     std::fs::remove_dir_all(&linked).expect("delete the directory behind git's back");
 
-    let entries = git().worktree_list(&repo).expect("list");
+    let git = git();
+    let entries = git.worktree_list(&repo).expect("list");
     assert_eq!(entries.len(), 2);
-    assert!(entries[1].prunable.is_some());
     assert_eq!(entries[1].branch.as_deref(), Some("gone"));
+    if porcelain_reports_lock_and_prune_state(&git) {
+        assert!(entries[1].prunable.is_some());
+    } else {
+        assert_eq!(entries[1].prunable, None);
+    }
 }

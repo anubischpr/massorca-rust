@@ -17,9 +17,12 @@ pub struct WorktreeEntry {
     pub branch: Option<String>,
     pub bare: bool,
     pub detached: bool,
-    /// Lock reason; `Some("")` when the worktree is locked without a reason.
+    /// Lock reason; `Some("")` when the worktree is locked without a reason. Git before
+    /// 2.31 prints no `locked` line, so this is always `None` there, even when locked.
     pub locked: Option<String>,
-    /// Why git could prune this worktree; `Some("")` when no reason is given.
+    /// Why git could prune this worktree; `Some("")` when no reason is given. Do not use it
+    /// to find a missing workspace: check that its directory exists. Git before 2.31 never
+    /// reports it.
     pub prunable: Option<String>,
 }
 

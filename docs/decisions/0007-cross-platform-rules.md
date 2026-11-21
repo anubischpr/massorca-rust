@@ -26,6 +26,9 @@ Status: accepted, 2026-11-20.
   in 2.25, or carry a fallback. Phase 1 uses `rev-parse`, `worktree add -b`,
   `worktree list --porcelain`, `worktree remove`, `status --porcelain`,
   `branch -d` and `show-ref`, all older than 2.25.
+  Output fields newer than 2.25 are absent on it: `locked` and `prunable` in
+  `worktree list --porcelain` appear from Git 2.31, so a missing workspace is
+  found by its directory, never by `prunable`.
 
 **Windows specifics.**
 
