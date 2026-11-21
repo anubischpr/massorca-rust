@@ -308,3 +308,52 @@ fn unix_socket_path_must_fit_sun_path() {
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert!(error.to_string().contains("104 bytes"), "{error}");
 }
+
+#[cfg(unix)]
+#[test]
+fn the_profile_directory_is_private_even_when_it_already_existed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().expect("a temporary home");
+    let profile = Profile::resolve_with(
+        Some(home.path().to_path_buf()),
+        Some("default".to_owned()),
+        no_env,
+    )
+    .expect("the profile resolves");
+    std::fs::create_dir_all(profile.dir()).expect("the directory exists");
+    std::fs::set_permissions(profile.dir(), std::fs::Permissions::from_mode(0o755))
+        .expect("a permissive directory");
+
+    ensure_dir(&profile).expect("the directory is prepared");
+
+    let mode = std::fs::metadata(profile.dir())
+        .expect("its metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_socket_file_is_readable_only_by_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().expect("a temporary home");
+    let profile = Profile::resolve_with(
+        Some(home.path().to_path_buf()),
+        Some("default".to_owned()),
+        no_env,
+    )
+    .expect("the profile resolves");
+    ensure_dir(&profile).expect("the directory is prepared");
+    std::fs::write(profile.socket_path(), b"").expect("a file at the socket path");
+
+    massorca_profile::restrict_socket(&profile).expect("the socket is restricted");
+
+    let mode = std::fs::metadata(profile.socket_path())
+        .expect("its metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}

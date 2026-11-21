@@ -1,0 +1,35 @@
+//! Command descriptors: what each CLI command or palette entry runs (extensions.md section 9, item 5).
+
+mod core_table;
+
+use serde_json::Value;
+
+pub use core_table::core_commands;
+
+use crate::owner::Owner;
+use crate::registry::{RegistrationError, RegistrationHandle, Registry};
+
+/// One command. Its id is the CLI command path; `method` is the request it issues first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandDescriptor {
+    pub id: String,
+    pub title: String,
+    pub method: String,
+    pub args_schema: Value,
+}
+
+/// Command descriptors keyed by id.
+pub type CommandRegistry = Registry<CommandDescriptor>;
+
+/// Registers the core command table under the core owner; the handles stay with the service.
+pub(crate) fn register_core(
+    registry: &CommandRegistry,
+) -> Result<Vec<RegistrationHandle>, RegistrationError> {
+    core_commands()
+        .into_iter()
+        .map(|descriptor| {
+            let id = descriptor.id.clone();
+            registry.register(Owner::Core, id, descriptor)
+        })
+        .collect()
+}

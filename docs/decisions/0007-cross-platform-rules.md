@@ -39,6 +39,21 @@ Status: accepted, 2026-11-20.
 - Line endings: the repository is LF (`.gitattributes`); code never assumes
   the line ending of files it reads from users' repositories.
 
+**Unsafe code.**
+
+- `unsafe_code` is `deny` for the whole workspace (root `Cargo.toml`).
+  Unsafe is allowed only in named, single-purpose platform modules that
+  declare `#![allow(unsafe_code)]` at their top.
+- Every `unsafe` block carries a `// SAFETY:` comment naming the invariant it
+  relies on.
+- The first such module is `crates/client/src/windows_handle_inheritance.rs`.
+  `CreateProcess` passes `bInheritHandles = TRUE`, so the detached service
+  would inherit the caller's stdout and stderr pipes; a caller reading the
+  output to end-of-file would then wait until the service stopped. The module
+  clears the inheritance of the standard handles before the spawn. Rust's
+  standard library duplicates handles for `Stdio::inherit`, so later children
+  are not affected.
+
 **Linux** is checked in WSL (Ubuntu 24.04) during development and in CI on
 `ubuntu-latest`. macOS is a target but not part of the Phase 1 exit.
 

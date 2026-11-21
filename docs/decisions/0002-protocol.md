@@ -12,6 +12,9 @@ a Rust client core through UniFFI.
 
 ## Decision
 
+The owner, principal, reserved-prefix and handle rules below come from
+`docs/architecture/extensions.md` section 9 (Phase 1 extension points).
+
 **Transports.**
 
 - Local: `interprocess` local sockets on top of tokio. Named pipes on Windows,
@@ -72,10 +75,24 @@ hard-wired list in the dispatcher).
 number and never a message to be parsed. `message` is for humans. Clients
 treat `method.not_found` as "this peer does not support it".
 
-**Authorization room.** Every method declares a permission class
-(`read`, `workspace`, `host-admin`, ...) in the method registry. Phase 1 only
-has the local owner, who holds every class; the check is still made per
-call, so Phase 3 adds callers without touching each handler.
+**Method ownership and authorization.** Every method is registered with an
+`owner` (`core`, or `ext:<id>` for an extension) next to its permission class
+(`read`, `workspace`, `host-admin`). Each request context carries a
+`Principal`. Phase 1 has one value, `Owner`, which holds every class; the
+enum is non-exhaustive so `Device` (Phase 3) and `Extension` (M6) can be added.
+Every request passes one check, `authorize(principal, permission)`, and
+handlers take the principal from their request context, never from the
+connection. The check is still made per call, so Phase 3 adds callers without
+touching each handler.
+
+**Reserved names.** The method prefix `ext.` is reserved for extension
+methods: the core refuses to register a method under it, and an extension
+method must carry it. Error codes under `extension.` are reserved the same way.
+
+**Capabilities.** Capabilities are registered with an owner through the same
+registry type the core features use. Registration returns a handle; dropping
+it withdraws the capability from every later handshake. `welcome` reads from
+that registry, so no list is hard-wired in the dispatcher.
 
 **UniFFI.** The `protocol` crate is plain data (serde types, no IO). It avoids
 types UniFFI cannot express (no `u128`, no generic public records, timestamps

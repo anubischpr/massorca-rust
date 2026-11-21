@@ -34,6 +34,22 @@ runs headless on a server.
   closes the store and exits 0. Ctrl+C and SIGTERM do the same.
 - **Status.** `massorca service status` connects without auto-starting and
   prints the `welcome` data or "not running".
+- **Endpoint ownership.** Only the current user may reach the service, and a
+  client refuses an endpoint another user serves. Windows: the pipe is created
+  with an owner-only descriptor (`D:P(A;;GA;;;<current user SID>)`, protected
+  from inheritance); the first-instance flag stops a second server taking the
+  name, and remote clients are rejected by default. Unix: the profile directory
+  is `0700` (0004) and the socket file is `0600` once bound. Before the first
+  `hello`, the client checks the far end: on Windows the server process must run
+  as the current user (`GetNamedPipeServerProcessId`, then the process token),
+  on Unix the peer's effective uid must equal its own. Any endpoint that fails
+  the check, or whose owner cannot be read, is refused with
+  `service.untrusted_endpoint` and never retried.
+- **Known limits.** A process of the same user can still stand in for the
+  service; the check separates users, not processes of one user. On Windows, a
+  restart right after shutdown can be refused with access denied for a moment
+  while the old pipe instance is released; the lifecycle test retries for up to
+  five seconds. A product restart path should retry the same way.
 
 ## Alternatives
 

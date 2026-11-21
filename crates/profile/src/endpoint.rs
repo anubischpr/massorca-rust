@@ -49,6 +49,16 @@ pub fn local_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
     path.into_os_string().to_fs_name::<GenericFilePath>()
 }
 
+/// Restricts the socket file to its owner (0600), after the listener binds it. The directory is already private, so no other user can reach the file in that moment.
+#[cfg(unix)]
+pub fn restrict_socket(profile: &Profile) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        profile.socket_path(),
+        std::fs::Permissions::from_mode(0o600),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::fnv1a_64;
