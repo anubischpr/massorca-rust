@@ -1,6 +1,9 @@
 //! Gallery stories for the session group: the session views of the Work panel and the Session summary.
 
 use super::{Story, variant};
+use crate::components::agent_icon::AgentKind;
+use crate::components::agent_status::AgentState;
+use crate::components::delegation_tree::{DelegationNode, DelegationTree, RunOrder, TreeVariant};
 use crate::components::diff_view::{
     DiffLine, DiffModel, DiffStatus, DiffView, FileDiff, FileStatus, Hunk,
 };
@@ -21,6 +24,11 @@ pub fn stories() -> Vec<Story> {
             name: "Plan view",
             spec: "PlanView.md",
             render: plan_view,
+        },
+        Story {
+            name: "Delegation tree",
+            spec: "DelegationTree.md",
+            render: delegation_tree,
         },
     ]
 }
@@ -239,6 +247,143 @@ fn plan_view(_: &mut Window, cx: &mut App) -> AnyElement {
                 300.,
                 PlanView::new("gallery-plan-stale", plan)
                     .status(PlanStatus::Stale("5 min ago".into())),
+            ),
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// A coordinator with one child per state, and a sequence of two steps under the last child.
+fn delegation_sample() -> Vec<DelegationNode> {
+    vec![DelegationNode {
+        role: Some("Coordinator".into()),
+        model: Some("Opus 5.5, high".into()),
+        run: Some(RunOrder::Parallel),
+        children: vec![
+            DelegationNode {
+                model: Some("Sonnet 5.5, medium".into()),
+                branch: Some("task/research-api".into()),
+                duration: Some("2 min".into()),
+                task: "Read the sync endpoints and list their fields".into(),
+                ..DelegationNode::new(
+                    "research",
+                    AgentKind::Claude,
+                    AgentState::Running,
+                    "Research the API",
+                )
+            },
+            DelegationNode {
+                model: Some("GPT-5.5, medium".into()),
+                branch: Some("task/client".into()),
+                task: "Needs a decision on the auth flow".into(),
+                ..DelegationNode::new(
+                    "write",
+                    AgentKind::Codex,
+                    AgentState::Waiting,
+                    "Write the client",
+                )
+            },
+            DelegationNode {
+                reason: Some("The auth tests failed on the token refresh".into()),
+                task: "Review the patch".into(),
+                ..DelegationNode::new(
+                    "review",
+                    AgentKind::Gemini,
+                    AgentState::Error,
+                    "Review the patch",
+                )
+            },
+            DelegationNode {
+                last_known: Some("5 min ago".into()),
+                task: "Deploy to staging".into(),
+                ..DelegationNode::new(
+                    "deploy",
+                    AgentKind::Cursor,
+                    AgentState::Unreachable,
+                    "Deploy to staging",
+                )
+            },
+            DelegationNode {
+                commits_ready: 2,
+                duration: Some("6 min".into()),
+                task: "Run the whole suite".into(),
+                run: Some(RunOrder::Sequence),
+                children: vec![
+                    DelegationNode::new(
+                        "build",
+                        AgentKind::Antigravity,
+                        AgentState::Done,
+                        "Build the package",
+                    ),
+                    DelegationNode::new(
+                        "suite",
+                        AgentKind::OpenCode,
+                        AgentState::Done,
+                        "Run the suite",
+                    ),
+                ],
+                ..DelegationNode::new(
+                    "tests",
+                    AgentKind::Antigravity,
+                    AgentState::Done,
+                    "Run the tests",
+                )
+            },
+        ],
+        ..DelegationNode::new(
+            "lead",
+            AgentKind::Claude,
+            AgentState::Running,
+            "Plan the release",
+        )
+    }]
+}
+
+fn delegation_tree(_: &mut Window, cx: &mut App) -> AnyElement {
+    let bots = vec![DelegationNode {
+        role: Some("Lead bot".into()),
+        run: Some(RunOrder::Parallel),
+        children: vec![
+            DelegationNode {
+                competence: Some("Research".into()),
+                ..DelegationNode::new("mara", AgentKind::Codex, AgentState::Running, "Mara")
+            },
+            DelegationNode {
+                competence: Some("Frontend".into()),
+                ..DelegationNode::new("lio", AgentKind::Gemini, AgentState::Idle, "Lio")
+            },
+        ],
+        ..DelegationNode::new("ada", AgentKind::Claude, AgentState::Running, "Ada")
+    }];
+    let frame = |height: f32, child: DelegationTree| div().h(px(height)).w_full().child(child);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Workspaces: the agent's icon, its model and branch, the states, commits ready and a sequence",
+            frame(
+                420.,
+                DelegationTree::new("gallery-tree-ws", delegation_sample())
+                    .selected(Some("write".into())),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Bot Teams: competence chips and plain words",
+            frame(
+                220.,
+                DelegationTree::new("gallery-tree-bots", bots).variant(TreeVariant::BotTeams),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Card form: one line per child",
+            frame(
+                200.,
+                DelegationTree::new("gallery-tree-card", delegation_sample())
+                    .variant(TreeVariant::Card),
             ),
             cx,
         ))
