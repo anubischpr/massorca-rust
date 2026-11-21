@@ -2,7 +2,7 @@
 
 use super::{Story, variant};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
-use crate::components::progress::Spinner;
+use crate::components::progress::{ProgressBar, ProgressState, Spinner};
 use crate::icon::IconSize;
 use crate::theme::TextStyled;
 use crate::tokens::{SPACE_2, SPACE_4};
@@ -58,6 +58,8 @@ fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
 }
 
 fn progress(_: &mut Window, cx: &mut App) -> AnyElement {
+    let bar_width = px(320.);
+    let bar = |bar: ProgressBar| div().w(bar_width).child(bar);
     let spinners = div()
         .flex()
         .items_center()
@@ -70,6 +72,46 @@ fn progress(_: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(SPACE_4))
+        .child(variant(
+            "Determinate",
+            bar(ProgressBar::new("Creating worktree oppm-api").determinate(0.62)),
+            cx,
+        ))
+        .child(variant(
+            "Indeterminate, travels",
+            bar(ProgressBar::new("Uploading 3 files").indeterminate()),
+            cx,
+        ))
+        .child(variant(
+            "Paused",
+            bar(ProgressBar::new("Copying repository")
+                .determinate(0.4)
+                .state(ProgressState::Paused)),
+            cx,
+        ))
+        .child(variant(
+            "Complete",
+            bar(ProgressBar::new("Creating worktree oppm-api")
+                .determinate(1.0)
+                .state(ProgressState::Complete)),
+            cx,
+        ))
+        .child(variant(
+            "Failed",
+            bar(ProgressBar::new("Creating worktree oppm-api")
+                .determinate(0.62)
+                .state(ProgressState::Failed)),
+            cx,
+        ))
+        .child(variant(
+            "Connection lost",
+            bar(ProgressBar::new("Uploading 3 files")
+                .determinate(0.62)
+                .state(ProgressState::Disconnected {
+                    age: "5 min ago".into(),
+                })),
+            cx,
+        ))
         .child(variant("Spinner, 12, 16, 20 and 24 px", spinners, cx))
         .child(variant(
             "Spinner, shown after 200 ms",
