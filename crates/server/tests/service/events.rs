@@ -108,6 +108,45 @@ async fn shutting_down_ends_open_streams_with_a_reason() {
         .expect("the service stops cleanly");
 }
 
+/// A subscriber that does not keep up ends with `stream.overflow` once its queue is full, instead of building an
+/// unbounded backlog. Nothing follows the error.
+#[tokio::test]
+async fn a_subscriber_that_falls_behind_ends_with_stream_overflow() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut subscription = client
+        .subscribe_events()
+        .await
+        .expect("events.subscribe answers");
+
+    for number in 0..2_000 {
+        running.events().publish(ChangeEvent {
+            topic: events::TOPIC_PROJECT_ADDED.to_owned(),
+            id: number.to_string(),
+        });
+    }
+    // Nothing reads the subscription while the events arrive, so they queue up in the client until its limit is hit.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let overflow = timeout(Duration::from_secs(10), async {
+        loop {
+            match subscription.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("the stream ended without saying why"),
+            }
+        }
+    })
+    .await
+    .expect("the overflow arrives in time");
+    assert_eq!(overflow.code, codes::STREAM_OVERFLOW);
+    assert!(
+        subscription.next().await.is_none(),
+        "nothing follows the error"
+    );
+    stop(running).await;
+}
+
 /// Reads frames until the response to `id` arrives and returns the stream id it carries.
 async fn subscribed_stream(raw: &mut Raw, id: u64) -> u64 {
     match answer_to(raw, id).await {

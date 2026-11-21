@@ -2,14 +2,16 @@
 
 use std::time::{Duration, Instant};
 
+use massorca_protocol::{ErrorBody, Message};
 use massorca_protocol::{
     MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, ProtocolRange, capabilities, codes, methods::service,
 };
-use serde_json::Value;
+use massorca_server::{Owner, Permission, RequestCtx};
+use serde_json::{Value, json};
 
 use super::common::{
-    Raw, SERVER_NAME, SERVER_VERSION, connect, hello_with, refusal_code, refusal_range, request,
-    start, stop, temp_home,
+    Raw, SERVER_NAME, SERVER_VERSION, connect, hello_offering, hello_with, refusal_code,
+    refusal_range, request, start, stop, temp_home,
 };
 
 #[tokio::test]
@@ -114,6 +116,63 @@ async fn hello_must_arrive_within_ten_seconds() {
     assert!(
         waited < Duration::from_secs(14),
         "the connection closed after {waited:?}, too late"
+    );
+    stop(running).await;
+}
+
+/// A handler sees who is calling and what the client listed in its `hello`, even capabilities the service does not know.
+#[tokio::test]
+async fn handlers_see_who_is_calling_and_what_the_client_offered() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let demo = Owner::Extension("demo".to_owned());
+    let _capability = running
+        .registries()
+        .capabilities
+        .register("demo/1", demo.clone())
+        .expect("the capability registers");
+    let _who = running
+        .registries()
+        .methods
+        .register(
+            demo,
+            "ext.demo.who",
+            "demo/1",
+            Permission::Read,
+            |ctx: RequestCtx, _params: Value| async move {
+                let mut offered: Vec<String> = ctx.client_capabilities.iter().cloned().collect();
+                offered.sort();
+                Ok::<Value, ErrorBody>(json!({
+                    "principal": format!("{:?}", ctx.principal),
+                    "offered": offered,
+                }))
+            },
+        )
+        .expect("the method registers");
+
+    let mut raw = Raw::open(home.path(), "default").await;
+    raw.send(&hello_offering(&["service/1", "demo/1", "future/9"]))
+        .await;
+    assert!(
+        matches!(raw.recv().await, Some(Message::Welcome { .. })),
+        "the welcome comes first"
+    );
+    raw.send(&request(1, "ext.demo.who", Value::Null)).await;
+    let answer = loop {
+        match raw.recv().await {
+            Some(Message::Response {
+                id: 1,
+                result: Some(value),
+                ..
+            }) => break value,
+            Some(_) => {}
+            None => panic!("the connection closed before the answer"),
+        }
+    };
+    assert_eq!(answer["principal"], "Owner");
+    assert_eq!(
+        answer["offered"],
+        json!(["demo/1", "future/9", "service/1"])
     );
     stop(running).await;
 }

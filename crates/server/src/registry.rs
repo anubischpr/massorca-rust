@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
+use crate::names;
 use crate::owner::Owner;
 
 /// One registered contribution.
@@ -42,6 +43,11 @@ impl<K: Send + Sync + 'static> Registry<K> {
         value: K,
     ) -> Result<RegistrationHandle, RegistrationError> {
         let key = key.into();
+        if let Owner::Extension(id) = &owner
+            && !names::is_valid(id)
+        {
+            return Err(RegistrationError::InvalidName { name: id.clone() });
+        }
         let mut entries = write(&self.entries);
         if entries.contains_key(&key) {
             return Err(RegistrationError::Duplicate { key });
@@ -117,6 +123,10 @@ impl fmt::Debug for RegistrationHandle {
 pub enum RegistrationError {
     #[error("{key} is already registered")]
     Duplicate { key: String },
+    #[error(
+        "{name} is not a valid name: use lower-case letters, digits, '.', '_' and '-', starting with a letter or digit"
+    )]
+    InvalidName { name: String },
 }
 
 fn read<K>(table: &RwLock<Entries<K>>) -> RwLockReadGuard<'_, Entries<K>> {

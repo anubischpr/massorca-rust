@@ -3,6 +3,7 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_store::{Store, now_ms};
@@ -14,8 +15,10 @@ use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::service::ServiceInfo;
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep};
 
 use crate::accept_loop;
+use crate::activity::Activity;
 use crate::context::{AppState, Registries};
 use crate::error::ServiceError;
 use crate::event_bus::EventBus;
@@ -45,11 +48,11 @@ impl Service {
             server_version,
         } = config;
         ensure_dir(&profile)?;
-        let lock = instance_lock::acquire(&profile)?;
+        let lock = instance_lock::acquire(&profile).await?;
         instance_lock::remove_stale_socket(&profile)?;
 
         let store = open_store(profile.store_path()).await?;
-        let listener = bind_endpoint(&profile)?;
+        let listener = bind_endpoint_when_released(&profile).await?;
 
         let registries = Registries::default();
         let registrations = features::register_core(&registries)?;
@@ -66,6 +69,7 @@ impl Service {
                 version: server_version.clone(),
             },
             started_at_ms,
+            activity: Activity::default(),
         });
         service_json::write(&profile, &server_version, started_at_ms)?;
 
@@ -131,6 +135,25 @@ impl RunningService {
 impl Drop for RunningService {
     fn drop(&mut self) {
         self.shutdown.shutdown();
+    }
+}
+
+/// How long a bind is retried while the operating system still holds the previous service's endpoint. Windows refuses a
+/// new first pipe instance until the last instance of the old service is closed.
+const BIND_WAIT: Duration = Duration::from_secs(5);
+const BIND_POLL: Duration = Duration::from_millis(25);
+
+async fn bind_endpoint_when_released(profile: &Profile) -> Result<Listener, ServiceError> {
+    let deadline = Instant::now() + BIND_WAIT;
+    loop {
+        match bind_endpoint(profile) {
+            Err(ServiceError::Io(error))
+                if error.kind() == io::ErrorKind::PermissionDenied && Instant::now() < deadline =>
+            {
+                sleep(BIND_POLL).await;
+            }
+            bound => return bound,
+        }
     }
 }
 

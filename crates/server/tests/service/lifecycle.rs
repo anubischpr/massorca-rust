@@ -1,8 +1,10 @@
 //! Service lifecycle: one service per profile, independent profiles, and a shutdown that frees the profile.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use massorca_client::Client;
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION};
 use massorca_server::{Owner, Permission, RequestCtx, Service, ServiceError};
 use serde_json::{Value, json};
@@ -10,7 +12,8 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use super::common::{
-    SERVER_VERSION, connect, profile, service_config, service_json, start, stop, temp_home,
+    SERVER_VERSION, client_options, connect, profile, register_stuck, service_config, service_json,
+    start, stop, temp_home,
 };
 
 #[tokio::test]
@@ -252,4 +255,142 @@ async fn a_squatter_on_the_endpoint_name_stops_the_service_from_starting() {
         started.is_err(),
         "a service must not start beside a listener that already holds the endpoint name"
     );
+}
+
+#[tokio::test]
+async fn a_handler_still_running_at_the_grace_limit_is_dropped_before_the_profile_is_released() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let entered = Arc::new(Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let _stuck = register_stuck(&running, Arc::clone(&entered), Arc::clone(&dropped));
+
+    let client = connect(home.path(), "default").await;
+    let call = tokio::spawn(async move {
+        client
+            .call::<_, Value>("ext.demo.stuck", &Value::Null)
+            .await
+    });
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the handler started");
+
+    running.shutdown_handle().shutdown();
+    timeout(Duration::from_secs(20), running.wait())
+        .await
+        .expect("the service stops after its grace period")
+        .expect("the service stops cleanly");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the handler was dropped before the profile was released, not left running"
+    );
+    // The call ends with an error once its connection is gone.
+    let _ = call.await;
+}
+
+/// A successor that starts while its predecessor drains waits for the profile instead of failing: the predecessor
+/// stops listening at once, but keeps the profile until its request finishes.
+#[tokio::test]
+async fn a_service_started_while_its_predecessor_drains_waits_for_the_profile() {
+    let home = temp_home();
+    let first = start(home.path(), "default").await;
+    let demo = Owner::Extension("demo".to_owned());
+    let _capability = first
+        .registries()
+        .capabilities
+        .register("demo/1", demo.clone())
+        .expect("the capability registers");
+    let entered = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let (started, held) = (Arc::clone(&entered), Arc::clone(&gate));
+    let _gated = first
+        .registries()
+        .methods
+        .register(
+            demo,
+            "ext.demo.gate",
+            "demo/1",
+            Permission::Read,
+            move |_ctx: RequestCtx, _params: Value| {
+                let (started, held) = (Arc::clone(&started), Arc::clone(&held));
+                async move {
+                    started.notify_one();
+                    held.notified().await;
+                    Ok::<Value, ErrorBody>(json!("finished"))
+                }
+            },
+        )
+        .expect("the method registers");
+
+    let client = connect(home.path(), "default").await;
+    let call =
+        tokio::spawn(async move { client.call::<_, Value>("ext.demo.gate", &Value::Null).await });
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the request started");
+
+    let stopper = connect(home.path(), "default").await;
+    stopper.shutdown().await.expect("the shutdown is answered");
+    let successor = tokio::spawn(Service::start(service_config(home.path(), "default")));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    gate.notify_one();
+
+    timeout(Duration::from_secs(20), first.wait())
+        .await
+        .expect("the predecessor stops")
+        .expect("the predecessor stops cleanly");
+    let successor = timeout(Duration::from_secs(20), successor)
+        .await
+        .expect("the successor starts in time")
+        .expect("the start task finishes")
+        .expect("the successor takes the profile");
+    let _ = call.await;
+    stop(successor).await;
+}
+
+/// A shutdown is answered only once nothing listens any more, so a client that connects right after the answer cannot
+/// reach the old service.
+#[tokio::test]
+async fn a_shutdown_is_answered_once_nothing_listens_any_more() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    client.shutdown().await.expect("the shutdown is answered");
+    let attempt = Client::connect(&profile(home.path(), "default"), client_options()).await;
+    assert!(
+        attempt.is_err(),
+        "no service accepts a connection after the answer"
+    );
+    drop(client);
+    timeout(Duration::from_secs(10), running.wait())
+        .await
+        .expect("the service stops in time")
+        .expect("the service stops cleanly");
+}
+
+/// A socket file left behind by a killed service does not stop the next one from starting.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stale_socket_file_left_by_a_killed_service_does_not_block_a_start() {
+    use massorca_profile::ensure_dir;
+
+    let home = temp_home();
+    let profile = profile(home.path(), "default");
+    ensure_dir(&profile).expect("the profile directory exists");
+    // Dropping a listener does not remove its socket file, which is what a killed service leaves behind.
+    drop(std::os::unix::net::UnixListener::bind(profile.socket_path()).expect("the socket binds"));
+    assert!(
+        profile.socket_path().exists(),
+        "the stale socket file is left behind"
+    );
+
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .service_info()
+        .await
+        .expect("the new service answers");
+    drop(client);
+    stop(running).await;
 }

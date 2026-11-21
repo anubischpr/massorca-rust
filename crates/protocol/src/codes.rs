@@ -9,6 +9,12 @@ pub const REQUEST_INVALID_PARAMS: &str = "request.invalid_params";
 pub const INTERNAL: &str = "internal";
 pub const SERVICE_SHUTTING_DOWN: &str = "service.shutting_down";
 pub const STREAM_NOT_FOUND: &str = "stream.not_found";
+/// A subscriber fell too far behind; its stream ends with this error rather than buffering without limit.
+pub const STREAM_OVERFLOW: &str = "stream.overflow";
+/// One stream item is larger than a frame; the stream ends with this error.
+pub const STREAM_ITEM_TOO_LARGE: &str = "stream.item_too_large";
+/// A reply is larger than a frame; only the request that asked for it fails.
+pub const RESPONSE_TOO_LARGE: &str = "response.too_large";
 pub const PATH_NOT_UTF8: &str = "path.not_utf8";
 pub const PATH_NOT_FOUND: &str = "path.not_found";
 pub const PATH_NOT_DIRECTORY: &str = "path.not_directory";

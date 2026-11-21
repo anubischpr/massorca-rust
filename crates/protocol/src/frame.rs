@@ -8,6 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Largest body (kind byte included) a local connection accepts unless the peers negotiate otherwise.
 pub const MAX_FRAME_LEN_LOCAL: u32 = 8 * 1024 * 1024;
 
+/// The `u32` length prefix that opens every frame.
+const LENGTH_PREFIX_LEN: usize = 4;
+
 /// The kind byte that opens every frame body. Kinds other than `Json` need a negotiated capability first.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,15 +89,32 @@ where
     }
 }
 
-/// Writes `message` as one frame and flushes the writer.
+/// Writes `message` as one frame and flushes the writer. A frame longer than `max_len` (kind byte included) fails with
+/// [`FrameError::TooLarge`] before any byte is written, so the stream stays at a frame boundary.
 #[cfg(feature = "tokio")]
-pub async fn write_message<W>(writer: &mut W, message: &Message) -> Result<(), FrameError>
+pub async fn write_message<W>(
+    writer: &mut W,
+    message: &Message,
+    max_len: u32,
+) -> Result<(), FrameError>
 where
     W: AsyncWrite + Unpin,
 {
-    writer.write_all(&encode_frame(message)).await?;
+    let frame = encode_frame(message);
+    let len = u32::try_from(frame.len() - LENGTH_PREFIX_LEN)
+        .expect("encode_frame bounds the body to u32");
+    if len > max_len {
+        return Err(FrameError::TooLarge(len));
+    }
+    writer.write_all(&frame).await?;
     writer.flush().await?;
     Ok(())
+}
+
+/// Whether `message` fits in one frame of `max_len` bytes, the check [`write_message`] makes.
+pub fn fits_frame(message: &Message, max_len: u32) -> bool {
+    let body = encode_frame(message).len() - LENGTH_PREFIX_LEN;
+    u64::try_from(body).is_ok_and(|body| body <= u64::from(max_len))
 }
 
 /// Reads the 4-byte length prefix; `None` if the stream ends before its first byte.

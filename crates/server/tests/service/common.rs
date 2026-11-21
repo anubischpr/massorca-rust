@@ -1,6 +1,8 @@
 //! Helpers shared by the service tests: profiles on temporary homes, in-process services and raw frames.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use interprocess::local_socket::tokio::Stream;
@@ -11,9 +13,13 @@ use massorca_protocol::{
     ErrorBody, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, PeerInfo,
     ProtocolRange, read_message, write_message,
 };
-use massorca_server::{RequestCtx, RunningService, Service, ServiceConfig};
+use massorca_server::{
+    CapabilityHandle, Owner, Permission, RegistrationHandle, RequestCtx, RunningService, Service,
+    ServiceConfig,
+};
 use serde_json::Value;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 
 pub const SERVER_NAME: &str = "massorca-test";
@@ -81,6 +87,50 @@ pub async fn echo(_ctx: RequestCtx, params: Value) -> Result<Value, ErrorBody> {
     Ok(params)
 }
 
+/// Sets its flag when dropped. A handler future is dropped when it finishes or when the service cancels its request.
+pub struct DropFlag(pub Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Registers `ext.demo.stuck`, a method that never answers. Each call notifies `entered`, and the handler's future sets
+/// `dropped` when the service cancels it. The returned handles keep the registrations in place.
+pub fn register_stuck(
+    running: &RunningService,
+    entered: Arc<Notify>,
+    dropped: Arc<AtomicBool>,
+) -> (CapabilityHandle, RegistrationHandle) {
+    let demo = Owner::Extension("demo".to_owned());
+    let capability = running
+        .registries()
+        .capabilities
+        .register("demo/1", demo.clone())
+        .expect("the capability registers");
+    let method = running
+        .registries()
+        .methods
+        .register(
+            demo,
+            "ext.demo.stuck",
+            "demo/1",
+            Permission::Read,
+            move |_ctx: RequestCtx, _params: Value| {
+                let (entered, dropped) = (Arc::clone(&entered), Arc::clone(&dropped));
+                async move {
+                    let _sentinel = DropFlag(dropped);
+                    entered.notify_one();
+                    std::future::pending::<()>().await;
+                    Ok::<Value, ErrorBody>(Value::Null)
+                }
+            },
+        )
+        .expect("the method registers");
+    (capability, method)
+}
+
 /// `service.json` of the profile, parsed.
 pub fn service_json(home: &Path, name: &str) -> Value {
     let text =
@@ -107,6 +157,22 @@ pub fn hello() -> Message {
         min: MIN_PROTOCOL_VERSION,
         max: PROTOCOL_VERSION,
     })
+}
+
+/// A `hello` offering the one protocol version this build speaks, and the listed capabilities.
+pub fn hello_offering(capabilities: &[&str]) -> Message {
+    Message::Hello {
+        protocol: ProtocolRange {
+            min: MIN_PROTOCOL_VERSION,
+            max: PROTOCOL_VERSION,
+        },
+        client: PeerInfo {
+            name: "raw-test-client".to_owned(),
+            version: "0.0.0-test".to_owned(),
+        },
+        capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
+        auth: None,
+    }
 }
 
 pub fn request(id: u64, method: &str, params: Value) -> Message {
@@ -149,7 +215,7 @@ impl Raw {
 
     pub async fn send(&mut self, message: &Message) {
         let mut writer: &Stream = &self.stream;
-        write_message(&mut writer, message)
+        write_message(&mut writer, message, MAX_FRAME_LEN_LOCAL)
             .await
             .expect("the frame is sent");
     }

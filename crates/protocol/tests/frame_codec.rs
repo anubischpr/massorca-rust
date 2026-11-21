@@ -1,5 +1,15 @@
-use massorca_protocol::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, Message, encode_frame};
+use massorca_protocol::{
+    FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, Message, encode_frame, fits_frame,
+};
 use serde_json::{Value, json};
+
+#[test]
+fn fits_frame_agrees_with_the_write_limit() {
+    let message = Message::Cancel { stream: 3 };
+    let body_len = u32::try_from(encode_frame(&message).len() - 4).expect("body fits u32");
+    assert!(fits_frame(&message, body_len));
+    assert!(!fits_frame(&message, body_len - 1));
+}
 
 #[test]
 fn encoded_frame_is_big_endian_length_then_kind_then_json() {

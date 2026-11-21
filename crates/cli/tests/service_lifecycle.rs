@@ -2,6 +2,7 @@
 
 mod harness;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::process::Stdio;
@@ -11,6 +12,7 @@ use std::time::Duration;
 
 use harness::{Sandbox, execute, massorca_in, single_document};
 use predicates::str::contains;
+use serde_json::Value;
 
 #[test]
 fn status_reports_not_running_without_starting_anything() {
@@ -176,4 +178,21 @@ fn autostart_does_not_keep_the_callers_stdout_pipe_open() {
         .expect("stdout reaches EOF once massorca exits; the service still holds the pipe");
     let _ = child.wait();
     assert!(String::from_utf8_lossy(&bytes).contains("\"pid\""));
+}
+
+#[test]
+fn restart_five_times_in_a_row_starts_a_new_service_each_time() {
+    let sandbox = Sandbox::new();
+    let pids: Vec<Value> = (0..5)
+        .map(|_| sandbox.json_ok("default", &["service", "restart"])["pid"].clone())
+        .collect();
+
+    let distinct: BTreeSet<String> = pids.iter().map(Value::to_string).collect();
+    assert_eq!(
+        distinct.len(),
+        5,
+        "every restart replaced the service: {pids:?}"
+    );
+    let status = sandbox.wait_for_running("default", true);
+    assert_eq!(status["info"]["pid"], pids[4]);
 }

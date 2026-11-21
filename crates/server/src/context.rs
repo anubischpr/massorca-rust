@@ -1,11 +1,13 @@
 //! The shared state of a running service, and the per-request context that handlers receive.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use massorca_core_store::Store;
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 
+use crate::activity::Activity;
 use crate::capability::CapabilityRegistry;
 use crate::commands::CommandRegistry;
 use crate::event_bus::EventBus;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub registries: Registries,
     pub server: PeerInfo,
     pub started_at_ms: i64,
+    /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
+    pub(crate) activity: Activity,
 }
 
 /// The context a handler receives. The principal is read from here only.
@@ -41,4 +45,6 @@ pub struct RequestCtx {
     pub principal: Principal,
     pub state: Arc<AppState>,
     pub connection_id: String,
+    /// The capabilities the client listed in its `hello`. The service does not act on them yet.
+    pub client_capabilities: Arc<HashSet<String>>,
 }

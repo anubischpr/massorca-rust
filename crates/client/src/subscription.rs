@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use massorca_protocol::{ErrorBody, Message};
+use massorca_protocol::{ErrorBody, Message, codes};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -10,19 +10,20 @@ use tokio::sync::mpsc;
 use crate::error::ClientError;
 use crate::pump::Item;
 
-/// The items of one stream. They queue until read; dropping the subscription cancels the stream on the service.
+/// The items of one stream. They queue until read, up to a limit: a subscriber that falls behind gets `stream.overflow`.
+/// Dropping the subscription cancels the stream on the service.
 pub struct Subscription {
     stream: u64,
-    items: mpsc::UnboundedReceiver<Item>,
-    outbound: mpsc::UnboundedSender<Message>,
+    items: mpsc::Receiver<Item>,
+    outbound: mpsc::Sender<Message>,
     finished: bool,
 }
 
 impl Subscription {
     pub(crate) fn new(
         stream: u64,
-        items: mpsc::UnboundedReceiver<Item>,
-        outbound: mpsc::UnboundedSender<Message>,
+        items: mpsc::Receiver<Item>,
+        outbound: mpsc::Sender<Message>,
     ) -> Self {
         Self {
             stream,
@@ -43,6 +44,10 @@ impl Subscription {
         if !matches!(item, Some(Ok(_))) {
             self.finished = true;
         }
+        // The service does not know this subscriber gave up, so the stream is cancelled here.
+        if matches!(&item, Some(Err(error)) if error.code == codes::STREAM_OVERFLOW) {
+            self.send_cancel();
+        }
         item
     }
 
@@ -59,6 +64,24 @@ impl Subscription {
 
     /// Stops the stream. Same as dropping it.
     pub fn cancel(self) {}
+
+    /// Asks the service to stop the stream. A full outbound queue is waited for on a task, so the cancel is not lost.
+    fn send_cancel(&self) {
+        let cancel = Message::Cancel {
+            stream: self.stream,
+        };
+        match self.outbound.try_send(cancel) {
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Full(cancel)) => {
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    let outbound = self.outbound.clone();
+                    runtime.spawn(async move {
+                        let _ = outbound.send(cancel).await;
+                    });
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Debug for Subscription {
@@ -72,9 +95,7 @@ impl fmt::Debug for Subscription {
 impl Drop for Subscription {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = self.outbound.send(Message::Cancel {
-                stream: self.stream,
-            });
+            self.send_cancel();
         }
     }
 }

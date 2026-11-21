@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::names;
 use crate::owner::Owner;
 use crate::registry::{RegistrationError, RegistrationHandle, Registry};
 
@@ -59,13 +60,17 @@ pub struct SettingsRegistry {
     entries: Registry<SettingDecl>,
 }
 
-/// The registry key of a declaration. The unit separator cannot occur in an owner's wire form, so the pair is unambiguous.
+/// The registry key of a declaration. Owner ids and keys follow the name rule, which excludes the unit separator, so the
+/// pair is unambiguous.
 fn slot(owner: &Owner, key: &str) -> String {
     format!("{owner}\u{1f}{key}")
 }
 
 impl SettingsRegistry {
     pub fn register(&self, decl: SettingDecl) -> Result<RegistrationHandle, RegistrationError> {
+        if !names::is_valid(&decl.key) {
+            return Err(RegistrationError::InvalidName { name: decl.key });
+        }
         let slot = slot(&decl.owner, &decl.key);
         let owner = decl.owner.clone();
         self.entries.register(owner, slot, decl)

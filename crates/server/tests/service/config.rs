@@ -4,7 +4,7 @@ use std::path::Path;
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigSet, ConfigValue};
-use massorca_server::{Owner, SettingDecl, SettingKind};
+use massorca_server::{Owner, SettingDecl, SettingKind, SettingsRegistry};
 use serde_json::{Value, json};
 
 use super::common::{connect, remote_code, start, stop, temp_home};
@@ -233,5 +233,66 @@ async fn each_owner_reads_its_own_value_for_a_shared_key() {
         .expect("core's setting is readable");
     assert_eq!(core.owner, "core");
     assert_ne!(core.value, Value::String("from demo".to_owned()));
+    stop(running).await;
+}
+
+/// Owner ids and setting keys use lower-case letters, digits, '.', '_' and '-', so the separator the registry joins them
+/// with can never occur in either of them.
+#[test]
+fn owner_ids_and_keys_outside_the_name_rule_are_refused_at_declaration() {
+    let settings = SettingsRegistry::default();
+    let declare = |owner: Owner, key: &str| {
+        settings.register(SettingDecl {
+            owner,
+            key: key.to_owned(),
+            kind: SettingKind::String,
+            default: json!("x"),
+            description: "a test setting".to_owned(),
+        })
+    };
+    let demo = || Owner::Extension("demo".to_owned());
+
+    assert!(
+        declare(Owner::Extension("a\u{1f}b".to_owned()), "key").is_err(),
+        "a separator in an owner id is refused"
+    );
+    assert!(
+        declare(Owner::Extension("Demo".to_owned()), "key").is_err(),
+        "an upper-case owner id is refused"
+    );
+    assert!(
+        declare(demo(), "bad\u{1f}key").is_err(),
+        "a separator in a key is refused"
+    );
+    assert!(
+        declare(demo(), "Key").is_err(),
+        "an upper-case key is refused"
+    );
+    assert!(
+        declare(demo(), "good.key_1-x").is_ok(),
+        "a key within the rule is accepted"
+    );
+}
+
+#[tokio::test]
+async fn config_refuses_owners_and_keys_outside_the_name_rule() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let bad_owner = client
+        .config_get(&key(Some("ext:a\u{1f}b")))
+        .await
+        .expect_err("no owner can carry that id");
+    assert_eq!(remote_code(&bad_owner), codes::CONFIG_UNKNOWN_KEY);
+
+    let bad_key = client
+        .config_get(&ConfigKey {
+            owner: None,
+            key: "workspaces\u{1f}default_root".to_owned(),
+        })
+        .await
+        .expect_err("no setting has that key");
+    assert_eq!(remote_code(&bad_key), codes::CONFIG_UNKNOWN_KEY);
     stop(running).await;
 }

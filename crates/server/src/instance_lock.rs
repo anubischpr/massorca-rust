@@ -2,24 +2,50 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
+use std::time::Duration;
 
-use massorca_profile::Profile;
+use interprocess::local_socket::Name;
+use interprocess::local_socket::tokio::Stream;
+use interprocess::local_socket::traits::tokio::Stream as _;
+use massorca_profile::{Profile, local_socket_name};
+use tokio::time::{Instant, sleep};
 
 use crate::error::ServiceError;
 
+/// How long a starting service waits for a lock that nothing answers for. A predecessor that has stopped listening may
+/// still be closing its connections, which takes up to the five-second shutdown grace.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+const LOCK_POLL: Duration = Duration::from_millis(50);
+
 /// Takes `<profile>/service.lock`. The operating system releases it when the returned file closes, even after a crash.
-pub(crate) fn acquire(profile: &Profile) -> Result<File, ServiceError> {
+/// A lock held while a service answers on the endpoint is refused at once. A lock held while nothing answers is waited
+/// for, so a successor can start while its predecessor is still draining.
+pub(crate) async fn acquire(profile: &Profile) -> Result<File, ServiceError> {
     let file = OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
         .open(profile.lock_path())?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => Err(ServiceError::AlreadyRunning),
-        Err(TryLockError::Error(error)) => Err(error.into()),
+    let endpoint = local_socket_name(profile)?;
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {
+                if answers(endpoint.clone()).await || Instant::now() >= deadline {
+                    return Err(ServiceError::AlreadyRunning);
+                }
+                sleep(LOCK_POLL).await;
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
     }
+}
+
+/// Whether a service accepts connections on `endpoint` right now.
+async fn answers(endpoint: Name<'static>) -> bool {
+    Stream::connect(endpoint).await.is_ok()
 }
 
 /// Removes a socket file left behind by a service that died without cleaning up. Call only while holding the lock.

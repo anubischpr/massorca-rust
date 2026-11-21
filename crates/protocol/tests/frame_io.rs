@@ -36,7 +36,7 @@ async fn messages_round_trip_over_a_small_duplex_buffer() {
     let sent = sample_messages();
     let writer = async move {
         for message in &sent {
-            write_message(&mut client, message)
+            write_message(&mut client, message, MAX_FRAME_LEN_LOCAL)
                 .await
                 .expect("write frame");
         }
@@ -148,8 +148,28 @@ async fn zero_length_body_is_truncated_because_it_has_no_kind_byte() {
 async fn write_message_writes_exactly_the_encoded_frame() {
     let message = Message::Cancel { stream: 9 };
     let mut bytes = Vec::new();
-    write_message(&mut bytes, &message)
+    write_message(&mut bytes, &message, MAX_FRAME_LEN_LOCAL)
         .await
         .expect("write to vec");
     assert_eq!(bytes, encode_frame(&message));
+}
+
+#[tokio::test]
+async fn a_frame_over_the_write_limit_is_refused_before_any_byte_is_written() {
+    let message = Message::Event {
+        stream: 1,
+        data: json!({ "pad": "x".repeat(300) }),
+    };
+    let frame = encode_frame(&message);
+    let body_len = u32::try_from(frame.len() - 4).expect("body fits u32");
+
+    let mut bytes = Vec::new();
+    let refused = write_message(&mut bytes, &message, body_len - 1).await;
+    assert!(matches!(refused, Err(FrameError::TooLarge(len)) if len == body_len));
+    assert!(bytes.is_empty(), "nothing reaches the stream");
+
+    write_message(&mut bytes, &message, body_len)
+        .await
+        .expect("a frame at the limit is written");
+    assert_eq!(bytes, frame);
 }

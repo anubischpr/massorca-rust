@@ -25,13 +25,19 @@ runs headless on a server.
   seconds. `--no-autostart` or `MASSORCA_NO_AUTOSTART=1` disables this.
 - **Single instance.** The service takes an exclusive lock on
   `<profile>/service.lock` (`std::fs::File::try_lock`, released by the OS if
-  the process dies) before binding. If the lock is held it exits with code 3,
-  a stable contract for supervisors and for the auto-start race (two CLIs
-  starting it at once: the loser exits 3, both connect to the winner). After
-  taking the lock it removes a stale Unix socket file.
+  the process dies) before binding. While a service answers on the endpoint, a
+  held lock means another service serves the profile: the new one exits with
+  code 3, a stable contract for supervisors and for the auto-start race (two
+  CLIs starting it at once: the loser exits 3, both connect to the winner).
+  While nothing answers, the predecessor may still be draining its connections,
+  so the successor waits up to 10 seconds for the lock. After taking the lock
+  it removes a stale Unix socket file. A bind the system refuses for a moment
+  is retried for up to 5 seconds.
 - **Shutdown.** `massorca service stop` sends `service.shutdown`. The service
   stops accepting connections, answers in-flight requests, ends streams,
-  closes the store and exits 0. Ctrl+C and SIGTERM do the same.
+  closes the store and exits 0. Ctrl+C and SIGTERM do the same. The shutdown
+  request is answered once the service has stopped accepting connections, so a
+  client that connects right after the answer cannot reach the old service.
 - **Status.** `massorca service status` connects without auto-starting and
   prints the `welcome` data or "not running".
 - **Endpoint ownership.** Only the current user may reach the service, and a
@@ -48,8 +54,9 @@ runs headless on a server.
 - **Known limits.** A process of the same user can still stand in for the
   service; the check separates users, not processes of one user. On Windows, a
   restart right after shutdown can be refused with access denied for a moment
-  while the old pipe instance is released; the lifecycle test retries for up to
-  five seconds. A product restart path should retry the same way.
+  while the old pipe instance is released. The service retries its bind for up
+  to five seconds, and a client with autostart waits out the same refusal (busy
+  or access denied) until its connect timeout.
 
 ## Alternatives
 

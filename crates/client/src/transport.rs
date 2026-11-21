@@ -22,13 +22,13 @@ pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Messa
 }
 
 /// Writes queued requests in order until every sender is gone or a write fails.
-pub(crate) async fn write_frames(
-    stream: Arc<Stream>,
-    mut outbound: mpsc::UnboundedReceiver<Message>,
-) {
+pub(crate) async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Message>) {
     let mut send: &Stream = &stream;
     while let Some(message) = outbound.recv().await {
-        if write_message(&mut send, &message).await.is_err() {
+        if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
+            .await
+            .is_err()
+        {
             return;
         }
     }
