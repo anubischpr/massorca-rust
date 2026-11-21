@@ -9,6 +9,7 @@ use crate::components::notification_card::{
 };
 use crate::components::project_sidebar_tabs::{ProjectSidebarTabs, ProjectTab, core_tabs};
 use crate::components::secret_request_card::{SecretRequestCard, SecretState};
+use crate::components::work_panel_tabs::{WorkPanelTabs, WorkTab, WorkTabKind};
 use crate::icon::IconName;
 use crate::tokens::{SPACE_3, SPACE_4};
 use gpui::{
@@ -36,6 +37,11 @@ pub fn stories() -> Vec<Story> {
             name: "Project sidebar tabs",
             spec: "ProjectSidebarTabs.md",
             render: project_tabs_story,
+        },
+        Story {
+            name: "Work panel tabs",
+            spec: "WorkPanelTabs.md",
+            render: work_tabs_story,
         },
     ]
 }
@@ -402,6 +408,46 @@ fn project_tabs_story(_: &mut Window, cx: &mut App) -> AnyElement {
             ProjectSidebarTabs::new("project-tabs-extension", extended)
                 .selected(4)
                 .on_select(|_, _, _| {}),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn work_tabs_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let kinds = vec![
+        WorkTab::new(WorkTabKind::Terminal, "zsh · oppm"),
+        WorkTab::new(WorkTabKind::Browser, "localhost:3000").loading(true),
+        WorkTab::new(WorkTabKind::Markdown, "README.md")
+            .dirty(true)
+            .path("~/oppm/README.md"),
+        WorkTab::new(WorkTabKind::MobileEmulator, "Pixel 8"),
+    ];
+    let many: Vec<WorkTab> = (0..9)
+        .map(|index| WorkTab::new(WorkTabKind::Terminal, format!("shell {index}")))
+        .collect();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Four kinds: the second loads, the third has unsaved changes",
+            WorkPanelTabs::new("work-tabs-kinds", kinds)
+                .selected(1)
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Overflow: the strip scrolls sideways in a 360 px panel",
+            div().w(px(360.)).child(
+                WorkPanelTabs::new("work-tabs-overflow", many)
+                    .selected(0)
+                    .on_action(|_, _, _| {}),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Empty: four ways to start",
+            WorkPanelTabs::new("work-tabs-empty", Vec::new()).on_action(|_, _, _| {}),
             cx,
         ))
         .into_any_element()

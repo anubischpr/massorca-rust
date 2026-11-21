@@ -33,3 +33,4 @@ pub mod text_field;
 pub mod toast;
 pub mod tooltip;
 pub mod usage_ring;
+pub mod work_panel_tabs;
