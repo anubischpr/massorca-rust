@@ -71,8 +71,15 @@ pub struct WorkspaceRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRemoveParams {
     pub workspace: String,
+    /// Discards uncommitted and untracked changes in a registered worktree.
     #[serde(default)]
     pub force: bool,
+    /// Deletes ignored files in a registered worktree, which git would otherwise delete unseen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub discard_ignored: bool,
+    /// Forgets a row whose directory git does not recognise as its worktree; the directory stays.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forget_orphan: bool,
 }
 
 /// Result of `workspace.remove`.
@@ -82,6 +89,10 @@ pub struct WorkspaceRemoved {
     pub branch_deleted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_kept_reason: Option<String>,
+    /// True when the directory still exists and was left in place: a folder, or a directory
+    /// git does not register as a worktree. Absent (false) when the directory was removed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub directory_kept: bool,
 }
 
 /// A workspace of a project.

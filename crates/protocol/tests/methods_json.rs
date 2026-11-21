@@ -257,9 +257,29 @@ fn workspace_remove_params_default_force_to_false() {
         workspaces::WorkspaceRemoveParams {
             workspace: "feat-x".to_owned(),
             force: false,
+            discard_ignored: false,
+            forget_orphan: false,
         }
     );
     assert_wire(&params, &json!({ "workspace": "feat-x", "force": false }));
+}
+
+#[test]
+fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
+    assert_wire(
+        &workspaces::WorkspaceRemoveParams {
+            workspace: "feat-x".to_owned(),
+            force: true,
+            discard_ignored: true,
+            forget_orphan: true,
+        },
+        &json!({
+            "workspace": "feat-x",
+            "force": true,
+            "discard_ignored": true,
+            "forget_orphan": true
+        }),
+    );
 }
 
 #[test]
@@ -326,8 +346,26 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             workspace: sample_workspace(),
             branch_deleted: true,
             branch_kept_reason: None,
+            directory_kept: false,
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
+    );
+}
+
+#[test]
+fn workspace_removed_says_when_a_directory_was_kept() {
+    assert_wire(
+        &workspaces::WorkspaceRemoved {
+            workspace: sample_workspace(),
+            branch_deleted: false,
+            branch_kept_reason: None,
+            directory_kept: true,
+        },
+        &json!({
+            "workspace": sample_workspace_json(),
+            "branch_deleted": false,
+            "directory_kept": true
+        }),
     );
 }
 
@@ -338,6 +376,7 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             workspace: sample_workspace(),
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
+            directory_kept: false,
         },
         &json!({
             "workspace": sample_workspace_json(),

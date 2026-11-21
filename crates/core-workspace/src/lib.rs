@@ -10,9 +10,11 @@ mod error;
 mod names;
 mod paths;
 mod projects;
+mod remove;
 mod selectors;
 mod views;
 mod workspaces;
 
 pub use error::DomainError;
+pub use remove::RemovalWaivers;
 pub use workspaces::Workspaces;

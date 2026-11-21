@@ -9,14 +9,13 @@ use std::sync::Arc;
 
 use massorca_core_git::Git;
 use massorca_core_store::Store;
-use massorca_core_workspace::{DomainError, Workspaces};
+use massorca_core_workspace::{DomainError, RemovalWaivers, Workspaces};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind};
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceRemoved};
 use tempfile::TempDir;
 
 pub struct Fixture {
     root: TempDir,
-    #[allow(dead_code)] // used by the removal tests, which land later
     pub store: Store,
     pub workspaces: Arc<Workspaces>,
 }
@@ -83,6 +82,17 @@ impl Fixture {
             .expect("create workspace")
     }
 
+    /// Removes workspace `selector` through both halves, as the handler does.
+    pub fn remove(&self, selector: &str) -> WorkspaceRemoved {
+        let begun = self
+            .workspaces
+            .begin_remove(selector, RemovalWaivers::NONE)
+            .expect("begin removal");
+        self.workspaces
+            .finish_remove(&begun.id, RemovalWaivers::NONE)
+            .expect("finish removal")
+    }
+
     /// Makes every workspace row insert fail, as a store that rejects the row would.
     pub fn fail_workspace_inserts(&self) {
         self.connection()
@@ -98,6 +108,34 @@ impl Fixture {
         self.connection()
             .execute_batch("DROP TRIGGER fail_workspace_insert;")
             .expect("drop trigger");
+    }
+
+    /// Makes every workspace row delete fail, as a store that rejects the delete would.
+    pub fn fail_workspace_deletes(&self) {
+        self.connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_workspace_delete BEFORE DELETE ON workspaces                  BEGIN SELECT RAISE(ABORT, 'simulated delete failure'); END;",
+            )
+            .expect("install trigger");
+    }
+
+    /// Lets workspace row deletes succeed again.
+    pub fn allow_workspace_deletes(&self) {
+        self.connection()
+            .execute_batch("DROP TRIGGER fail_workspace_delete;")
+            .expect("drop trigger");
+    }
+
+    /// Deletes project `id` underneath its workspaces, with foreign key enforcement off, as a
+    /// damaged store would be left.
+    pub fn delete_project_row(&self, id: &str) {
+        let connection = self.connection();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("turn foreign keys off");
+        connection
+            .execute("DELETE FROM projects WHERE id = ?1", [id])
+            .expect("delete project row");
     }
 
     /// A second connection to the store file, used only for fault injection.

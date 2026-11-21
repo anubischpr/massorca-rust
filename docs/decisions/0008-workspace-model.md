@@ -36,7 +36,31 @@ lineage) comes later; the model must not block it.
   The main worktree is never removed. A branch the workspace created is
   deleted with `git branch -d` (only if git proves it merged); otherwise it is
   kept and the result says so. A folder workspace is forgotten; its directory
-  is never deleted.
+  is never deleted. A failure before git acts returns the row to `ready`; a
+  failure after git has removed the worktree leaves it `removing`, and `rm` again
+  finishes the job.
+- **Changes a removal would lose.** Uncommitted and untracked changes in a
+  worktree refuse with `workspace.dirty` unless `--force` is given. Ignored
+  files are counted apart, because `git status` does not list them and
+  `git worktree remove` deletes them; they refuse with
+  `workspace.ignored_files`, and only `--discard-ignored` removes them. `--force`
+  does not cover ignored files. A refusal returns the row to `ready`.
+- **Orphan directories.** A directory that git does not recognise as its
+  worktree refuses with `workspace.orphan`: a directory git never registered, one
+  inside another repository, or a registered worktree whose `.git` file is gone.
+  Git recognises a worktree only when it reports the directory as its own top.
+  `--force` does not cover an orphan. `--forget-orphan` forgets the row and keeps
+  the directory, which is never deleted; git keeps its record of the worktree
+  until git prunes it, and the result says the directory was kept. This replaces
+  forgetting an unregistered directory silently.
+- **Selectors.** An id or an exact name selects a workspace or project. A selector
+  that is a path must be absolute; a relative one is refused with
+  `request.invalid_params`, because it would resolve against the service's own
+  directory.
+- **Names.** Workspace and project names refuse Windows device names (`CON`,
+  `NUL`, `COM1`, ..., with or without an extension, in any case). A project name
+  also refuses a colon, a trailing dot or space, and `.` or `..`. A default
+  workspaces root and a project's root must be absolute.
 - **Errors** are typed codes (`workspace.dirty`, `workspace.locked`,
   `workspace.not_found`, `workspace.name_taken`, `project.not_git`, ...), never
   classified from git's message text. One exception: `git rev-parse

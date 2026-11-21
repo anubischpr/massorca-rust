@@ -15,5 +15,6 @@ mod worktree_porcelain;
 
 pub use error::GitError;
 pub use git::{DEFAULT_TIMEOUT, Git};
+pub use repository::WorktreeChanges;
 pub use version::GitVersion;
 pub use worktree::{WorktreeAdd, WorktreeEntry};

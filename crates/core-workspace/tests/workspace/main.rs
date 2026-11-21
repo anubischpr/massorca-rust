@@ -8,5 +8,6 @@ mod fixture;
 mod names;
 mod projects;
 mod read;
+mod remove;
 mod rollback;
 mod selectors;

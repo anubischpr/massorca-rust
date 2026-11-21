@@ -1,4 +1,4 @@
-use massorca_core_git::{Git, GitError};
+use massorca_core_git::{Git, GitError, WorktreeChanges};
 
 use crate::fixture::{Fixture, canonical, run_git, text};
 
@@ -84,4 +84,60 @@ fn status_outside_a_repository_is_an_error_not_clean() {
         .status_dirty(dir.path())
         .expect_err("not a repository");
     assert!(matches!(error, GitError::Failed { .. }), "{error:?}");
+}
+
+#[test]
+fn ignored_files_are_counted_apart_from_untracked_and_uncommitted_changes() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    commit_file_in(
+        &repo,
+        ".gitignore",
+        "*.env
+",
+    );
+    std::fs::write(repo.join("secrets.env"), "key").expect("write ignored file");
+    std::fs::write(
+        repo.join("notes.txt"),
+        "draft
+",
+    )
+    .expect("write untracked file");
+
+    let changes = git().status_changes(&repo).expect("status");
+
+    assert_eq!(
+        changes,
+        WorktreeChanges {
+            uncommitted: 0,
+            untracked: 1,
+            ignored: 1,
+        }
+    );
+    assert!(!changes.is_clean());
+}
+
+#[test]
+fn a_tree_with_only_ignored_files_is_not_clean_but_has_no_other_changes() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    commit_file_in(
+        &repo,
+        ".gitignore",
+        "build/
+",
+    );
+    std::fs::create_dir_all(repo.join("build")).expect("create ignored dir");
+    std::fs::write(repo.join("build").join("out.bin"), "x").expect("write ignored file");
+
+    let changes = git().status_changes(&repo).expect("status");
+
+    assert_eq!(changes.uncommitted, 0);
+    assert_eq!(changes.untracked, 0);
+    assert_eq!(changes.ignored, 1, "one ignored entry for the directory");
+    assert!(!changes.is_clean());
+}
+
+fn commit_file_in(repo: &std::path::Path, name: &str, contents: &str) {
+    crate::fixture::commit_file(repo, name, contents, "add ignore rules");
 }
