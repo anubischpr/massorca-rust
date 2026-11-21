@@ -56,6 +56,33 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             })),
         ),
         command(
+            "git.fetch",
+            "Fetch from a remote, pruning deleted branches",
+            "git.fetch",
+            workspace_args(json!({ "remote": { "type": "string" }, "all": { "type": "boolean" } })),
+        ),
+        command(
+            "git.pull",
+            "Bring the branch up to date with its upstream",
+            "git.pull",
+            workspace_args(json!({ "mode": { "enum": ["ff_only", "merge", "rebase"] } })),
+        ),
+        command(
+            "git.push",
+            "Push the branch to its upstream, creating it if needed",
+            "git.push",
+            workspace_args(json!({
+                "remote": { "type": "string" },
+                "force_with_lease": { "type": "string" }
+            })),
+        ),
+        command(
+            "git.abort",
+            "Abort the merge or rebase in progress",
+            "git.abort",
+            workspace_args(json!({})),
+        ),
+        command(
             "git.log",
             "Show the history of a workspace, a page at a time",
             "git.log",

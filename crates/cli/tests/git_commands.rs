@@ -306,3 +306,30 @@ fn branch_commands_create_switch_rename_list_and_delete() {
     assert!(deleted["commit"].as_str().is_some_and(|c| c.len() >= 40));
     assert!(dir.join("README.md").exists());
 }
+
+#[test]
+fn push_fetch_and_pull_through_the_cli() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let remote = sandbox.home().join("remote.git");
+    let remote_text = remote.to_string_lossy().into_owned();
+    harness::git(sandbox.home(), &["init", "-q", "--bare", &remote_text]);
+    harness::git(&dir, &["remote", "add", "origin", &remote_text]);
+
+    let pushed = sandbox.json_ok("default", &["git", "push", "-w", "feature"]);
+    assert_eq!(pushed["outcome"]["kind"], "created");
+    assert_eq!(pushed["upstream_set"], true);
+    let text = sandbox
+        .run("default", &["git", "fetch", "-w", "feature"])
+        .success();
+    assert!(stdout_text(&text).contains("already up to date"));
+    let pulled = sandbox.json_ok(
+        "default",
+        &["git", "pull", "-w", "feature", "--mode", "rebase"],
+    );
+    assert_eq!(pulled["outcome"], "up_to_date");
+    sandbox
+        .run("default", &["git", "abort", "-w", "feature"])
+        .code(1)
+        .stderr(contains("git.no_operation"));
+}

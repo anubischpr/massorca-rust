@@ -5,6 +5,7 @@ mod commit;
 mod diff;
 mod index;
 mod log;
+mod remote;
 mod status;
 
 use clap::{Args, Subcommand};
@@ -27,6 +28,14 @@ pub enum GitCommand {
     Discard(index::DiscardArgs),
     /// Commits the staged changes, or amends HEAD; hooks run.
     Commit(commit::CommitArgs),
+    /// Fetches from a remote, pruning branches deleted there.
+    Fetch(remote::FetchArgs),
+    /// Brings the branch up to date with its upstream; never merges unless `--mode` says so.
+    Pull(remote::PullArgs),
+    /// Pushes the branch to its upstream, creating it on the remote if needed. Never forces.
+    Push(remote::PushArgs),
+    /// Aborts the merge, rebase, cherry-pick or revert in progress.
+    Abort(WorkspaceArg),
     /// Lists the files a comparison changes, with line counts.
     Diff(diff::DiffArgs),
     /// Shows the history, newest first, a page at a time.
@@ -74,6 +83,10 @@ pub async fn execute(
         GitCommand::Unstage(args) => index::run_unstage(&client, args, output).await,
         GitCommand::Discard(args) => index::run_discard(&client, args, output).await,
         GitCommand::Commit(args) => commit::run(&client, args, output).await,
+        GitCommand::Fetch(args) => remote::run_fetch(&client, args, output).await,
+        GitCommand::Pull(args) => remote::run_pull(&client, args, output).await,
+        GitCommand::Push(args) => remote::run_push(&client, args, output).await,
+        GitCommand::Abort(workspace) => remote::run_abort(&client, workspace, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
