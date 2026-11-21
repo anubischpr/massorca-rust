@@ -10,6 +10,7 @@ mod pump;
 mod spawn;
 mod subscription;
 mod transport;
+mod typed_calls;
 
 pub use client::Client;
 pub use error::ClientError;
