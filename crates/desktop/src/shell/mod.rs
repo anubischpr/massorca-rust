@@ -66,6 +66,8 @@ pub struct Shell {
     _settings_search_changes: Subscription,
     /// The workspace folder's text field, shown on the Settings page.
     settings_folder: Entity<TextField>,
+    /// The disabled state the field was last set to, so a frame does not notify it again.
+    settings_folder_disabled: bool,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -133,6 +135,9 @@ impl Shell {
         let snapshot = store.read(cx).snapshot(Instant::now());
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
+            if store.read(cx).state().connection.is_connected() {
+                shell.settings.folder.forget_read_failure();
+            }
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -178,6 +183,7 @@ impl Shell {
             settings_search,
             _settings_search_changes: settings_search_changes,
             settings_folder,
+            settings_folder_disabled: false,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,

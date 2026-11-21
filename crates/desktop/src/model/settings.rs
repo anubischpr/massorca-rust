@@ -125,6 +125,13 @@ impl FolderSetting {
         self.status = Some(FolderStatus::Failed(message.into()));
     }
 
+    /// A read that failed is tried again once the store reports the link; a refused save is not.
+    pub fn forget_read_failure(&mut self) {
+        if self.stored.is_none() && matches!(self.status, Some(FolderStatus::Failed(_))) {
+            self.status = None;
+        }
+    }
+
     /// The text field changed: the draft follows it and an old refusal no longer applies.
     pub fn typed(&mut self, text: &str) {
         text.clone_into(&mut self.draft);

@@ -24,6 +24,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 
 use super::Shell;
+use crate::model::navigation::Page;
 use crate::model::settings::{
     FolderSetting, FolderStatus, FolderValue, SettingsModel, folder_reason, folder_refusal_text,
     folder_request,
@@ -355,8 +356,15 @@ const SAVED_FOR: Duration = Duration::from_secs(2);
 impl Shell {
     /// Reads the workspace folder once the service is connected and the value is not known yet.
     pub(super) fn refresh_folder(&mut self, cx: &mut Context<Self>) {
+        // The value is read when the page is on screen, not on every connection.
+        if self.model.navigation().page != Page::Settings {
+            return;
+        }
         let connected = self.store.read(cx).state().connection.is_connected();
         if !connected || self.settings.folder.stored.is_some() || self.settings.folder.loading {
+            return;
+        }
+        if matches!(self.settings.folder.status, Some(FolderStatus::Failed(_))) {
             return;
         }
         let Some(service) = self.service.clone() else {
@@ -437,8 +445,14 @@ impl Shell {
         let reason = folder_reason(connected, &self.settings.folder);
         let draft = self.settings.folder.draft.clone();
         let field = self.settings_folder.clone();
+        // set_disabled notifies the field, so it is called only when the state changes.
+        let disabled = reason.is_some();
+        let changed = disabled != self.settings_folder_disabled;
+        self.settings_folder_disabled = disabled;
         field.update(cx, |field, cx| {
-            field.set_disabled(reason.is_some(), cx);
+            if changed {
+                field.set_disabled(disabled, cx);
+            }
             if !field.focus_handle(cx).is_focused(window) && field.text() != draft {
                 field.set_text(&draft, window, cx);
             }
