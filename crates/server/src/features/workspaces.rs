@@ -12,6 +12,8 @@ use massorca_protocol::methods::workspaces::{
 };
 use massorca_protocol::{ErrorBody, capabilities};
 
+use massorca_core_workspace::RemovalWaivers;
+
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
@@ -78,15 +80,19 @@ async fn remove(
     params: WorkspaceRemoveParams,
 ) -> Result<WorkspaceRemoved, ErrorBody> {
     let domain = Arc::new(for_mutation(&ctx).await?);
-    let force = params.force;
+    let waivers = RemovalWaivers {
+        force: params.force,
+        discard_ignored: params.discard_ignored,
+        forget_orphan: params.forget_orphan,
+    };
     let selector = params.workspace;
     let begun = {
         let domain = Arc::clone(&domain);
-        blocking(move || domain.begin_remove(&selector, force)).await?
+        blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
     publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
     let id = begun.id.clone();
-    let removed = blocking(move || domain.finish_remove(&id, force)).await?;
+    let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
     publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
 }

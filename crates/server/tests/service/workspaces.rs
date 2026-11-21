@@ -66,6 +66,8 @@ fn remove_params(workspace: &str, force: bool) -> WorkspaceRemoveParams {
     WorkspaceRemoveParams {
         workspace: workspace.to_owned(),
         force,
+        discard_ignored: false,
+        forget_orphan: false,
     }
 }
 
@@ -254,6 +256,51 @@ async fn a_dirty_worktree_is_refused_and_a_project_with_workspaces_cannot_be_rem
         .await
         .expect("forced removal");
     assert!(!forced.directory_kept);
+    assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sent() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    std::fs::write(
+        repo.join(".gitignore"),
+        "*.env
+",
+    )
+    .expect("write ignore rules");
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-q", "-m", "ignore env files"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "ignored"))
+        .await
+        .expect("create");
+    std::fs::write(Path::new(&created.path).join("secrets.env"), "key").expect("write ignored");
+
+    let refused = client
+        .call::<_, WorkspaceRemoved>(workspaces::REMOVE, &remove_params("ignored", true))
+        .await
+        .expect_err("ignored files");
+    assert_eq!(remote_code(&refused), codes::WORKSPACE_IGNORED_FILES);
+
+    let removed: WorkspaceRemoved = client
+        .call(
+            workspaces::REMOVE,
+            &WorkspaceRemoveParams {
+                workspace: "ignored".to_owned(),
+                force: true,
+                discard_ignored: true,
+                forget_orphan: false,
+            },
+        )
+        .await
+        .expect("removal with discard_ignored");
+    assert!(!removed.directory_kept);
     assert!(!Path::new(&created.path).exists());
     stop(running).await;
 }
