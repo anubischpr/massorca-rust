@@ -311,6 +311,9 @@ impl Render for Shell {
             .on_action(cx.listener(|shell, _: &CloseOverlay, window, cx| {
                 if shell.model.palette().is_some() {
                     shell.close_palette(window, cx);
+                } else if shell.model.usage_popover().is_some() {
+                    shell.model.close_usage_popover();
+                    cx.notify();
                 } else {
                     shell.model.close_overlay();
                     cx.notify();

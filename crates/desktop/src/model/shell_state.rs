@@ -25,6 +25,8 @@ pub struct ShellModel {
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
+    /// The ring whose usage popover is open, by its position in the snapshot.
+    usage_popover: Option<usize>,
 }
 
 impl ShellModel {
@@ -36,6 +38,7 @@ impl ShellModel {
             regions: RegionState::default(),
             window_width,
             palette: None,
+            usage_popover: None,
         }
     }
 
@@ -185,6 +188,25 @@ impl ShellModel {
                 Zone::TitleBar | Zone::Rail | Zone::Conversation | Zone::StatusBar => true,
             })
             .collect()
+    }
+
+    /// The ring whose usage popover is open, if it still exists in the snapshot.
+    pub fn usage_popover(&self) -> Option<usize> {
+        self.usage_popover
+            .filter(|&position| position < self.snapshot.usage.len())
+    }
+
+    /// Opens a ring's usage popover, or closes it when that one is open (D-SH-15). Only one is
+    /// open at a time.
+    pub fn toggle_usage_popover(&mut self, position: usize) {
+        self.usage_popover = match self.usage_popover() {
+            Some(open) if open == position => None,
+            _ => Some(position),
+        };
+    }
+
+    pub fn close_usage_popover(&mut self) {
+        self.usage_popover = None;
     }
 
     /// The palette while it is open.

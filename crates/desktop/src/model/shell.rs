@@ -68,15 +68,47 @@ pub struct ProjectGroup {
     pub hosts: Vec<HostGroup>,
 }
 
+/// What the shell knows about one provider's usage (D-SH-15, UsageRing.md states).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageStatus {
+    /// A reported percentage, 0 to 100.
+    Percent(u8),
+    /// Asked for and not back yet.
+    Loading,
+    /// The provider reports no usage.
+    NotReported,
+    /// The usage cannot be had.
+    Unavailable,
+    /// The reading failed; the last value stays.
+    Failed { last: Option<u8> },
+}
+
+impl UsageStatus {
+    /// The line the usage popover leads with. `None` while loading, when a skeleton shows.
+    pub fn headline(self) -> Option<String> {
+        match self {
+            Self::Percent(percent) => Some(format!("{percent} percent")),
+            Self::Loading => None,
+            Self::NotReported => Some("Usage not reported".into()),
+            Self::Unavailable => Some("Usage unavailable".into()),
+            Self::Failed {
+                last: Some(percent),
+            } => Some(format!(
+                "Usage could not be read. Last value {percent} percent"
+            )),
+            Self::Failed { last: None } => Some("Usage could not be read".into()),
+        }
+    }
+}
+
 /// Usage of one provider, for the rail rings (D-SH-15).
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageModel {
     pub agent: Agent,
     /// The arc colour slot, 1 to 6, that the core assigns in order of first use.
     pub slot: u8,
-    /// 0 to 100; `None` while unknown.
-    pub percent: Option<u8>,
-    /// Time until the window resets, such as "2 days".
+    pub status: UsageStatus,
+    /// Time until the window resets, such as "2 days". Empty when the provider does not say.
     pub resets_in: String,
 }
 
@@ -261,5 +293,30 @@ mod tests {
         assert_eq!(s.hosts_text(), "1 of 2 hosts unreachable");
         s.waiting = 0;
         assert_eq!(s.agents_text(), "2 running");
+    }
+
+    #[test]
+    fn usage_copy_follows_the_ring_states() {
+        assert_eq!(
+            UsageStatus::Percent(62).headline().as_deref(),
+            Some("62 percent")
+        );
+        assert_eq!(UsageStatus::Loading.headline(), None);
+        assert_eq!(
+            UsageStatus::NotReported.headline().as_deref(),
+            Some("Usage not reported")
+        );
+        assert_eq!(
+            UsageStatus::Unavailable.headline().as_deref(),
+            Some("Usage unavailable")
+        );
+        assert_eq!(
+            UsageStatus::Failed { last: Some(62) }.headline().as_deref(),
+            Some("Usage could not be read. Last value 62 percent")
+        );
+        assert_eq!(
+            UsageStatus::Failed { last: None }.headline().as_deref(),
+            Some("Usage could not be read")
+        );
     }
 }

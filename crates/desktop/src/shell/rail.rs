@@ -8,20 +8,24 @@ use crate::model::morph::{MorphFrame, ease, incoming, outgoing};
 use crate::model::navigation::Mode;
 use crate::model::rail::{RailEntry, RailItem, rail_items, theme_label};
 use crate::model::roving::{FocusStep, step};
-use crate::model::shell::{Agent, UsageModel};
+use crate::model::shell::{Agent, UsageModel, UsageStatus};
 use crate::model::shell_state::ShellModel;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Context, Div, FocusHandle, IntoElement, Radians,
-    Role, SharedString, Stateful, Transformation, Window, div, prelude::*, px, size, svg,
+    Animation, AnimationExt, AnyElement, App, Context, Div, FocusHandle, IntoElement, KeyDownEvent,
+    Radians, Role, SharedString, Stateful, Transformation, WeakEntity, Window, div, prelude::*, px,
+    size, svg,
 };
-use massorca_ui::components::agent_icon::AgentKind;
-use massorca_ui::components::usage_ring::{UsageReading, UsageRing, UsageSlot};
+use massorca_ui::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use massorca_ui::components::popover::{Popover, PopoverPlacement, PopoverVariant, PopoverWidth};
+use massorca_ui::components::skeleton::{LineWidth, Skeleton};
+use massorca_ui::components::usage_ring::{UsageReading, UsageRing, UsageSlot, usage_name};
 use massorca_ui::style::{FocusRing, Surface};
 use massorca_ui::tokens::{
     BORDER_WIDTH_THICK, DURATION_MODERATE, EASE_STANDARD, RADIUS_MD, RADIUS_XS, SIZE_ICON_MD,
     SIZE_RAIL_BUTTON, SIZE_RAIL_WIDTH, SIZE_TITLEBAR_MACOS, SPACE_1, SPACE_2, SPACE_HALF,
+    TYPE_BODY, TYPE_BODY_SM,
 };
-use massorca_ui::{ActiveTheme, IconName, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// The rail's GPUI state: a focus handle per item in roving order, and the morph in progress.
 #[derive(Debug)]
@@ -219,7 +223,8 @@ fn rail_item(
         }
         RailItem::Usage(position) => {
             let usage = &model.snapshot().usage[position];
-            usage_ring(usage, position, handle, tab_stop, theme)
+            let open = model.usage_popover() == Some(position);
+            usage_ring(usage, position, open, handle, tab_stop, shell, theme)
         }
     }
 }
@@ -361,36 +366,119 @@ fn morph_icon(
         )
 }
 
-/// One provider's usage ring, in a focusable 36 px item. The ring has its own tooltip.
+/// One provider's usage ring, in a focusable 36 px item. A click, Enter or Space opens its usage
+/// popover, which closes on a second press, Escape or a click outside (D-SH-15).
 fn usage_ring(
     usage: &UsageModel,
     position: usize,
+    open: bool,
     handle: &FocusHandle,
     tab_stop: bool,
+    shell: &WeakEntity<Shell>,
     theme: &Theme,
 ) -> AnyElement {
-    let reading = usage.percent.map_or(UsageReading::Loading, |percent| {
-        UsageReading::Percent(f32::from(percent))
-    });
-    let mut ring =
-        UsageRing::new(agent_kind(usage.agent), reading).resets_in(usage.resets_in.clone());
+    let kind = agent_kind(usage.agent);
+    let reading = usage_reading(usage.status);
+    let resets = (!usage.resets_in.is_empty()).then_some(usage.resets_in.as_str());
+    let name = usage_name(kind.label(), reading, resets, None);
+    let mut ring = UsageRing::new(kind, reading);
+    if let Some(resets) = resets {
+        ring = ring.resets_in(resets.to_owned());
+    }
     if let Some(slot) = UsageSlot::new(usage.slot) {
         ring = ring.slot(slot);
     }
-    div()
+    let press = shell.clone();
+    let key_press = shell.clone();
+    let trigger = div()
         .id(SharedString::from(format!("rail-usage-{position}")))
+        .debug_selector(move || format!("rail-usage-{position}"))
         .group("rail-item")
         .track_focus(handle)
         .tab_stop(tab_stop)
         .focus_ring(theme)
+        .role(Role::Button)
+        .aria_label(name)
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
         .size(px(SIZE_RAIL_BUTTON))
         .rounded(px(RADIUS_MD))
-        .child(ring)
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            change(&press, cx, move |shell| {
+                shell.model.toggle_usage_popover(position);
+            });
+        })
+        .on_key_down(move |event: &KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                change(&key_press, cx, move |shell| {
+                    shell.model.toggle_usage_popover(position);
+                });
+                cx.stop_propagation();
+            }
+        })
+        .child(ring);
+    let dismiss = shell.clone();
+    Popover::new(("usage-popover", position), trigger)
+        .open(open)
+        .variant(PopoverVariant::Info)
+        .width(PopoverWidth::Small)
+        .placement(PopoverPlacement::Above)
+        .title("Usage")
+        .trigger_focus(handle.clone())
+        .on_dismiss(move |_, cx| change(&dismiss, cx, |shell| shell.model.close_usage_popover()))
+        .child(usage_popover_body(usage, theme))
         .into_any_element()
+}
+
+/// The popover's rows: the agent, the reading or the state it is in, and when the window resets.
+fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
+    let kind = agent_kind(usage.agent);
+    let agent = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE_2))
+        .text_style(TYPE_BODY)
+        .text_color(theme.palette.text.primary)
+        .child(AgentIcon::new(kind).size(AgentIconSize::Small))
+        .child(kind.label());
+    let body = div().flex().flex_col().gap(px(SPACE_1)).child(agent);
+    let body = match usage.status.headline() {
+        Some(headline) => body.child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(theme.palette.text.primary)
+                .child(headline),
+        ),
+        None => body
+            .child(Skeleton::line(LineWidth::Full))
+            .child(Skeleton::line(LineWidth::Partial)),
+    };
+    if matches!(usage.status, UsageStatus::Percent(_)) && !usage.resets_in.is_empty() {
+        return body.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(format!("Resets in {}", usage.resets_in)),
+        );
+    }
+    body
+}
+
+/// The ring's reading for the status: a percentage draws its arc; the others draw none.
+fn usage_reading(status: UsageStatus) -> UsageReading {
+    match status {
+        UsageStatus::Percent(percent) => UsageReading::Percent(f32::from(percent)),
+        UsageStatus::Loading => UsageReading::Loading,
+        UsageStatus::NotReported => UsageReading::NotReported,
+        UsageStatus::Unavailable => UsageReading::Unavailable,
+        UsageStatus::Failed { last } => UsageReading::Failed {
+            last: last.map(f32::from),
+        },
+    }
 }
 
 /// The mark of each agent: its own icon, never a letter (A16, A94).

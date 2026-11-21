@@ -5,7 +5,7 @@ use crate::data::{DataSource, SampleDataSource};
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
-use crate::model::shell::ShellSnapshot;
+use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px, size};
 use massorca_ui::{ActiveTheme, Appearance, Theme};
 
@@ -292,4 +292,69 @@ fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppCont
         shell.read_with(cx, |shell, _| shell.model().overlay()),
         None
     );
+}
+
+/// Sample data whose rings show the reading states other than a percentage.
+struct UsageStates;
+
+impl DataSource for UsageStates {
+    fn snapshot(&self) -> ShellSnapshot {
+        let mut snapshot = SampleDataSource.snapshot();
+        let states = [
+            UsageStatus::Loading,
+            UsageStatus::NotReported,
+            UsageStatus::Unavailable,
+            UsageStatus::Failed { last: Some(62) },
+        ];
+        snapshot.usage = states
+            .into_iter()
+            .enumerate()
+            .map(|(index, status)| UsageModel {
+                agent: Agent::Claude,
+                slot: u8::try_from(index + 1).unwrap_or(1),
+                status,
+                resets_in: String::new(),
+            })
+            .collect();
+        snapshot
+    }
+}
+
+fn usage_popover(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<usize> {
+    shell.read_with(cx, |shell, _| shell.model().usage_popover())
+}
+
+#[gpui::test]
+fn a_usage_ring_opens_its_popover_and_a_second_press_closes_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    click(cx, "rail-usage-0");
+    assert_eq!(usage_popover(&shell, cx), Some(0));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("popover-panel").is_some(),
+        "the popover is drawn"
+    );
+    click(cx, "rail-usage-0");
+    assert_eq!(usage_popover(&shell, cx), None);
+}
+
+#[gpui::test]
+fn escape_closes_an_open_usage_popover(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    click(cx, "rail-usage-1");
+    assert_eq!(usage_popover(&shell, cx), Some(1));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(usage_popover(&shell, cx), None);
+}
+
+#[gpui::test]
+fn a_ring_without_a_percentage_still_opens_its_popover(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&UsageStates, window, cx));
+    click(cx, "rail-usage-2");
+    draw(cx);
+    assert_eq!(usage_popover(&shell, cx), Some(2));
+    assert!(cx.debug_bounds("popover-panel").is_some());
 }
