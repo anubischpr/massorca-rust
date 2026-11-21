@@ -1,0 +1,7 @@
+/target/
+.atl/
+.codegraph/
+node_modules/
+*.log
+.env
+.env.*
