@@ -3,9 +3,10 @@
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant, StatePreview};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::kbd::{Kbd, ShortcutOs};
 use crate::icon::IconName;
 use crate::style::Surface;
-use crate::theme::ActiveTheme;
+use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{LAYOUT_MENU_MIN_WIDTH, SPACE_2, SPACE_3, SPACE_4};
 use gpui::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
 
@@ -20,6 +21,11 @@ pub fn stories() -> Vec<Story> {
             name: "IconButton",
             spec: "IconButton.md",
             render: icon_button_story,
+        },
+        Story {
+            name: "Kbd",
+            spec: "Kbd.md",
+            render: kbd_story,
         },
     ]
 }
@@ -142,6 +148,58 @@ fn icon_button_story(_: &mut Window, cx: &mut App) -> AnyElement {
                             .surface(Surface::Frame),
                     ),
             ),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn kbd_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let p = cx.theme().palette;
+    column()
+        .child(variant(
+            "Single keys",
+            row()
+                .child(Kbd::new("Esc"))
+                .child(Kbd::new("F6"))
+                .child(Kbd::new("Enter")),
+            cx,
+        ))
+        .child(variant(
+            "Chord on Windows and Linux (Ctrl+K, a + between caps)",
+            row()
+                .child(Kbd::new("Mod+K").os(ShortcutOs::WindowsLinux))
+                .child(Kbd::new("Mod+Shift+F").os(ShortcutOs::WindowsLinux))
+                .child(Kbd::new("Mod+Alt+Shift+K").os(ShortcutOs::WindowsLinux)),
+            cx,
+        ))
+        .child(variant(
+            "Chord on macOS (⌘K, glyphs with no separator)",
+            row()
+                .child(Kbd::new("Mod+K").os(ShortcutOs::MacOs))
+                .child(Kbd::new("Mod+Shift+F").os(ShortcutOs::MacOs))
+                .child(Kbd::new("Ctrl+K").os(ShortcutOs::MacOs)),
+            cx,
+        ))
+        .child(variant(
+            "Inline in a menu row, for the running OS",
+            row()
+                .child(
+                    div()
+                        .text_body()
+                        .text_color(p.text.primary)
+                        .child("Open command palette"),
+                )
+                .child(Kbd::new("Mod+K")),
+            cx,
+        ))
+        .child(variant(
+            "Selected row (primary text)",
+            row().child(Kbd::new("Mod+P").selected(true)),
+            cx,
+        ))
+        .child(variant(
+            "Disabled (no fill)",
+            row().child(Kbd::new("Mod+K").disabled(true)),
             cx,
         ))
         .into_any_element()
