@@ -1,12 +1,19 @@
 //! Agent status through the CLI (decisions 0052, 0053): the fake agent reports through `massorca agent hook`, and
-//! the tests wait on reported states, never on fixed sleeps.
+//! the tests wait on reported states with `agent status --until`, never on fixed sleeps.
 
 mod harness;
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use harness::{Sandbox, capture, eventually};
+use harness::{Sandbox, capture, eventually, single_document, stdout_text, with_json};
+use predicates::str::contains;
 use serde_json::{Value, json};
+
+/// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
+const UNTIL_SECS: &str = "60";
 
 /// Declares kind `fake` with the full event table, or with `status` replaced by `status_override`.
 fn declare_fake(sandbox: &Sandbox, status_override: Option<Value>) {
@@ -70,6 +77,22 @@ fn start(sandbox: &Sandbox, prompt: &str, extra: &[&str]) -> (String, String) {
     )
 }
 
+/// `agent status <session> --until <state>`, which must succeed; returns the record it printed.
+fn until(sandbox: &Sandbox, session: &str, state: &str) -> Value {
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session,
+            "--until",
+            state,
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    )
+}
+
 fn activity(session: &Value) -> (&str, Option<&str>, &str) {
     let activity = &session["activity"];
     (
@@ -80,13 +103,82 @@ fn activity(session: &Value) -> (&str, Option<&str>, &str) {
 }
 
 #[test]
+fn a_prompted_agent_reports_working_then_done_through_its_hooks() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, terminal) = start(&sandbox, "hold this", &[]);
+
+    let working = until(&sandbox, &session, "working");
+    assert_eq!(activity(&working), ("working", None, "hook"));
+    assert_eq!(working["execution"]["state"], "live");
+    assert!(working["activity"]["at_ms"].as_i64().unwrap_or(0) > 0);
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(activity(&done), ("done", Some("success"), "hook"));
+    assert_eq!(done["result"], "done: hold this");
+
+    sandbox
+        .run("default", &["agent", "status", &session])
+        .success()
+        .stdout(contains("execution: live"))
+        .stdout(contains("activity: done (success) from hook"));
+    let listed = stdout_text(&sandbox.run("default", &["agent", "list"]).success());
+    assert!(
+        listed.contains("done (success) from hook"),
+        "list shows activity and its source: {listed}"
+    );
+}
+
+#[test]
+fn a_prompt_that_asks_leaves_the_agent_waiting() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, _terminal) = start(&sandbox, "ask: may I", &[]);
+
+    let waiting = until(&sandbox, &session, "waiting");
+    assert_eq!(activity(&waiting), ("waiting", None, "hook"));
+    sandbox
+        .run("default", &["agent", "status", &session])
+        .success()
+        .stdout(contains("activity: waiting from hook"));
+}
+
+#[test]
+fn a_run_that_ends_while_working_is_done_and_interrupted_by_the_process() {
+    let sandbox = sandbox_with_workspace(None);
+
+    // Stopped through the agent: the stop itself applies the exit.
+    let (stopped, _terminal) = start(&sandbox, "hold one", &[]);
+    until(&sandbox, &stopped, "working");
+    let after_stop = sandbox.json_ok("default", &["agent", "stop", &stopped, "--force"]);
+    assert_eq!(after_stop["execution"]["state"], "exited");
+    assert_eq!(
+        activity(&after_stop),
+        ("done", Some("interrupted"), "process")
+    );
+    sandbox
+        .run("default", &["agent", "status", &stopped])
+        .success()
+        .stdout(contains("execution: exited (killed"))
+        .stdout(contains("activity: done (interrupted) from process"));
+
+    // Ended behind the agent's back: the sweep sees the terminal's exit.
+    let (swept, terminal) = start(&sandbox, "hold two", &[]);
+    until(&sandbox, &swept, "working");
+    sandbox
+        .run("default", &["terminal", "kill", &terminal, "--force"])
+        .success();
+    let exited = until(&sandbox, &swept, "exited");
+    assert_eq!(exited["execution"]["state"], "exited");
+    assert_eq!(activity(&exited), ("done", Some("interrupted"), "process"));
+}
+
+#[test]
 fn a_report_with_a_wrong_token_is_refused_and_the_hook_still_exits_zero() {
     let sandbox = sandbox_with_workspace(None);
     let (session, _terminal) = start(&sandbox, "hold on", &[]);
-    eventually("the agent working", || {
-        let shown = sandbox.json_ok("default", &["agent", "status", &session]);
-        (shown["activity"]["state"] == "working").then_some(())
-    });
+    until(&sandbox, &session, "working");
 
     let mut hook = sandbox.command("default");
     hook.args(["agent", "hook", "stop", r#"{"result":"forged"}"#])
@@ -129,4 +221,124 @@ fn a_hook_outside_an_agent_run_exits_zero_promptly() {
         status["running"], false,
         "a hook never starts the service: {status}"
     );
+}
+
+#[test]
+fn waiting_for_a_state_that_never_comes_times_out_with_an_error() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, _terminal) = start(&sandbox, "hold forever", &[]);
+    until(&sandbox, &session, "working");
+
+    let outcome = sandbox
+        .run(
+            "default",
+            &with_json(&[
+                "agent",
+                "status",
+                &session,
+                "--until",
+                "idle",
+                "--timeout",
+                "1",
+            ]),
+        )
+        .failure();
+    let document = single_document(&outcome);
+    assert_eq!(
+        document["error"]["code"], "agent.status_timeout",
+        "{document}"
+    );
+    sandbox
+        .run(
+            "default",
+            &[
+                "agent",
+                "status",
+                &session,
+                "--until",
+                "idle",
+                "--timeout",
+                "1",
+            ],
+        )
+        .failure()
+        .stderr(contains("did not reach idle within 1 s"));
+}
+
+/// Reads what a child has written to `file` so far.
+fn written(file: &mut File) -> String {
+    file.seek(SeekFrom::Start(0)).expect("rewind");
+    let mut text = String::new();
+    file.read_to_string(&mut text).expect("read");
+    text
+}
+
+#[test]
+fn a_watch_sends_a_snapshot_first_and_then_each_change() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, terminal) = start(&sandbox, "hold watched", &[]);
+    until(&sandbox, &session, "working");
+
+    let mut out = tempfile::tempfile().expect("a temporary file");
+    let mut watcher = sandbox.command("default");
+    watcher
+        .args(["--json", "agent", "status", &session, "--watch"])
+        .stdin(Stdio::null())
+        .stdout(out.try_clone().expect("duplicate"))
+        .stderr(Stdio::null());
+    let mut child = harness::ChildGuard::new(watcher.spawn().expect("the watcher starts"));
+
+    let first = eventually("the snapshot", || {
+        let text = written(&mut out);
+        text.lines().next().map(str::to_owned)
+    });
+    let first: Value = serde_json::from_str(&first).expect("a JSON line");
+    assert_eq!(first["result"]["kind"], "snapshot", "{first}");
+    assert_eq!(first["result"]["sessions"][0]["id"], session.as_str());
+    assert_eq!(
+        first["result"]["sessions"][0]["activity"]["state"],
+        "working"
+    );
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let changed = eventually("a change to done", || {
+        written(&mut out)
+            .lines()
+            .skip(1)
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|item| item["result"]["session"]["activity"]["state"] == "done")
+    });
+    assert_eq!(changed["result"]["kind"], "changed");
+    assert_eq!(changed["result"]["session"]["id"], session.as_str());
+    assert!(child.is_running(), "a watch runs until interrupted");
+}
+
+#[test]
+fn a_session_with_no_reports_shows_no_status() {
+    let sandbox = sandbox_with_workspace(Some(json!({ "mechanism": "none" })));
+    let (session, terminal) = start(&sandbox, "hello", &[]);
+    eventually("the agent's answer", || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", &terminal]);
+        screen["lines"]
+            .as_array()
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.as_str().map(str::trim) == Some("fake-agent: done hello"))
+            })
+            .then_some(())
+    });
+
+    let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+    assert!(shown.get("activity").is_none(), "{shown}");
+    sandbox
+        .run("default", &["agent", "status", &session])
+        .success()
+        .stdout(contains("execution: live"))
+        .stdout(contains("activity: no status"));
+    let listed = stdout_text(&sandbox.run("default", &["agent", "list"]).success());
+    assert!(listed.contains("no status"), "{listed}");
+    assert!(listed.contains("live"), "{listed}");
 }

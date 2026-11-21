@@ -2,10 +2,15 @@
 //!
 //! Each call connects on its own; a session keeps running after the command that started it exits.
 
-use clap::{Args, Subcommand};
+use std::time::Duration;
+
+use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_profile::Profile;
-use massorca_protocol::methods::agents::{AgentSession, AgentSessionList, AgentStartParams};
+use massorca_protocol::methods::agents::{
+    ActivityState, AgentSession, AgentSessionList, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams,
+};
 use massorca_protocol::methods::terminals::TerminalState;
 
 use crate::agent_text;
@@ -23,10 +28,7 @@ pub enum AgentCommand {
     /// Lists agent sessions, newest first: every session, or those of one workspace.
     List(AgentListArgs),
     /// Shows one session's execution and activity, or every session's when none is named.
-    Status {
-        /// Session id, or a unique prefix of at least 8 characters.
-        session: Option<String>,
-    },
+    Status(AgentStatusArgs),
     /// Ends a session's run. The session stays listed as exited until forgotten.
     Stop {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -47,6 +49,54 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AgentStatusArgs {
+    /// Session id, or a unique prefix of at least 8 characters.
+    pub session: Option<String>,
+    /// Print every change until interrupted.
+    #[arg(long, conflicts_with = "until")]
+    pub watch: bool,
+    /// Wait until the session reaches this activity, or until its run has exited.
+    #[arg(long, value_enum, value_name = "STATE", requires = "session")]
+    pub until: Option<UntilState>,
+    /// Give up waiting for `--until` after this many seconds and exit non-zero.
+    #[arg(long, value_name = "SECS", requires = "until")]
+    pub timeout: Option<u64>,
+}
+
+/// What `status --until` waits for: an activity, or the run's exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UntilState {
+    Working,
+    Waiting,
+    Idle,
+    Done,
+    Exited,
+}
+
+impl UntilState {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Waiting => "waiting",
+            Self::Idle => "idle",
+            Self::Done => "done",
+            Self::Exited => "exited",
+        }
+    }
+
+    fn reached_by(self, session: &AgentSession) -> bool {
+        let activity = session.activity.as_ref().map(|activity| activity.state);
+        match self {
+            Self::Exited => session.execution.state == TerminalState::Exited,
+            Self::Working => activity == Some(ActivityState::Working),
+            Self::Waiting => activity == Some(ActivityState::Waiting),
+            Self::Idle => activity == Some(ActivityState::Idle),
+            Self::Done => activity == Some(ActivityState::Done),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -135,13 +185,28 @@ pub async fn execute(
             let list = client.agent_list(args.workspace.as_deref()).await?;
             output.success(&list, &agent_text::sessions_lines(&list.sessions));
         }
-        AgentCommand::Status {
+        AgentCommand::Status(AgentStatusArgs {
             session: Some(session),
-        } => {
+            until: Some(until),
+            timeout,
+            ..
+        }) => {
+            let reached = wait_until(&client, &session, until, timeout).await?;
+            output.success(&reached, &agent_text::session_details(&reached));
+        }
+        AgentCommand::Status(AgentStatusArgs {
+            session,
+            watch: true,
+            ..
+        }) => watch(&client, session, output).await?,
+        AgentCommand::Status(AgentStatusArgs {
+            session: Some(session),
+            ..
+        }) => {
             let shown = client.agent_show(&session).await?;
             output.success(&shown, &agent_text::session_details(&shown));
         }
-        AgentCommand::Status { session: None } => {
+        AgentCommand::Status(AgentStatusArgs { session: None, .. }) => {
             let list: AgentSessionList = client.agent_list(None).await?;
             output.success(&list, &agent_text::sessions_lines(&list.sessions));
         }
@@ -158,6 +223,80 @@ pub async fn execute(
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),
+    }
+    Ok(())
+}
+
+/// Waits on the watch stream until the session reaches `until`; returns its record then.
+async fn wait_until(
+    client: &Client,
+    selector: &str,
+    until: UntilState,
+    timeout: Option<u64>,
+) -> Result<AgentSession, CliError> {
+    let mut stream = client
+        .agent_watch(&AgentWatchParams {
+            workspace: None,
+            session: Some(selector.to_owned()),
+        })
+        .await?;
+    let wait = async {
+        while let Some(item) = stream.next_as::<AgentWatchEvent>().await {
+            let sessions = match item? {
+                AgentWatchEvent::Snapshot { sessions } => sessions,
+                AgentWatchEvent::Changed { session } => vec![*session],
+                AgentWatchEvent::Unknown => Vec::new(),
+            };
+            if let Some(reached) = sessions
+                .into_iter()
+                .find(|session| until.reached_by(session))
+            {
+                return Ok(reached);
+            }
+        }
+        Err(CliError::new(
+            "agent.watch_ended",
+            format!(
+                "the status stream ended before session {selector} reached {}",
+                until.name()
+            ),
+            exit::ERROR,
+        ))
+    };
+    match timeout {
+        None => wait.await,
+        Some(secs) => tokio::time::timeout(Duration::from_secs(secs), wait)
+            .await
+            .unwrap_or_else(|_| {
+                Err(CliError::new(
+                    "agent.status_timeout",
+                    format!(
+                        "session {selector} did not reach {} within {secs} s",
+                        until.name()
+                    ),
+                    exit::ERROR,
+                ))
+            }),
+    }
+}
+
+/// Prints the selected sessions, then every change, until the stream ends or the command is interrupted. With
+/// `--json` each item is its own `{"ok":true,"result":...}` line.
+async fn watch(client: &Client, session: Option<String>, output: Output) -> Result<(), CliError> {
+    let mut stream = client
+        .agent_watch(&AgentWatchParams {
+            workspace: None,
+            session,
+        })
+        .await?;
+    while let Some(item) = stream.next_as::<AgentWatchEvent>().await {
+        let item = item?;
+        let lines = match &item {
+            AgentWatchEvent::Snapshot { sessions } => agent_text::sessions_lines(sessions),
+            AgentWatchEvent::Changed { session } => vec![agent_text::change_line(session)],
+            AgentWatchEvent::Unknown => continue,
+        };
+        output.success(&item, &lines);
     }
     Ok(())
 }

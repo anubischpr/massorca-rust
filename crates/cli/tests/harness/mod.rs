@@ -216,6 +216,11 @@ impl ChildGuard {
 }
 
 impl ChildGuard {
+    /// Guards a child the test spawned itself.
+    pub fn new(child: Child) -> Self {
+        Self(child)
+    }
+
     /// `true` while the child has not exited.
     pub fn is_running(&mut self) -> bool {
         matches!(self.0.try_wait(), Ok(None))
