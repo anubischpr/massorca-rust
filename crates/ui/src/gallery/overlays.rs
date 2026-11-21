@@ -2,6 +2,7 @@
 
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonVariant};
+use crate::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use crate::components::menu::{MenuEntry, MenuItem, MenuView};
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
 use crate::components::select::SelectView;
@@ -36,6 +37,11 @@ pub fn stories() -> Vec<Story> {
             name: "Select",
             spec: "Select.md",
             render: select_story,
+        },
+        Story {
+            name: "Dialog",
+            spec: "Dialog.md",
+            render: dialog_story,
         },
     ]
 }
@@ -325,4 +331,80 @@ fn branch_options() -> Vec<SharedString> {
         .into_iter()
         .map(SharedString::from)
         .collect()
+}
+
+fn dialog_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let field = window.use_keyed_state("dialog-story/field", cx, |_, cx| {
+        TextField::new(cx).placeholder("Project name")
+    });
+    let field_focus = field.read(cx).focus_handle(cx);
+    let secondary = cx.theme().palette.text.secondary;
+    let body = move |text: &'static str| div().text_body().text_color(secondary).child(text);
+
+    let confirm = Dialog::new("dialog-story/confirm", "Archive this workspace?")
+        .open(true)
+        .width(DialogWidth::Small)
+        .child(body("Its sessions stop, and its worktree stays on disk."))
+        .action("Archive")
+        .inline();
+    let destructive = Dialog::new("dialog-story/destructive", "Delete secret DB_PASSWORD?")
+        .open(true)
+        .variant(DialogVariant::Destructive)
+        .child(body(
+            "This removes the secret from 3 projects and 1 team. Agents that use it lose access. This cannot be undone.",
+        ))
+        .loss(["3 projects", "1 team", "2 routines stop"])
+        .action("Delete secret (3 projects use it)")
+        .inline();
+    let long_loss = Dialog::new("dialog-story/long-loss", "Remove project NexusCare?")
+        .open(true)
+        .variant(DialogVariant::Destructive)
+        .child(body(
+            "Every session and file in these places is removed. This cannot be undone.",
+        ))
+        .loss([
+            "8 workspaces",
+            "21 sessions",
+            "4 routines stop",
+            "2 teams lose their board",
+            "1 design system",
+            "3 secrets lose a project",
+            "5 saved searches",
+        ])
+        .action("Remove project")
+        .inline();
+    let error = Dialog::new("dialog-story/error", "Could not delete")
+        .open(true)
+        .variant(DialogVariant::Error)
+        .child(body("Could not delete. The secret is still there."))
+        .error("Host unreachable. Nothing was deleted.")
+        .action("Retry")
+        .inline();
+    let one_field = Dialog::new("dialog-story/one-field", "Rename project")
+        .open(true)
+        .variant(DialogVariant::OneField)
+        .field(field_focus)
+        .child(field.clone())
+        .action("Rename")
+        .inline();
+    let busy = Dialog::new("dialog-story/busy", "Delete secret DB_PASSWORD?")
+        .open(true)
+        .variant(DialogVariant::Destructive)
+        .child(body("Deleting the secret from every project."))
+        .action("Deleting")
+        .busy(true)
+        .inline();
+
+    div()
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap(px(SPACE_2))
+        .child(variant("Confirm", confirm, cx))
+        .child(variant("Destructive, names the loss", destructive, cx))
+        .child(variant("Destructive, long loss list", long_loss, cx))
+        .child(variant("Error", error, cx))
+        .child(variant("One field", one_field, cx))
+        .child(variant("Busy", busy, cx))
+        .into_any_element()
 }
