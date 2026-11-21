@@ -4,8 +4,12 @@
 
 pub mod capabilities;
 pub mod codes;
+pub mod frame;
 pub mod message;
 
+pub use frame::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame};
+#[cfg(feature = "tokio")]
+pub use frame::{read_message, write_message};
 pub use message::{ErrorBody, Message, PeerInfo, ProtocolRange};
 
 /// Highest protocol version this build speaks.
