@@ -12,7 +12,7 @@ mod workspaces;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use error::StoreError;
-pub use migrations::MIGRATIONS;
+pub use migrations::{MIGRATIONS, Migration};
 pub use projects::{ProjectKind, ProjectRow};
 pub use store::Store;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};

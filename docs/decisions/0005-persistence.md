@@ -20,8 +20,11 @@ that a newer binary can upgrade while an older one refuses to damage.
   applied count is SQLite's `user_version`. Each step runs in its own
   `BEGIN IMMEDIATE` transaction that re-reads `user_version` first and skips a
   step another process has already applied, so two processes opening the same
-  old file migrate it once between them. A database whose `user_version` is
-  newer than the binary knows is refused (`store.newer_schema`) and never
+  old file migrate it once between them. A table rebuild sets
+  `foreign_keys_off`: enforcement is switched off around that step's
+  transaction and restored after it, and the step is rolled back unless
+  `PRAGMA foreign_key_check` comes back empty. A database whose `user_version`
+  is newer than the binary knows is refused (`store.newer_schema`) and never
   touched. Before the first step of a run on an existing database, the file is
   copied to `store.sqlite3.bak-v<old>` under that write lock, once per run; the
   last five backups are kept.

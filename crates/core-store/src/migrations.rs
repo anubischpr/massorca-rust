@@ -5,8 +5,17 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::backup;
 use crate::error::StoreError;
 
+/// One schema step. A table rebuild sets `foreign_keys_off`: enforcement is off around its transaction, which is rolled
+/// back if it leaves a foreign key violation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Migration {
+    pub sql: &'static str,
+    pub foreign_keys_off: bool,
+}
+
 /// Schema steps in order. The number applied is the database's `user_version`; shipped steps are never edited.
-pub const MIGRATIONS: &[&str] = &[r#"
+pub const MIGRATIONS: &[Migration] = &[Migration {
+    sql: r#"
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK(kind IN ('git','folder')),
@@ -38,7 +47,9 @@ CREATE TABLE settings (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY(owner, key)
 );
-"#];
+"#,
+    foreign_keys_off: false,
+}];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.
@@ -46,7 +57,7 @@ CREATE TABLE settings (
 pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
-    steps: &[&str],
+    steps: &[Migration],
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
     let mut backed_up = false;
@@ -64,14 +75,35 @@ pub(crate) fn migrate(
     }
 }
 
-/// Runs one step if `user_version` still reads `found` under the write lock. Otherwise another process has moved
-/// it on, and the caller reads it again.
+/// Runs one step, with foreign keys switched off around its transaction when the step asks for that.
 fn apply_step(
     connection: &mut Connection,
     file: Option<&Path>,
     found: i64,
     index: usize,
-    step: &str,
+    step: &Migration,
+    backed_up: &mut bool,
+) -> Result<(), StoreError> {
+    if !step.foreign_keys_off {
+        return run_step(connection, file, found, index, step, backed_up);
+    }
+    // `PRAGMA foreign_keys` does nothing inside a transaction, so it is set before the step's transaction and
+    // restored after it, whether the step committed or was rolled back.
+    let enforced = foreign_keys_enforced(connection)?;
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = run_step(connection, file, found, index, step, backed_up);
+    let restored = connection.pragma_update(None, "foreign_keys", enforced);
+    result.and(restored.map_err(StoreError::from))
+}
+
+/// Runs the step in one immediate transaction if `user_version` still reads `found`. Otherwise another process has
+/// moved it on, and the caller reads it again.
+fn run_step(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    found: i64,
+    index: usize,
+    step: &Migration,
     backed_up: &mut bool,
 ) -> Result<(), StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -86,7 +118,15 @@ fn apply_step(
         backup::create_before_migration(file, found)?;
     }
     *backed_up = true;
-    transaction.execute_batch(step)?;
+    transaction.execute_batch(step.sql)?;
+    if step.foreign_keys_off
+        && let Some(table) = first_foreign_key_violation(&transaction)?
+    {
+        return Err(StoreError::ForeignKeyViolation {
+            version: i64::try_from(index + 1).unwrap_or(i64::MAX),
+            table,
+        });
+    }
     transaction.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
     transaction.commit()?;
     Ok(())
@@ -96,23 +136,92 @@ fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
     connection.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
+fn foreign_keys_enforced(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+}
+
+/// The table of the first row that breaks a foreign key, if any.
+fn first_foreign_key_violation(connection: &Connection) -> rusqlite::Result<Option<String>> {
+    let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
+    let mut rows = statement.query([])?;
+    let first = rows.next()?;
+    first.map(|row| row.get(0)).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use rusqlite::Connection;
 
-    use super::migrate;
+    use super::{Migration, migrate};
+    use crate::error::StoreError;
 
-    const STEPS: &[&str] = &[
-        "CREATE TABLE step_1 (x INTEGER);",
-        "CREATE TABLE step_2 (x INTEGER);",
-        "CREATE TABLE step_3 (x INTEGER);",
-        "CREATE TABLE step_4 (x INTEGER);",
-        "CREATE TABLE step_5 (x INTEGER);",
-        "CREATE TABLE step_6 (x INTEGER);",
-        "CREATE TABLE step_7 (x INTEGER);",
+    const fn step(sql: &'static str) -> Migration {
+        Migration {
+            sql,
+            foreign_keys_off: false,
+        }
+    }
+
+    const STEPS: &[Migration] = &[
+        step("CREATE TABLE step_1 (x INTEGER);"),
+        step("CREATE TABLE step_2 (x INTEGER);"),
+        step("CREATE TABLE step_3 (x INTEGER);"),
+        step("CREATE TABLE step_4 (x INTEGER);"),
+        step("CREATE TABLE step_5 (x INTEGER);"),
+        step("CREATE TABLE step_6 (x INTEGER);"),
+        step("CREATE TABLE step_7 (x INTEGER);"),
     ];
+
+    const PARENT_AND_CHILD: Migration = step(
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parent (id));
+         INSERT INTO parent VALUES (1, 'kept');
+         INSERT INTO child VALUES (10, 1);",
+    );
+    /// The SQLite table-rebuild procedure: create the new table, copy, drop the old one, rename.
+    const REBUILD_PARENT: Migration = Migration {
+        sql: "CREATE TABLE parent_new (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+              INSERT INTO parent_new SELECT id, name FROM parent;
+              DROP TABLE parent;
+              ALTER TABLE parent_new RENAME TO parent;",
+        foreign_keys_off: true,
+    };
+    const DELETE_PARENT: Migration = Migration {
+        sql: "DELETE FROM parent;",
+        foreign_keys_off: true,
+    };
+    const ORPHAN_CHILD: Migration = step("INSERT INTO child VALUES (11, 99);");
+
+    /// A connection set up the way `Store` sets up its own: foreign keys enforced.
+    fn enforcing_connection() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        connection
+    }
+
+    fn version(connection: &Connection) -> i64 {
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn foreign_keys_enforced(connection: &Connection) -> bool {
+        connection
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn row_count(connection: &Connection, table: &str) -> i64 {
+        connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
 
     #[test]
     fn only_the_five_newest_backups_are_kept() {
@@ -164,5 +273,65 @@ mod tests {
             )
             .unwrap();
         assert!(!has_step_2);
+    }
+
+    #[test]
+    fn foreign_keys_off_step_can_rebuild_a_table_that_rows_reference() {
+        let mut connection = enforcing_connection();
+        migrate(&mut connection, None, &[PARENT_AND_CHILD, REBUILD_PARENT]).unwrap();
+
+        assert_eq!(version(&connection), 2);
+        assert!(foreign_keys_enforced(&connection));
+        assert_eq!(row_count(&connection, "parent"), 1);
+        assert_eq!(row_count(&connection, "child"), 1);
+    }
+
+    #[test]
+    fn the_same_rebuild_is_refused_while_foreign_keys_stay_on() {
+        let mut connection = enforcing_connection();
+        let rebuild_with_enforcement = Migration {
+            foreign_keys_off: false,
+            ..REBUILD_PARENT
+        };
+        let error = migrate(
+            &mut connection,
+            None,
+            &[PARENT_AND_CHILD, rebuild_with_enforcement],
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
+        assert_eq!(version(&connection), 1);
+    }
+
+    #[test]
+    fn foreign_keys_off_step_that_leaves_a_violation_is_rolled_back() {
+        let mut connection = enforcing_connection();
+        migrate(&mut connection, None, &[PARENT_AND_CHILD]).unwrap();
+
+        let error = migrate(&mut connection, None, &[PARENT_AND_CHILD, DELETE_PARENT]).unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                StoreError::ForeignKeyViolation { version: 2, ref table } if table == "child"
+            ),
+            "{error:?}"
+        );
+        assert_eq!(version(&connection), 1);
+        assert_eq!(row_count(&connection, "parent"), 1);
+        assert!(foreign_keys_enforced(&connection));
+    }
+
+    #[test]
+    fn ordinary_steps_keep_foreign_keys_enforced() {
+        let mut connection = enforcing_connection();
+        migrate(&mut connection, None, &[PARENT_AND_CHILD]).unwrap();
+
+        let error = migrate(&mut connection, None, &[PARENT_AND_CHILD, ORPHAN_CHILD]).unwrap_err();
+
+        assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
+        assert_eq!(version(&connection), 1);
+        assert_eq!(row_count(&connection, "child"), 1);
     }
 }

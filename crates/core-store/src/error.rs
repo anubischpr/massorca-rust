@@ -15,6 +15,9 @@ pub enum StoreError {
     /// Another constraint (foreign key, CHECK, NOT NULL) rejected the write.
     #[error("violates a database constraint ({constraint})")]
     Constraint { constraint: String },
+    /// A step that turned foreign keys off left a row breaking one in `table`; the step was rolled back.
+    #[error("migration to schema version {version} leaves a foreign key violation in {table}")]
+    ForeignKeyViolation { version: i64, table: String },
     #[error("database error: {0}")]
     Sqlite(#[source] rusqlite::Error),
     #[error("file error: {0}")]
