@@ -11,6 +11,10 @@ publish.workspace = true
 dunce.workspace = true
 thiserror.workspace = true
 
+# A job object kills every process git starts, through a safe API.
+[target.'cfg(windows)'.dependencies]
+win32job.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

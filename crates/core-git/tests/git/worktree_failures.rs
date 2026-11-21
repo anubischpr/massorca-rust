@@ -1,7 +1,7 @@
 //! A failed or killed `worktree add` leaves nothing behind that it created, and
 //! mutations are not cut short by the query timeout.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_core_git::{Git, GitError, WorktreeAdd};
 
@@ -125,4 +125,40 @@ fn a_mutation_timeout_applies_to_mutations() {
         )
         .expect_err("no time to run");
     assert!(matches!(error, GitError::Timeout { .. }), "{error:?}");
+}
+
+#[test]
+fn a_hook_left_running_in_the_background_does_not_turn_a_success_into_a_timeout() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let linked = fixture.sibling("background-hook");
+    // The background `sleep` inherits git's output pipes and outlives git.
+    install_post_checkout_hook(&repo, "sleep 60 &\nexit 0");
+    let started = Instant::now();
+
+    git()
+        .worktree_add(&repo, &linked, new_branch("background"))
+        .expect("worktree add");
+
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(linked.join("README.md").is_file());
+}
+
+#[test]
+fn a_killed_add_kills_its_hook_and_removes_what_it_created() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let linked = fixture.sibling("killed-add");
+    install_post_checkout_hook(&repo, "sleep 60");
+    let git = git().with_mutation_timeout(Some(Duration::from_secs(3)));
+    let started = Instant::now();
+
+    let error = git
+        .worktree_add(&repo, &linked, new_branch("killed"))
+        .expect_err("the hook outlives the timeout");
+
+    assert!(matches!(error, GitError::Timeout { .. }), "{error:?}");
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert_eq!(registered(&git, &repo), vec![canonical(&repo)]);
+    assert!(!git.branch_exists(&repo, "killed").expect("branch check"));
 }
