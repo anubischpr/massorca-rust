@@ -111,6 +111,11 @@ impl MenuItem {
         self.disabled_reason.is_some()
     }
 
+    /// The checked state of a checkable row; `None` for a plain row.
+    pub fn is_checked(&self) -> Option<bool> {
+        self.checked
+    }
+
     pub fn has_submenu(&self) -> bool {
         self.submenu.is_some()
     }
@@ -241,6 +246,8 @@ pub struct MenuView {
     hover: HoverIntent,
     /// A trigger whose clicks do not count as outside clicks, so it can toggle the menu.
     ignored_outside: Option<Bounds<Pixels>>,
+    min_width: f32,
+    empty_text: SharedString,
     _hover_timer: Option<Task<()>>,
 }
 
@@ -272,8 +279,30 @@ impl MenuView {
             submenu: None,
             hover: HoverIntent::default(),
             ignored_outside: None,
+            min_width: LAYOUT_MENU_MIN_WIDTH,
+            empty_text: "Nothing to do here yet".into(),
             _hover_timer: None,
         }
+    }
+
+    /// Minimum panel width, kept within the menu width range; a Select passes its trigger width.
+    pub fn with_min_width(mut self, width: f32) -> Self {
+        self.min_width = width.clamp(LAYOUT_MENU_MIN_WIDTH, LAYOUT_MENU_MAX_WIDTH);
+        self
+    }
+
+    /// The line shown instead of rows when there are none, saying why.
+    pub fn with_empty_text(mut self, text: impl Into<SharedString>) -> Self {
+        self.empty_text = text.into();
+        self
+    }
+
+    /// Starts the highlight on `index` when that row can take it.
+    pub fn with_highlight(mut self, index: Option<usize>) -> Self {
+        if let Some(index) = index.filter(|index| selectable_at(&self.entries, *index)) {
+            self.active = Some(index);
+        }
+        self
     }
 
     /// The highlighted row of the menu's own list, or of the open submenu.
@@ -553,7 +582,7 @@ impl Render for MenuView {
             .track_focus(&self.focus)
             .flex()
             .flex_col()
-            .min_w(px(LAYOUT_MENU_MIN_WIDTH))
+            .min_w(px(self.min_width))
             .max_w(px(LAYOUT_MENU_MAX_WIDTH))
             .p(px(SPACE_1))
             .debug_selector(|| "menu-panel".into())
@@ -571,7 +600,7 @@ impl Render for MenuView {
                     .py(px(SPACE_1))
                     .text_style(TYPE_CAPTION)
                     .text_color(theme.palette.text.secondary)
-                    .child("Nothing to do here yet")
+                    .child(self.empty_text.clone())
                     .into_any_element(),
             ]
         } else {
