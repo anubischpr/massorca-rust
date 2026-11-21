@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use massorca_protocol::methods::agents::{
-    self, Activity, ActivitySource, ActivityState, AgentKind, AgentKinds, AgentSession,
-    AgentStartParams, Execution, KindCredentials, Outcome, StatusMechanism,
+    self, Activity, ActivitySource, ActivityState, AgentBringBackParams, AgentHookParams,
+    AgentKind, AgentKinds, AgentSession, AgentStartParams, AgentWatchEvent, Execution,
+    KindCredentials, Outcome, PromptReceipt, ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -188,6 +189,54 @@ fn start_params_default_every_optional_field() {
             rows: None,
             request_id: None,
         }
+    );
+}
+
+#[test]
+fn bring_back_merges_and_prompts_unless_told_otherwise() {
+    let decoded: AgentBringBackParams =
+        serde_json::from_value(json!({ "child": "s-2" })).expect("decodes");
+    assert!(decoded.merge && decoded.prompt);
+    let declined: AgentBringBackParams =
+        serde_json::from_value(json!({ "child": "s-2", "merge": false, "prompt": false }))
+            .expect("decodes");
+    assert!(!declined.merge && !declined.prompt);
+}
+
+#[test]
+fn hook_payload_is_opaque_text() {
+    assert_wire(
+        &AgentHookParams {
+            session: "s-1".to_owned(),
+            token: "tok".to_owned(),
+            event: "Stop".to_owned(),
+            payload: Some("{\"session_id\":\"x\"}".to_owned()),
+        },
+        &json!({ "session": "s-1", "token": "tok", "event": "Stop", "payload": "{\"session_id\":\"x\"}" }),
+    );
+}
+
+#[test]
+fn watch_items_are_tagged_by_kind() {
+    assert_wire(
+        &AgentWatchEvent::Snapshot {
+            sessions: Vec::new(),
+        },
+        &json!({ "kind": "snapshot", "sessions": [] }),
+    );
+    let unknown: AgentWatchEvent =
+        serde_json::from_value(json!({ "kind": "reordered" })).expect("decodes");
+    assert_eq!(unknown, AgentWatchEvent::Unknown);
+}
+
+#[test]
+fn the_prompt_receipt_is_handed_to_terminal() {
+    assert_wire(
+        &PromptReceipt {
+            receipt: ReceiptKind::HandedToTerminal,
+            bytes: 12,
+        },
+        &json!({ "receipt": "handed_to_terminal", "bytes": 12 }),
     );
 }
 

@@ -155,6 +155,181 @@ pub struct AgentStopParams {
     pub force: bool,
 }
 
+/// Params of `agent.prompt`. `force` types even while the agent is working or waiting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPromptParams {
+    pub session: String,
+    pub text: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// What `agent.prompt` can honestly say about a delivery (0054).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptKind {
+    /// The bytes were written to the terminal; nothing more is known.
+    HandedToTerminal,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Result of `agent.prompt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptReceipt {
+    pub receipt: ReceiptKind,
+    pub bytes: u64,
+}
+
+/// Params of `agent.hook`, sent by `massorca agent hook` from inside a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentHookParams {
+    pub session: String,
+    pub token: String,
+    pub event: String,
+    /// The hook's payload, kept opaque; at most [`MAX_HOOK_PAYLOAD_BYTES`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+}
+
+/// Params of `agent.watch`. Without a filter every session is watched.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentWatchParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// One item of an `agent.watch` stream, tagged by `kind`. Readers ignore kinds they do not know.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentWatchEvent {
+    /// The first item, and the item after a watcher fell behind: every selected session.
+    Snapshot { sessions: Vec<AgentSession> },
+    /// One session changed; the full record follows.
+    Changed { session: Box<AgentSession> },
+    /// A kind this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Params of `agent.delegate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDelegateParams {
+    pub parent: String,
+    pub prompt: String,
+    /// Defaults to the parent's kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Name of the child workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
+    /// The parent run's token, required when called from inside that run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+/// Result of `agent.tree`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTree {
+    pub root: AgentSession,
+    pub children: Vec<AgentSession>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Params of `agent.bring_back`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBringBackParams {
+    pub child: String,
+    /// Merge the child's branch into the parent's worktree.
+    #[serde(default = "yes")]
+    pub merge: bool,
+    /// Tell the parent run about the child.
+    #[serde(default = "yes")]
+    pub prompt: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// Result of `agent.bring_back`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BringBackResult {
+    pub child: AgentSession,
+    pub merged: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_commit: Option<String>,
+    pub prompt_delivered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Params of `agent.credentials.import`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsImportParams {
+    pub kind: String,
+    /// The directory the declared files are copied from.
+    pub from: String,
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// One copied credential file: its name and size, never its contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedFile {
+    pub name: String,
+    pub bytes: u64,
+}
+
+/// Result of `agent.credentials.import`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsImported {
+    pub kind: String,
+    pub home: String,
+    pub files: Vec<ImportedFile>,
+}
+
+/// Selects one kind's credential home.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsKindRef {
+    pub kind: String,
+}
+
+/// One declared credential file in a profile home.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialFile {
+    pub name: String,
+    pub present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at_ms: Option<i64>,
+}
+
+/// Result of `agent.credentials.show`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsShown {
+    pub kind: String,
+    pub home: String,
+    pub exists: bool,
+    pub files: Vec<CredentialFile>,
+}
+
+/// Result of `agent.credentials.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsRemoved {
+    pub kind: String,
+    pub removed: bool,
+}
+
 /// Whether the session's current or last run is there; the terminal vocabulary (0052).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Execution {
