@@ -34,6 +34,7 @@ pub mod sidebar_row;
 pub mod skeleton;
 pub mod splitter;
 pub mod switch;
+pub mod text_editing;
 pub mod text_field;
 pub mod toast;
 pub mod tooltip;

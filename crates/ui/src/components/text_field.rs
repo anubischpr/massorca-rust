@@ -6,13 +6,14 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, Div, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
-    ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun,
-    UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, px, relative, size,
+    ElementInputHandler, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
+    SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun, UnderlineStyle,
+    Window, actions, div, fill, point, px, relative, size,
 };
 
+use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
@@ -539,12 +540,7 @@ impl TextField {
     }
 
     fn after_edit(&mut self, changed: bool, window: &Window, cx: &mut Context<Self>) {
-        if changed {
-            window.notify_text_input_changed(&self.focus_handle);
-            cx.emit(TextFieldEvent::Changed);
-        }
-        window.notify_text_selection_changed(&self.focus_handle);
-        cx.notify();
+        input::after_edit(self, changed, window, cx);
     }
 
     /// Applies a text change when the field accepts input.
@@ -554,10 +550,7 @@ impl TextField {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut TextBuffer) -> bool,
     ) {
-        if self.editable() {
-            let changed = change(&mut self.buffer);
-            self.after_edit(changed, window, cx);
-        }
+        input::edit(self, window, cx, change);
     }
 
     /// Moves or selects the caret without changing the text.
@@ -1053,76 +1046,37 @@ impl Element for TextElement {
     }
 }
 
-impl EntityInputHandler for TextField {
-    fn text_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        adjusted_range: &mut Option<Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<String> {
-        let range = self.buffer.range_from_utf16(&range_utf16);
-        adjusted_range.replace(self.buffer.range_to_utf16(&range));
-        Some(self.buffer.text()[range].to_owned())
+impl InputHost for TextField {
+    fn text_buffer(&self) -> &TextBuffer {
+        &self.buffer
     }
 
-    fn selected_text_range(
-        &mut self,
-        _: bool,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.buffer.range_to_utf16(&self.buffer.selected()),
-            reversed: self.buffer.reversed(),
-        })
+    fn text_buffer_mut(&mut self) -> &mut TextBuffer {
+        &mut self.buffer
     }
 
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.buffer
-            .marked()
-            .map(|range| self.buffer.range_to_utf16(&range))
+    fn input_accepts(&self) -> bool {
+        self.editable()
     }
 
-    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.buffer.unmark();
-        self.after_edit(false, window, cx);
+    fn input_focus(&self) -> &FocusHandle {
+        &self.focus_handle
     }
 
-    fn replace_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        text: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let text = strip_line_breaks(text);
-        self.edit(window, cx, |buffer| buffer.replace_text(range_utf16, &text));
+    fn input_changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Changed);
     }
 
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        new_selected_range: Option<Range<usize>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let text = strip_line_breaks(new_text);
-        self.edit(window, cx, |buffer| {
-            buffer.replace_and_mark(range_utf16, &text, new_selected_range)
-        });
+    fn sanitize_insert(text: &str) -> String {
+        strip_line_breaks(text)
     }
 
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
+    fn layout_bounds(
+        &self,
+        range: Range<usize>,
         element_bounds: Bounds<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let line = self.current_line()?;
-        let range = self.buffer.range_from_utf16(&range_utf16);
         let left = element_bounds.left() - self.scroll_x;
         Some(Bounds::from_corners(
             point(left + line.x_for_index(range.start), element_bounds.top()),
@@ -1130,48 +1084,14 @@ impl EntityInputHandler for TextField {
         ))
     }
 
-    fn selection_bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<Bounds<Pixels>> {
-        self.bounds_for_range(range_utf16, element_bounds, window, cx)
-            .into_iter()
-            .collect()
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        position: Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn offset_at(&self, position: Point<Pixels>) -> Option<usize> {
         let bounds = self.last_bounds?;
         let line = self.current_line()?;
-        let index = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
-        Some(self.buffer.offset_to_utf16(index))
-    }
-
-    fn set_selected_text_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.buffer.select_utf16(range_utf16);
-        self.after_edit(false, window, cx);
-    }
-
-    fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        Some(self.buffer.utf16_len())
-    }
-
-    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
-        self.editable()
+        Some(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x))
     }
 }
+
+impl_input_handler!(TextField);
 
 /// Typed line breaks never enter a single-line field.
 fn strip_line_breaks(text: &str) -> String {
@@ -1261,7 +1181,7 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
     use std::{cell::RefCell, rc::Rc};
 
     #[test]
