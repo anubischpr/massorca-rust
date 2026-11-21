@@ -431,6 +431,7 @@ impl RenderOnce for Button {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{focus_and_draw, press_key};
     use super::*;
     use crate::tokens::Appearance;
     use std::cell::Cell;
@@ -571,25 +572,6 @@ mod tests {
         }
     }
 
-    /// Focuses `focus`, then paints, so the button registers its key handlers.
-    fn focus_and_draw(cx: &mut gpui::VisualTestContext, focus: &FocusHandle) {
-        cx.update(|window, cx| window.focus(focus, cx));
-        cx.run_until_parked();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-    }
-
-    /// Presses and releases one key: GPUI turns a focused Enter or Space release into a click.
-    fn press_key(cx: &mut gpui::VisualTestContext, key: &str) {
-        let os = cx.update(|_, cx| cx.platform_info().os);
-        let keystroke = gpui::Keystroke::parse_with_os(key, os).unwrap();
-        cx.simulate_event(gpui::KeyDownEvent {
-            keystroke: keystroke.clone(),
-            is_held: false,
-            prefer_character_input: false,
-        });
-        cx.simulate_event(gpui::KeyUpEvent { keystroke });
-    }
-
     /// Hosts one button with a focus handle and a click counter.
     struct Harness {
         focus: FocusHandle,
@@ -618,14 +600,44 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
             let clicks = self.clicks.clone();
             div().child(
-                div().debug_selector(|| "button".into()).child(
-                    Button::new("under-test", "Save")
-                        .focus_handle(self.focus.clone())
-                        .disabled(self.disabled)
-                        .loading(self.loading)
-                        .on_click(move |_, _| clicks.set(clicks.get() + 1)),
-                ),
+                div()
+                    .absolute()
+                    .top(gpui::px(0.))
+                    .left(gpui::px(0.))
+                    .debug_selector(|| "button".into())
+                    .child(
+                        Button::new("under-test", "Save")
+                            .focus_handle(self.focus.clone())
+                            .disabled(self.disabled)
+                            .loading(self.loading)
+                            .on_click(move |_, _| clicks.set(clicks.get() + 1)),
+                    ),
             )
         }
+    }
+}
+
+/// GPUI helpers that the element tests of the controls share.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use gpui::{FocusHandle, VisualTestContext};
+
+    /// Focuses `focus`, then paints, so the element registers its key handlers.
+    pub(crate) fn focus_and_draw(cx: &mut VisualTestContext, focus: &FocusHandle) {
+        cx.update(|window, cx| window.focus(focus, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// Presses and releases one key: GPUI turns a focused Enter or Space release into a click.
+    pub(crate) fn press_key(cx: &mut VisualTestContext, key: &str) {
+        let os = cx.update(|_, cx| cx.platform_info().os);
+        let keystroke = gpui::Keystroke::parse_with_os(key, os).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
     }
 }

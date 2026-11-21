@@ -292,8 +292,11 @@ impl RenderOnce for IconButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
     use crate::icon::IconSize;
     use crate::tokens::Appearance;
+    use gpui::Render;
+    use std::cell::Cell;
 
     fn dark() -> Theme {
         Theme::new(Appearance::Dark)
@@ -396,5 +399,82 @@ mod tests {
                 .loading(true)
                 .activates()
         );
+    }
+
+    /// Hosts one icon button with a focus handle and a click counter.
+    struct Harness {
+        focus: FocusHandle,
+        clicks: Rc<Cell<u32>>,
+        disabled: bool,
+        loading: bool,
+    }
+
+    impl Harness {
+        fn new(
+            cx: &mut gpui::Context<Self>,
+            clicks: Rc<Cell<u32>>,
+            disabled: bool,
+            loading: bool,
+        ) -> Self {
+            Self {
+                focus: cx.focus_handle(),
+                clicks,
+                disabled,
+                loading,
+            }
+        }
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div().child(
+                div()
+                    .absolute()
+                    .top(gpui::px(0.))
+                    .left(gpui::px(0.))
+                    .debug_selector(|| "button".into())
+                    .child(
+                        IconButton::new("under-test", IconName::Plus, "New terminal")
+                            .focus_handle(self.focus.clone())
+                            .disabled(self.disabled)
+                            .loading(self.loading)
+                            .on_click(move |_, _| clicks.set(clicks.get() + 1)),
+                    ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn pointer_enter_and_space_each_fire_once(cx: &mut gpui::TestAppContext) {
+        let clicks = Rc::new(Cell::new(0_u32));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness::new(cx, clicks.clone(), false, false));
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("button").expect("button is drawn");
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        assert_eq!(clicks.get(), 1, "bounds {bounds:?}");
+        let focus = view.read_with(cx, |h, _| h.focus.clone());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "enter");
+        assert_eq!(clicks.get(), 2);
+        press_key(cx, "space");
+        assert_eq!(clicks.get(), 3);
+    }
+
+    #[gpui::test]
+    fn disabled_and_loading_ignore_pointer_and_keys(cx: &mut gpui::TestAppContext) {
+        for (disabled, loading) in [(true, false), (false, true)] {
+            let clicks = Rc::new(Cell::new(0_u32));
+            let (view, cx) =
+                cx.add_window_view(|_, cx| Harness::new(cx, clicks.clone(), disabled, loading));
+            cx.run_until_parked();
+            let center = cx.debug_bounds("button").expect("button is drawn").center();
+            cx.simulate_click(center, gpui::Modifiers::none());
+            let focus = view.read_with(cx, |h, _| h.focus.clone());
+            focus_and_draw(cx, &focus);
+            press_key(cx, "enter");
+            press_key(cx, "space");
+            assert_eq!(clicks.get(), 0, "disabled={disabled} loading={loading}");
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant, StatePreview};
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::ActiveTheme;
@@ -9,11 +10,18 @@ use crate::tokens::{LAYOUT_MENU_MIN_WIDTH, SPACE_2, SPACE_3, SPACE_4};
 use gpui::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Button",
-        spec: "Button.md",
-        render: button_story,
-    }]
+    vec![
+        Story {
+            name: "Button",
+            spec: "Button.md",
+            render: button_story,
+        },
+        Story {
+            name: "IconButton",
+            spec: "IconButton.md",
+            render: icon_button_story,
+        },
+    ]
 }
 
 /// Every button variant, in gallery order.
@@ -23,6 +31,121 @@ const VARIANTS: [(&str, ButtonVariant); 4] = [
     ("Ghost", ButtonVariant::Ghost),
     ("Danger", ButtonVariant::Danger),
 ];
+
+/// Icon buttons in gallery order, each with its accessible name.
+const ICONS: [(IconName, &str); 4] = [
+    (IconName::Plus, "New terminal"),
+    (IconName::Copy, "Copy path"),
+    (IconName::Ellipsis, "More actions"),
+    (IconName::X, "Close tab"),
+];
+
+/// One row of icon buttons, each configured by `configure`.
+fn icon_row(prefix: &'static str, configure: impl Fn(IconButton) -> IconButton) -> Div {
+    ICONS
+        .iter()
+        .enumerate()
+        .fold(row(), |r, (i, (icon, name))| {
+            r.child(configure(IconButton::new((prefix, i), *icon, *name)))
+        })
+}
+
+fn icon_button_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let frame = cx.theme().palette.surface.frame;
+    column()
+        .child(variant("Ghost at rest", icon_row("ghost-rest", |b| b), cx))
+        .child(variant(
+            "Ghost, hover",
+            icon_row("ghost-hover", |b| b.preview(StatePreview::Hover)),
+            cx,
+        ))
+        .child(variant(
+            "Ghost, pressed",
+            icon_row("ghost-pressed", |b| b.preview(StatePreview::Pressed)),
+            cx,
+        ))
+        .child(variant(
+            "Focus ring (keyboard focus)",
+            icon_row("ghost-focus", |b| b.preview(StatePreview::Focus)),
+            cx,
+        ))
+        .child(variant(
+            "Outline",
+            icon_row("outline", |b| b.variant(IconButtonVariant::Outline)),
+            cx,
+        ))
+        .child(variant(
+            "Outline, hover",
+            icon_row("outline-hover", |b| {
+                b.variant(IconButtonVariant::Outline)
+                    .preview(StatePreview::Hover)
+            }),
+            cx,
+        ))
+        .child(variant(
+            "Toggle, off and on (aria-pressed)",
+            row()
+                .child(
+                    IconButton::new("toggle-off", IconName::PanelLeft, "Show project sidebar")
+                        .toggle(false),
+                )
+                .child(
+                    IconButton::new("toggle-on", IconName::PanelLeft, "Hide project sidebar")
+                        .toggle(true),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Disabled (the reason replaces the name in the tooltip)",
+            icon_row("disabled", |b| {
+                b.disabled(true)
+                    .disabled_reason("Host unreachable. Last known state, 5 min ago.")
+            }),
+            cx,
+        ))
+        .child(variant(
+            "Loading (spinner after 200 ms)",
+            row().child(IconButton::new("loading", IconName::RefreshCw, "Retry").loading(true)),
+            cx,
+        ))
+        .child(variant(
+            "Sizes",
+            row()
+                .child(
+                    IconButton::new("size-compact", IconName::Plus, "Compact")
+                        .size(ButtonSize::Compact),
+                )
+                .child(
+                    IconButton::new("size-default", IconName::Plus, "Default")
+                        .size(ButtonSize::Default),
+                )
+                .child(
+                    IconButton::new("size-comfortable", IconName::Plus, "Comfortable")
+                        .size(ButtonSize::Comfortable),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Title bar (frame surface, no fill of its own)",
+            div().flex().p(px(SPACE_3)).bg(frame).child(
+                row()
+                    .child(
+                        IconButton::new(
+                            "titlebar-sidebar",
+                            IconName::PanelLeft,
+                            "Show project sidebar",
+                        )
+                        .surface(Surface::Frame),
+                    )
+                    .child(
+                        IconButton::new("titlebar-settings", IconName::Settings, "Settings")
+                            .surface(Surface::Frame),
+                    ),
+            ),
+            cx,
+        ))
+        .into_any_element()
+}
 
 fn column() -> Div {
     div().flex().flex_col().gap(px(SPACE_4))
