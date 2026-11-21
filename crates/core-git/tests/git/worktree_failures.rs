@@ -149,7 +149,7 @@ fn a_killed_add_kills_its_hook_and_removes_what_it_created() {
     let fixture = Fixture::new();
     let repo = fixture.repo();
     let linked = fixture.sibling("killed-add");
-    install_post_checkout_hook(&repo, "sleep 60");
+    install_post_checkout_hook(&repo, "sleep 120");
     let git = git().with_mutation_timeout(Some(Duration::from_secs(3)));
     let started = Instant::now();
 
@@ -158,7 +158,12 @@ fn a_killed_add_kills_its_hook_and_removes_what_it_created() {
         .expect_err("the hook outlives the timeout");
 
     assert!(matches!(error, GitError::Timeout { .. }), "{error:?}");
-    assert!(started.elapsed() < Duration::from_secs(30));
+    // Well under the hook's two minutes: the hook was killed, not waited for, even on a loaded machine.
+    assert!(started.elapsed() < Duration::from_secs(60));
     assert_eq!(registered(&git, &repo), vec![canonical(&repo)]);
     assert!(!git.branch_exists(&repo, "killed").expect("branch check"));
+    assert!(
+        !linked.exists(),
+        "the directory the add created is left behind"
+    );
 }

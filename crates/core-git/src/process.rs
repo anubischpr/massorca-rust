@@ -82,7 +82,7 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> i
 struct ProcessTree {
     #[cfg(unix)]
     group: u32,
-    /// `None` when the job could not be created or assigned; then only the child is killed.
+    /// `None` when the job could not be created; then only the child is killed.
     #[cfg(windows)]
     job: Option<win32job::Job>,
 }
@@ -97,17 +97,10 @@ impl ProcessTree {
         Ok((child, Self { group }))
     }
 
-    /// Processes the child starts before it joins the job escape it; assigning right
-    /// after the spawn keeps that window to the child's own startup.
+    /// The child is created inside the job, so nothing it starts escapes the job.
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        use std::os::windows::io::AsRawHandle;
-        let child = command.spawn()?;
-        let job = win32job::Job::create_with_limit_info(
-            win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
-        )
-        .ok()
-        .filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
+        let (child, job) = crate::windows_job_spawn::spawn_in_job(command, CREATE_NO_WINDOW)?;
         Ok((child, Self { job }))
     }
 
