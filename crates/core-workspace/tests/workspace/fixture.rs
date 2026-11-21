@@ -11,6 +11,7 @@ use massorca_core_git::Git;
 use massorca_core_store::Store;
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use tempfile::TempDir;
 
 pub struct Fixture {
@@ -75,6 +76,13 @@ impl Fixture {
             .add_project(params)
             .expect("add folder project")
     }
+
+    /// Creates a workspace named `name` in project `project` with default options.
+    pub fn create(&self, project: &str, name: &str) -> Workspace {
+        self.workspaces
+            .create_workspace(create_params(project, name))
+            .expect("create workspace")
+    }
 }
 
 /// Creates `dir` as a repository on `main` with one commit containing `file`.
@@ -92,6 +100,18 @@ pub fn project_add(path: &Path) -> ProjectAddParams {
         name: None,
         kind: None,
         workspaces_root: None,
+    }
+}
+
+pub fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
+    WorkspaceCreateParams {
+        project: project.to_owned(),
+        name: name.to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        path: None,
+        request_id: None,
     }
 }
 
@@ -153,4 +173,43 @@ pub fn commit_file(dir: &Path, file: &str, contents: &str, message: &str) {
         dir.join(".git").join("hooks").display()
     );
     run_git(dir, &["-c", hooks.as_str(), "commit", "-q", "-m", message]);
+}
+
+/// Whether the local branch `branch` exists in `repo`.
+pub fn branch_exists(repo: &Path, branch: &str) -> bool {
+    Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(repo)
+        .status()
+        .expect("spawn git")
+        .success()
+}
+
+/// How many worktrees git lists for `repo`, the main worktree included.
+pub fn worktree_count(repo: &Path) -> usize {
+    run_git(repo, &["worktree", "list", "--porcelain"])
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .count()
+}
+
+/// The sorted names of the entries directly inside `dir`.
+pub fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .map(|entry| {
+            entry
+                .expect("read entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
 }
