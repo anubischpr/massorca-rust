@@ -1,5 +1,5 @@
-//! Branch and ref queries. Yes/no answers come from git's exit status. The one
-//! place that reads git's message text is `delete_branch_if_merged`.
+//! Branch and ref queries. Yes/no answers come from git's exit status, and deletion
+//! asks git's merge test directly, so nothing here reads git's message text.
 
 use std::path::Path;
 
@@ -17,17 +17,22 @@ impl Git {
         exit_code_answer(&captured)
     }
 
-    /// Whether any remote-tracking ref `refs/remotes/<remote>/<branch>` exists.
+    /// Whether `refs/remotes/<remote>/<branch>` exists for a remote configured in `repo`.
+    /// Each remote name is matched whole, so a remote whose name contains `/` works.
     pub fn remote_branch_exists(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
-        let captured = self.run(
-            Some(repo),
-            ["for-each-ref", "--format=%(refname)", "refs/remotes/"],
-        )?;
-        captured.require_success()?;
-        Ok(captured
-            .text()?
-            .lines()
-            .any(|reference| remote_branch_of(reference) == Some(branch)))
+        let remotes = self.run(Some(repo), ["remote"])?;
+        remotes.require_success()?;
+        for remote in remotes.text()?.lines() {
+            let reference = format!("refs/remotes/{remote}/{branch}");
+            let captured = self.run(
+                Some(repo),
+                ["show-ref", "--verify", "--quiet", reference.as_str()],
+            )?;
+            if exit_code_answer(&captured)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Whether `rev` resolves to a commit in `repo`.
@@ -44,19 +49,51 @@ impl Git {
         exit_code_answer(&captured)
     }
 
-    /// Deletes `branch` with `git branch -d`. Returns `false` when git refuses because
-    /// the branch is not fully merged; any other refusal is an error.
+    /// Deletes `branch` with `git branch -d`, once git's merge rule says it is merged:
+    /// contained in its upstream when that resolves, else in HEAD. Returns `false` for a
+    /// branch that is not merged; any other failure is an error.
     pub fn delete_branch_if_merged(&self, repo: &Path, branch: &str) -> Result<bool, GitError> {
-        let captured = self.run_mutation(Some(repo), ["branch", "-d", "--", branch])?;
-        if captured.succeeded() {
-            return Ok(true);
-        }
-        // Git exits 1 for this refusal and for other failures alike; only the
-        // message tells them apart, and LC_ALL=C keeps it in English.
-        if captured.stderr_contains("is not fully merged") {
+        let reference = format!("refs/heads/{branch}");
+        let target = self.merge_target(repo, branch)?;
+        if !self.is_ancestor(repo, &reference, &target)? {
             return Ok(false);
         }
-        Err(captured.failure())
+        self.run_mutation(Some(repo), ["branch", "-d", "--", branch])?
+            .require_success()?;
+        Ok(true)
+    }
+
+    /// The commit `git branch -d` tests `branch` against: its upstream when that commit
+    /// exists, else HEAD. A gone upstream therefore falls back to HEAD, as in git.
+    fn merge_target(&self, repo: &Path, branch: &str) -> Result<String, GitError> {
+        let listed = self.run_mutation(
+            Some(repo),
+            ["branch", "--list", "--format=%(upstream)", "--", branch],
+        )?;
+        listed.require_success()?;
+        let upstream = listed.text()?.trim();
+        if upstream.is_empty() {
+            return Ok("HEAD".to_owned());
+        }
+        let commit = format!("{upstream}^{{commit}}");
+        let captured = self.run_mutation(
+            Some(repo),
+            ["rev-parse", "--verify", "--quiet", commit.as_str()],
+        )?;
+        match captured.exit_code() {
+            Some(0) => Ok(upstream.to_owned()),
+            Some(1) => Ok("HEAD".to_owned()),
+            _ => Err(captured.failure()),
+        }
+    }
+
+    /// Whether `ancestor` is reachable from `descendant`, by `merge-base --is-ancestor`.
+    fn is_ancestor(&self, repo: &Path, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+        let captured = self.run_mutation(
+            Some(repo),
+            ["merge-base", "--is-ancestor", ancestor, descendant],
+        )?;
+        exit_code_answer(&captured)
     }
 
     /// Whether git accepts `name` as a branch name.
@@ -76,36 +113,11 @@ impl Git {
     }
 }
 
-/// The branch part of `refs/remotes/<remote>/<branch>`. The remote is the first
-/// path segment, which matches how git names remotes in practice.
-fn remote_branch_of(reference: &str) -> Option<&str> {
-    let rest = reference.strip_prefix("refs/remotes/")?;
-    let (remote, branch) = rest.split_once('/')?;
-    (!remote.is_empty()).then_some(branch)
-}
-
 /// Maps a yes/no query's exit status: 0 is yes, 1 is no, anything else is a failure.
 fn exit_code_answer(captured: &Captured) -> Result<bool, GitError> {
     match captured.exit_code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         _ => Err(captured.failure()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::remote_branch_of;
-
-    #[test]
-    fn the_branch_is_everything_after_the_remote_segment() {
-        assert_eq!(
-            remote_branch_of("refs/remotes/origin/feature/x"),
-            Some("feature/x")
-        );
-        assert_eq!(remote_branch_of("refs/remotes/origin/main"), Some("main"));
-        assert_eq!(remote_branch_of("refs/remotes/origin"), None);
-        assert_eq!(remote_branch_of("refs/heads/main"), None);
-        assert_eq!(remote_branch_of("refs/remotes//x"), None);
     }
 }

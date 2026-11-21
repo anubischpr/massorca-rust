@@ -17,9 +17,12 @@ pub struct WorktreeEntry {
     pub branch: Option<String>,
     pub bare: bool,
     pub detached: bool,
-    /// Lock reason; `Some("")` when the worktree is locked without a reason.
+    /// Lock reason; `Some("")` when the worktree is locked without a reason. Git before
+    /// 2.31 prints no `locked` line, so this is always `None` there, even when locked.
     pub locked: Option<String>,
-    /// Why git could prune this worktree; `Some("")` when no reason is given.
+    /// Why git could prune this worktree; `Some("")` when no reason is given. Do not use it
+    /// to find a missing workspace: check that its directory exists. Git before 2.31 never
+    /// reports it.
     pub prunable: Option<String>,
 }
 
@@ -64,7 +67,9 @@ fn comparable(path: &Path) -> PathBuf {
 }
 
 impl Git {
-    /// Lists the main worktree and every linked worktree of `repo`.
+    /// Lists the main worktree and every linked worktree of `repo`. Paths with a line break
+    /// are unsupported: before Git 2.36 `worktree list --porcelain` has no `-z` form to
+    /// report them, so `worktree_add` refuses to create one.
     pub fn worktree_list(&self, repo: &Path) -> Result<Vec<WorktreeEntry>, GitError> {
         let captured = self.run(Some(repo), ["worktree", "list", "--porcelain"])?;
         captured.require_success()?;
@@ -72,15 +77,21 @@ impl Git {
         parse_worktree_list(text).map_err(|reason| captured.invalid_output(reason))
     }
 
-    /// Adds a worktree at `path`; a relative `path` resolves against `repo`. When git
-    /// fails, or is killed by a mutation timeout, after registering the worktree or
-    /// creating the branch, this call removes what it created so a retry can succeed.
+    /// Adds a worktree at `path`; a relative `path` resolves against `repo`. A `path` with a
+    /// line break is refused before git runs. When git fails, or is killed by a mutation
+    /// timeout, after registering the worktree or creating the branch, this call removes
+    /// what it created so a retry can succeed.
     pub fn worktree_add(
         &self,
         repo: &Path,
         path: &Path,
         add: WorktreeAdd<'_>,
     ) -> Result<(), GitError> {
+        if path.to_string_lossy().contains(['\n', '\r']) {
+            return Err(GitError::UnsupportedPath {
+                path: path.to_path_buf(),
+            });
+        }
         // `--` ends option parsing, so a path or base that starts with a dash is not an option.
         let mut args = vec![OsString::from("worktree"), OsString::from("add")];
         match add {

@@ -163,6 +163,7 @@ impl Captured {
         }
     }
 
+    /// Reads git's message text. Only `Git::toplevel` may use it (ADR 0008).
     pub(crate) fn stderr_contains(&self, needle: &str) -> bool {
         String::from_utf8_lossy(&self.output.stderr).contains(needle)
     }
