@@ -7,6 +7,9 @@ use crate::components::badge::Badge;
 use crate::components::button::StatePreview;
 use crate::components::icon_button::IconButton;
 use crate::components::list_row::{ListRow, RowLeading, RowLines, TREE_INDENT};
+use crate::components::segmented_control::{
+    Segment, SegmentedControl, SegmentedSize, SegmentedStyle,
+};
 use crate::components::sidebar_row::{HostConnection, SidebarRow, WorkspaceKind};
 use crate::components::usage_ring::UsageSlot;
 use crate::icon::IconName;
@@ -25,6 +28,11 @@ pub fn stories() -> Vec<Story> {
             name: "Sidebar row",
             spec: "SidebarRow.md",
             render: sidebar_row,
+        },
+        Story {
+            name: "Segmented control",
+            spec: "SegmentedControl.md",
+            render: segmented_control,
         },
     ]
 }
@@ -315,6 +323,128 @@ fn list_row(_: &mut Window, cx: &mut App) -> AnyElement {
                     .tooltip("A session title that is much longer than the row and keeps going")
                     .leading(RowLeading::Agent(AgentKind::Codex, AgentIconSize::Small)),
                 ),
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// A row of items that wraps.
+fn row() -> Div {
+    div().flex().flex_wrap().items_center().gap(px(SPACE_2))
+}
+
+fn segmented_control(_: &mut Window, cx: &mut App) -> AnyElement {
+    let two = || vec![Segment::text("One"), Segment::text("Two")];
+    column()
+        .child(variant(
+            "Outlined, text: two and three options",
+            row()
+                .child(SegmentedControl::new(
+                    "seg-search",
+                    "Search in",
+                    vec![Segment::text("Names"), Segment::text("Content")],
+                ))
+                .child(
+                    SegmentedControl::new(
+                        "seg-days",
+                        "View",
+                        vec![
+                            Segment::text("Day"),
+                            Segment::text("Week"),
+                            Segment::text("Month"),
+                        ],
+                    )
+                    .selected(1),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Icon and text, and icon only (each with a name and a tooltip)",
+            row()
+                .child(SegmentedControl::new(
+                    "seg-icon-text",
+                    "View",
+                    vec![
+                        Segment::icon_text(IconName::List, "List"),
+                        Segment::icon_text(IconName::Kanban, "Board"),
+                    ],
+                ))
+                .child(
+                    SegmentedControl::new(
+                        "seg-icons",
+                        "Show",
+                        vec![
+                            Segment::icon_only(IconName::List, "List"),
+                            Segment::icon_only(IconName::Kanban, "Board"),
+                            Segment::icon_only(IconName::Calendar, "Calendar"),
+                        ],
+                    )
+                    .selected(2),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Sunken, on a composer (A30): Chat and Terminal",
+            row().child(
+                SegmentedControl::new(
+                    "seg-chat",
+                    "Mode",
+                    vec![
+                        Segment::icon_text(IconName::MessageSquare, "Chat"),
+                        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+                    ],
+                )
+                .style(SegmentedStyle::Sunken),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Sizes: compact, default and comfortable",
+            row()
+                .child(
+                    SegmentedControl::new("seg-compact", "Size", two())
+                        .size(SegmentedSize::Compact),
+                )
+                .child(SegmentedControl::new("seg-default", "Size", two()))
+                .child(
+                    SegmentedControl::new("seg-comfortable", "Size", two())
+                        .size(SegmentedSize::Comfortable),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Strong selected style, at most once per view",
+            row().child(
+                SegmentedControl::new(
+                    "seg-strong",
+                    "Layout",
+                    vec![Segment::text("Split"), Segment::text("Unified")],
+                )
+                .strong(true),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "States: hover, pressed, focus, a disabled segment and a disabled control",
+            row()
+                .child(
+                    SegmentedControl::new("seg-hover", "Hover", two())
+                        .preview(1, StatePreview::Hover),
+                )
+                .child(
+                    SegmentedControl::new("seg-pressed", "Pressed", two())
+                        .preview(1, StatePreview::Pressed),
+                )
+                .child(
+                    SegmentedControl::new("seg-focus", "Focus", two())
+                        .preview(0, StatePreview::Focus),
+                )
+                .child(SegmentedControl::new(
+                    "seg-off-segment",
+                    "Disabled segment",
+                    vec![Segment::text("On"), Segment::text("Off").disabled(true)],
+                ))
+                .child(SegmentedControl::new("seg-disabled", "Disabled", two()).disabled(true)),
             cx,
         ))
         .into_any_element()

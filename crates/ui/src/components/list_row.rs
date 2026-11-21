@@ -473,12 +473,17 @@ impl RenderOnce for ListRow {
         let interactive = self.activates();
         let fills = row_fills(self.surface, self.selected, &theme);
         let ink = row_ink(&p, self.disabled, self.dimmed, self.title_colour);
-        let focus = self.focus.clone().unwrap_or_else(|| {
-            window
-                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-                .read(cx)
-                .clone()
-        });
+        // GPUI reads a tracked handle's Tab stop from the handle, not from the element.
+        let focus = self
+            .focus
+            .clone()
+            .unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .tab_stop(self.tab_stop && interactive);
         let (rest, border) = match self.preview {
             Some(StatePreview::Hover) => (fills.hover, NONE),
             Some(StatePreview::Pressed) => (fills.pressed, NONE),
@@ -499,7 +504,6 @@ impl RenderOnce for ListRow {
             .id(self.id.clone())
             .group(ROW_GROUP)
             .track_focus(&focus)
-            .tab_stop(self.tab_stop && interactive)
             .flex()
             .items_center()
             .gap(px(SPACE_2))
