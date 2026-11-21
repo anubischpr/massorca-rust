@@ -6,11 +6,14 @@
 //! the rows. Paths use `/` and carry no leading slash.
 
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::empty_state::{EmptyState, EmptyStateVariant};
+use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::list_row::{
     ListMove, RowDensity, RowLines, TREE_INDENT, list_move, move_index, row_height,
 };
 use crate::components::search_field::{SearchField, SearchFieldEvent};
 use crate::components::segmented_control::{Segment, SegmentedControl};
+use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::tooltip::{Tooltip, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::Surface;
@@ -637,10 +640,14 @@ pub enum FileTreeEvent {
     Scope(SearchScope),
     /// A row asked for its menu: a right click, Shift+F10 or the Menu key.
     ContextMenu(SharedString),
+    /// Retry was pressed in the error state.
+    Retry,
 }
 
 /// Fully transparent: no fill at rest, and no focus ring unless the row has the cursor.
 const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
+/// Depths of the loading placeholders, which are drawn tree-shaped.
+const LOADING_DEPTHS: [usize; 6] = [0, 1, 1, 0, 1, 0];
 
 /// The file tree: a search field with its Names and Content scope, above the rows. The
 /// entity owns its [`FileTreeState`] and emits [`FileTreeEvent`]s.
@@ -725,6 +732,11 @@ impl FileTreeView {
         cx.notify();
     }
 
+    pub fn set_status(&mut self, status: FileTreeStatus, cx: &mut Context<Self>) {
+        self.state.set_status(status);
+        cx.notify();
+    }
+
     /// The matching lines of the Content scope, from the owner's search.
     pub fn set_content(&mut self, matches: Vec<ContentMatch>, cx: &mut Context<Self>) {
         self.state.set_content(matches);
@@ -737,6 +749,11 @@ impl FileTreeView {
             cx.emit(FileTreeEvent::Query(query.clone()));
             cx.notify();
         }
+    }
+
+    fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search
+            .update(cx, |search, cx| search.set_query("", window, cx));
     }
 
     fn set_scope(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -863,11 +880,22 @@ impl FileTreeView {
         true
     }
 
-    /// The rows of the current scope.
+    fn has_rows(&self) -> bool {
+        match self.state.scope() {
+            SearchScope::Names => !self.state.visible().is_empty(),
+            SearchScope::Content => !self.state.content().is_empty(),
+        }
+    }
+
+    /// The rows of the current scope, or the empty state that says why there are none.
     fn list(&self, context: RowContext) -> AnyElement {
+        let entity = context.entity.clone();
         match self.state.scope() {
             SearchScope::Names => {
                 let rows = self.state.visible();
+                if rows.is_empty() {
+                    return self.empty_list(&entity);
+                }
                 uniform_list((self.id.clone(), "rows"), rows.len(), move |range, _, _| {
                     range
                         .map(|index| render_row(&context, index, &rows[index]))
@@ -880,6 +908,9 @@ impl FileTreeView {
             }
             SearchScope::Content => {
                 let matches = self.state.content().to_vec();
+                if matches.is_empty() {
+                    return self.empty_list(&entity);
+                }
                 uniform_list(
                     (self.id.clone(), "matches"),
                     matches.len(),
@@ -895,6 +926,29 @@ impl FileTreeView {
             }
         }
     }
+
+    /// "No matches for …" with Clear search while a query runs; otherwise the folder is empty.
+    fn empty_list(&self, entity: &Entity<Self>) -> AnyElement {
+        let query = self.state.query().to_owned();
+        let state = if query.is_empty() {
+            EmptyState::new((self.id.clone(), "empty"), "This folder is empty.")
+                .variant(EmptyStateVariant::Compact)
+        } else {
+            let entity = entity.clone();
+            EmptyState::filtered((self.id.clone(), "filtered"), &query, move |window, cx| {
+                entity.update(cx, |tree, cx| tree.clear_search(window, cx));
+            })
+        };
+        div()
+            .debug_selector(|| "file-tree-empty".into())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .p(px(SPACE_2))
+            .child(state)
+            .into_any_element()
+    }
 }
 
 /// What every row needs from its tree, captured once per frame.
@@ -907,6 +961,26 @@ struct RowContext {
     focused: bool,
     cursor: usize,
     active: Option<SharedString>,
+}
+
+/// Tree-shaped placeholders while the listing loads. They do not spin.
+fn loading_rows(height: f32) -> AnyElement {
+    div()
+        .debug_selector(|| "file-tree-loading".into())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .children(LOADING_DEPTHS.iter().map(|&depth| {
+            div()
+                .flex()
+                .items_center()
+                .h(px(height))
+                .pl(px(SPACE_2 + depth as f32 * TREE_INDENT))
+                .pr(px(SPACE_2))
+                .child(Skeleton::line(LineWidth::Most))
+        }))
+        .into_any_element()
 }
 
 fn render_row(context: &RowContext, index: usize, row: &VisibleRow) -> AnyElement {
@@ -1094,7 +1168,28 @@ impl Render for FileTreeView {
             entity.update(cx, |tree, cx| tree.set_scope(index, cx));
         });
 
-        let body = self.list(context);
+        let body = match self.state.status() {
+            FileTreeStatus::Loading => loading_rows(context.height),
+            FileTreeStatus::Ready => self.list(context),
+            FileTreeStatus::Error => {
+                let retry = context.entity.clone();
+                let error =
+                    ErrorState::new((self.id.clone(), "error"), "Could not read the file list.")
+                        .variant(ErrorStateVariant::Section)
+                        .on_retry(move |_, cx| {
+                            retry.update(cx, |_, cx| cx.emit(FileTreeEvent::Retry));
+                        });
+                let rows = self.has_rows().then(|| self.list(context));
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(error)
+                    .children(rows)
+                    .into_any_element()
+            }
+        };
 
         div()
             .id(self.id.clone())
