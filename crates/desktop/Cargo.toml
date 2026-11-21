@@ -1,0 +1,20 @@
+[package]
+name = "massorca-desktop"
+description = "MassOrca desktop app on GPUI: the shell, view models and data sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+gpui.workspace = true
+gpui_platform.workspace = true
+massorca-ui.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
