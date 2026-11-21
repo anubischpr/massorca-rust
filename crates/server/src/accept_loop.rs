@@ -19,7 +19,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// Pause after a failed accept, so a persistent failure does not spin.
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
-/// Serves until shutdown. The lock and the core registrations live here so that they are released only after the connections are gone.
+/// Serves until shutdown. The lock and the core registrations live here so that they are released only after the connections
+/// and the work they started are gone.
 pub(crate) async fn run(
     listener: Listener,
     state: Arc<AppState>,
@@ -55,4 +56,6 @@ pub(crate) async fn run(
         connections.abort_all();
         while connections.join_next().await.is_some() {}
     }
+    // Aborted handlers and store calls that were already running finish first, so the lock covers all store access.
+    state.activity.idle().await;
 }

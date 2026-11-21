@@ -1,6 +1,7 @@
 //! Service lifecycle: one service per profile, independent profiles, and a shutdown that frees the profile.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION};
@@ -252,4 +253,69 @@ async fn a_squatter_on_the_endpoint_name_stops_the_service_from_starting() {
         started.is_err(),
         "a service must not start beside a listener that already holds the endpoint name"
     );
+}
+
+/// Sets its flag when dropped; a handler future is dropped only when it finishes or the runtime cancels it.
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn a_handler_still_running_at_the_grace_limit_is_dropped_before_the_profile_is_released() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let demo = Owner::Extension("demo".to_owned());
+    let _capability = running
+        .registries()
+        .capabilities
+        .register("demo/1", demo.clone())
+        .expect("the capability registers");
+    let entered = Arc::new(Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let (started, flag) = (Arc::clone(&entered), Arc::clone(&dropped));
+    let _stuck = running
+        .registries()
+        .methods
+        .register(
+            demo,
+            "ext.demo.stuck",
+            "demo/1",
+            Permission::Read,
+            move |_ctx: RequestCtx, _params: Value| {
+                let (started, flag) = (Arc::clone(&started), Arc::clone(&flag));
+                async move {
+                    let _sentinel = DropFlag(flag);
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                    Ok::<Value, ErrorBody>(Value::Null)
+                }
+            },
+        )
+        .expect("the method registers");
+
+    let client = connect(home.path(), "default").await;
+    let call = tokio::spawn(async move {
+        client
+            .call::<_, Value>("ext.demo.stuck", &Value::Null)
+            .await
+    });
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the handler started");
+
+    running.shutdown_handle().shutdown();
+    timeout(Duration::from_secs(20), running.wait())
+        .await
+        .expect("the service stops after its grace period")
+        .expect("the service stops cleanly");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the handler was dropped before the profile was released, not left running"
+    );
+    // The call ends with an error once its connection is gone.
+    let _ = call.await;
 }

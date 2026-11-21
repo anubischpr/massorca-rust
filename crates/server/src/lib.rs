@@ -1,7 +1,9 @@
 //! The MassOrca service: one per profile, serving the protocol over a local socket (ADR 0002, 0003), with the registries
 //! through which core and extensions contribute methods, capabilities, commands and settings (extensions.md section 9).
 
+mod abort_guard;
 mod accept_loop;
+mod activity;
 mod capability;
 mod commands;
 mod connection;

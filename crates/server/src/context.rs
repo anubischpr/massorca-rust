@@ -6,6 +6,7 @@ use massorca_core_store::Store;
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 
+use crate::activity::Activity;
 use crate::capability::CapabilityRegistry;
 use crate::commands::CommandRegistry;
 use crate::event_bus::EventBus;
@@ -33,6 +34,8 @@ pub struct AppState {
     pub registries: Registries,
     pub server: PeerInfo,
     pub started_at_ms: i64,
+    /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
+    pub(crate) activity: Activity,
 }
 
 /// The context a handler receives. The principal is read from here only.

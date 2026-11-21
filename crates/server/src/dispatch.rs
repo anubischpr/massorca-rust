@@ -7,6 +7,8 @@ use massorca_protocol::methods::events::Subscribed;
 use massorca_protocol::{ErrorBody, Message, codes};
 use serde_json::Value;
 
+use crate::abort_guard::AbortOnDrop;
+use crate::activity::Activity;
 use crate::context::RequestCtx;
 use crate::method::{Handler, StreamSource, encode};
 use crate::permission::{Principal, authorize};
@@ -49,23 +51,33 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
 
     match &entry.value.handler {
         Handler::Call(call) => {
-            let result = guarded(&method, call(ctx, params)).await;
+            let result = guarded(&session.state.activity, &method, call(ctx, params)).await;
             reply(&session, id, result).await;
         }
-        Handler::Stream(open) => match guarded(&method, open(ctx, params)).await {
-            Ok(source) => open_stream(&session, id, source).await,
-            Err(error) => reply(&session, id, Err(error)).await,
-        },
+        Handler::Stream(open) => {
+            match guarded(&session.state.activity, &method, open(ctx, params)).await {
+                Ok(source) => open_stream(&session, id, source).await,
+                Err(error) => reply(&session, id, Err(error)).await,
+            }
+        }
     }
 }
 
 /// Runs a handler on its own task, so a panic in it is answered as `internal` and the request is never left waiting.
-async fn guarded<T, F>(method: &str, future: F) -> Result<T, ErrorBody>
+/// The handler counts as activity until its future is dropped, and dropping this one aborts the task, so an aborted
+/// connection cannot leave a handler running.
+async fn guarded<T, F>(activity: &Activity, method: &str, future: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,
     F: Future<Output = Result<T, ErrorBody>> + Send + 'static,
 {
-    match tokio::spawn(future).await {
+    let work = activity.enter();
+    let handler = tokio::spawn(async move {
+        let _work = work;
+        future.await
+    });
+    let _abort = AbortOnDrop::new(handler.abort_handle());
+    match handler.await {
         Ok(result) => result,
         Err(error) if error.is_panic() => {
             tracing::error!(method, "a method handler panicked");

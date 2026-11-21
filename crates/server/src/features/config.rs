@@ -95,7 +95,7 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     let json = serde_json::to_string(&params.value)
         .map_err(|error| ErrorBody::new(codes::INTERNAL, error.to_string()))?;
     let (owner, key) = (decl.owner.to_string(), decl.key.clone());
-    store_blocking::run(ctx.state.store.clone(), move |store| {
+    store_blocking::run(&ctx.state, move |store| {
         store.set_setting(&owner, &key, &json)
     })
     .await?;
@@ -103,8 +103,7 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
 }
 
 async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ConfigList, ErrorBody> {
-    let rows =
-        store_blocking::run(ctx.state.store.clone(), |store| store.list_settings(None)).await?;
+    let rows = store_blocking::run(&ctx.state, |store| store.list_settings(None)).await?;
     let mut stored: HashMap<(String, String), String> = rows
         .into_iter()
         .map(|(owner, key, json)| ((owner, key), json))
@@ -138,10 +137,8 @@ fn find(
 
 async fn stored_value(ctx: &RequestCtx, decl: &SettingDecl) -> Result<Option<Value>, ErrorBody> {
     let (owner, key) = (decl.owner.to_string(), decl.key.clone());
-    let json = store_blocking::run(ctx.state.store.clone(), move |store| {
-        store.get_setting(&owner, &key)
-    })
-    .await?;
+    let json =
+        store_blocking::run(&ctx.state, move |store| store.get_setting(&owner, &key)).await?;
     json.as_deref().map(stored_json).transpose()
 }
 

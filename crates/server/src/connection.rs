@@ -5,8 +5,9 @@ use std::sync::Arc;
 use interprocess::local_socket::tokio::Stream;
 use massorca_protocol::{ErrorBody, Message, codes};
 use tokio::sync::mpsc;
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::JoinSet;
 
+use crate::abort_guard::AbortOnDrop;
 use crate::context::AppState;
 use crate::dispatch;
 use crate::handshake;
@@ -28,9 +29,9 @@ pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: Shut
 
     // Aborting on drop keeps a cancelled connection from leaving its socket open.
     let reader = tokio::spawn(transport::read_frames(Arc::clone(&stream), inbound_tx));
-    let _reader = AbortOnDrop(reader.abort_handle());
+    let _reader = AbortOnDrop::new(reader.abort_handle());
     let writer = tokio::spawn(transport::write_frames(Arc::clone(&stream), outbound_rx));
-    let _writer = AbortOnDrop(writer.abort_handle());
+    let _writer = AbortOnDrop::new(writer.abort_handle());
     // The socket closes once both tasks have dropped their clones.
     drop(stream);
 
@@ -94,13 +95,5 @@ fn route(message: Message, session: &Arc<Session>, requests: &mut JoinSet<()>) {
         Message::Cancel { stream } => session.streams.release(stream),
         // A repeated hello, frames only the service sends, and unknown types carry nothing to act on.
         _ => {}
-    }
-}
-
-struct AbortOnDrop(AbortHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
     }
 }

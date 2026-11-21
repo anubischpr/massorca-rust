@@ -16,6 +16,7 @@ use massorca_protocol::methods::service::ServiceInfo;
 use tokio::task::JoinHandle;
 
 use crate::accept_loop;
+use crate::activity::Activity;
 use crate::context::{AppState, Registries};
 use crate::error::ServiceError;
 use crate::event_bus::EventBus;
@@ -66,6 +67,7 @@ impl Service {
                 version: server_version.clone(),
             },
             started_at_ms,
+            activity: Activity::default(),
         });
         service_json::write(&profile, &server_version, started_at_ms)?;
 
