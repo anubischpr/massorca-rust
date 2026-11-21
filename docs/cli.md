@@ -32,10 +32,36 @@ letters, digits, `-` or `_`.
 | `config get <KEY> [--owner OWNER]` | Shows one setting and whether it still has its default value. |
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
+| `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. |
+| `project list` | Lists every project, ordered by name. |
+| `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
+| `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
+| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. |
+| `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
+| `workspace rm <WORKSPACE> [--force]` | Removes a workspace. `--force` discards uncommitted changes in a worktree. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
 which must be an absolute path.
+
+### Projects and workspaces
+
+A relative path given to `project add`, `workspace create --path`, or `--workspaces-root`
+is taken from the directory the command runs in. Workspaces of a project go under its
+workspaces root, which defaults to `workspaces.default_root` (a folder named after the
+project) at the time the project is added.
+
+`workspace rm` behaves as follows:
+
+- A worktree is removed with its directory. Uncommitted changes refuse the removal with
+  `workspace.dirty` and exit 1; `--force` discards them.
+- Its branch is deleted only when git proves the branch is merged. Otherwise the output
+  says `kept branch <B>: not merged`.
+- A folder workspace is forgotten and its directory stays (`kept directory <PATH>`).
+- A directory that git no longer registers as a worktree is forgotten and left in place.
+- The main worktree of a repository is never removed, and a locked worktree is refused
+  with `workspace.locked`.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the
@@ -82,4 +108,6 @@ Each profile lives in `<home>/profiles/<name>/`. The service writes daily log fi
 
 ## Not yet available
 
-Projects and workspaces commands, and extension commands, arrive in later milestones.
+Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
+generated names, setup scripts, terminal and agent guards on removal, squash-merge detection,
+remote hosts) are not available yet.
