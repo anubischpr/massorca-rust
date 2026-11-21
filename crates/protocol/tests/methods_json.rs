@@ -326,8 +326,26 @@ fn workspace_removed_omits_reason_when_branch_was_deleted() {
             workspace: sample_workspace(),
             branch_deleted: true,
             branch_kept_reason: None,
+            directory_kept: false,
         },
         &json!({ "workspace": sample_workspace_json(), "branch_deleted": true }),
+    );
+}
+
+#[test]
+fn workspace_removed_says_when_a_directory_was_kept() {
+    assert_wire(
+        &workspaces::WorkspaceRemoved {
+            workspace: sample_workspace(),
+            branch_deleted: false,
+            branch_kept_reason: None,
+            directory_kept: true,
+        },
+        &json!({
+            "workspace": sample_workspace_json(),
+            "branch_deleted": false,
+            "directory_kept": true
+        }),
     );
 }
 
@@ -338,6 +356,7 @@ fn workspace_removed_carries_reason_when_branch_was_kept() {
             workspace: sample_workspace(),
             branch_deleted: false,
             branch_kept_reason: Some("branch has unmerged commits".to_owned()),
+            directory_kept: false,
         },
         &json!({
             "workspace": sample_workspace_json(),
