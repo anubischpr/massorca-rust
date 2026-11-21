@@ -1,14 +1,32 @@
 //! ScrollArea: the scroll container for lists, trees, transcripts and wide tables
-//! (docs/design/components/ScrollArea.md). This file holds the scroll rules as plain functions: the
-//! thumb's geometry, the amount each key scrolls and the clamp at either end. The element that draws
-//! the area and its thumb builds on them.
+//! (docs/design/components/ScrollArea.md). The viewport scrolls its content under a thin overlay
+//! thumb with no track fill. The wheel, the keys, a thumb drag and a click on the track all scroll
+//! it. The thumb geometry and the key rules are plain functions below; the element draws them.
 
-use crate::tokens::{SIZE_CONTROL_DEFAULT, SIZE_SCROLLBAR_MIN_THUMB};
+use crate::components::switch::ease;
+use crate::theme::ActiveTheme;
+use crate::tokens::{
+    Color, DURATION_FAST, EASE_STANDARD, RADIUS_XS, SIZE_CONTROL_DEFAULT, SIZE_SCROLLBAR_MIN_THUMB,
+    SIZE_SCROLLBAR_THICKNESS, SPACE_HALF,
+};
+use gpui::{
+    Animation, AnimationExt, AnyElement, App, AppContext, Context, DragMoveEvent, ElementId,
+    EmptyView, Entity, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseUpEvent, ParentElement, Pixels, Point, RenderOnce, ScrollHandle,
+    StatefulInteractiveElement, Styled, Task, Window, div, point, px,
+};
+use std::fmt;
+use std::time::Duration;
+
+/// No colour: the focus ring's rest state, which keeps the 2 px inset border without drawing it.
+const NONE: Color = Color::rgba8(0, 0, 0, 0.0);
 
 /// Time after scrolling stops before an overlay thumb hides (design-system 4.8).
 pub const SCROLLBAR_HIDE_DELAY_MS: u64 = 1000;
 /// Distance one Up, Down, Left or Right press scrolls: the 28 px desktop row.
 pub const ROW_STEP_PX: f32 = SIZE_CONTROL_DEFAULT;
+/// Gap between a thumb and the edge it runs along (`space.half`).
+const THUMB_INSET: f32 = SPACE_HALF;
 
 /// Which directions a scroll area scrolls. Each thumb shows only while its direction overflows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20,7 +38,7 @@ pub enum ScrollAxis {
 }
 
 impl ScrollAxis {
-    pub fn supports(self, track: Track) -> bool {
+    fn supports(self, track: Track) -> bool {
         match track {
             Track::Vertical => self != Self::Horizontal,
             Track::Horizontal => self != Self::Vertical,
@@ -100,6 +118,441 @@ pub fn scrolled_after(scrolled: f32, overflow: f32, scroll: KeyScroll) -> f32 {
         KeyScroll::By(step) => (scrolled + step).clamp(0.0, overflow),
         KeyScroll::Start => 0.0,
         KeyScroll::End => overflow,
+    }
+}
+
+/// Forces a visual state so the gallery can show it without the pointer or the keyboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollPreview {
+    Thumbs,
+    Focus,
+}
+
+/// A scroll container with a thin overlay thumb. Give it a fixed size; the content inside scrolls.
+#[derive(IntoElement)]
+pub struct ScrollArea {
+    id: ElementId,
+    axis: ScrollAxis,
+    children: Vec<AnyElement>,
+    handle: Option<ScrollHandle>,
+    focus: Option<FocusHandle>,
+    focusable: bool,
+    preview: Option<ScrollPreview>,
+}
+
+impl fmt::Debug for ScrollArea {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScrollArea")
+            .field("id", &self.id)
+            .field("axis", &self.axis)
+            .field("focusable", &self.focusable)
+            .field("children", &self.children.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScrollArea {
+    pub fn new(id: impl Into<ElementId>) -> Self {
+        Self {
+            id: id.into(),
+            axis: ScrollAxis::default(),
+            children: Vec::new(),
+            handle: None,
+            focus: None,
+            focusable: true,
+            preview: None,
+        }
+    }
+
+    /// Keyboard focus lives with the caller; without it the area keeps its own.
+    pub fn focus_handle(mut self, focus: FocusHandle) -> Self {
+        self.focus = Some(focus);
+        self
+    }
+
+    pub fn axis(mut self, axis: ScrollAxis) -> Self {
+        self.axis = axis;
+        self
+    }
+
+    /// One content element, in order. Pass a handle to scroll the area from outside.
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+
+    pub fn handle(mut self, handle: ScrollHandle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+
+    /// Whether the viewport takes a Tab stop. Turn it off when the content has focusable
+    /// controls: those take Tab themselves, and the arrow keys then reach the area from them.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Forces a visual state (gallery only).
+    pub fn preview(mut self, preview: ScrollPreview) -> Self {
+        self.preview = Some(preview);
+        self
+    }
+}
+
+/// A thumb drag in progress: the track, the pointer along it and the scrolled amount at press.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Drag {
+    track: Track,
+    pointer: f32,
+    scrolled: f32,
+}
+
+/// What the area keeps between frames: its scroll handle, focus stop, thumb visibility and drag.
+struct ScrollAreaState {
+    handle: ScrollHandle,
+    focus: FocusHandle,
+    shown: bool,
+    generation: usize,
+    hovered: bool,
+    hide: Option<Task<()>>,
+    drag: Option<Drag>,
+}
+
+impl ScrollAreaState {
+    /// Hides the thumb once scrolling has stopped, unless the pointer still holds it.
+    fn hide_if_idle(&mut self, cx: &mut Context<Self>) {
+        if self.hovered || self.drag.is_some() || !self.shown {
+            return;
+        }
+        self.shown = false;
+        self.generation += 1;
+        cx.notify();
+    }
+}
+
+/// Shows the thumb and restarts its hide timer. Each call replaces the timer, so the thumb stays
+/// for the full delay after the last scroll.
+fn reveal(state: &Entity<ScrollAreaState>, cx: &mut App) {
+    let weak = state.downgrade();
+    let hide = cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(SCROLLBAR_HIDE_DELAY_MS))
+            .await;
+        weak.update(cx, |state, cx| state.hide_if_idle(cx)).ok();
+    });
+    state.update(cx, |state, cx| {
+        if !state.shown {
+            state.shown = true;
+            state.generation += 1;
+        }
+        state.hide = Some(hide);
+        cx.notify();
+    });
+}
+
+/// The payload of a thumb drag; the thumb's own move handler reads which track it belongs to.
+struct DraggedThumb;
+
+fn along(track: Track, point: Point<Pixels>) -> f32 {
+    match track {
+        Track::Vertical => f32::from(point.y),
+        Track::Horizontal => f32::from(point.x),
+    }
+}
+
+fn viewport_len(handle: &ScrollHandle, track: Track) -> f32 {
+    let size = handle.bounds().size;
+    match track {
+        Track::Vertical => f32::from(size.height),
+        Track::Horizontal => f32::from(size.width),
+    }
+}
+
+fn origin_along(handle: &ScrollHandle, track: Track) -> f32 {
+    along(track, handle.bounds().origin)
+}
+
+fn overflow_len(handle: &ScrollHandle, track: Track) -> f32 {
+    let max = handle.max_offset();
+    match track {
+        Track::Vertical => f32::from(max.y),
+        Track::Horizontal => f32::from(max.x),
+    }
+}
+
+/// The scrolled amount along `track`. Offsets are negative once a list has moved.
+fn scrolled_len(handle: &ScrollHandle, track: Track) -> f32 {
+    -along(track, handle.offset())
+}
+
+fn thumb_on(handle: &ScrollHandle, track: Track) -> Option<Thumb> {
+    thumb(
+        viewport_len(handle, track),
+        overflow_len(handle, track),
+        scrolled_len(handle, track),
+    )
+}
+
+/// Sets the scrolled amount along `track`, keeping the other axis where it is.
+fn set_scrolled(handle: &ScrollHandle, track: Track, scrolled: f32) {
+    let offset = handle.offset();
+    let value = px(-scrolled);
+    let next = match track {
+        Track::Vertical => point(offset.x, value),
+        Track::Horizontal => point(value, offset.y),
+    };
+    handle.set_offset(next);
+}
+
+/// Ends a press: a drag stops and the thumb hides after its delay, unless the pointer is over it.
+fn end_press(
+    state: Entity<ScrollAreaState>,
+) -> impl Fn(&MouseUpEvent, &mut gpui::Window, &mut App) + 'static {
+    move |_, _, cx| {
+        state.update(cx, |state, _| state.drag = None);
+        reveal(&state, cx);
+    }
+}
+
+impl RenderOnce for ScrollArea {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let p = cx.theme().palette;
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| ScrollAreaState {
+            handle: ScrollHandle::new(),
+            focus: cx.focus_handle(),
+            shown: false,
+            generation: 0,
+            hovered: false,
+            hide: None,
+            drag: None,
+        });
+        let (own_handle, own_focus, shown, generation, drag) = {
+            let state = state.read(cx);
+            (
+                state.handle.clone(),
+                state.focus.clone(),
+                state.shown,
+                state.generation,
+                state.drag,
+            )
+        };
+        let handle = self.handle.clone().unwrap_or(own_handle);
+        let focus = self.focus.clone().unwrap_or(own_focus);
+        let previewed = self.preview;
+        let shown = shown || previewed == Some(ScrollPreview::Thumbs);
+        // Thumbs take the pointer only while visible, so a hidden one never covers content.
+        let interactive = shown || drag.is_some();
+        let axis = self.axis;
+        let reduce_motion = cx.reduce_motion();
+
+        let mut viewport = div()
+            .id(self.id.clone())
+            .size_full()
+            .track_scroll(&handle)
+            .track_focus(&focus)
+            .tab_stop(self.focusable)
+            .border_2()
+            .border_color(if previewed == Some(ScrollPreview::Focus) {
+                p.border.focus
+            } else {
+                NONE
+            })
+            .focus_visible(|s| s.border_color(p.border.focus));
+        viewport = match axis {
+            ScrollAxis::Vertical => viewport.overflow_y_scroll(),
+            ScrollAxis::Horizontal => viewport.overflow_x_scroll(),
+            ScrollAxis::Both => viewport.overflow_scroll(),
+        };
+        viewport = viewport
+            .on_scroll({
+                let state = state.clone();
+                move |_, _, cx| reveal(&state, cx)
+            })
+            .on_key_down({
+                let state = state.clone();
+                let handle = handle.clone();
+                let focus = focus.clone();
+                move |event: &KeyDownEvent, window, cx| {
+                    if !focus.is_focused(window) {
+                        return;
+                    }
+                    let page = viewport_len(&handle, Track::Vertical);
+                    let Some((track, scroll)) = key_scroll(event.keystroke.key.as_str(), page)
+                    else {
+                        return;
+                    };
+                    if !axis.supports(track) {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let next = scrolled_after(
+                        scrolled_len(&handle, track),
+                        overflow_len(&handle, track),
+                        scroll,
+                    );
+                    set_scrolled(&handle, track, next);
+                    reveal(&state, cx);
+                }
+            })
+            .children(self.children);
+
+        let mut root = div()
+            .id((self.id.clone(), "root"))
+            .relative()
+            .size_full()
+            .on_hover({
+                let state = state.clone();
+                move |hovered: &bool, _, cx| {
+                    state.update(cx, |state, _| state.hovered = *hovered);
+                    reveal(&state, cx);
+                }
+            })
+            .on_mouse_up(MouseButton::Left, end_press(state.clone()))
+            .on_mouse_up_out(MouseButton::Left, end_press(state.clone()))
+            .child(viewport);
+
+        for track in [Track::Vertical, Track::Horizontal] {
+            if !axis.supports(track) {
+                continue;
+            }
+            let Some(geometry) = thumb_on(&handle, track) else {
+                continue;
+            };
+            let colour = p.border.strong;
+            let (strip, bar) = match track {
+                Track::Vertical => (
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right_0()
+                        .w(px(SIZE_SCROLLBAR_THICKNESS + 2.0 * THUMB_INSET)),
+                    div()
+                        .absolute()
+                        .top(px(geometry.start))
+                        .right(px(THUMB_INSET))
+                        .w(px(SIZE_SCROLLBAR_THICKNESS))
+                        .h(px(geometry.length)),
+                ),
+                Track::Horizontal => (
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(SIZE_SCROLLBAR_THICKNESS + 2.0 * THUMB_INSET)),
+                    div()
+                        .absolute()
+                        .left(px(geometry.start))
+                        .bottom(px(THUMB_INSET))
+                        .h(px(SIZE_SCROLLBAR_THICKNESS))
+                        .w(px(geometry.length)),
+                ),
+            };
+            let (thumb_name, track_name) = match track {
+                Track::Vertical => ("thumb-v", "track-v"),
+                Track::Horizontal => ("thumb-h", "track-h"),
+            };
+            let mut bar = bar
+                .id((self.id.clone(), thumb_name))
+                .debug_selector(move || thumb_name.into())
+                .rounded(px(RADIUS_XS))
+                .bg(colour)
+                .opacity(if shown { 1.0 } else { 0.0 });
+            if interactive {
+                bar = bar
+                    .on_mouse_down(MouseButton::Left, {
+                        let state = state.clone();
+                        let handle = handle.clone();
+                        move |event: &MouseDownEvent, _, cx| {
+                            // No stop_propagation here: GPUI starts the drag from this element's
+                            // own press. The track ignores a press inside the thumb.
+                            let press = Drag {
+                                track,
+                                pointer: along(track, event.position),
+                                scrolled: scrolled_len(&handle, track),
+                            };
+                            state.update(cx, |state, cx| {
+                                state.drag = Some(press);
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .on_drag(DraggedThumb, |_, _, _, cx| cx.new(|_| EmptyView))
+                    .on_drag_move::<DraggedThumb>({
+                        let state = state.clone();
+                        let handle = handle.clone();
+                        move |event: &DragMoveEvent<DraggedThumb>, _, cx| {
+                            let Some(drag) = state.read(cx).drag else {
+                                return;
+                            };
+                            if drag.track != track {
+                                return;
+                            }
+                            let delta = along(track, event.event.position) - drag.pointer;
+                            let next = dragged_scroll(
+                                viewport_len(&handle, track),
+                                overflow_len(&handle, track),
+                                drag.scrolled,
+                                delta,
+                            );
+                            set_scrolled(&handle, track, next);
+                            state.update(cx, |_, cx| cx.notify());
+                        }
+                    });
+            }
+            // A change of visibility bumps `generation`, which restarts the fade; the first frame
+            // draws the thumb at its resting opacity.
+            let bar = if generation > 0 && !reduce_motion {
+                let fading_in = shown;
+                let fade = format!(
+                    "thumb-fade-{}-{generation}",
+                    if track == Track::Vertical { "v" } else { "h" }
+                );
+                bar.with_animation(
+                    (self.id.clone(), fade),
+                    Animation::new(DURATION_FAST),
+                    move |el, delta| {
+                        let t = ease(EASE_STANDARD, delta);
+                        el.opacity(if fading_in { t } else { 1.0 - t })
+                    },
+                )
+                .into_any_element()
+            } else {
+                bar.into_any_element()
+            };
+            let mut strip = strip;
+            if interactive {
+                strip = strip.on_mouse_down(MouseButton::Left, {
+                    let state = state.clone();
+                    let handle = handle.clone();
+                    move |event: &MouseDownEvent, _, cx| {
+                        let pointer = along(track, event.position) - origin_along(&handle, track);
+                        let Some(geometry) = thumb_on(&handle, track) else {
+                            return;
+                        };
+                        let page = viewport_len(&handle, track);
+                        let step = if pointer < geometry.start {
+                            -page
+                        } else if pointer > geometry.start + geometry.length {
+                            page
+                        } else {
+                            return;
+                        };
+                        let next = scrolled_after(
+                            scrolled_len(&handle, track),
+                            overflow_len(&handle, track),
+                            KeyScroll::By(step),
+                        );
+                        set_scrolled(&handle, track, next);
+                        reveal(&state, cx);
+                    }
+                });
+            }
+            root = root.child(strip.debug_selector(move || track_name.into()).child(bar));
+        }
+        root
     }
 }
 
