@@ -94,6 +94,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Lists, checks, removes and discovers the hosts this client paired with, and installs new ones over SSH.
+    Host {
+        #[command(subcommand)]
+        command: HostCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
@@ -317,4 +322,62 @@ pub enum DeviceCommand {
 pub enum ServerCommand {
     /// Shows the listeners, server pin, devices and pending offers; on this computer also Tailscale.
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HostCommand {
+    /// Lists the hosts this client paired with. Makes no connection.
+    List,
+    /// Shows one host: addresses, pin, device and scopes.
+    Show {
+        /// Host name.
+        name: String,
+    },
+    /// Forgets a host. Unless --keep-device, first revokes this device on the server when it answers.
+    Remove(HostRemoveArgs),
+    /// Connects to one host, or to every host, and reports whether it answers.
+    Status {
+        /// Host name. Without it, every host is checked.
+        name: Option<String>,
+    },
+    /// Lists the online Tailscale peers, and which of them run massorca.
+    Discover,
+    /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
+    AddSsh(HostAddSshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HostRemoveArgs {
+    /// Host name.
+    pub name: String,
+    /// Forget the host without revoking this device on the server.
+    #[arg(long)]
+    pub keep_device: bool,
+    /// Also stops and removes the service over SSH. Needs --ssh.
+    #[arg(long, requires = "ssh")]
+    pub uninstall: bool,
+    /// SSH destination of the host to uninstall, as ssh takes it: [user@]host.
+    #[arg(long, value_name = "TARGET", requires = "uninstall")]
+    pub ssh: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct HostAddSshArgs {
+    /// SSH destination, as ssh takes it: [user@]host.
+    pub target: String,
+    /// Linux massorca binary to install: an ELF file for x86_64 or aarch64.
+    #[arg(long, value_name = "PATH")]
+    pub binary: PathBuf,
+    /// Host name to store the server as. Defaults to the server's name in the pairing offer.
+    #[arg(long, value_name = "HOST")]
+    pub name: Option<String>,
+    /// Listen address for the service, repeatable. Defaults to tailscale.
+    #[arg(long = "listen", value_name = "ADDR")]
+    pub listen: Vec<String>,
+    /// Extra option for ssh, repeatable: --ssh-arg -p --ssh-arg 2222.
+    #[arg(long = "ssh-arg", value_name = "ARG", allow_hyphen_values = true)]
+    pub ssh_arg: Vec<String>,
+    /// Name this computer has on the server. Defaults to this computer's host name.
+    #[arg(long, value_name = "NAME")]
+    pub device_name: Option<String>,
 }

@@ -10,6 +10,7 @@ use massorca_protocol::pairing::Offer;
 use crate::args::{PairAcceptArgs, PairOfferArgs};
 use crate::connect::{connect, peer};
 use crate::error::CliError;
+use crate::host::records::record_lines;
 use crate::output::Output;
 use crate::target::Target;
 use crate::time_text;
@@ -84,29 +85,4 @@ pub fn default_device_name() -> String {
         .map(|name| name.trim().to_owned())
         .find(|name| !name.is_empty())
         .unwrap_or_else(|| FALLBACK_DEVICE_NAME.to_owned())
-}
-
-/// What `pair accept` shows of the stored host.
-fn record_lines(record: &massorca_client::HostRecord) -> Vec<String> {
-    let mut lines = vec![
-        format!("host: {}", record.name),
-        format!("server: {}", record.server),
-    ];
-    lines.extend(
-        record
-            .addresses
-            .iter()
-            .map(|address| format!("address: {address}")),
-    );
-    lines.push(format!("pin: {}", record.pin));
-    lines.push(format!(
-        "device: {} ({})",
-        record.device_name, record.device_id
-    ));
-    lines.push(format!("scopes: {}", record.scopes.join(", ")));
-    lines.push(format!(
-        "paired: {}",
-        time_text::utc_minute(record.paired_at_ms)
-    ));
-    lines
 }

@@ -14,6 +14,7 @@ use crate::config;
 use crate::device;
 use crate::error::CliError;
 use crate::ext;
+use crate::host;
 use crate::output::{self, Output};
 use crate::pair;
 use crate::project;
@@ -116,6 +117,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
                     block_on(server_status::execute(&target, autostart, output))
                 }
             }
+        }
+        Commands::Host { command } => {
+            globals.local_only(host::command_path(&command))?;
+            block_on(host::execute(&globals.profile()?, command, output))
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
