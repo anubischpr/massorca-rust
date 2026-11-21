@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use massorca_core_git::Git;
 use massorca_core_store::Store;
-use massorca_core_workspace::{DomainError, Workspaces};
+use massorca_core_workspace::{DomainError, RemovalWaivers, Workspaces};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceRemoved};
 use tempfile::TempDir;
@@ -87,10 +87,10 @@ impl Fixture {
     pub fn remove(&self, selector: &str) -> WorkspaceRemoved {
         let begun = self
             .workspaces
-            .begin_remove(selector, false)
+            .begin_remove(selector, RemovalWaivers::NONE)
             .expect("begin removal");
         self.workspaces
-            .finish_remove(&begun.id, false)
+            .finish_remove(&begun.id, RemovalWaivers::NONE)
             .expect("finish removal")
     }
 

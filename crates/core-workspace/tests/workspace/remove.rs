@@ -7,6 +7,7 @@ use massorca_core_store::{
     WorkspaceKind as StoreWorkspaceKind, WorkspaceRow, WorkspaceState as StoreWorkspaceState,
     new_id, now_ms,
 };
+use massorca_core_workspace::RemovalWaivers;
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::WorkspaceState;
 
@@ -27,7 +28,7 @@ fn removing_a_clean_worktree_deletes_its_directory_row_and_created_branch() {
 
     let begun = fx
         .workspaces
-        .begin_remove("feature", false)
+        .begin_remove("feature", RemovalWaivers::NONE)
         .expect("begin removal");
 
     assert_eq!(begun.state, WorkspaceState::Removing);
@@ -36,7 +37,7 @@ fn removing_a_clean_worktree_deletes_its_directory_row_and_created_branch() {
 
     let removed = fx
         .workspaces
-        .finish_remove(&ws.id, false)
+        .finish_remove(&ws.id, RemovalWaivers::NONE)
         .expect("finish removal");
 
     assert_eq!(removed.workspace.id, ws.id);
@@ -59,7 +60,7 @@ fn a_dirty_worktree_is_refused_and_returns_to_ready() {
     fs::write(Path::new(&ws.path).join("scratch.txt"), "unsaved").expect("write file");
 
     expect_code(
-        fx.workspaces.begin_remove("dirty", false),
+        fx.workspaces.begin_remove("dirty", RemovalWaivers::NONE),
         codes::WORKSPACE_DIRTY,
     );
 
@@ -74,17 +75,17 @@ fn force_removes_a_dirty_worktree_after_the_refusal() {
     let ws = fx.create(&project.name, "forced");
     fs::write(Path::new(&ws.path).join("scratch.txt"), "unsaved").expect("write file");
     expect_code(
-        fx.workspaces.begin_remove("forced", false),
+        fx.workspaces.begin_remove("forced", RemovalWaivers::NONE),
         codes::WORKSPACE_DIRTY,
     );
 
     let begun = fx
         .workspaces
-        .begin_remove("forced", true)
+        .begin_remove("forced", RemovalWaivers::FORCE)
         .expect("begin with force");
     let removed = fx
         .workspaces
-        .finish_remove(&begun.id, true)
+        .finish_remove(&begun.id, RemovalWaivers::FORCE)
         .expect("finish with force");
 
     assert!(removed.branch_deleted);
@@ -100,7 +101,7 @@ fn a_locked_worktree_is_refused_even_with_force() {
     run_git(&fx.repo(), &["worktree", "lock", ws.path.as_str()]);
 
     expect_code(
-        fx.workspaces.begin_remove("locked", true),
+        fx.workspaces.begin_remove("locked", RemovalWaivers::FORCE),
         codes::WORKSPACE_LOCKED,
     );
 
@@ -132,7 +133,8 @@ fn the_main_worktree_is_never_removed() {
     fx.store.insert_workspace(&row).expect("insert main row");
 
     expect_code(
-        fx.workspaces.begin_remove("main-row", true),
+        fx.workspaces
+            .begin_remove("main-row", RemovalWaivers::FORCE),
         codes::WORKSPACE_MAIN_WORKTREE,
     );
 
@@ -156,11 +158,11 @@ fn a_missing_directory_is_removed_from_git_and_the_store() {
 
     let begun = fx
         .workspaces
-        .begin_remove("ghost", false)
+        .begin_remove("ghost", RemovalWaivers::NONE)
         .expect("begin removal of a missing workspace");
     let removed = fx
         .workspaces
-        .finish_remove(&begun.id, false)
+        .finish_remove(&begun.id, RemovalWaivers::NONE)
         .expect("finish removal");
 
     assert!(removed.branch_deleted);
@@ -181,11 +183,11 @@ fn a_missing_directory_is_also_removed_from_git_when_forced() {
 
     let begun = fx
         .workspaces
-        .begin_remove("forced-ghost", true)
+        .begin_remove("forced-ghost", RemovalWaivers::FORCE)
         .expect("begin with force");
     let removed = fx
         .workspaces
-        .finish_remove(&begun.id, true)
+        .finish_remove(&begun.id, RemovalWaivers::FORCE)
         .expect("finish with force");
 
     assert!(removed.branch_deleted);
@@ -259,18 +261,18 @@ fn an_interrupted_removal_resumes_when_removed_again() {
     let ws = fx.create(&project.name, "resume");
     let interrupted = fx
         .workspaces
-        .begin_remove("resume", false)
+        .begin_remove("resume", RemovalWaivers::NONE)
         .expect("first half");
     assert_eq!(interrupted.state, WorkspaceState::Removing);
 
     let again = fx
         .workspaces
-        .begin_remove("resume", false)
+        .begin_remove("resume", RemovalWaivers::NONE)
         .expect("begin again on a removing workspace");
     assert_eq!(again.state, WorkspaceState::Removing);
     let removed = fx
         .workspaces
-        .finish_remove(&ws.id, false)
+        .finish_remove(&ws.id, RemovalWaivers::NONE)
         .expect("finish the interrupted removal");
 
     assert!(removed.branch_deleted);
@@ -285,7 +287,7 @@ fn finish_alone_marks_and_removes_a_ready_workspace() {
 
     let removed = fx
         .workspaces
-        .finish_remove(&ws.id, false)
+        .finish_remove(&ws.id, RemovalWaivers::NONE)
         .expect("finish without begin");
 
     assert!(removed.branch_deleted);
@@ -300,12 +302,12 @@ fn dirt_that_appears_after_begin_is_refused_by_finish_and_returns_to_ready() {
     let ws = fx.create(&project.name, "late-dirt");
     let begun = fx
         .workspaces
-        .begin_remove("late-dirt", false)
+        .begin_remove("late-dirt", RemovalWaivers::NONE)
         .expect("begin on a clean worktree");
     fs::write(Path::new(&ws.path).join("late.txt"), "typed after begin").expect("write file");
 
     expect_code(
-        fx.workspaces.finish_remove(&begun.id, false),
+        fx.workspaces.finish_remove(&begun.id, RemovalWaivers::NONE),
         codes::WORKSPACE_DIRTY,
     );
 
@@ -319,12 +321,12 @@ fn a_refused_retry_of_an_interrupted_removal_returns_to_ready() {
     let project = fx.repo_project();
     let ws = fx.create(&project.name, "retry");
     fx.workspaces
-        .begin_remove("retry", false)
+        .begin_remove("retry", RemovalWaivers::NONE)
         .expect("first half");
     fs::write(Path::new(&ws.path).join("new.txt"), "dirt").expect("write file");
 
     expect_code(
-        fx.workspaces.begin_remove("retry", false),
+        fx.workspaces.begin_remove("retry", RemovalWaivers::NONE),
         codes::WORKSPACE_DIRTY,
     );
 
@@ -337,7 +339,7 @@ fn removing_an_unknown_workspace_is_not_found() {
     fx.repo_project();
 
     expect_code(
-        fx.workspaces.begin_remove("nothing", false),
+        fx.workspaces.begin_remove("nothing", RemovalWaivers::NONE),
         codes::WORKSPACE_NOT_FOUND,
     );
 }
@@ -349,7 +351,7 @@ fn finishing_an_unknown_workspace_is_not_found() {
 
     expect_code(
         fx.workspaces
-            .finish_remove("00000000-0000-0000-0000-000000000000", false),
+            .finish_remove("00000000-0000-0000-0000-000000000000", RemovalWaivers::NONE),
         codes::WORKSPACE_NOT_FOUND,
     );
 }
@@ -398,4 +400,49 @@ fn a_removed_worktree_reports_that_no_directory_was_kept() {
     let removed = fx.remove("gone-clean");
 
     assert!(!removed.directory_kept);
+}
+
+#[test]
+fn ignored_files_refuse_removal_until_their_own_waiver_is_given() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    commit_file(
+        &fx.repo(),
+        ".gitignore",
+        "*.env
+",
+        "ignore env files",
+    );
+    let ws = fx.create(&project.name, "ignored");
+    let secret = Path::new(&ws.path).join("secrets.env");
+    fs::write(&secret, "key").expect("write ignored file");
+
+    expect_code(
+        fx.workspaces.begin_remove("ignored", RemovalWaivers::FORCE),
+        codes::WORKSPACE_IGNORED_FILES,
+    );
+    assert_eq!(state_of(&fx, &ws.id), WorkspaceState::Ready);
+    assert!(secret.is_file(), "a refusal deletes nothing");
+
+    fx.workspaces
+        .begin_remove(
+            "ignored",
+            RemovalWaivers {
+                force: true,
+                discard_ignored: true,
+                forget_orphan: false,
+            },
+        )
+        .expect("begin with both waivers");
+    fx.workspaces
+        .finish_remove(
+            &ws.id,
+            RemovalWaivers {
+                force: true,
+                discard_ignored: true,
+                forget_orphan: false,
+            },
+        )
+        .expect("finish with both waivers");
+    assert!(!Path::new(&ws.path).exists());
 }

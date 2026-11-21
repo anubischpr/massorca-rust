@@ -28,6 +28,7 @@ pub const WORKSPACE_NAME_INVALID: &str = "workspace.name_invalid";
 pub const WORKSPACE_PATH_TAKEN: &str = "workspace.path_taken";
 pub const WORKSPACE_DIRTY: &str = "workspace.dirty";
 pub const WORKSPACE_LOCKED: &str = "workspace.locked";
+pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";

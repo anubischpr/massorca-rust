@@ -16,4 +16,5 @@ mod views;
 mod workspaces;
 
 pub use error::DomainError;
+pub use remove::RemovalWaivers;
 pub use workspaces::Workspaces;

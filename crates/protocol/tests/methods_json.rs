@@ -257,9 +257,29 @@ fn workspace_remove_params_default_force_to_false() {
         workspaces::WorkspaceRemoveParams {
             workspace: "feat-x".to_owned(),
             force: false,
+            discard_ignored: false,
+            forget_orphan: false,
         }
     );
     assert_wire(&params, &json!({ "workspace": "feat-x", "force": false }));
+}
+
+#[test]
+fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
+    assert_wire(
+        &workspaces::WorkspaceRemoveParams {
+            workspace: "feat-x".to_owned(),
+            force: true,
+            discard_ignored: true,
+            forget_orphan: true,
+        },
+        &json!({
+            "workspace": "feat-x",
+            "force": true,
+            "discard_ignored": true,
+            "forget_orphan": true
+        }),
+    );
 }
 
 #[test]

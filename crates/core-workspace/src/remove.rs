@@ -14,16 +14,47 @@ use crate::paths;
 use crate::views;
 use crate::workspaces::Workspaces;
 
+/// What the caller waives when removing a workspace. Each waiver covers one kind of change that
+/// removal would otherwise refuse, and none of them covers another.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemovalWaivers {
+    /// Discards uncommitted and untracked changes in a registered worktree (`--force`).
+    pub force: bool,
+    /// Deletes ignored files in a registered worktree (`--discard-ignored`).
+    pub discard_ignored: bool,
+    /// Forgets a row whose directory git does not recognise as its worktree (`--forget-orphan`).
+    pub forget_orphan: bool,
+}
+
+impl RemovalWaivers {
+    /// No waiver: every kind of change refuses removal.
+    pub const NONE: Self = Self {
+        force: false,
+        discard_ignored: false,
+        forget_orphan: false,
+    };
+    /// Discards uncommitted and untracked changes, but leaves ignored files refusing removal.
+    pub const FORCE: Self = Self {
+        force: true,
+        discard_ignored: false,
+        forget_orphan: false,
+    };
+}
+
 impl Workspaces {
     /// First half of removing `selector`. Marks the row `removing` and runs every refusal
     /// check, so the handler can publish `workspace.removing` with the returned workspace
     /// before it calls [`Workspaces::finish_remove`]. A refusal returns the row to `ready`.
     /// Calling this again on a `removing` row resumes an interrupted removal.
-    pub fn begin_remove(&self, selector: &str, force: bool) -> Result<Workspace, DomainError> {
+    pub fn begin_remove(
+        &self,
+        selector: &str,
+        waivers: RemovalWaivers,
+    ) -> Result<Workspace, DomainError> {
         let _guard = self.lock_mutations();
         let row = self.resolve_workspace(selector)?;
         let row = self.mark_removing(row)?;
-        self.check_or_restore(&row, force)?;
+        self.check_or_restore(&row, waivers)?;
         Ok(views::workspace(&row))
     }
 
@@ -34,7 +65,11 @@ impl Workspaces {
     ///
     /// A failure after the row is marked `removing` leaves it that way; calling
     /// [`Workspaces::begin_remove`] again finishes the job.
-    pub fn finish_remove(&self, id: &str, force: bool) -> Result<WorkspaceRemoved, DomainError> {
+    pub fn finish_remove(
+        &self,
+        id: &str,
+        waivers: RemovalWaivers,
+    ) -> Result<WorkspaceRemoved, DomainError> {
         let _guard = self.lock_mutations();
         let row = self.store.get_workspace(id)?.ok_or_else(|| {
             DomainError::new(
@@ -43,11 +78,11 @@ impl Workspaces {
             )
         })?;
         let row = self.mark_removing(row)?;
-        self.check_or_restore(&row, force)?;
+        self.check_or_restore(&row, waivers)?;
         let project = self.project_of(&row)?;
         let (branch_deleted, branch_kept_reason, directory_kept) = match row.kind {
             StoreWorkspaceKind::Worktree => {
-                let directory_kept = self.remove_worktree(&project, &row, force)?;
+                let directory_kept = self.remove_worktree(&project, &row, waivers.force)?;
                 self.store.delete_workspace(&row.id)?;
                 let (deleted, reason) = self.delete_created_branch(&project, &row);
                 (deleted, reason, directory_kept)
@@ -77,8 +112,12 @@ impl Workspaces {
 
     /// Runs the checks. A refusal puts the row back to `ready`, because no file was touched;
     /// any other failure leaves it `removing` so the removal can be resumed.
-    fn check_or_restore(&self, row: &WorkspaceRow, force: bool) -> Result<(), DomainError> {
-        match self.check_removable(row, force) {
+    fn check_or_restore(
+        &self,
+        row: &WorkspaceRow,
+        waivers: RemovalWaivers,
+    ) -> Result<(), DomainError> {
+        match self.check_removable(row, waivers) {
             Ok(()) => Ok(()),
             Err(error) if is_refusal(error.code()) => {
                 self.store
@@ -91,7 +130,11 @@ impl Workspaces {
 
     /// The refusals: the main worktree and a locked worktree always, a dirty one unless
     /// forced. A folder workspace has no git state to check.
-    fn check_removable(&self, row: &WorkspaceRow, force: bool) -> Result<(), DomainError> {
+    fn check_removable(
+        &self,
+        row: &WorkspaceRow,
+        waivers: RemovalWaivers,
+    ) -> Result<(), DomainError> {
         if row.kind == StoreWorkspaceKind::Folder {
             return Ok(());
         }
@@ -121,15 +164,30 @@ impl Workspaces {
                 format!("{} is locked; unlock it with git first", row.path),
             ));
         }
-        // Only a registered worktree is deleted, so only its changes can be lost.
-        if registered && !force && path.is_dir() && self.git.status_dirty(path)? {
-            return Err(DomainError::new(
-                codes::WORKSPACE_DIRTY,
-                format!(
-                    "{} has uncommitted or untracked changes; remove with force to discard them",
-                    row.path
-                ),
-            ));
+        // Only a registered worktree is deleted, so only its changes can be lost. git status does
+        // not list ignored files, so they are counted apart and need their own waiver.
+        if registered && path.is_dir() {
+            let changes = self.git.status_changes(path)?;
+            if !waivers.force && (changes.uncommitted > 0 || changes.untracked > 0) {
+                return Err(DomainError::new(
+                    codes::WORKSPACE_DIRTY,
+                    format!(
+                        "{} has {} uncommitted and {} untracked change(s); remove with force to discard them",
+                        row.path, changes.uncommitted, changes.untracked
+                    ),
+                ));
+            }
+            if !waivers.discard_ignored && changes.ignored > 0 {
+                return Err(DomainError::new(
+                    codes::WORKSPACE_IGNORED_FILES,
+                    format!(
+                        "{} has {} ignored entr{} that removal would delete; remove with discard_ignored to delete them",
+                        row.path,
+                        changes.ignored,
+                        if changes.ignored == 1 { "y" } else { "ies" }
+                    ),
+                ));
+            }
         }
         Ok(())
     }
@@ -209,6 +267,9 @@ impl Workspaces {
 fn is_refusal(code: &str) -> bool {
     matches!(
         code,
-        codes::WORKSPACE_DIRTY | codes::WORKSPACE_LOCKED | codes::WORKSPACE_MAIN_WORKTREE
+        codes::WORKSPACE_DIRTY
+            | codes::WORKSPACE_IGNORED_FILES
+            | codes::WORKSPACE_LOCKED
+            | codes::WORKSPACE_MAIN_WORKTREE
     )
 }
