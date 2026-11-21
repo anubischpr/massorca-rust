@@ -2,6 +2,8 @@
 //! the cases the client cannot produce.
 
 mod common;
+mod config;
+mod events;
 mod handshake;
 mod lifecycle;
 mod registries;
