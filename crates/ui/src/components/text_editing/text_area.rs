@@ -2,17 +2,24 @@
 //! [`TextBuffer`] of the single-line field and wraps it to the width it is given; the wrapping
 //! lives in [`super::layout`] and the element that paints it in `text_area::element`.
 
+mod editing;
+mod element;
+mod pointer;
+mod render;
+mod shaping;
+
 use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, Pixels, Point, Window,
-    actions, point, px,
+    App, Bounds, Context, ElementId, EventEmitter, FocusHandle, Focusable, KeyBinding, Pixels,
+    Point, SharedString, Window, actions, point, px,
 };
 
 use super::input::{self, InputHost, impl_input_handler};
 use super::layout::Shaped;
 use super::{TextBuffer, normalize_line_breaks};
+use crate::tokens::{SIZE_COMPOSER_MAX_HEIGHT, SIZE_COMPOSER_MIN_HEIGHT};
 
 actions!(
     text_area,
@@ -106,13 +113,21 @@ pub enum TextAreaEvent {
 /// Multi-line text input. It owns its text and focus; the owner subscribes to its events.
 #[derive(Debug)]
 pub struct TextArea {
+    id: ElementId,
     focus_handle: FocusHandle,
     buffer: TextBuffer,
+    placeholder: SharedString,
+    label: SharedString,
+    min_height: f32,
+    max_height: f32,
     disabled: bool,
     /// The last paint, for hit tests, the caret and IME geometry.
     shaped: Option<Rc<Shaped>>,
     bounds: Option<Bounds<Pixels>>,
     scroll: Pixels,
+    /// Scroll so the caret row is in view on the next paint; set by edits and caret moves.
+    ensure_caret: bool,
+    selecting: bool,
 }
 
 impl EventEmitter<TextAreaEvent> for TextArea {}
@@ -126,13 +141,44 @@ impl Focusable for TextArea {
 impl TextArea {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            id: "text-area".into(),
             focus_handle: cx.focus_handle().tab_stop(true),
             buffer: TextBuffer::new(""),
+            placeholder: SharedString::default(),
+            label: SharedString::default(),
+            min_height: SIZE_COMPOSER_MIN_HEIGHT,
+            max_height: SIZE_COMPOSER_MAX_HEIGHT,
             disabled: false,
             shaped: None,
             bounds: None,
             scroll: px(0.),
+            ensure_caret: false,
+            selecting: false,
         }
+    }
+
+    /// The element id; an owner with several areas gives each its own.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
+        self.placeholder = text.into();
+        self
+    }
+
+    /// The accessible name, for example "Message to Claude".
+    pub fn label(mut self, text: impl Into<SharedString>) -> Self {
+        self.label = text.into();
+        self
+    }
+
+    /// Height limits in logical pixels: the area grows from `min` to `max`, then scrolls.
+    pub fn heights(mut self, min: f32, max: f32) -> Self {
+        self.min_height = min;
+        self.max_height = max.max(min);
+        self
     }
 
     pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
@@ -253,6 +299,10 @@ impl InputHost for TextArea {
 
     fn sanitize_insert(text: &str) -> String {
         normalize_line_breaks(text)
+    }
+
+    fn input_will_edit(&mut self) {
+        self.ensure_caret = true;
     }
 
     fn layout_bounds(
