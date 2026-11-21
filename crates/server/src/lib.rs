@@ -1,16 +1,23 @@
 //! The MassOrca service: one per profile, serving the protocol over a local socket (ADR 0002, 0003), with the registries
 //! through which core and extensions contribute methods, capabilities, commands and settings (extensions.md section 9).
 
+mod accept_loop;
 mod capability;
 mod commands;
+mod connection;
 mod context;
+mod dispatch;
 mod event_bus;
+mod handshake;
 mod method;
 mod owner;
 mod permission;
 mod registry;
+mod session;
 mod settings;
 mod shutdown;
+mod streams;
+mod transport;
 
 pub use capability::{CapabilityHandle, CapabilityRegistry};
 pub use commands::{CommandDescriptor, CommandRegistry, core_commands};
