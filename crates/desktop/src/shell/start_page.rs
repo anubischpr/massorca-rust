@@ -5,10 +5,11 @@
 //! workspace or the start page with no workspace.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, SharedString, WeakEntity, Window, div, img, px};
+use gpui::{AnyElement, App, Context, SharedString, WeakEntity, Window, div, px};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::popover::OverlayLayer;
+use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::tokens::{
@@ -145,12 +146,7 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(SPACE_6))
-        .child(
-            div()
-                .flex()
-                .justify_center()
-                .child(img("brand/massorca-logo.svg").size(px(48.)).flex_none()),
-        )
+        .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
         .child(placement)
         .child(composer);

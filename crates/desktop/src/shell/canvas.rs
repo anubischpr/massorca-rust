@@ -14,8 +14,9 @@ use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, TeamPage};
 use gpui::{
     AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, Window, div,
-    img, prelude::*, px,
+    prelude::*, px,
 };
+use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
@@ -149,7 +150,7 @@ fn start_page(theme: &Theme) -> impl IntoElement {
         .gap(px(SPACE_3))
         .w_full()
         .max_w(px(LAYOUT_CONVERSATION_READING))
-        .child(img("brand/massorca-logo.svg").size(px(48.)).flex_none())
+        .child(rose_logo())
         .child(
             div()
                 .text_style(TYPE_HEADING)

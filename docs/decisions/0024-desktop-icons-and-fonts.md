@@ -33,7 +33,12 @@ pink rose.
   from the exact path data in `status-bar/icons.tsx`; Antigravity, Gentle
   Shell, Gemini and Cursor as the PNGs from `src/shared/agent-icons/`; OpenCode
   from its glyph. Claude keeps its fixed `#D97757`; Codex follows the text
-  colour; PNGs are drawn as supplied. Only assets are taken, never code.
+  colour. A PNG mark is drawn from a copy resampled to 1x, 2x or 3x of its
+  drawn size, picked by the window scale, never more than twice the drawn
+  size: GPUI's atlas has one mip level, so a larger raster aliases. A
+  colour SVG drawn through `img()` has its root sized to the drawn size, since
+  GPUI rasterises it at twice its root size (the start-page rose). Only assets
+  are taken, never code.
 - **One `AgentIcon` component** maps an `AgentKind` to its asset; an unknown
   agent uses the generic agent mark (A18).
 
