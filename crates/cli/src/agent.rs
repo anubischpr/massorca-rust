@@ -45,6 +45,16 @@ pub enum AgentCommand {
         /// Session id, or a unique prefix of at least 8 characters.
         session: String,
     },
+    /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
+    Hook(AgentHookArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AgentHookArgs {
+    /// The hook event, mapped to an activity by the kind's declaration.
+    pub event: String,
+    /// The hook's payload, at most 64 KiB. Without it, stdin is read when it is not a terminal.
+    pub payload: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -147,6 +157,7 @@ pub async fn execute(
             );
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
+        AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),
     }
     Ok(())
 }
