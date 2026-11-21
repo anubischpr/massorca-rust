@@ -1,4 +1,4 @@
-//! Agent session rows: insert, read, list newest first, exit recording, the service-stopped sweep and the foreign keys.
+//! Agent session rows: insert, read, list newest first, exit and status recording, the service-stopped sweep and the foreign keys.
 
 mod common;
 
@@ -211,5 +211,60 @@ fn an_unknown_workspace_or_a_repeated_request_id_is_refused() {
     assert_conflict(
         store.insert_agent_session(&second),
         "agent_sessions.request_id",
+    );
+}
+
+#[test]
+fn a_status_change_writes_activity_and_result_and_learns_the_ref_once() {
+    let (store, workspace) = store_with_workspace();
+    let mut row = session_row(&workspace, 10);
+    row.agent_ref = None;
+    store.insert_agent_session(&row).unwrap();
+    let working = StoredActivity {
+        state: "working".to_owned(),
+        outcome: None,
+        source: "hook".to_owned(),
+        at: 11,
+    };
+
+    assert!(
+        store
+            .set_agent_session_status(&row.id, Some(&working), None, Some("learned"))
+            .unwrap()
+    );
+    let read = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(read.activity, Some(working));
+    assert_eq!(read.result, None);
+    assert_eq!(read.agent_ref.as_deref(), Some("learned"));
+
+    let done = StoredActivity {
+        state: "done".to_owned(),
+        outcome: Some("success".to_owned()),
+        source: "hook".to_owned(),
+        at: 12,
+    };
+    store
+        .set_agent_session_status(&row.id, Some(&done), Some("the result"), Some("other"))
+        .unwrap();
+    let read = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(read.activity, Some(done));
+    assert_eq!(read.result.as_deref(), Some("the result"));
+    assert_eq!(
+        read.agent_ref.as_deref(),
+        Some("learned"),
+        "a ref already set is kept"
+    );
+
+    store
+        .set_agent_session_status(&row.id, None, None, None)
+        .unwrap();
+    let read = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(read.activity, None);
+    assert_eq!(read.result, None);
+    assert_eq!(read.agent_ref.as_deref(), Some("learned"));
+    assert!(
+        !store
+            .set_agent_session_status("no-such-session", None, None, None)
+            .unwrap()
     );
 }
