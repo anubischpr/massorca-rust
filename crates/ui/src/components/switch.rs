@@ -285,12 +285,17 @@ impl RenderOnce for Switch {
         let hover = paint(checked, Visual::Hover, p);
         let pressed = paint(checked, Visual::Pressed, p);
         let hover_knob = if interactive { hover.knob } else { shown.knob };
-        let focus = self.focus.clone().unwrap_or_else(|| {
-            window
-                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-                .read(cx)
-                .clone()
-        });
+        // GPUI reads a tracked handle's Tab stop from the handle, not the element.
+        let focus = self
+            .focus
+            .clone()
+            .unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .tab_stop(!self.disabled);
         let (from, to, changes) = window
             .use_keyed_state(self.id.clone(), cx, |_, _| ToggleMotion::new(checked))
             .update(cx, |motion, _| {
@@ -332,7 +337,6 @@ impl RenderOnce for Switch {
             .id(self.id.clone())
             .group(HOVER_GROUP)
             .track_focus(&focus)
-            .tab_stop(!self.disabled)
             .focus_ring(&theme)
             .flex_none()
             .w(px(SIZE_SWITCH_TRACK_WIDTH))

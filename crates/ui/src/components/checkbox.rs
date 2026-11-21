@@ -243,12 +243,17 @@ impl RenderOnce for Checkbox {
         } else {
             shown
         };
-        let focus = self.focus.clone().unwrap_or_else(|| {
-            window
-                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-                .read(cx)
-                .clone()
-        });
+        // GPUI reads a tracked handle's Tab stop from the handle, not the element.
+        let focus = self
+            .focus
+            .clone()
+            .unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .tab_stop(!self.disabled);
         let changes = window
             .use_keyed_state(self.id.clone(), cx, |_, _| ToggleMotion::new(checked))
             .update(cx, |motion, _| {
@@ -312,7 +317,6 @@ impl RenderOnce for Checkbox {
             .id(self.id.clone())
             .group(HOVER_GROUP)
             .track_focus(&focus)
-            .tab_stop(!self.disabled)
             .focus_ring(&theme)
             .flex()
             .items_start()

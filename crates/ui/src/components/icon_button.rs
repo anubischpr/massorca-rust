@@ -257,12 +257,17 @@ impl RenderOnce for IconButton {
         let hover = paint(self.variant, self.surface, Visual::Hover, &theme);
         let pressed = paint(self.variant, self.surface, Visual::Pressed, &theme);
         let hover_icon = if interactive { hover.icon } else { rest.icon };
-        let focus = self.focus.clone().unwrap_or_else(|| {
-            window
-                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-                .read(cx)
-                .clone()
-        });
+        // GPUI reads a tracked handle's Tab stop from the handle, not the element.
+        let focus = self
+            .focus
+            .clone()
+            .unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .tab_stop(true);
         if self.loading {
             window.request_animation_frame();
         }
@@ -270,7 +275,6 @@ impl RenderOnce for IconButton {
         let mut root = div()
             .id(self.id.clone())
             .track_focus(&focus)
-            .tab_stop(true)
             .focus_ring(&theme)
             .group(HOVER_GROUP)
             .flex()

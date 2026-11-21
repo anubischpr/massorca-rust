@@ -373,12 +373,17 @@ impl RenderOnce for Button {
         let hover = paint(self.variant, self.surface, Visual::Hover, &theme);
         let pressed = paint(self.variant, self.surface, Visual::Pressed, &theme);
         let hover_label = if interactive { hover.label } else { rest.label };
-        let focus = self.focus.clone().unwrap_or_else(|| {
-            window
-                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-                .read(cx)
-                .clone()
-        });
+        // GPUI reads a tracked handle's Tab stop from the handle, not the element.
+        let focus = self
+            .focus
+            .clone()
+            .unwrap_or_else(|| {
+                window
+                    .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .tab_stop(true);
         if self.loading {
             window.request_animation_frame();
         }
@@ -386,7 +391,6 @@ impl RenderOnce for Button {
         let mut root = div()
             .id(self.id.clone())
             .track_focus(&focus)
-            .tab_stop(true)
             .focus_ring(&theme)
             .group(HOVER_GROUP)
             .flex()
@@ -570,6 +574,26 @@ mod tests {
             press_key(cx, "space");
             assert_eq!(clicks.get(), 0, "disabled={disabled} loading={loading}");
         }
+    }
+
+    struct TwoButtons;
+
+    impl gpui::Render for TwoButtons {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+                .child(Button::new("first", "Save"))
+                .child(Button::new("second", "Cancel"))
+        }
+    }
+
+    #[gpui::test]
+    fn tab_reaches_buttons_that_own_their_focus_handle(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, _| TwoButtons);
+        let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.focus_next(cx));
+        let focused = cx.update(|window, cx| window.focused(cx).is_some());
+        assert!(focused, "Tab must land on a button");
     }
 
     /// Hosts one button with a focus handle and a click counter.
