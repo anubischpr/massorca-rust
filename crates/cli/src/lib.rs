@@ -6,10 +6,13 @@ pub mod app;
 pub mod args;
 pub mod config;
 pub mod connect;
+pub mod cwd_path;
 pub mod error;
 pub mod ext;
 pub mod logging;
 pub mod output;
+pub mod project;
 pub mod service;
+pub mod workspace_text;
 
 pub use app::run;

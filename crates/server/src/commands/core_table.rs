@@ -81,7 +81,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("project"),
         ),
         command(
-            "project.remove",
+            "project.rm",
             "Remove a project",
             "project.remove",
             selector("project"),

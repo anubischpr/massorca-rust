@@ -56,6 +56,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Registers, lists, shows and removes projects: git repositories and folders.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
@@ -93,6 +98,42 @@ pub enum ConfigCommand {
     Set(ConfigSetArgs),
     /// Lists every setting.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    /// Registers a git repository, or a folder with --folder. Without a kind, a directory inside a repository is a git project.
+    Add(ProjectAddArgs),
+    /// Lists every project, ordered by name.
+    List,
+    /// Shows one project, selected by id, name or path.
+    Show {
+        /// Project id, name or path.
+        project: String,
+    },
+    /// Unregisters a project that has no workspaces. Its files stay.
+    Rm {
+        /// Project id, name or path.
+        project: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectAddArgs {
+    /// Directory to register. A relative path is taken from the current directory.
+    pub path: PathBuf,
+    /// Name of the project. Defaults to the directory's name.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// Register the directory as a folder, even when it is inside a repository.
+    #[arg(long, conflicts_with = "git")]
+    pub folder: bool,
+    /// Register a git repository; fail when the directory is not inside one.
+    #[arg(long)]
+    pub git: bool,
+    /// Directory that holds this project's workspaces. Defaults to a folder under the workspaces default root.
+    #[arg(long, value_name = "DIR")]
+    pub workspaces_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
