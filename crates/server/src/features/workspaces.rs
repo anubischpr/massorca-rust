@@ -66,8 +66,16 @@ async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Worksp
 
 async fn list(ctx: RequestCtx, params: WorkspaceListParams) -> Result<WorkspaceList, ErrorBody> {
     let domain = shared(&ctx);
-    let workspaces = blocking(move || domain.list_workspaces(params.project.as_deref())).await?;
-    Ok(WorkspaceList { workspaces })
+    let project = params.project.clone();
+    let workspaces = {
+        let domain = Arc::clone(&domain);
+        blocking(move || domain.list_workspaces(params.project.as_deref())).await?
+    };
+    let unregistered = blocking(move || domain.unregistered_worktrees(project.as_deref())).await?;
+    Ok(WorkspaceList {
+        workspaces,
+        unregistered,
+    })
 }
 
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {

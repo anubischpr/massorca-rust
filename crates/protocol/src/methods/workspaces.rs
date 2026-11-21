@@ -59,6 +59,20 @@ pub struct WorkspaceListParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceList {
     pub workspaces: Vec<Workspace>,
+    /// Worktrees git registers under a project's workspaces root that no workspace records.
+    /// They are reported, never removed. Absent when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unregistered: Vec<UnregisteredWorktree>,
+}
+
+/// A worktree git registers under a project's workspaces root with no workspace row, usually
+/// left by a create that stopped after `worktree add`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnregisteredWorktree {
+    pub project_id: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// Selector for `workspace.show`: id, then exact name, then path.

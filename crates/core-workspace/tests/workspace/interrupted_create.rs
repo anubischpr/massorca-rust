@@ -7,7 +7,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{WorkspaceKind, WorkspaceState};
 
 use crate::fixture::{
-    Fixture, branch_exists, canonical, create_params, expect_code, run_git, text,
+    Fixture, branch_exists, canonical, create_params, expect_code, run_git, text, worktree_count,
 };
 
 /// Simulates the crash: git registers a worktree at `path` on a new `branch`, nothing else runs.
@@ -84,4 +84,66 @@ fn the_main_worktree_is_never_adopted_even_when_its_branch_matches() {
     );
     assert!(fx.repo().join("README.md").exists());
     assert_eq!(fx.workspaces.list_workspaces(None).expect("list").len(), 0);
+}
+
+#[test]
+fn a_worktree_left_by_an_interrupted_create_is_reported_until_the_create_adopts_it() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let target = Path::new(&project.workspaces_root).join("lost");
+    crash_after_worktree_add(&fx, &target, "lost");
+
+    let unregistered = fx.workspaces.unregistered_worktrees(None).expect("list");
+    assert_eq!(unregistered.len(), 1);
+    assert_eq!(unregistered[0].project_id, project.id);
+    assert_eq!(unregistered[0].path, text(&canonical(&target)));
+    assert_eq!(unregistered[0].branch.as_deref(), Some("lost"));
+    assert!(
+        fx.workspaces
+            .list_workspaces(None)
+            .expect("list")
+            .is_empty()
+    );
+
+    fx.create(&project.name, "lost");
+    assert!(
+        fx.workspaces
+            .unregistered_worktrees(None)
+            .expect("list")
+            .is_empty()
+    );
+}
+
+#[test]
+fn reporting_an_unregistered_worktree_removes_nothing() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let target = Path::new(&project.workspaces_root).join("kept");
+    crash_after_worktree_add(&fx, &target, "kept");
+
+    fx.workspaces.unregistered_worktrees(None).expect("first");
+    fx.workspaces.unregistered_worktrees(None).expect("second");
+
+    assert!(target.join("README.md").exists());
+    assert_eq!(worktree_count(&fx.repo()), 2);
+    assert!(branch_exists(&fx.repo(), "kept"));
+}
+
+#[test]
+fn a_worktree_outside_the_workspaces_root_is_not_reported() {
+    let fx = Fixture::new();
+    fx.repo_project();
+    let outside = fx.path("elsewhere/outside");
+    std::fs::create_dir_all(outside.parent().expect("has a parent")).expect("create parent");
+    run_git(
+        &fx.repo(),
+        &["worktree", "add", "-b", "outside", &text(&outside), "HEAD"],
+    );
+
+    assert!(
+        fx.workspaces
+            .unregistered_worktrees(None)
+            .expect("list")
+            .is_empty()
+    );
 }

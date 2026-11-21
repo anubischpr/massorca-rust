@@ -60,6 +60,11 @@ lineage) comes later; the model must not block it.
   the directory, which is never deleted; git keeps its record of the worktree
   until git prunes it, and the result says the directory was kept. This replaces
   forgetting an unregistered directory silently.
+- **Unregistered worktrees.** `workspace list` compares git's worktrees under each git
+  project's workspaces root with the rows. A worktree with no row is reported as
+  `unregistered` (path, branch) and is never removed. It exists after a create that
+  stopped between `worktree add` and the row insert. Listing takes the mutation
+  lock, so a create in progress is not reported.
 - **Selectors.** An id or an exact name selects a workspace or project. A selector
   that is a path must be absolute; a relative one is refused with
   `request.invalid_params`, because it would resolve against the service's own

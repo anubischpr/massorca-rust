@@ -37,7 +37,7 @@ letters, digits, `-` or `_`.
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
 | `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
-| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. |
+| `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
