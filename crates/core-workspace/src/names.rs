@@ -5,12 +5,10 @@ use massorca_protocol::codes;
 use crate::error::DomainError;
 
 /// The longest workspace name; it is also a branch name and a directory name.
-#[allow(dead_code)] // the workspace name rule is first used by workspace creation
 const MAX_WORKSPACE_NAME: usize = 64;
 
 /// A workspace name: `[A-Za-z0-9._-]`, 1 to 64 characters, no leading `.` or `-`, and no
 /// trailing `.`, which Windows silently drops from directory names.
-#[allow(dead_code)] // the workspace name rule is first used by workspace creation
 pub(crate) fn workspace_name(name: &str) -> Result<(), DomainError> {
     let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
     let well_formed = !name.is_empty()
