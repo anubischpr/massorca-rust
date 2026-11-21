@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{
     Config, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermMode, viewport_to_point,
@@ -174,6 +174,15 @@ impl TerminalFeed {
     /// How the process ended, once it has.
     pub fn exit(&self) -> Option<Exit> {
         self.exit
+    }
+
+    /// The text of one visible row of the live screen, trailing blanks removed.
+    pub fn row_text(&self, row: usize) -> String {
+        let grid = self.term.grid();
+        let text: String = (0..self.columns())
+            .map(|column| grid[Line(row as i32)][Column(column)].c)
+            .collect();
+        text.trim_end().to_owned()
     }
 
     /// The window title the program set with OSC 0 or 2.
