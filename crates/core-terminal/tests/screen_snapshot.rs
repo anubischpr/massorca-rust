@@ -288,3 +288,127 @@ fn coloured_blanks_and_erase_tails_round_trip() {
     bytes.extend_from_slice(b"\x1b[42mgreen bar\x1b[K");
     check(30, 6, &bytes);
 }
+
+/// Feeds `bytes` to a reference parser, and to a screen whose snapshot a fresh parser replays.
+/// `probe` then goes to both, and they must show the same.
+fn probe_matches_reference(bytes: &[u8], probe: &[u8]) {
+    let mut screen = Screen::new(80, 24);
+    screen.process(bytes);
+    let mut target = vt100::Parser::new(size(24), size(80), SCROLLBACK_ROWS);
+    target.process(&screen.snapshot());
+    let mut reference = reference(80, 24, bytes);
+    target.process(probe);
+    reference.process(probe);
+    assert_visible_matches(&reference, &target);
+    assert_scrollback_matches(&mut reference, &mut target);
+}
+
+fn snapshot_of(bytes: &[u8]) -> Vec<u8> {
+    let mut screen = Screen::new(80, 24);
+    screen.process(bytes);
+    screen.snapshot()
+}
+
+/// The snapshot of a screen rebuilt from the snapshot of `bytes`, after `probe` is fed to it.
+fn rebuilt_after(bytes: &[u8], probe: &[u8]) -> Vec<u8> {
+    let mut rebuilt = Screen::new(80, 24);
+    rebuilt.process(&snapshot_of(bytes));
+    rebuilt.process(probe);
+    rebuilt.snapshot()
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn scroll_region_is_restored() {
+    // The line feed at the bottom margin scrolls rows 5 to 10 only, so "bottom" moves up a row.
+    probe_matches_reference(
+        b"\x1b[2J\x1b[1;1Htop\x1b[5;10r\x1b[10;1Hbottom",
+        b"\x1b[10;1H\n",
+    );
+}
+
+#[test]
+fn origin_mode_is_restored() {
+    // Under origin mode `ESC[1;1H` is the top of the region, row 4 here.
+    probe_matches_reference(b"\x1b[4;12r\x1b[?6h", b"\x1b[1;1HX");
+}
+
+#[test]
+fn saved_cursor_is_restored_for_esc_8() {
+    probe_matches_reference(b"\x1b[3;4H\x1b7\x1b[10;20Htext", b"\x1b8X");
+}
+
+#[test]
+fn saved_cursor_keeps_its_origin_mode() {
+    probe_matches_reference(b"\x1b[5;10r\x1b[?6h\x1b[2;3H\x1b7\x1b[?6l", b"\x1b8X");
+}
+
+#[test]
+fn csi_s_and_csi_u_save_and_restore_the_cursor() {
+    let mut screen = Screen::new(80, 24);
+    screen.process(b"\x1b[3;4H\x1b[s\x1b[10;20H\x1b[u");
+    assert_eq!(screen.cursor_position(), (2, 3));
+    let bytes = b"\x1b[3;4H\x1b[s\x1b[10;20H";
+    assert_eq!(
+        rebuilt_after(bytes, b"\x1b[uX"),
+        snapshot_of(&[&bytes[..], b"\x1b[uX"].concat())
+    );
+}
+
+#[test]
+fn autowrap_off_is_replayed() {
+    assert!(contains(&snapshot_of(b"\x1b[?7l"), b"\x1b[?7l"));
+}
+
+#[test]
+fn line_drawing_and_shifts_are_stored_and_restored() {
+    assert!(contains(&snapshot_of(b"\x1b(0lqk\x1b(B"), "┌─┐".as_bytes()));
+    assert!(contains(&rebuilt_after(b"\x1b(0", b"q"), "─".as_bytes()));
+    let shifted = rebuilt_after(b"\x1b)0\x0e", b"q");
+    assert!(contains(&shifted, "─".as_bytes()));
+    // After shift in, `q` is ASCII again.
+    let unshifted = rebuilt_after(b"\x1b)0\x0eq\x0f", b"q");
+    assert!(contains(&unshifted, "─q".as_bytes()));
+}
+
+#[test]
+fn sequences_split_across_process_calls_are_tracked() {
+    let mut screen = Screen::new(80, 24);
+    for chunk in [&b"\x1b[4;"[..], b"12r\x1b[?", b"6h\x1b", b"(0", b"q"] {
+        screen.process(chunk);
+    }
+    let snapshot = screen.snapshot();
+    assert!(contains(&snapshot, b"\x1b[?6h"));
+    assert!(contains(&snapshot, "─".as_bytes()));
+    assert_eq!(snapshot, snapshot_of(b"\x1b[4;12r\x1b[?6h\x1b(0q"));
+}
+
+#[test]
+fn full_reset_forgets_the_restored_modes() {
+    let mut screen = Screen::new(80, 24);
+    screen.process(b"\x1b(0\x0e\x1b[?7l\x1b[?6h\x1b[3;7r\x1b7\x1b[?47h\x1bc");
+    assert_eq!(screen.snapshot(), Screen::new(80, 24).snapshot());
+}
+
+#[test]
+fn main_margins_and_cursor_survive_a_snapshot_taken_in_the_alternate_screen() {
+    // Leaving the alternate screen returns to the main cursor saved when it was entered.
+    probe_matches_reference(
+        b"\x1b[2J\x1b[1;1Hmain\x1b[2;5r\x1b[4;3H\x1b[?1049h\x1b[?6h\x1b[1;3r\x1b[1;1Halt",
+        b"\x1b[?1049l\x1b[5;1H\n",
+    );
+}
+
+/// The cursor after writing a full row waits to wrap; the next character must still wrap.
+#[test]
+fn pending_wrap_survives_a_snapshot() {
+    for origin in [&b""[..], &b"\x1b[?6h"[..]] {
+        let mut bytes = b"\x1b[2;4r".to_vec();
+        bytes.extend_from_slice(origin);
+        bytes.extend_from_slice(&[b'x'; 80]);
+        probe_matches_reference(&bytes, b"Y");
+    }
+}

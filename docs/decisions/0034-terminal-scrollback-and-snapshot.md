@@ -26,7 +26,8 @@ rendered snapshot on reattach rather than a raw replay.
 - **The snapshot** is a byte stream of escape sequences, so every client
   feeds it to its own emulator: a full reset, the scrollback rows (oldest
   first), the visible screen with attributes (`vt100`'s formatted output),
-  then cursor position and visibility and the input modes (application
+  each grid's scroll region, origin mode and saved cursor, the character set and
+  autowrap, then cursor position and visibility and the input modes (application
   cursor and keypad, bracketed paste, mouse mode and encoding, alternate
   screen). The title, which `vt100` does not keep, is tracked from OSC 0 and 2
   by the model's callbacks and sent in the `Terminal` record, not inside the
