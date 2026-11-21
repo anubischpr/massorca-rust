@@ -204,3 +204,49 @@ fn stage_unstage_and_discard_with_its_waivers() {
         "hello"
     );
 }
+
+#[test]
+fn commit_then_amend_through_the_cli() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    harness::git(&dir, &["config", "user.name", "t"]);
+    harness::git(&dir, &["config", "user.email", "t@example.invalid"]);
+    std::fs::write(dir.join("a.txt"), "a").expect("write");
+    sandbox
+        .run("default", &["git", "stage", "a.txt", "-w", "feature"])
+        .success();
+
+    let text = sandbox
+        .run(
+            "default",
+            &["git", "commit", "-m", "add a", "-w", "feature"],
+        )
+        .success();
+    assert!(
+        stdout_text(&text).starts_with("[feature "),
+        "{}",
+        stdout_text(&text)
+    );
+    let amended = sandbox.json_ok(
+        "default",
+        &[
+            "git",
+            "commit",
+            "--amend",
+            "-m",
+            "add a file",
+            "-w",
+            "feature",
+        ],
+    );
+    assert_eq!(amended["subject"], "add a file");
+    assert!(amended["replaced"].is_string());
+
+    sandbox
+        .run(
+            "default",
+            &["git", "commit", "-m", "again", "-w", "feature"],
+        )
+        .code(1)
+        .stderr(contains("git.nothing_to_commit"));
+}

@@ -46,6 +46,16 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             })),
         ),
         command(
+            "git.commit",
+            "Commit the staged changes, or amend HEAD",
+            "git.commit",
+            workspace_args(json!({
+                "message": { "type": "string" },
+                "amend": { "type": "boolean" },
+                "allow_published": { "type": "boolean" }
+            })),
+        ),
+        command(
             "git.log",
             "Show the history of a workspace, a page at a time",
             "git.log",
