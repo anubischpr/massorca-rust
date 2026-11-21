@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::projects::{Project, ProjectKind};
 use massorca_protocol::methods::workspaces::{
-    Workspace, WorkspaceKind, WorkspaceRemoved, WorkspaceState,
+    UnregisteredWorktree, Workspace, WorkspaceKind, WorkspaceRemoved, WorkspaceState,
 };
 
 pub fn project_kind(kind: ProjectKind) -> &'static str {
@@ -157,4 +157,14 @@ pub fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Vec<String> {
             .map(|row| format_row(row.iter().map(String::as_str).collect())),
     );
     lines
+}
+
+/// One line for a worktree under a workspaces root that no workspace records. It is reported
+/// only: a create with the same name and branch adopts it.
+pub fn unregistered_line(worktree: &UnregisteredWorktree) -> String {
+    format!(
+        "unregistered worktree {} (branch {}): not a workspace; a create with this name and branch adopts it",
+        worktree.path,
+        worktree.branch.as_deref().unwrap_or("-")
+    )
 }

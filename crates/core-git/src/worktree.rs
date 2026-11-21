@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::GitError;
 use crate::git::Git;
+use crate::worktree_locks::fill_lock_reasons;
 use crate::worktree_porcelain::parse_worktree_list;
 
 /// One worktree from `git worktree list --porcelain`. The first entry is the main worktree.
@@ -18,7 +19,7 @@ pub struct WorktreeEntry {
     pub bare: bool,
     pub detached: bool,
     /// Lock reason; `Some("")` when the worktree is locked without a reason. Git before
-    /// 2.31 prints no `locked` line, so this is always `None` there, even when locked.
+    /// 2.31 prints no `locked` line, so the reason comes from git's `locked` admin file.
     pub locked: Option<String>,
     /// Why git could prune this worktree; `Some("")` when no reason is given. Do not use it
     /// to find a missing workspace: check that its directory exists. Git before 2.31 never
@@ -74,7 +75,10 @@ impl Git {
         let captured = self.run(Some(repo), ["worktree", "list", "--porcelain"])?;
         captured.require_success()?;
         let text = captured.text()?;
-        parse_worktree_list(text).map_err(|reason| captured.invalid_output(reason))
+        let mut entries =
+            parse_worktree_list(text).map_err(|reason| captured.invalid_output(reason))?;
+        fill_lock_reasons(&mut entries);
+        Ok(entries)
     }
 
     /// Adds a worktree at `path`; a relative `path` resolves against `repo`. A `path` with a

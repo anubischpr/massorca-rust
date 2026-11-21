@@ -28,11 +28,20 @@ lineage) comes later; the model must not block it.
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
   given. Create carries an optional client request id; repeating the same id
   returns the first result instead of creating twice.
+- **Interrupted create.** A create that stops after `worktree add` and before
+  its row is stored leaves a worktree that git registers and no row records.
+  The same create (same project, name, path and branch) adopts it: it stores
+  the row and says the branch was not created by this request, so removal keeps
+  the branch. A registered worktree that another row owns, that is on another
+  branch, or that is the main worktree is never adopted and the path is taken.
+  The adopted worktree's base is not verified.
 - **Create a folder workspace.** Registers an existing directory (the project
   path by default). No files are created.
 - **Remove.** The workspace row is first set to `removing`, then git runs
   `worktree remove` (with `--force` only when the user passes `--force`), then
   the row is deleted. A dirty or locked worktree is refused with a typed code.
+  Git before 2.31 prints no `locked` line, so the lock is read from git's
+  `locked` file in the worktree's admin record, which carries the same reason.
   The main worktree is never removed. A branch the workspace created is
   deleted with `git branch -d` (only if git proves it merged); otherwise it is
   kept and the result says so. A folder workspace is forgotten; its directory
@@ -53,6 +62,11 @@ lineage) comes later; the model must not block it.
   the directory, which is never deleted; git keeps its record of the worktree
   until git prunes it, and the result says the directory was kept. This replaces
   forgetting an unregistered directory silently.
+- **Unregistered worktrees.** `workspace list` compares git's worktrees under each git
+  project's workspaces root with the rows. A worktree with no row is reported as
+  `unregistered` (path, branch) and is never removed. It exists after a create that
+  stopped between `worktree add` and the row insert. Listing takes the mutation
+  lock, so a create in progress is not reported.
 - **Selectors.** An id or an exact name selects a workspace or project. A selector
   that is a path must be absolute; a relative one is refused with
   `request.invalid_params`, because it would resolve against the service's own

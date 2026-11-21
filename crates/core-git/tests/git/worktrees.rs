@@ -299,14 +299,11 @@ fn list_reports_a_locked_worktree_with_its_reason() {
         ],
     );
 
-    let git = git();
-    let entries = git.worktree_list(&repo).expect("list");
-    let locked = &entry_at(&entries, &linked).locked;
-    if porcelain_reports_lock_and_prune_state(&git) {
-        assert_eq!(locked.as_deref(), Some("agent running"));
-    } else {
-        assert_eq!(*locked, None);
-    }
+    let entries = git().worktree_list(&repo).expect("list");
+    assert_eq!(
+        entry_at(&entries, &linked).locked.as_deref(),
+        Some("agent running")
+    );
 }
 
 #[test]
@@ -317,14 +314,28 @@ fn list_reports_a_lock_without_a_reason_as_an_empty_reason() {
     add_new_branch(&repo, &linked, "quiet");
     run_git(&repo, &["worktree", "lock", text(&linked)]);
 
-    let git = git();
-    let entries = git.worktree_list(&repo).expect("list");
-    let locked = &entry_at(&entries, &linked).locked;
-    if porcelain_reports_lock_and_prune_state(&git) {
-        assert_eq!(locked.as_deref(), Some(""));
-    } else {
-        assert_eq!(*locked, None);
-    }
+    let entries = git().worktree_list(&repo).expect("list");
+    assert_eq!(entry_at(&entries, &linked).locked.as_deref(), Some(""));
+}
+
+#[test]
+fn list_reports_a_lock_on_a_worktree_whose_directory_is_gone() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    let linked = fixture.sibling("locked-gone-wt");
+    add_new_branch(&repo, &linked, "locked-gone");
+    run_git(
+        &repo,
+        &["worktree", "lock", "--reason", "kept", text(&linked)],
+    );
+    std::fs::remove_dir_all(&linked).expect("delete the directory behind git's back");
+
+    let entries = git().worktree_list(&repo).expect("list");
+    let entry = entries
+        .iter()
+        .find(|entry| entry.branch.as_deref() == Some("locked-gone"))
+        .expect("the locked worktree is still listed");
+    assert_eq!(entry.locked.as_deref(), Some("kept"));
 }
 
 #[test]

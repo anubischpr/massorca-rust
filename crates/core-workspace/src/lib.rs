@@ -12,6 +12,7 @@ mod paths;
 mod projects;
 mod remove;
 mod selectors;
+mod unregistered;
 mod views;
 mod workspaces;
 

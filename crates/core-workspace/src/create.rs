@@ -72,6 +72,9 @@ impl Workspaces {
             Some(text) => paths::absolute(text)?,
             None => paths::absolute(&project.workspaces_root)?.join(&params.name),
         };
+        if let Some(adopted) = self.adopt_interrupted_worktree(project, &target, branch, params)? {
+            return Ok(adopted);
+        }
         self.ensure_path_free(&target)?;
         let base = params.base.as_deref().unwrap_or("HEAD");
         if params.existing_branch {
@@ -138,6 +141,49 @@ impl Workspaces {
             return Err(with_leftovers(refused_insert(error), &leftovers));
         }
         Ok(views::workspace(&row))
+    }
+
+    /// Adopts the worktree an interrupted create left at `target`: git registers it on `branch`
+    /// and no row records it (ADR 0008). That create's branch cannot be proven to be this
+    /// request's, so the row says it was not created here and removal keeps the branch.
+    /// The main worktree and a path that a row already owns are never adopted.
+    fn adopt_interrupted_worktree(
+        &self,
+        project: &ProjectRow,
+        target: &Path,
+        branch: &str,
+        params: &WorkspaceCreateParams,
+    ) -> Result<Option<Workspace>, DomainError> {
+        let key = paths::path_key(target);
+        let entries = self.git.worktree_list(Path::new(&project.path))?;
+        let registered = entries
+            .iter()
+            .skip(1)
+            .find(|entry| paths::path_key(&entry.path) == key);
+        let Some(entry) = registered else {
+            return Ok(None);
+        };
+        if entry.branch.as_deref() != Some(branch)
+            || self.store.find_workspace_by_path_key(&key)?.is_some()
+        {
+            return Ok(None);
+        }
+        let row = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id.clone(),
+            kind: StoreWorkspaceKind::Worktree,
+            name: params.name.clone(),
+            path: paths::path_text(&paths::canonical(target))?,
+            path_key: key,
+            branch: Some(branch.to_owned()),
+            base_ref: None,
+            created_branch: false,
+            state: StoreWorkspaceState::Ready,
+            request_id: params.request_id.clone(),
+            created_at: now_ms(),
+        };
+        self.store.insert_workspace(&row).map_err(refused_insert)?;
+        Ok(Some(views::workspace(&row)))
     }
 
     /// Registers an existing directory: the project's by default. Creates no files.

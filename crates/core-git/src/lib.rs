@@ -11,6 +11,7 @@ mod refs;
 mod repository;
 mod version;
 mod worktree;
+mod worktree_locks;
 mod worktree_porcelain;
 
 pub use error::GitError;

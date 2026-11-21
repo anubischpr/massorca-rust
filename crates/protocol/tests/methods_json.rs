@@ -334,9 +334,31 @@ fn workspace_list_has_the_documented_shape() {
     assert_wire(
         &workspaces::WorkspaceList {
             workspaces: vec![sample_workspace()],
+            unregistered: Vec::new(),
         },
         &json!({ "workspaces": [sample_workspace_json()] }),
     );
+}
+
+#[test]
+fn workspace_list_reports_unregistered_worktrees_and_an_older_list_still_decodes() {
+    assert_wire(
+        &workspaces::WorkspaceList {
+            workspaces: Vec::new(),
+            unregistered: vec![workspaces::UnregisteredWorktree {
+                project_id: "p1".into(),
+                path: "/work/ws/lost".into(),
+                branch: None,
+            }],
+        },
+        &json!({
+            "workspaces": [],
+            "unregistered": [{ "project_id": "p1", "path": "/work/ws/lost" }]
+        }),
+    );
+    let older: workspaces::WorkspaceList =
+        serde_json::from_value(json!({ "workspaces": [] })).expect("older list decodes");
+    assert!(older.unregistered.is_empty());
 }
 
 #[test]

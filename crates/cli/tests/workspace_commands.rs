@@ -347,3 +347,30 @@ fn an_orphan_directory_needs_forget_orphan_and_keeps_its_directory() {
     assert_eq!(removed["directory_kept"], true);
     assert!(Path::new(&path).join("notes.txt").is_file());
 }
+
+#[test]
+fn a_worktree_left_by_an_interrupted_create_is_listed_until_a_create_adopts_it() {
+    let sandbox = Sandbox::new();
+    let repo = add_repo_project(&sandbox);
+    let root = sandbox.home().join("ws").join("lost");
+    let root_text = root.to_string_lossy().into_owned();
+    git(
+        &repo,
+        &["worktree", "add", "-b", "lost", root_text.as_str(), "HEAD"],
+    );
+
+    let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
+    assert_eq!(listed["workspaces"].as_array().map(Vec::len), Some(0));
+    assert_eq!(listed["unregistered"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed["unregistered"][0]["branch"], "lost");
+    sandbox
+        .run("default", &["workspace", "list", "--project", "repo"])
+        .success()
+        .stdout(contains("unregistered worktree"));
+    assert!(root.is_dir(), "listing never removes the worktree");
+
+    let adopted = sandbox.json_ok("default", &["workspace", "create", "repo", "lost"]);
+    assert_eq!(adopted["branch"], "lost");
+    let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
+    assert!(listed.get("unregistered").is_none());
+}

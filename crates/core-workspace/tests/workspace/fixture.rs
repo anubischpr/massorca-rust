@@ -272,3 +272,14 @@ pub fn entries(dir: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
+/// The equality key the domain stores for `path` (ADR 0007): canonical text, lowercased where
+/// the filesystem ignores case. The path must exist.
+pub fn path_key_of(path: &Path) -> String {
+    let text = canonical(path).to_string_lossy().into_owned();
+    if cfg!(any(windows, target_os = "macos")) {
+        text.to_lowercase()
+    } else {
+        text
+    }
+}

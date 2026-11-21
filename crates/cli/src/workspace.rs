@@ -39,11 +39,16 @@ pub async fn execute(
                         .transpose()?,
                 })
                 .await?;
-            let lines = if list.workspaces.is_empty() {
+            let mut lines = if list.workspaces.is_empty() {
                 vec!["no workspaces".to_owned()]
             } else {
                 workspace_text::workspace_table(&list.workspaces)
             };
+            lines.extend(
+                list.unregistered
+                    .iter()
+                    .map(workspace_text::unregistered_line),
+            );
             output.success(&list, &lines);
         }
         WorkspaceCommand::Show { workspace } => {
