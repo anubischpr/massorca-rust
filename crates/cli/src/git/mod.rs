@@ -1,6 +1,7 @@
 //! `massorca git ...`: the `git/1` methods on a workspace, one module per command group (decision 0010).
 
 mod diff;
+mod index;
 mod log;
 mod status;
 
@@ -16,6 +17,12 @@ use crate::output::Output;
 pub enum GitCommand {
     /// Shows the changed files: staged, unstaged, untracked and conflicted.
     Status(status::StatusArgs),
+    /// Stages files, or every change with `--all`.
+    Stage(index::PathsArgs),
+    /// Unstages files, or everything with `--all`; the working files are kept.
+    Unstage(index::PathsArgs),
+    /// Discards changes to files. Refuses to delete untracked files or drop staged changes unless told to.
+    Discard(index::DiscardArgs),
     /// Lists the files a comparison changes, with line counts.
     Diff(diff::DiffArgs),
     /// Shows the history, newest first, a page at a time.
@@ -49,6 +56,9 @@ pub async fn execute(
     let client = connect(profile, autostart).await?;
     match command {
         GitCommand::Status(args) => status::run(&client, args, output).await,
+        GitCommand::Stage(args) => index::run_stage(&client, args, output).await,
+        GitCommand::Unstage(args) => index::run_unstage(&client, args, output).await,
+        GitCommand::Discard(args) => index::run_discard(&client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,

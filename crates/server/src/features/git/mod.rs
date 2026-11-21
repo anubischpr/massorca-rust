@@ -1,10 +1,13 @@
 //! The `git/1` capability (decisions 0010-0015): one module per command group, sharing workspace resolution here.
 
 mod diff;
+mod index;
 mod log;
 mod status;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use massorca_core_git::Git;
 use massorca_core_workspace::DomainError;
@@ -25,6 +28,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(status::register(registries)?);
     handles.extend(diff::register(registries)?);
     handles.extend(log::register(registries)?);
+    handles.extend(index::register(registries)?);
     Ok(handles)
 }
 
@@ -33,6 +37,33 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 pub(crate) struct Repository {
     pub(crate) git: Git,
     pub(crate) dir: PathBuf,
+    pub(crate) workspace_id: String,
+}
+
+/// One lock per workspace, held by every git mutation on it, so two clients cannot interleave a stage and a
+/// commit (decision 0010). Entries are dropped with their last holder.
+static MUTATION_LOCKS: LazyLock<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(Mutex::default);
+
+impl Repository {
+    /// Waits for the workspace's mutation lock; reads never take it.
+    pub(crate) async fn lock(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = MUTATION_LOCKS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            match locks.get(&self.workspace_id).and_then(Weak::upgrade) {
+                Some(lock) => lock,
+                None => {
+                    let lock = Arc::new(tokio::sync::Mutex::new(()));
+                    locks.insert(self.workspace_id.clone(), Arc::downgrade(&lock));
+                    lock
+                }
+            }
+        };
+        lock.lock_owned().await
+    }
 }
 
 /// Resolves `selector` to a git work tree. A folder workspace, a missing directory and a workspace being removed are refused.
@@ -40,7 +71,7 @@ pub(crate) async fn repository(
     ctx: &RequestCtx,
     selector: String,
 ) -> Result<Repository, ErrorBody> {
-    let workspaces = std::sync::Arc::clone(&ctx.state.workspaces);
+    let workspaces = Arc::clone(&ctx.state.workspaces);
     let git = workspaces.git().clone();
     let workspace = blocking(move || {
         workspaces
@@ -78,6 +109,7 @@ pub(crate) async fn repository(
     Ok(Repository {
         git,
         dir: PathBuf::from(workspace.path),
+        workspace_id: workspace.id,
     })
 }
 
@@ -133,5 +165,8 @@ where
 
 /// A git failure as the protocol reports it.
 pub(crate) fn git_error(error: massorca_core_git::GitError) -> ErrorBody {
-    DomainError::from(error).into()
+    match massorca_core_git::failure_code(&error) {
+        Some(code) => ErrorBody::new(code, error.to_string()),
+        None => DomainError::from(error).into(),
+    }
 }

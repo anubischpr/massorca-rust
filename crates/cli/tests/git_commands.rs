@@ -97,13 +97,7 @@ fn status_of_a_folder_workspace_is_refused_with_exit_1() {
 fn diff_lists_staged_files_and_patch_shows_one() {
     let sandbox = Sandbox::new();
     let dir = workspace(&sandbox);
-    std::fs::write(
-        dir.join("README.md"),
-        "hello
-staged
-",
-    )
-    .expect("write");
+    std::fs::write(dir.join("README.md"), "hello\nstaged\n").expect("write");
     harness::git(&dir, &["add", "README.md"]);
 
     let unstaged = sandbox.json_ok("default", &["git", "diff", "-w", "feature"]);
@@ -149,4 +143,64 @@ fn log_prints_a_page_and_the_cursor_for_the_next() {
         .run("default", &["git", "log", "-w", "feature", "-n", "1"])
         .success();
     assert!(stdout_text(&text).contains("(more: --cursor "));
+}
+
+#[test]
+fn stage_unstage_and_discard_with_its_waivers() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    std::fs::write(dir.join("README.md"), "edited").expect("write");
+    std::fs::write(dir.join("new.txt"), "work").expect("write");
+
+    sandbox
+        .run("default", &["git", "stage", "README.md", "-w", "feature"])
+        .success();
+    let status = sandbox.json_ok("default", &["git", "status", "-w", "feature"]);
+    assert_eq!(status["entries"][0]["staged"], "modified");
+    sandbox
+        .run("default", &["git", "unstage", "--all", "-w", "feature"])
+        .success();
+
+    sandbox
+        .run("default", &["git", "discard", "--all", "-w", "feature"])
+        .code(1)
+        .stderr(contains("git.discard_untracked"))
+        .stderr(contains("new.txt"));
+    let planned = sandbox
+        .run(
+            "default",
+            &[
+                "git",
+                "discard",
+                "--all",
+                "--delete-untracked",
+                "--dry-run",
+                "-w",
+                "feature",
+            ],
+        )
+        .success();
+    assert!(stdout_text(&planned).contains("would delete new.txt"));
+    assert!(dir.join("new.txt").exists());
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "git",
+                "discard",
+                "--all",
+                "--delete-untracked",
+                "-w",
+                "feature",
+            ],
+        )
+        .success();
+    assert!(!dir.join("new.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("README.md"))
+            .expect("read")
+            .trim_end(),
+        "hello"
+    );
 }
