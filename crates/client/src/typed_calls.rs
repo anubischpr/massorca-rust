@@ -1,5 +1,6 @@
 //! Typed helpers over the methods of the core features.
 
+use massorca_protocol::methods::agents::{self, AgentKinds};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
 use massorca_protocol::methods::projects::{
@@ -163,6 +164,11 @@ impl Client {
     /// `terminal.close`: kills the terminal if it is live, then forgets it.
     pub async fn terminal_close(&self, terminal: &str) -> Result<Terminal, ClientError> {
         self.call(terminals::CLOSE, &terminal_ref(terminal)).await
+    }
+
+    /// `agent.kinds`: every declared agent kind, whether it is installed, and its problems.
+    pub async fn agent_kinds(&self) -> Result<AgentKinds, ClientError> {
+        self.call(agents::KINDS, &()).await
     }
 }
 

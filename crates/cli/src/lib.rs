@@ -2,6 +2,8 @@
 //!
 //! The binary is a thin shell over [`run`], so parsing, output and exit codes stay testable.
 
+pub mod agent;
+pub mod agent_text;
 pub mod app;
 pub mod args;
 pub mod config;
