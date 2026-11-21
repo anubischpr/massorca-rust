@@ -173,13 +173,9 @@ fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme)
                 .child("No projects yet"),
         );
     }
-    let mut workspaces = 0;
     for (index, row) in tree.iter().enumerate() {
         let focus = row_focus(window, cx, format!("tree-{index}"));
-        list = list.child(tree_row(row, index, workspaces, &focus));
-        if matches!(row, TreeRow::Workspace { .. }) {
-            workspaces += 1;
-        }
+        list = list.child(tree_row(row, index, &focus));
     }
     list
 }

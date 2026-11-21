@@ -37,24 +37,22 @@ pub(super) fn nav_row(row: &NavRow, focus: &FocusHandle, shell: &WeakEntity<Shel
     item
 }
 
-/// One row of the project tree, identified by its position in the list. `workspaces` counts the
-/// workspace rows above it, which picks the usage colour of a workspace label (P29).
-pub(super) fn tree_row(
-    row: &TreeRow,
-    index: usize,
-    workspaces: usize,
-    focus: &FocusHandle,
-) -> SidebarRow {
+/// One row of the project tree, identified by its position in the list.
+pub(super) fn tree_row(row: &TreeRow, index: usize, focus: &FocusHandle) -> SidebarRow {
     let id = SharedString::from(format!("tree-row-{index}"));
     let item = match row {
         TreeRow::Project { name } => SidebarRow::project(id, IconName::Folder, name.clone()),
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
-        TreeRow::Workspace { name, branch } => {
+        TreeRow::Workspace {
+            name,
+            branch,
+            usage_slot,
+        } => {
             let mut item = SidebarRow::workspace(
                 id,
                 name.clone(),
                 WorkspaceKind::Worktree,
-                usage_slot(workspaces),
+                UsageSlot::new(*usage_slot).unwrap_or_default(),
             )
             .level(WORKSPACE_LEVEL);
             if let Some(branch) = branch {
@@ -110,12 +108,6 @@ fn session_indent(depth: usize) -> f32 {
     (0..depth).fold(SESSION_LEVEL as f32 * TREE_INDENT, |parent, _| {
         child_session_indent(parent)
     })
-}
-
-/// The usage colour of the `ordinal`th workspace, the six slots in turn (P29). The view model
-/// does not carry a slot per workspace yet.
-fn usage_slot(ordinal: usize) -> UsageSlot {
-    UsageSlot::new((ordinal % 6) as u8 + 1).unwrap_or_default()
 }
 
 /// The icon of each navigation row. Two Lucide names are not bundled yet and use the nearest

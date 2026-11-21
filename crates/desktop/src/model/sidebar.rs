@@ -39,6 +39,7 @@ pub enum TreeRow {
     Workspace {
         name: String,
         branch: Option<String>,
+        usage_slot: u8,
     },
     /// A session at `depth` (0 for a top session, 1 for its child sessions, A83).
     Session {
@@ -128,6 +129,7 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
                 rows.push(TreeRow::Workspace {
                     name: workspace.name.clone(),
                     branch: workspace.branch.clone(),
+                    usage_slot: workspace.usage_slot,
                 });
                 for session in &workspace.sessions {
                     push_session(&mut rows, session, 0, active);
