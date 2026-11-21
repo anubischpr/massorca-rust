@@ -6,6 +6,7 @@ mod controls;
 mod feedback;
 mod fields;
 mod indicators;
+mod layout;
 mod lists;
 mod overlays;
 
@@ -35,6 +36,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(lists::stories());
     all.extend(overlays::stories());
     all.extend(feedback::stories());
+    all.extend(layout::stories());
     all
 }
 
