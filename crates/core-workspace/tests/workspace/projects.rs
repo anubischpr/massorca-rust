@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::ProjectKind;
@@ -286,4 +287,18 @@ fn a_handle_with_another_default_root_uses_it_for_the_workspaces_root_and_shares
         .show_project(&project.id)
         .expect("the other handle sees the project");
     assert_eq!(seen.id, project.id);
+}
+
+#[test]
+fn a_default_root_that_is_not_absolute_is_refused_when_a_project_would_take_it() {
+    let fx = Fixture::new();
+    let handle = fx
+        .workspaces
+        .with_default_root(PathBuf::from("relative/root"));
+
+    expect_code(
+        handle.add_project(project_add(&fx.repo())),
+        codes::REQUEST_INVALID_PARAMS,
+    );
+    assert!(fx.workspaces.list_projects().expect("list").is_empty());
 }

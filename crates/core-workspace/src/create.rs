@@ -1,7 +1,7 @@
 //! Creating workspaces (ADR 0008): a new worktree and branch in a git project, or a
 //! registration of an existing directory in a folder project.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use massorca_core_git::WorktreeAdd;
 use massorca_core_store::{
@@ -70,7 +70,7 @@ impl Workspaces {
         }
         let target = match params.path.as_deref() {
             Some(text) => paths::absolute(text)?,
-            None => PathBuf::from(&project.workspaces_root).join(&params.name),
+            None => paths::absolute(&project.workspaces_root)?.join(&params.name),
         };
         self.ensure_path_free(&target)?;
         let base = params.base.as_deref().unwrap_or("HEAD");

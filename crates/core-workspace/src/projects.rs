@@ -69,7 +69,15 @@ impl Workspaces {
                 paths::absolute(&text)?;
                 text
             }
-            None => paths::path_text(&self.default_root.join(&name))?,
+            None => {
+                if !self.default_root.is_absolute() {
+                    return Err(DomainError::new(
+                        codes::REQUEST_INVALID_PARAMS,
+                        "the default workspaces root must be an absolute path",
+                    ));
+                }
+                paths::path_text(&self.default_root.join(&name))?
+            }
         };
         let row = ProjectRow {
             id: new_id(),

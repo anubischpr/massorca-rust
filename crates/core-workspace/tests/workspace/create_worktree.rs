@@ -8,7 +8,7 @@ use massorca_protocol::methods::workspaces::{WorkspaceKind, WorkspaceState};
 
 use crate::fixture::{
     Fixture, branch_exists, canonical, create_params, entries, expect_code, project_add, run_git,
-    text,
+    text, worktree_count,
 };
 
 #[test]
@@ -319,4 +319,27 @@ fn the_project_can_be_named_by_id_and_a_created_workspace_lists_and_shows_the_sa
         fx.workspaces.list_workspaces(None).expect("list"),
         [created]
     );
+}
+
+#[test]
+fn a_project_whose_workspaces_root_is_relative_is_refused_before_git_runs() {
+    let fx = Fixture::new();
+    fx.store
+        .insert_project(&massorca_core_store::ProjectRow {
+            id: massorca_core_store::new_id(),
+            kind: massorca_core_store::ProjectKind::Git,
+            path: text(&canonical(&fx.repo())),
+            path_key: "relative-root-project".to_owned(),
+            name: "odd".to_owned(),
+            workspaces_root: "relative/workspaces".to_owned(),
+            added_at: massorca_core_store::now_ms(),
+        })
+        .expect("insert a project with a relative root");
+
+    expect_code(
+        fx.workspaces
+            .create_workspace(create_params("odd", "worker")),
+        codes::REQUEST_INVALID_PARAMS,
+    );
+    assert_eq!(worktree_count(&fx.repo()), 1, "git created nothing");
 }
