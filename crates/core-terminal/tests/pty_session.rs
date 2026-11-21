@@ -4,7 +4,9 @@ mod support;
 
 use massorca_core_terminal::pty::{PtyError, PtySize};
 use massorca_core_terminal::shell::{EnvSnapshot, resolve_program};
-use support::{exit_within, shell_program, spec, start, terminal_env, type_text};
+use support::{
+    TIMEOUT, exit_within, shell_program, spec, start, terminal_env, type_text, visible_text,
+};
 
 #[test]
 fn a_resize_reaches_the_shell_while_it_runs() {
@@ -30,7 +32,7 @@ fn a_resize_reaches_the_shell_while_it_runs() {
         .expect("resize the terminal");
     if cfg!(windows) {
         type_text(&running.master, "mode con\r\n");
-        // Wait for the prompt after the report too: input typed while `mode con` runs is lost.
+        // `exit` is typed at the prompt, as a person would.
         running
             .output
             .wait_until("the console size, then the prompt", |text| {
@@ -50,7 +52,12 @@ fn a_resize_reaches_the_shell_while_it_runs() {
         });
         type_text(&running.master, "exit\n");
     }
-    let _ = exit_within(&running.exit);
+    if let Err(error) = running.exit.recv_timeout(TIMEOUT) {
+        panic!(
+            "the shell did not exit ({error}); visible output: {:?}",
+            visible_text(&running.output.raw())
+        );
+    }
     running.master.close();
     running.output.finish();
 }
