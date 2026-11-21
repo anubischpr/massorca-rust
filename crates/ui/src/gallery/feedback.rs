@@ -1,15 +1,17 @@
 //! Gallery stories for the feedback group.
 
 use super::{Story, variant};
+use crate::components::banner::{Banner, BannerVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardPadding, CardVariant};
 use crate::components::empty_state::{EmptyState, EmptyStateVariant};
 use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::toast::{Toast, ToastKind, ToastSpec, Toasts};
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{SPACE_3, TYPE_BODY_SM};
+use crate::tokens::{SPACE_2, SPACE_3, TYPE_BODY_SM};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
@@ -29,7 +31,193 @@ pub fn stories() -> Vec<Story> {
             spec: "ErrorState.md",
             render: error_state_story,
         },
+        Story {
+            name: "Banner",
+            spec: "Banner.md",
+            render: banner_story,
+        },
+        Story {
+            name: "Toast",
+            spec: "Toast.md",
+            render: toast_story,
+        },
     ]
+}
+
+fn toast_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Kinds: info, success and warning clear after eight seconds; an error stays",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .child(Toast::new("toast-info", ToastKind::Info, "Copied"))
+                .child(Toast::new(
+                    "toast-success",
+                    ToastKind::Success,
+                    "Session renamed",
+                ))
+                .child(Toast::new(
+                    "toast-warning",
+                    ToastKind::Warning,
+                    "Runs on a host that is slow to answer",
+                ))
+                .child(Toast::new(
+                    "toast-error",
+                    ToastKind::Error,
+                    "Could not rename the session",
+                )),
+            cx,
+        ))
+        .child(variant(
+            "Undo: times out after eight seconds",
+            Toast::new("toast-undo", ToastKind::Success, "Removed from queue")
+                .action("Undo", |_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Repeated within two seconds: a counter chip instead of a second toast",
+            Toast::new("toast-repeat", ToastKind::Info, "Copied").repeats(2),
+            cx,
+        ))
+        .child(variant(
+            "Action running: the button shows a spinner and cannot be pressed",
+            Toast::new("toast-busy", ToastKind::Error, "Setup script failed")
+                .action("Open log", |_, _| {})
+                .action_loading(true),
+            cx,
+        ))
+        .child(variant(
+            "Live stack: bottom right of the canvas, newest at the bottom, three visible",
+            div()
+                .relative()
+                .h(px(240.))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(SPACE_2))
+                        .child(
+                            Button::new("toast-demo-info", "Show toast")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    Toasts::show(cx, ToastSpec::new(ToastKind::Info, "Copied"));
+                                }),
+                        )
+                        .child(
+                            Button::new("toast-demo-undo", "Show with Undo")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    let spec =
+                                        ToastSpec::new(ToastKind::Success, "Removed from queue")
+                                            .with_action("Undo", true);
+                                    Toasts::show_with_action(cx, spec, |_, _| {});
+                                }),
+                        )
+                        .child(
+                            Button::new("toast-demo-error", "Show error")
+                                .variant(ButtonVariant::Secondary)
+                                .on_click(|_, cx| {
+                                    Toasts::show(
+                                        cx,
+                                        ToastSpec::new(
+                                            ToastKind::Error,
+                                            "Could not rename the session",
+                                        ),
+                                    );
+                                }),
+                        ),
+                )
+                .child(Toasts::stack(cx)),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Info: a note about the content, dismissible",
+            Banner::new(
+                "banner-info",
+                BannerVariant::Info,
+                "This diff is large (12,431 lines). Show it anyway?",
+            )
+            .action(Button::new("banner-info-show", "Show diff"))
+            .on_dismiss(|_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Success: restored, dismissible",
+            Banner::new(
+                "banner-success",
+                BannerVariant::Success,
+                "Reconnected to VPS",
+            )
+            .on_dismiss(|_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Warning: sign-in needed, one action",
+            Banner::new(
+                "banner-warning",
+                BannerVariant::Warning,
+                "VPS needs you to sign in",
+            )
+            .action(Button::new("banner-warning-sign-in", "Sign in")),
+            cx,
+        ))
+        .child(variant(
+            "Danger: a failure with a Details disclosure and two actions",
+            Banner::new(
+                "banner-danger",
+                BannerVariant::Danger,
+                "Setup script failed.",
+            )
+            .detail("Exit code 1. Open the log for the full output.")
+            .action(Button::new("banner-danger-log", "Open log"))
+            .action(Button::new("banner-danger-retry", "Retry")),
+            cx,
+        ))
+        .child(variant(
+            "Connecting: a spinner in place of the glyph",
+            Banner::new(
+                "banner-connecting",
+                BannerVariant::Info,
+                "Connecting to VPS",
+            )
+            .loading(true),
+            cx,
+        ))
+        .child(variant(
+            "Unreachable: the last known state, never worded as stopped",
+            Banner::new(
+                "banner-unreachable",
+                BannerVariant::Unreachable,
+                "VPS can't be reached. Showing the last known state from 5 min ago.",
+            )
+            .detail("Work that was running there may still be running.")
+            .action(Button::new("banner-unreachable-retry", "Retry")),
+            cx,
+        ))
+        .child(variant(
+            "Edge to edge, with a +2 more count for hidden notices",
+            Banner::new(
+                "banner-more",
+                BannerVariant::Warning,
+                "Two more notices are waiting.",
+            )
+            .edge_to_edge(true)
+            .more(2, |_, _| {}),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn error_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
