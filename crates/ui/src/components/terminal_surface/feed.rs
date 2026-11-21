@@ -18,6 +18,10 @@ use alacritty_terminal::term::{
 };
 use alacritty_terminal::vte::ansi::Processor;
 
+mod snapshot;
+
+pub use snapshot::{RenderCell, RenderCursor, RenderSnapshot};
+
 /// Scrollback kept per terminal: the default of the desktop setting.
 const SCROLLBACK_LINES: usize = 10_000;
 /// The service's size limits (decision 0033), so a resize cannot ask for more.
