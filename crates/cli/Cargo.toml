@@ -1,0 +1,38 @@
+[package]
+name = "massorca-cli"
+description = "The massorca command: runs and controls the service of a profile, reads and changes its settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "massorca_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "massorca"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+massorca-client.workspace = true
+massorca-profile.workspace = true
+massorca-protocol.workspace = true
+massorca-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
