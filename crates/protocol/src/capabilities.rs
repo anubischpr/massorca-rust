@@ -5,3 +5,4 @@ pub const PROJECTS: &str = "projects/1";
 pub const WORKSPACES: &str = "workspaces/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
+pub const GIT: &str = "git/1";
