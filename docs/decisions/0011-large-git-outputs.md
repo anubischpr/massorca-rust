@@ -34,7 +34,8 @@ No reply streams in `git/1`.
 - `git.diff_file` returns the patch of one path, capped at `max_bytes`. The
   default is 1 MiB and the maximum is 4 MiB.
   - When the patch is longer, the text is cut at the last line break before
-    the cap and `truncated: true` is set, together with the full byte count.
+    the cap and `truncated: true` is set. The size past the cap is not
+    known, because git is stopped there.
   - A binary file returns no text, only its old and new sizes from
     `git cat-file -s`, so a client can show "binary, 2.1 MiB → 2.3 MiB".
 - The modes are the same for both methods:
@@ -42,6 +43,8 @@ No reply streams in `git/1`.
   - `staged`: HEAD against the index;
   - `head`: HEAD against the working tree;
   - `range`: two revisions, `from..to`.
+- An untracked file has no index entry, so `git.diff_file` shows it as
+  wholly added, read from the working tree without following a symlink.
 - Diffs always run with `--no-ext-diff --no-textconv --no-color`. A user's
   external diff tool or text converter never runs, because it can hang or
   print what git does not control.
@@ -53,9 +56,10 @@ No reply streams in `git/1`.
 - The first page resolves the revision to a commit id. The cursor carries that
   id and an offset, so later pages walk the same history even if the branch
   moves in between.
-- The reply sets `has_more` when another page exists.
+- The reply carries `next_cursor` when another page exists.
 - Each commit carries its id, parents, author and committer, both times, and
-  the subject. The full message is cut at 64 KiB per commit.
+  the subject. The full message is cut at 4 KiB per commit, so a page of 500
+  commits stays far below a frame.
 
 ### Process output is capped too
 
