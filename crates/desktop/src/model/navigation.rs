@@ -62,13 +62,15 @@ impl Page {
     }
 }
 
-/// Where the user is: one mode and one page.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Where the user is: one mode and one page, plus the pages Back and Forward return to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Navigation {
     pub mode: Mode,
     pub page: Page,
-    /// The page Back returns to.
-    previous: Option<Page>,
+    /// Pages Back returns to, the latest last.
+    back_pages: Vec<Page>,
+    /// Pages Forward returns to, the latest last.
+    forward_pages: Vec<Page>,
 }
 
 impl Navigation {
@@ -78,7 +80,8 @@ impl Navigation {
     pub fn press_mode_switch(&mut self) -> bool {
         if self.page != Page::Home {
             self.page = Page::Home;
-            self.previous = None;
+            self.back_pages.clear();
+            self.forward_pages.clear();
             false
         } else {
             self.mode = self.mode.other();
@@ -86,15 +89,37 @@ impl Navigation {
         }
     }
 
+    /// Opens a page. It becomes the Back target and clears the Forward pages.
     pub fn open(&mut self, page: Page) {
         if page != self.page {
-            self.previous = Some(self.page);
+            self.back_pages.push(self.page);
+            self.forward_pages.clear();
             self.page = page;
         }
     }
 
+    pub fn can_go_back(&self) -> bool {
+        !self.back_pages.is_empty()
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        !self.forward_pages.is_empty()
+    }
+
+    /// Returns to the previous page. Does nothing without history.
     pub fn back(&mut self) {
-        self.page = self.previous.take().unwrap_or(Page::Home);
+        if let Some(previous) = self.back_pages.pop() {
+            self.forward_pages.push(self.page);
+            self.page = previous;
+        }
+    }
+
+    /// Goes forward again after a Back. Does nothing without forward history.
+    pub fn forward(&mut self) {
+        if let Some(next) = self.forward_pages.pop() {
+            self.back_pages.push(self.page);
+            self.page = next;
+        }
     }
 }
 
@@ -111,6 +136,30 @@ mod tests {
         assert!(nav.press_mode_switch());
         assert_eq!(nav.mode, Mode::BotTeams);
         assert_eq!(nav.mode.switch_tooltip(), "Switch to Workspaces");
+    }
+
+    #[test]
+    fn forward_replays_what_back_left_and_opening_a_page_clears_it() {
+        let mut nav = Navigation::default();
+        nav.open(Page::Tasks);
+        nav.open(Page::Calendar);
+        nav.back();
+        assert_eq!(nav.page, Page::Tasks);
+        assert!(nav.can_go_forward());
+        nav.forward();
+        assert_eq!(nav.page, Page::Calendar);
+        nav.back();
+        nav.open(Page::Marketplace);
+        assert!(!nav.can_go_forward());
+    }
+
+    #[test]
+    fn back_and_forward_do_nothing_without_history() {
+        let mut nav = Navigation::default();
+        assert!(!nav.can_go_back() && !nav.can_go_forward());
+        nav.back();
+        nav.forward();
+        assert_eq!(nav.page, Page::Home);
     }
 
     #[test]

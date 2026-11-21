@@ -34,6 +34,16 @@ impl Region {
         }
     }
 
+    /// The glossary name shown in copy and landmarks (A5, A91).
+    pub fn name(self) -> &'static str {
+        match self {
+            Region::SessionSummary => "Session summary",
+            Region::ProjectSidebar => "Project sidebar",
+            Region::Sidebar => "Sidebar",
+            Region::WorkPanel => "Work panel",
+        }
+    }
+
     pub fn default_width(self) -> f32 {
         match self {
             Region::SessionSummary => LAYOUT_SUMMARY_DEFAULT,
@@ -97,7 +107,10 @@ impl RegionState {
         self.open.contains(&region)
     }
 
+    /// Opens or closes a region. Narrow: an open region toggles its overlay, and a
+    /// closed one opens as the overlay (handoff 2.5).
     pub fn toggle(&mut self, region: Region, window_width: f32) {
+        let narrow = window_width < region.threshold();
         if self.placement(region, window_width) == Placement::Collapsed {
             self.overlay = if self.overlay == Some(region) {
                 None
@@ -110,6 +123,9 @@ impl RegionState {
             self.open.remove(i);
         } else {
             self.open.push(region);
+            if narrow {
+                self.overlay = Some(region);
+            }
         }
     }
 
@@ -139,6 +155,26 @@ pub const RAIL_WIDTH: f32 = SIZE_RAIL_WIDTH;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_region_opened_while_narrow_appears_as_the_overlay() {
+        let mut s = RegionState::default();
+        s.toggle(Region::SessionSummary, 900.0);
+        assert!(s.is_open(Region::SessionSummary));
+        assert_eq!(s.overlay(), Some(Region::SessionSummary));
+        assert_eq!(
+            s.placement(Region::SessionSummary, 900.0),
+            Placement::Collapsed
+        );
+    }
+
+    #[test]
+    fn region_names_follow_the_glossary() {
+        assert_eq!(Region::SessionSummary.name(), "Session summary");
+        assert_eq!(Region::WorkPanel.name(), "Work panel");
+        assert_eq!(Region::ProjectSidebar.name(), "Project sidebar");
+        assert_eq!(Region::Sidebar.name(), "Sidebar");
+    }
 
     #[test]
     fn thresholds_are_sums_of_the_open_minimums() {
