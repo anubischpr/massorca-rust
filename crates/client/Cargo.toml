@@ -14,6 +14,7 @@ massorca-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]

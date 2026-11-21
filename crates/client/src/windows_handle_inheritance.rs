@@ -1,7 +1,9 @@
 //! Clears the inheritance of this process's standard handles, so the detached service does not keep the caller's pipes open.
 //!
-//! `CreateProcess` is called with `bInheritHandles = TRUE`, so every inheritable handle leaks into the child. Rust's
+//! `CreateProcess` is called with `bInheritHandles = TRUE`, so inheritable handles leak into the child. Rust's
 //! `Stdio::inherit` duplicates the handles it passes on, so later children are unaffected by this change.
+//! Only the three standard handles (input, output, error) are covered; other inheritable handles are not.
+//! A failure is logged at debug level and the autostart continues.
 #![allow(unsafe_code)]
 
 use std::io;
@@ -15,18 +17,21 @@ use windows_sys::Win32::System::Console::{
 
 const STANDARD_HANDLES: [STD_HANDLE; 3] = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
 
-/// Clears `HANDLE_FLAG_INHERIT` on each valid standard handle of this process; missing ones are skipped.
-pub(crate) fn clear_standard_handle_inheritance() -> io::Result<()> {
+/// Clears `HANDLE_FLAG_INHERIT` on each valid standard handle of this process; missing ones are skipped and a failure is
+/// logged, so one handle that cannot be changed does not stop the others.
+pub(crate) fn clear_standard_handle_inheritance() {
     for which in STANDARD_HANDLES {
         let Some(handle) = standard_handle(which) else {
             continue;
         };
         // SAFETY: `handle` is a valid handle GetStdHandle returned for this process; the mask only selects HANDLE_FLAG_INHERIT and the flags clear it.
         if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
-            return Err(io::Error::last_os_error());
+            tracing::debug!(
+                error = %io::Error::last_os_error(),
+                "could not clear inheritance of a standard handle"
+            );
         }
     }
-    Ok(())
 }
 
 /// The standard handle `which`, or `None` when the process has none or it is invalid.
@@ -44,7 +49,7 @@ mod tests {
 
     #[test]
     fn standard_handles_are_not_inherited_once_cleared() {
-        clear_standard_handle_inheritance().expect("the standard handles are updated");
+        clear_standard_handle_inheritance();
         for which in STANDARD_HANDLES {
             let Some(handle) = standard_handle(which) else {
                 continue;

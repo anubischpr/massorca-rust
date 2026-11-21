@@ -17,7 +17,7 @@ pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<()
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     detach(&mut command);
-    keep_handles_private()?;
+    keep_handles_private();
     command
         .spawn()
         .map(drop)
@@ -26,18 +26,12 @@ pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<()
 
 /// Stops the detached service from inheriting this process's standard pipes, so a caller reading them to end-of-file is not held open.
 #[cfg(windows)]
-fn keep_handles_private() -> Result<(), ClientError> {
-    crate::windows_handle_inheritance::clear_standard_handle_inheritance().map_err(|error| {
-        ClientError::StartFailed(format!(
-            "could not stop the service inheriting handles: {error}"
-        ))
-    })
+fn keep_handles_private() {
+    crate::windows_handle_inheritance::clear_standard_handle_inheritance();
 }
 
 #[cfg(unix)]
-fn keep_handles_private() -> Result<(), ClientError> {
-    Ok(())
-}
+fn keep_handles_private() {}
 
 #[cfg(windows)]
 fn detach(command: &mut Command) {
