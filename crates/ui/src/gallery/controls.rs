@@ -156,6 +156,23 @@ fn icon_button_story(_: &mut Window, cx: &mut App) -> AnyElement {
             ),
             cx,
         ))
+        .child(variant(
+            "Status dot (6 px, top right; the word is in the tooltip)",
+            row()
+                .child(
+                    IconButton::new("status-warning", IconName::Plus, "Needs attention")
+                        .status(BadgeTone::Warning),
+                )
+                .child(
+                    IconButton::new("status-danger", IconName::Plus, "Failed")
+                        .status(BadgeTone::Danger),
+                )
+                .child(
+                    IconButton::new("status-success", IconName::Plus, "Connected")
+                        .status(BadgeTone::Success),
+                ),
+            cx,
+        ))
         .into_any_element()
 }
 

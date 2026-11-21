@@ -3,13 +3,14 @@
 //!
 //! Its accessible name is its tooltip text, so the constructor requires one.
 
+use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{
     ButtonSize, ClickHandler, HOVER_GROUP, StatePreview, glyph, loading_slot,
 };
 use crate::icon::IconName;
 use crate::style::{FocusRing, Surface};
 use crate::theme::{ActiveTheme, Theme, box_shadows};
-use crate::tokens::{Color, RADIUS_MD};
+use crate::tokens::{Color, RADIUS_MD, SPACE_HALF};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -96,6 +97,7 @@ pub struct IconButton {
     size: ButtonSize,
     surface: Surface,
     toggled: Option<bool>,
+    status: Option<BadgeTone>,
     loading: bool,
     disabled: bool,
     reason: Option<SharedString>,
@@ -130,6 +132,7 @@ impl IconButton {
             size: ButtonSize::default(),
             surface: Surface::default(),
             toggled: None,
+            status: None,
             loading: false,
             disabled: false,
             reason: None,
@@ -159,6 +162,17 @@ impl IconButton {
     pub fn toggle(mut self, pressed: bool) -> Self {
         self.toggled = Some(pressed);
         self
+    }
+
+    /// A status dot in the top-right corner; its word belongs in the tooltip.
+    pub fn status(mut self, tone: BadgeTone) -> Self {
+        self.status = Some(tone);
+        self
+    }
+
+    /// The status dot's tone, if the button shows one.
+    pub fn status_tone(&self) -> Option<BadgeTone> {
+        self.status
     }
 
     /// Busy: no activation, and a spinner replaces the icon after `SPINNER_DELAY`.
@@ -281,10 +295,20 @@ impl RenderOnce for IconButton {
             root = root.on_click(move |_, window, cx| on_click(window, cx));
         }
 
-        if self.loading {
+        let root = if self.loading {
             root.child(loading_slot(Some(self.icon), icon_size, rest.icon))
         } else {
             root.child(glyph(self.icon, icon_size, rest.icon, hover_icon))
+        };
+        match self.status {
+            Some(tone) => root.child(
+                div()
+                    .absolute()
+                    .top(px(SPACE_HALF))
+                    .right(px(SPACE_HALF))
+                    .child(Badge::dot().tone(tone)),
+            ),
+            None => root,
         }
     }
 }
@@ -376,6 +400,16 @@ mod tests {
         let enabled = IconButton::new("a", IconName::Plus, "New terminal")
             .disabled_reason("Host unreachable.");
         assert_eq!(enabled.tooltip_text().as_ref(), "New terminal");
+    }
+
+    #[test]
+    fn status_dot_keeps_its_tone() {
+        let dot = IconButton::new("a", IconName::Plus, "x").status(BadgeTone::Warning);
+        assert_eq!(dot.status_tone(), Some(BadgeTone::Warning));
+        assert_eq!(
+            IconButton::new("a", IconName::Plus, "x").status_tone(),
+            None
+        );
     }
 
     #[test]
