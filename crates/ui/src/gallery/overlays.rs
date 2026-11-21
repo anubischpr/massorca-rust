@@ -5,16 +5,24 @@ use crate::components::button::{Button, ButtonVariant};
 use crate::components::popover::{Popover, PopoverVariant, PopoverWidth};
 use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::text_field::TextField;
+use crate::components::tooltip::{Tooltip, TooltipTrigger};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{SPACE_2, TYPE_BODY_SM};
 use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Popover",
-        spec: "Popover.md",
-        render: popover_story,
-    }]
+    vec![
+        Story {
+            name: "Popover",
+            spec: "Popover.md",
+            render: popover_story,
+        },
+        Story {
+            name: "Tooltip",
+            spec: "Tooltip.md",
+            render: tooltip_story,
+        },
+    ]
 }
 
 /// Room under each trigger for its open panel, which floats over the gallery.
@@ -122,4 +130,51 @@ fn popover_story(window: &mut Window, cx: &mut App) -> AnyElement {
 /// A fixed-height slot so the open panel has room to float below its trigger.
 fn slot(content: impl IntoElement) -> impl IntoElement {
     div().h(px(SLOT_HEIGHT)).child(content)
+}
+
+fn tooltip_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let label = window.use_keyed_state("tooltip-story/label", cx, |_, _| {
+        Tooltip::new("New terminal")
+    });
+    let shortcut = window.use_keyed_state("tooltip-story/shortcut", cx, |_, _| {
+        Tooltip::new("Command palette").shortcut("Mod+K")
+    });
+    let reason = window.use_keyed_state("tooltip-story/reason", cx, |_, _| {
+        Tooltip::new("Host unreachable. Last known state, 5 min ago.")
+    });
+    let full = window.use_keyed_state("tooltip-story/full", cx, |_, _| {
+        Tooltip::new("~/projects/NexusCare/oppm-api")
+    });
+    let long = window.use_keyed_state("tooltip-story/long", cx, |_, _| {
+        Tooltip::new(
+            "Opens the Board, Routines and Memory for this team, with every project the team uses on this host",
+        )
+    });
+    let focus = window
+        .use_keyed_state("tooltip-story/focus", cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone();
+    let _ = focus.clone();
+
+    let trigger = TooltipTrigger::new(
+        "tooltip-story/trigger",
+        "Command palette",
+        Button::new("tooltip-story/button", "Command palette")
+            .variant(ButtonVariant::Secondary)
+            .focus_handle(focus.clone()),
+    )
+    .shortcut("Mod+K")
+    .focus_handle(focus);
+
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(SPACE_2))
+        .child(variant("Label", label, cx))
+        .child(variant("Label and shortcut", shortcut, cx))
+        .child(variant("Reason (disabled control)", reason, cx))
+        .child(variant("Full text of a truncated value", full, cx))
+        .child(variant("Long content, three lines", long, cx))
+        .child(variant("Trigger: hover, or Tab to it", trigger, cx))
+        .into_any_element()
 }
