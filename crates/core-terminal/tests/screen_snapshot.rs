@@ -402,6 +402,17 @@ fn main_margins_and_cursor_survive_a_snapshot_taken_in_the_alternate_screen() {
     );
 }
 
+/// A frozen copy serializes the screen as it was frozen, whatever the screen takes in later.
+#[test]
+fn a_frozen_copy_ignores_output_processed_after_it_was_taken() {
+    let mut screen = Screen::new(20, 4);
+    screen.process(b"first\r\nsecond \x1b[?6h");
+    let frozen = screen.freeze();
+    let expected = screen.snapshot();
+    screen.process(b"\r\nthird \x1b[31mred\x1b[?6l");
+    assert_eq!(frozen.serialize(), expected);
+}
+
 /// The cursor after writing a full row waits to wrap; the next character must still wrap.
 #[test]
 fn pending_wrap_survives_a_snapshot() {

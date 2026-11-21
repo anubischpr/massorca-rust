@@ -18,7 +18,7 @@ use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment, MAX_ATTACH
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
-use crate::screen::Screen;
+use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
 
 /// Largest input accepted per call (0033).
@@ -492,7 +492,8 @@ impl TerminalManager {
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
         let shared = Arc::new(AttachShared::default());
-        {
+        // Under the lock: the copy, its offset, and the registration, so no chunk falls between.
+        let frozen = {
             let mut core = lock(&terminal.core);
             let exited = matches!(core.status, Status::Exited(_));
             if !exited && core.attachments.len() >= MAX_ATTACHMENTS {
@@ -501,7 +502,7 @@ impl TerminalManager {
             let info = terminal.info_locked(&core);
             let resume = since.and_then(|since| Some((since, core.ring.read_from(since)?)));
             let mut queue = lock(&shared.queue);
-            match resume {
+            let frozen = match resume {
                 Some((offset, bytes)) => {
                     queue.push_back(AttachItem::Attached {
                         info: info.clone(),
@@ -511,24 +512,34 @@ impl TerminalManager {
                     if !bytes.is_empty() {
                         queue.push_back(AttachItem::Output { offset, bytes });
                     }
+                    None
                 }
                 None => {
-                    let (offset, snapshot) = core.snapshot();
+                    let frozen = core.freeze_snapshot();
                     queue.push_back(AttachItem::Attached {
                         info: info.clone(),
                         mode: AttachMode::Snapshot,
-                        offset,
+                        offset: frozen.offset,
                     });
-                    queue.push_back(snapshot);
                     queue.snapshot_at = Some(Instant::now());
+                    Some(frozen)
                 }
-            }
+            };
             if !exited {
                 core.attachments.push(Arc::clone(&shared));
             } else {
                 queue.push_back(AttachItem::Exited { info });
                 queue.ended = true;
             }
+            frozen
+        };
+        if let Some(frozen) = frozen {
+            // Outside the lock. Output queued meanwhile follows the `Attached` item, so the
+            // snapshot is inserted right after it.
+            #[cfg(test)]
+            note_lock_state(&terminal);
+            let snapshot = frozen.into_item();
+            lock(&shared.queue).insert_snapshot(snapshot);
         }
         Ok(Attachment::new(terminal, shared))
     }
@@ -654,16 +665,14 @@ impl Core {
         }
     }
 
-    /// The snapshot item and the offset output continues from.
-    fn snapshot(&mut self) -> (u64, AttachItem) {
-        let offset = self.ring.end_offset();
-        let item = AttachItem::Snapshot {
-            offset,
+    /// Copies what a snapshot needs, under the lock; serialize it after the lock is released.
+    fn freeze_snapshot(&self) -> FrozenSnapshot {
+        FrozenSnapshot {
+            offset: self.ring.end_offset(),
             cols: self.size.cols,
             rows: self.size.rows,
-            bytes: self.screen.snapshot(),
-        };
-        (offset, item)
+            screen: self.screen.freeze(),
+        }
     }
 
     /// Applies one PTY read to the screen, the ring and the attachments. Returns the
@@ -702,6 +711,38 @@ impl Core {
         }
         replies
     }
+}
+
+/// A snapshot's state, copied under the terminal lock and serialized after it is released.
+struct FrozenSnapshot {
+    offset: u64,
+    cols: u16,
+    rows: u16,
+    screen: FrozenScreen,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: whether the terminal lock was free when a snapshot started to serialize.
+    static LOCK_FREE_AT_SERIALIZE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+impl FrozenSnapshot {
+    /// Serializes the copy. The caller must not hold the terminal lock.
+    fn into_item(self) -> AttachItem {
+        AttachItem::Snapshot {
+            offset: self.offset,
+            cols: self.cols,
+            rows: self.rows,
+            bytes: self.screen.serialize(),
+        }
+    }
+}
+
+/// Records whether the terminal lock is free where a snapshot starts to serialize.
+#[cfg(test)]
+fn note_lock_state(terminal: &Terminal) {
+    LOCK_FREE_AT_SERIALIZE.with(|free| free.set(Some(terminal.core.try_lock().is_ok())));
 }
 
 pub(crate) struct Terminal {
@@ -849,19 +890,25 @@ impl Terminal {
 
     /// The recovery of a lagging attachment: a fresh snapshot, atomically with its queue.
     pub(crate) fn resnapshot(&self, shared: &AttachShared) -> AttachItem {
-        let mut core = lock(&self.core);
-        let (_, snapshot) = core.snapshot();
-        let mut queue = lock(&shared.queue);
-        queue.clear();
-        queue.lagging = false;
-        queue.snapshot_at = Some(Instant::now());
-        if matches!(core.status, Status::Exited(_)) {
-            queue.push_back(AttachItem::Exited {
-                info: self.info_locked(&core),
-            });
-            queue.ended = true;
-        }
-        snapshot
+        let frozen = {
+            let core = lock(&self.core);
+            let frozen = core.freeze_snapshot();
+            let mut queue = lock(&shared.queue);
+            queue.clear();
+            queue.lagging = false;
+            queue.snapshot_at = Some(Instant::now());
+            if matches!(core.status, Status::Exited(_)) {
+                queue.push_back(AttachItem::Exited {
+                    info: self.info_locked(&core),
+                });
+                queue.ended = true;
+            }
+            frozen
+        };
+        #[cfg(test)]
+        note_lock_state(self);
+        // Returned straight to the reader of this attachment, so nothing queues ahead of it.
+        frozen.into_item()
     }
 
     pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
@@ -992,6 +1039,51 @@ mod tests {
         assert_eq!(core.size, size);
         assert_eq!(core.screen.size(), (100, 30));
         drop(core);
+        manager.kill(&info.id, true).expect("kill");
+    }
+
+    /// A snapshot is serialized only once the terminal lock is free, so the PTY reader is never
+    /// held up by building it (decision 0034). The seam records the lock state at that point.
+    #[test]
+    fn a_snapshot_is_serialized_after_the_terminal_lock_is_released() {
+        use std::cell::Cell;
+        use std::collections::BTreeMap;
+
+        use super::{CreateSpec, LOCK_FREE_AT_SERIALIZE, ShellChoice};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let shell = if cfg!(windows) {
+            ShellChoice {
+                program: "cmd.exe".to_owned(),
+                args: vec!["/d".to_owned()],
+            }
+        } else {
+            ShellChoice {
+                program: "sh".to_owned(),
+                args: Vec::new(),
+            }
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(shell),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+
+        LOCK_FREE_AT_SERIALIZE.with(|free| free.set(None));
+        let attachment = manager.attach(&info.id, None).expect("attach");
+
+        assert_eq!(LOCK_FREE_AT_SERIALIZE.with(Cell::get), Some(true));
+        drop(attachment);
         manager.kill(&info.id, true).expect("kill");
     }
 

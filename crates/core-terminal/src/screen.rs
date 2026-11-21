@@ -109,14 +109,41 @@ impl Screen {
         self.parser.callbacks().title.as_deref()
     }
 
+    /// Copies what a snapshot needs: cheap next to serializing it, so it can run under a lock.
+    pub fn freeze(&self) -> FrozenScreen {
+        FrozenScreen {
+            screen: self.parser.screen().clone(),
+            modes: self.modes.clone(),
+        }
+    }
+
     /// Escape bytes that rebuild this screen in a fresh emulator of the same size: reset, the
     /// scrollback oldest first, each grid's rows with its margins and cursors (main first), then
     /// the character set, autowrap, pen and input modes.
     pub fn snapshot(&self) -> Vec<u8> {
-        let (rows, cols) = self.parser.screen().size();
-        // The reads and the rows come from a copy, so the live screen keeps its cursor and view.
+        self.freeze().serialize()
+    }
+}
+
+/// A copy of a [`Screen`] from [`Screen::freeze`]. It shares nothing with the screen, so it can
+/// be serialized after the screen's lock is released.
+#[derive(Debug)]
+pub struct FrozenScreen {
+    screen: vt100::Screen,
+    modes: Modes,
+}
+
+impl FrozenScreen {
+    /// The bytes [`Screen::snapshot`] gives for the screen this was frozen from.
+    pub fn serialize(self) -> Vec<u8> {
+        // Read from the copy before it becomes the probe below.
+        let attributes = self.screen.attributes_formatted();
+        let hide_cursor = self.screen.hide_cursor();
+        let input_modes = self.screen.input_mode_formatted();
+        let (rows, cols) = self.screen.size();
+        // The reads and the rows come from the copy, so it keeps its cursor and view.
         let mut probe = vt100::Parser::new(rows, cols, SCROLLBACK_ROWS);
-        *probe.screen_mut() = self.parser.screen().clone();
+        *probe.screen_mut() = self.screen;
         let alternate = probe.screen().alternate_screen();
         if alternate {
             // Leaving the grid without `?1049l` keeps the main cursor where it is.
@@ -146,10 +173,9 @@ impl Screen {
         if self.modes.autowrap_off {
             out.push_str("\x1b[?7l");
         }
-        let live = self.parser.screen();
-        out.push_str(&live.attributes_formatted());
-        out.push_str(if live.hide_cursor() { HIDE } else { SHOW });
-        out.push_str(&live.input_mode_formatted());
+        out.push_str(&attributes);
+        out.push_str(if hide_cursor { HIDE } else { SHOW });
+        out.push_str(&input_modes);
         out.into_bytes()
     }
 }
@@ -528,7 +554,7 @@ enum ParseState {
 
 /// The modes vt100 ignores, followed from the bytes given to the screen. Bytes pass on unchanged,
 /// except SCOSC and SCORC (as DECSC and DECRC) and line drawing (as the box characters it draws).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Modes {
     state: ParseState,
     /// The escape sequence in progress, from its ESC. It is held back until it ends.

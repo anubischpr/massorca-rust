@@ -84,6 +84,21 @@ impl Queue {
         self.items.push_back(item);
     }
 
+    /// Queues a snapshot after the `Attached` item an attach queued before building it, unless
+    /// the queue overflowed meanwhile: the next read then takes a fresh snapshot instead.
+    pub(crate) fn insert_snapshot(&mut self, item: AttachItem) {
+        if self.lagging {
+            return;
+        }
+        let at = self
+            .items
+            .iter()
+            .take_while(|queued| matches!(queued, AttachItem::Attached { .. }))
+            .count();
+        self.bytes += item.queued_bytes();
+        self.items.insert(at, item);
+    }
+
     pub(crate) fn clear(&mut self) {
         self.items.clear();
         self.bytes = 0;

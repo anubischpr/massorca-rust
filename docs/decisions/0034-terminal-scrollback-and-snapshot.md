@@ -78,9 +78,10 @@ rendered snapshot on reattach rather than a raw replay.
 - Memory per terminal is bounded: the model (1000 rows plus the screen), 1 MiB
   of ring and up to 16 attachment queues of 2 MiB each, plus the snapshot an
   attach starts with.
-- A snapshot is still serialized under the terminal lock, so building one
-  pauses that terminal's reader for its duration; the 250 ms pacing bounds how
-  often a lagging client can cause that.
+- A snapshot copies the screen under the terminal lock, which is cheap, and
+  serializes that copy after the lock is released, so building one does not
+  pause that terminal's reader. The 250 ms pacing still bounds how often a
+  lagging client takes one.
 - A client offline for more than 1 MiB of output gets a snapshot instead of
   the missed bytes; history older than 1000 rows is gone.
 - Durable history and cold restore can be added later from the same reader
