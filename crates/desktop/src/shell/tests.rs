@@ -3,13 +3,19 @@
 use super::workspace_dialogs::MenuTarget;
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
+use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::palette::{PaletteGroup, PaletteMode, PaletteModel};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
+use crate::model::sidebar::SidebarContent;
 use crate::model::status_items::StatusItem;
-use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px, size};
+use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage};
+use gpui::{
+    Entity, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext,
+    VisualTestContext, point, px, size,
+};
 use massorca_ui::{ActiveTheme, Appearance, Theme};
 
 /// The sample data without an open session: the landing view.
@@ -43,6 +49,19 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.simulate_click(bounds.center(), Modifiers::default());
 }
 
+/// Presses and releases one key. GPUI turns the release of a focused Enter or Space into a click,
+/// so the release has to be sent too.
+fn press_key(cx: &mut VisualTestContext, key: &str) {
+    let os = cx.update(|_, cx| cx.platform_info().os);
+    let keystroke = Keystroke::parse_with_os(key, os).unwrap();
+    cx.simulate_event(KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(KeyUpEvent { keystroke });
+}
+
 fn navigation(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Mode, Page) {
     shell.read_with(cx, |shell, _| {
         (
@@ -55,7 +74,9 @@ fn navigation(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Mode, Page)
 #[gpui::test]
 fn the_shell_opens_on_home_with_sample_data(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     shell.read_with(cx, |shell, _| {
         assert_eq!(shell.model().snapshot().projects.len(), 2);
         assert_eq!(shell.model().navigation().page, Page::Home);
@@ -73,7 +94,9 @@ fn draw_in_both_themes(cx: &mut VisualTestContext) {
 #[gpui::test]
 fn every_shell_surface_renders_in_both_themes(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw_in_both_themes(cx);
     cx.simulate_keystrokes(palette_key());
     draw_in_both_themes(cx);
@@ -94,7 +117,8 @@ fn every_shell_surface_renders_in_both_themes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_landing_view_with_a_region_open_renders_in_both_themes(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&Landing, window, cx));
+    let (shell, cx) =
+        cx.add_window_view(|window, cx| Shell::new(&Landing, &SampleTeamsSource, window, cx));
     shell.update(cx, |shell, _| {
         shell.model.toggle_region(Region::WorkPanel);
     });
@@ -111,7 +135,9 @@ fn the_landing_view_with_a_region_open_renders_in_both_themes(cx: &mut TestAppCo
 #[gpui::test]
 fn the_mode_button_returns_home_first_and_then_switches_twice(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     click(cx, "rail-tasks");
     assert_eq!(navigation(&shell, cx), (Mode::Workspaces, Page::Tasks));
     click(cx, "rail-mode");
@@ -123,7 +149,9 @@ fn the_mode_button_returns_home_first_and_then_switches_twice(cx: &mut TestAppCo
 #[gpui::test]
 fn the_rail_theme_toggle_switches_the_appearance(cx: &mut TestAppContext) {
     setup(cx);
-    let (_shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (_shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     click(cx, "rail-theme");
     let appearance = cx.update(|_, cx| cx.theme().appearance);
     assert_eq!(appearance, Appearance::Light);
@@ -132,7 +160,9 @@ fn the_rail_theme_toggle_switches_the_appearance(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_title_bar_toggle_opens_its_region_inline(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     click(cx, "tip:Work panel");
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.model().inline_regions()),
@@ -143,7 +173,9 @@ fn a_title_bar_toggle_opens_its_region_inline(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_sidebar_leaves_full_pages_and_returns_with_the_mode_home(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
     click(cx, "rail-tasks");
     assert!(!shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
@@ -154,7 +186,9 @@ fn the_sidebar_leaves_full_pages_and_returns_with_the_mode_home(cx: &mut TestApp
 #[gpui::test]
 fn a_click_on_the_canvas_closes_the_sidebar_overlay(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     cx.simulate_resize(size(px(900.), px(600.)));
     shell.update(cx, |shell, cx| {
         shell.model.toggle_sidebar();
@@ -169,7 +203,9 @@ fn a_click_on_the_canvas_closes_the_sidebar_overlay(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_status_bar_sits_under_the_canvas_and_names_the_hosts(cx: &mut TestAppContext) {
     setup(cx);
-    let (_shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (_shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     let canvas = cx.debug_bounds("canvas").expect("the canvas is drawn");
     let hosts = cx
@@ -199,7 +235,9 @@ fn palette_query(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<St
 #[gpui::test]
 fn mod_k_opens_the_palette_and_a_command_typed_into_it_runs_on_enter(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes(palette_key());
     draw(cx);
@@ -217,7 +255,9 @@ fn mod_k_opens_the_palette_and_a_command_typed_into_it_runs_on_enter(cx: &mut Te
 #[gpui::test]
 fn escape_closes_the_palette_and_returns_focus_to_the_shell(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes(palette_key());
     draw(cx);
@@ -234,7 +274,9 @@ fn escape_closes_the_palette_and_returns_focus_to_the_shell(cx: &mut TestAppCont
 #[gpui::test]
 fn the_arrow_keys_move_the_active_palette_row(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes(palette_key());
     draw(cx);
@@ -257,7 +299,9 @@ fn zone_has_focus(shell: &Entity<Shell>, cx: &mut VisualTestContext, zone: Zone)
 #[gpui::test]
 fn f6_moves_focus_through_the_frame_and_shift_f6_steps_back(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes("f6");
     draw(cx);
@@ -275,7 +319,9 @@ fn f6_moves_focus_through_the_frame_and_shift_f6_steps_back(cx: &mut TestAppCont
 #[gpui::test]
 fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     cx.simulate_resize(size(px(900.), px(600.)));
     // A resize refreshes the real window; the test window needs the view told to re-render.
     shell.update(cx, |_, cx| cx.notify());
@@ -332,7 +378,9 @@ fn usage_popover(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<us
 #[gpui::test]
 fn a_usage_ring_opens_its_popover_and_a_second_press_closes_it(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     click(cx, "rail-usage-0");
     assert_eq!(usage_popover(&shell, cx), Some(0));
     draw(cx);
@@ -347,7 +395,9 @@ fn a_usage_ring_opens_its_popover_and_a_second_press_closes_it(cx: &mut TestAppC
 #[gpui::test]
 fn escape_closes_an_open_usage_popover(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     click(cx, "rail-usage-1");
     assert_eq!(usage_popover(&shell, cx), Some(1));
     cx.simulate_keystrokes("escape");
@@ -357,7 +407,8 @@ fn escape_closes_an_open_usage_popover(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_ring_without_a_percentage_still_opens_its_popover(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&UsageStates, window, cx));
+    let (shell, cx) =
+        cx.add_window_view(|window, cx| Shell::new(&UsageStates, &SampleTeamsSource, window, cx));
     click(cx, "rail-usage-2");
     draw(cx);
     assert_eq!(usage_popover(&shell, cx), Some(2));
@@ -377,7 +428,9 @@ fn status_menu_rows(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<Op
 #[gpui::test]
 fn right_clicking_the_status_bar_opens_a_checkable_row_per_item(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     let hosts = cx
         .debug_bounds("status-hosts")
@@ -395,7 +448,9 @@ fn right_clicking_the_status_bar_opens_a_checkable_row_per_item(cx: &mut TestApp
 #[gpui::test]
 fn choosing_a_row_hides_that_item_and_closes_the_menu(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     shell.update_in(cx, |shell, window, cx| {
         shell.open_status_menu(point(px(40.), px(40.)), window, cx);
     });
@@ -417,7 +472,9 @@ fn choosing_a_row_hides_that_item_and_closes_the_menu(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_menu_key_on_the_status_bar_opens_the_visibility_menu(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     cx.update(|window, cx| {
         let focus = shell.read(cx).zones.get(Zone::StatusBar).clone();
         window.focus(&focus, cx);
@@ -431,7 +488,9 @@ fn the_menu_key_on_the_status_bar_opens_the_visibility_menu(cx: &mut TestAppCont
 #[gpui::test]
 fn a_command_run_from_the_palette_comes_back_under_recent(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes(palette_key());
     draw(cx);
@@ -461,7 +520,9 @@ fn quick_open_key() -> &'static str {
 #[gpui::test]
 fn mod_p_opens_the_palette_in_go_to_file_mode_and_escape_closes_it(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     draw(cx);
     cx.simulate_keystrokes(quick_open_key());
     draw(cx);
@@ -475,4 +536,61 @@ fn mod_p_opens_the_palette_in_go_to_file_mode_and_escape_closes_it(cx: &mut Test
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(palette_query(&shell, cx), None);
+}
+
+#[gpui::test]
+fn the_mode_switch_shows_the_teams_sidebar_and_the_bot_teams_home(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    click(cx, "rail-mode");
+    assert_eq!(navigation(&shell, cx), (Mode::BotTeams, Page::Home));
+    shell.read_with(cx, |shell, _| {
+        assert!(matches!(shell.model().sidebar(), SidebarContent::BotTeams));
+        assert_eq!(shell.model().canvas(), Canvas::Home(Mode::BotTeams));
+        assert!(
+            shell.model().sidebar_inline(),
+            "the Sidebar stays for Bot Teams"
+        );
+    });
+    draw(cx);
+}
+
+#[gpui::test]
+fn the_mode_button_switches_from_the_keyboard_and_keeps_focus(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    let button = shell.read_with(cx, |shell, _| shell.rail.focus_target().clone());
+    cx.update(|window, cx| window.focus(&button, cx));
+    cx.run_until_parked();
+    draw(cx);
+    press_key(cx, "enter");
+    assert_eq!(navigation(&shell, cx).0, Mode::BotTeams);
+    assert!(cx.update(|window, _| button.is_focused(window)));
+    press_key(cx, "space");
+    assert_eq!(navigation(&shell, cx).0, Mode::Workspaces);
+}
+
+#[gpui::test]
+fn a_team_page_is_drawn_with_the_sidebar_open(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    click(cx, "rail-mode");
+    shell.update(cx, |shell, cx| {
+        shell.model.open_team_page(TeamPage::Board(TeamId(1)));
+        cx.notify();
+    });
+    draw(cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            shell.model().canvas(),
+            Canvas::Team(TeamPage::Board(TeamId(1)))
+        );
+        assert!(shell.model().sidebar_inline());
+    });
 }

@@ -2,7 +2,7 @@
 //! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
-use super::navigation::{Navigation, Page};
+use super::navigation::{Mode, Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
 use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
@@ -10,6 +10,7 @@ use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
+use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -24,6 +25,8 @@ pub struct ShellModel {
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
+    /// The Bot Teams data the Bot Teams pages and Sidebar show (screens 4).
+    teams: TeamsState,
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
@@ -42,6 +45,7 @@ impl ShellModel {
             snapshot,
             navigation: Navigation::default(),
             regions: RegionState::default(),
+            teams: TeamsState::unavailable(),
             window_width,
             palette: None,
             usage_popover: None,
@@ -77,6 +81,24 @@ impl ShellModel {
         &self.regions
     }
 
+    pub fn teams(&self) -> &TeamsState {
+        &self.teams
+    }
+
+    pub fn teams_mut(&mut self) -> &mut TeamsState {
+        &mut self.teams
+    }
+
+    /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
+    pub fn set_teams(&mut self, teams: TeamsState) {
+        self.teams = teams;
+    }
+
+    /// The Bot Teams Sidebar for the page on screen.
+    pub fn bot_teams_sidebar(&self) -> TeamsSidebar {
+        teams_sidebar(&self.teams, self.navigation.page)
+    }
+
     pub fn window_width(&self) -> f32 {
         self.window_width
     }
@@ -93,6 +115,10 @@ impl ShellModel {
     /// Whether a region is on screen now, inline or as the open overlay. Full pages hide them all.
     pub fn region_visible(&self, region: Region) -> bool {
         if self.navigation.page.is_full_page() {
+            return false;
+        }
+        // Bot Teams has no Workspaces regions: the Sidebar is the only one on screen there.
+        if self.navigation.mode == Mode::BotTeams && region != Region::Sidebar {
             return false;
         }
         match self.placement(region) {
@@ -149,7 +175,15 @@ impl ShellModel {
     }
 
     pub fn open_page(&mut self, page: Page) {
+        self.teams.cancel_pick();
         self.navigation.open(page);
+    }
+
+    /// Opens a Bot Teams page and makes its team the one the Sidebar lists projects for.
+    pub fn open_team_page(&mut self, page: TeamPage) {
+        self.teams.cancel_pick();
+        self.teams.select(page.team());
+        self.navigation.open(Page::Team(page));
     }
 
     pub fn go_back(&mut self) {
@@ -162,6 +196,7 @@ impl ShellModel {
 
     /// The mode button (P6). Returns true when the mode changed.
     pub fn press_mode_switch(&mut self) -> bool {
+        self.teams.cancel_pick();
         self.navigation.press_mode_switch()
     }
 
@@ -313,6 +348,7 @@ mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
     use crate::model::navigation::Mode;
+    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell(width: f32) -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), width)
@@ -355,11 +391,33 @@ mod tests {
     }
 
     #[test]
+    fn bot_teams_keeps_only_the_sidebar_and_shows_no_workspaces_session() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        assert!(model.press_mode_switch());
+        assert_eq!(model.canvas(), Canvas::Home(Mode::BotTeams));
+        assert!(model.region_visible(Region::Sidebar));
+        assert!(!model.region_visible(Region::WorkPanel));
+        assert!(model.inline_regions().is_empty());
+    }
+
+    #[test]
+    fn a_team_page_takes_the_canvas_selects_its_team_and_keeps_the_sidebar() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        assert_eq!(model.canvas(), Canvas::Team(TeamPage::Board(TeamId(1))));
+        assert!(model.sidebar_inline());
+        assert_eq!(model.teams().selected(), Some(TeamId(1)));
+    }
+
+    #[test]
     fn the_sidebar_lists_the_content_of_the_current_mode() {
         let mut model = shell(1440.0);
         assert!(matches!(model.sidebar(), SidebarContent::Workspaces { .. }));
         assert!(model.press_mode_switch());
-        assert!(matches!(model.sidebar(), SidebarContent::BotTeams { .. }));
+        assert!(matches!(model.sidebar(), SidebarContent::BotTeams));
     }
 
     #[test]

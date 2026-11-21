@@ -88,6 +88,32 @@ Per-window UI state lives in `ShellModel`, not in the store: the open usage
 popover, the Status bar items the window hides, and the palette's Recent rows
 (the last five commands and workspaces run). None of it is saved to disk yet.
 
+## Bot Teams
+
+Bot Teams is a mode of the same shell (D-SH-10), not a second app. Its data is
+plain structs in `model::teams` with stable ids: teams, bots, Board tasks,
+projects, routines, web addresses, memory and files. A `TeamsSource` fills it.
+`SampleTeamsSource` holds team Desarrollo from the screen specs and is chosen
+by `--sample`, the way `SampleDataSource` is. Without a service, `UnavailableTeams`
+is used: the pages say that Bot Teams is not connected and nothing changes.
+Every change goes through `TeamsState`, which refuses with a named reason. Until
+the service has Bot Teams, changes land in the sample store only.
+
+- **Navigation.** `Page::Team(TeamPage)` keeps the Sidebar open (screens 3,
+  decision 1). In Bot Teams the Sidebar is the only region, and a Workspaces
+  session is never shown there. The mode switch cancels a card pick.
+- **Views.** `model::teams` builds the Sidebar, Board, card and address view
+  models; `shell::teams` draws them. Forms and confirms are `TeamDialog` and
+  `TeamConfirm`, held by the Shell, which reads a form's fields on submit.
+- **Board.** A picked card is state in `TeamsState`; the Board changes only on
+  the drop. Components `BoardColumn` and `Avatar` live in `massorca-ui`, with
+  gallery stories.
+- **Not built, and what each waits for.** The Conference room and agent-driven
+  routines wait for live agents and sessions. The routine form and the Calendar
+  wait for the scheduling editor and the calendar view. Team files wait for the
+  file editor (D-ED-01). Drag on the Board, a multi-line brief, the Add bot
+  advanced options and skills wait for their own rows.
+
 ## Testing
 
 See 0025: state tests in plain Rust, element tests with GPUI's fake platform,

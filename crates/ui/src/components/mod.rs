@@ -2,8 +2,10 @@
 
 pub mod agent_icon;
 pub mod agent_status;
+pub mod avatar;
 pub mod badge;
 pub mod banner;
+pub mod board_column;
 pub mod browser_chrome;
 pub mod button;
 pub mod card;

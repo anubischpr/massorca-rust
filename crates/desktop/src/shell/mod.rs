@@ -8,6 +8,7 @@ mod service_banner;
 mod sidebar;
 mod sidebar_rows;
 mod status_bar;
+mod teams;
 mod title_bar;
 mod tooltip;
 mod workspace_dialog_views;
@@ -19,6 +20,7 @@ use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::shell_state::ShellModel;
+use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
 use actions::{
@@ -66,13 +68,23 @@ pub struct Shell {
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
     dialogs: WorkspaceDialogs,
+    /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
+    team_dialog: Option<teams::TeamDialog>,
+    /// The confirm before a project is deleted, if one is open.
+    team_confirm: Option<teams::TeamConfirm>,
 }
 
 impl Shell {
-    /// Fills the store from sample data, once; nothing changes it afterwards.
-    pub fn new(data: &impl DataSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Fills the store from sample data, once; nothing changes it afterwards. The Bot Teams data
+    /// comes from `teams`, the same way (`--sample` selects both).
+    pub fn new(
+        data: &impl DataSource,
+        teams: &impl TeamsSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let store = cx.new(|_| ServiceStore::sample(data));
-        Self::with_store(store, None, None, window, cx)
+        Self::with_store(store, None, None, teams.teams(), window, cx)
     }
 
     /// Follows a running service through the bridge of `source`.
@@ -84,13 +96,21 @@ impl Shell {
         let handle = source.handle();
         let (bridge, updates) = source.into_parts();
         let store = cx.new(|cx| ServiceStore::following(updates, cx));
-        Self::with_store(store, Some(handle), Some(bridge), window, cx)
+        Self::with_store(
+            store,
+            Some(handle),
+            Some(bridge),
+            UnavailableTeams.teams(),
+            window,
+            cx,
+        )
     }
 
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
         bridge: Option<ServiceBridge>,
+        teams: TeamsState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -106,8 +126,10 @@ impl Shell {
         let rail = RailState::new(snapshot.usage.len(), cx);
         let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
+        let mut model = ShellModel::new(snapshot, width);
+        model.set_teams(teams);
         Self {
-            model: ShellModel::new(snapshot, width),
+            model,
             focus,
             rail,
             zones,
@@ -120,6 +142,8 @@ impl Shell {
             _bridge: bridge,
             _store_changes: store_changes,
             dialogs: WorkspaceDialogs::default(),
+            team_dialog: None,
+            team_confirm: None,
         }
     }
 
@@ -255,7 +279,7 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
-        let canvas = canvas::canvas(&self.model, &self.zones, cx);
+        let canvas = canvas::canvas(&self.model, &self.zones, window, cx);
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
@@ -280,8 +304,15 @@ impl Render for Shell {
             .flex_row()
             .when(self.model.sidebar_inline(), |el| {
                 el.child(
-                    sidebar::sidebar(&self.model, &self.search, false, window, cx)
-                        .track_focus(self.zones.get(Zone::Sidebar)),
+                    sidebar::sidebar(
+                        &self.model,
+                        &self.search,
+                        false,
+                        self.rail.morph_generation(),
+                        window,
+                        cx,
+                    )
+                    .track_focus(self.zones.get(Zone::Sidebar)),
                 )
             })
             .child(
@@ -297,8 +328,15 @@ impl Render for Shell {
             )
             .when(self.model.sidebar_overlay(), |el| {
                 el.child(
-                    sidebar::sidebar(&self.model, &self.search, true, window, cx)
-                        .track_focus(self.zones.get(Zone::Sidebar)),
+                    sidebar::sidebar(
+                        &self.model,
+                        &self.search,
+                        true,
+                        self.rail.morph_generation(),
+                        window,
+                        cx,
+                    )
+                    .track_focus(self.zones.get(Zone::Sidebar)),
                 )
             })
             .when(self.model.overlay().is_some(), |el| {
@@ -335,6 +373,14 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let team_dialog = self
+            .team_dialog
+            .as_ref()
+            .map(|dialog| teams::team_dialog_view(dialog, self.model.teams().hosts(), &shell, cx));
+        let team_confirm = self
+            .team_confirm
+            .as_ref()
+            .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
         div()
             .size_full()
             .flex()
@@ -388,5 +434,7 @@ impl Render for Shell {
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
+            .when_some(team_dialog, |el, dialog| el.child(dialog))
+            .when_some(team_confirm, |el, dialog| el.child(dialog))
     }
 }
