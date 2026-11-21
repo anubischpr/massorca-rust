@@ -2812,6 +2812,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
+name = "massorca-client"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "massorca-profile",
+ "massorca-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys",
+]
+
+[[package]]
 name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
@@ -2847,8 +2863,11 @@ version = "0.1.0"
 dependencies = [
  "directories",
  "interprocess",
+ "libc",
  "tempfile",
  "thiserror 2.0.21",
+ "widestring",
+ "windows-sys",
 ]
 
 [[package]]
@@ -2859,6 +2878,24 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "massorca-server"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "interprocess",
+ "massorca-client",
+ "massorca-core-store",
+ "massorca-profile",
+ "massorca-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
