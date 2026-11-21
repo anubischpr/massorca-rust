@@ -151,11 +151,12 @@ fn read_on_thread<R: Read + Send + 'static>(mut pipe: R) -> Reader {
 /// deadline (no timeout, or one too large for an `Instant`) it waits for the exit.
 fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> io::Result<Option<ExitStatus>> {
     loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
+        // Checked first, so a passed deadline wins even over a child that already exited.
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Ok(None);
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
         }
         thread::sleep(POLL_INTERVAL);
     }
@@ -201,7 +202,7 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use super::{Bounded, run_bounded};
+    use super::{Bounded, run_bounded, wait_for_exit};
 
     /// Set only on child processes, never on the test process.
     const CHILD_SLEEPS: &str = "MASSORCA_CORE_GIT_TEST_CHILD_SLEEPS";
@@ -337,6 +338,19 @@ mod tests {
         }
         assert!(started.elapsed() < Duration::from_secs(30));
         assert_grandchild_dies(&pid_file);
+    }
+
+    #[test]
+    fn a_passed_deadline_wins_over_a_child_that_already_exited() {
+        let mut child = test_binary()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+        child.wait().expect("the child exits");
+        let outcome = wait_for_exit(&mut child, Some(Instant::now())).expect("poll");
+        assert!(outcome.is_none(), "{outcome:?}");
     }
 
     #[test]
