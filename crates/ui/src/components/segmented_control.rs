@@ -315,10 +315,12 @@ impl RenderOnce for SegmentedControl {
         let tab = tab_segment(selected, &enabled);
         let handles: Vec<FocusHandle> = (0..count)
             .map(|index| {
+                // GPUI reads a tracked handle's Tab stop from the handle, not the element.
                 window
                     .use_keyed_state(segment_id(&self.id, index), cx, |_, cx| cx.focus_handle())
                     .read(cx)
                     .clone()
+                    .tab_stop(tab == Some(index))
             })
             .collect();
         let outlined = self.style == SegmentedStyle::Outlined;
@@ -410,7 +412,6 @@ impl RenderOnce for SegmentedControl {
             if is_enabled {
                 element = element
                     .track_focus(&handles[index])
-                    .tab_stop(tab == Some(index))
                     .focus_visible(move |style| style.border_color(p.border.focus));
                 if self.preview.is_none() {
                     element = element
@@ -449,6 +450,9 @@ impl RenderOnce for SegmentedControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::press_key;
+    use gpui::Render;
+    use std::cell::RefCell;
 
     #[test]
     fn arrows_wrap_at_both_ends() {
@@ -539,5 +543,61 @@ mod tests {
         assert_eq!(SegmentedSize::Comfortable.track(), 32.0);
         assert_eq!(SegmentedSize::default(), SegmentedSize::Default);
         assert_eq!(SegmentedStyle::default(), SegmentedStyle::Outlined);
+    }
+
+    /// Hosts a control of three options, the middle one disabled, that logs each index it asks for.
+    struct Harness {
+        log: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let log = self.log.clone();
+            let segments = vec![
+                Segment::text("Names"),
+                Segment::text("Content").disabled(true),
+                Segment::text("Both"),
+            ];
+            div().child(
+                SegmentedControl::new("under-test", "Search in", segments)
+                    .selected(0)
+                    .on_change(move |index, _, _| log.borrow_mut().push(index)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_pointer_press_selects_the_segment_once(cx: &mut gpui::TestAppContext) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (_view, cx) = cx.add_window_view(|_, _| Harness { log: log.clone() });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("segment-2").expect("segment is drawn");
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        assert_eq!(*log.borrow(), vec![2]);
+    }
+
+    #[gpui::test]
+    fn arrow_keys_move_focus_and_select_and_skip_the_disabled_segment(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (_view, cx) = cx.add_window_view(|_, _| Harness { log: log.clone() });
+        cx.run_until_parked();
+        // The group's one tab stop is the selected segment; draw so its keys are registered.
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        press_key(cx, "right");
+        assert_eq!(
+            *log.borrow(),
+            vec![2],
+            "right skips the disabled middle segment"
+        );
+        press_key(cx, "left");
+        press_key(cx, "right");
+        assert_eq!(
+            *log.borrow(),
+            vec![2, 2],
+            "left went back to the first segment"
+        );
     }
 }
