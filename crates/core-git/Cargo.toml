@@ -11,6 +11,7 @@ publish.workspace = true
 dunce.workspace = true
 massorca-protocol.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 # A job object kills every process git starts, through a safe API.
 [target.'cfg(windows)'.dependencies]
