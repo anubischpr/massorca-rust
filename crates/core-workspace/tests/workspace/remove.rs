@@ -602,3 +602,26 @@ fn an_orphan_keeps_its_ignored_files_when_forgotten() {
     assert!(removed.directory_kept);
     assert!(Path::new(&lost.path).join("secrets.env").is_file());
 }
+
+#[test]
+fn the_ignored_files_refusal_says_that_files_would_be_deleted_not_entries() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    commit_file(&fx.repo(), ".gitignore", "*.env\n", "ignore env files");
+    let ws = fx.create(&project.name, "wording");
+    fs::write(Path::new(&ws.path).join("secrets.env"), "key").expect("write ignored file");
+
+    let error = fx
+        .workspaces
+        .begin_remove("wording", RemovalWaivers::FORCE)
+        .expect_err("ignored files refuse removal");
+
+    assert_eq!(error.code(), codes::WORKSPACE_IGNORED_FILES);
+    assert!(
+        error
+            .message()
+            .contains("holds ignored files that removal would delete"),
+        "{}",
+        error.message()
+    );
+}

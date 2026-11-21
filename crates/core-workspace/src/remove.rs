@@ -240,10 +240,14 @@ impl Workspaces {
                 return Err(DomainError::new(
                     codes::WORKSPACE_IGNORED_FILES,
                     format!(
-                        "{} has {} ignored entr{} that removal would delete; remove with discard_ignored to delete them",
+                        "{} holds ignored files that removal would delete ({} ignored {} in git status; a directory counts once); remove with discard_ignored to delete them",
                         row.path,
                         changes.ignored,
-                        if changes.ignored == 1 { "y" } else { "ies" }
+                        if changes.ignored == 1 {
+                            "entry"
+                        } else {
+                            "entries"
+                        }
                     ),
                 ));
             }
