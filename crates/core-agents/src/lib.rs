@@ -5,6 +5,8 @@
 
 pub mod event;
 pub mod kind;
+pub mod resolve;
 
 pub use event::{DoneOutcome, EventTarget};
 pub use kind::KindDecl;
+pub use resolve::SearchEnv;
