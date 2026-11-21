@@ -6,6 +6,7 @@ pub mod capabilities;
 pub mod codes;
 pub mod frame;
 pub mod message;
+pub mod methods;
 
 pub use frame::{FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame};
 #[cfg(feature = "tokio")]
