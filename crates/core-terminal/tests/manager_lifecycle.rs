@@ -615,3 +615,29 @@ async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
     };
     wait_for_screen(&manager, &info.id, &expected).await;
 }
+
+#[tokio::test]
+async fn input_typed_while_the_shell_is_busy_reaches_it() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_output().await;
+
+    // Typed ahead while the shell runs a command, as a person would.
+    let busy = if cfg!(windows) {
+        "ping -n 4 127.0.0.1 >nul"
+    } else {
+        "sleep 3"
+    };
+    manager.input(&info.id, &line(busy)).expect("input");
+    let mut expected = Vec::new();
+    for index in 0..5 {
+        let (command, marker) = marker_command(&format!("ahead{index}"));
+        manager.input(&info.id, &command).expect("input");
+        expected.push(marker);
+    }
+    for marker in &expected {
+        watch.wait_for_text(marker).await;
+    }
+}

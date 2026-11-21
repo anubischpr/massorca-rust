@@ -4,6 +4,7 @@
 mod client;
 mod connect;
 mod error;
+mod git_calls;
 mod handshake;
 mod options;
 mod pump;
