@@ -13,6 +13,7 @@ mod lists;
 mod overlays;
 mod panels;
 mod session;
+mod teams;
 mod terminal;
 
 use crate::theme::{ActiveTheme, TextStyled, Theme};
@@ -47,6 +48,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(session::stories());
     all.extend(composer::stories());
     all.extend(terminal::stories());
+    all.extend(teams::stories());
     all
 }
 
