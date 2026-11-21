@@ -56,9 +56,19 @@ belong to and the permission class they need. The dispatcher knows nothing
 about specific features: it looks the method up, checks the caller holds the
 permission, decodes the params and calls the handler. Capabilities offered in
 `welcome` are computed from the registry. Extensions (see
-`docs/architecture/extensions.md` once written) register methods and
+`docs/architecture/extensions.md`, section 9) register methods and
 capabilities the same way, so the core leaves room for them without a list to
-edit.
+edit. Each entry carries its owner (`core` or `ext:<id>`). Dispatch checks the
+request's principal once, through `authorize`, before it decodes params.
+
+## Events
+
+Change events go through the in-process event bus, and the `events/1` stream
+reads from that bus rather than from handler code, so clients and, later,
+extensions share one source. Dropping a subscription unsubscribes. This build
+has the bus and the stream but no publisher yet: the workspace events arrive
+with the projects and workspaces handlers. The bus seam comes from
+`docs/architecture/extensions.md`, section 9.
 
 Phase 1 capabilities:
 
