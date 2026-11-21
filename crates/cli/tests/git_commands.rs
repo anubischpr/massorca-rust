@@ -92,3 +92,37 @@ fn status_of_a_folder_workspace_is_refused_with_exit_1() {
         .code(1)
         .stderr(contains("git.not_a_repository"));
 }
+
+#[test]
+fn diff_lists_staged_files_and_patch_shows_one() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    std::fs::write(
+        dir.join("README.md"),
+        "hello
+staged
+",
+    )
+    .expect("write");
+    harness::git(&dir, &["add", "README.md"]);
+
+    let unstaged = sandbox.json_ok("default", &["git", "diff", "-w", "feature"]);
+    assert_eq!(unstaged["files"].as_array().map(Vec::len), Some(0));
+    let staged = sandbox.json_ok("default", &["git", "diff", "-w", "feature", "--staged"]);
+    assert_eq!(staged["files"][0]["path"], "README.md");
+    assert_eq!(staged["totals"]["added"], 1);
+
+    let text = sandbox
+        .run(
+            "default",
+            &["git", "patch", "README.md", "-w", "feature", "--staged"],
+        )
+        .success();
+    let text = stdout_text(&text);
+    assert!(text.contains("+staged"), "{text}");
+
+    sandbox
+        .run("default", &["git", "patch", "../x", "-w", "feature"])
+        .code(1)
+        .stderr(contains("git.path_outside_worktree"));
+}

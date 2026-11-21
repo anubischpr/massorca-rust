@@ -5,12 +5,38 @@ use serde_json::{Value, json};
 use super::CommandDescriptor;
 
 pub(super) fn git_commands() -> Vec<CommandDescriptor> {
-    vec![command(
-        "git.status",
-        "Show the changed files of a workspace",
-        "git.status",
-        workspace_args(json!({ "limit": { "type": "integer", "minimum": 1 } })),
-    )]
+    vec![
+        command(
+            "git.status",
+            "Show the changed files of a workspace",
+            "git.status",
+            workspace_args(json!({ "limit": { "type": "integer", "minimum": 1 } })),
+        ),
+        command(
+            "git.diff",
+            "List the files a comparison changes",
+            "git.diff",
+            workspace_args(json!({
+                "mode": { "enum": ["worktree", "staged", "head", "range"] },
+                "from": { "type": "string" },
+                "to": { "type": "string" },
+                "limit": { "type": "integer", "minimum": 1 }
+            })),
+        ),
+        command(
+            "git.patch",
+            "Show the patch of one file",
+            "git.diff_file",
+            workspace_args(json!({
+                "path": { "type": "string" },
+                "mode": { "enum": ["worktree", "staged", "head", "range"] },
+                "from": { "type": "string" },
+                "to": { "type": "string" },
+                "original_path": { "type": "string" },
+                "max_bytes": { "type": "integer", "minimum": 1 }
+            })),
+        ),
+    ]
 }
 
 fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDescriptor {
