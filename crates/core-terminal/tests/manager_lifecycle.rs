@@ -3,13 +3,17 @@
 
 mod manager_support;
 
+use std::thread;
 use std::time::{Duration, Instant};
 
 use manager_support::{
-    Managed, SIZE, is_gone, line, marker_command, script_shell, spec, wait_until, watch,
+    Managed, SIZE, TIMEOUT, is_gone, line, marker_command, script_shell, spec, visible, wait_until,
+    watch,
 };
 use massorca_core_terminal::pty::PtySize;
-use massorca_core_terminal::{ExitReason, ShellChoice, TerminalError, TerminalState};
+use massorca_core_terminal::{
+    AttachItem, AttachMode, ExitReason, ShellChoice, TerminalError, TerminalState,
+};
 
 const GRACE: Duration = Duration::from_secs(5);
 
@@ -403,4 +407,41 @@ async fn only_the_newest_exited_terminals_are_kept() {
     assert_eq!(listed, vec![second.id.clone()]);
     let exit = manager.get(&second.id).expect("get").exit.expect("exit");
     assert_eq!((exit.code, exit.reason), (Some(3), ExitReason::Exited));
+}
+
+#[tokio::test]
+async fn a_terminal_without_attachments_still_renders_output() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let (command, expected) = marker_command("unattended");
+    manager.input(&info.id, &command).expect("input");
+    // ConPTY asks for the cursor position at start; only the manager can answer it here.
+    thread::sleep(Duration::from_millis(500));
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let mut attachment = manager.attach(&info.id, None).expect("attach");
+        let mut seen = String::new();
+        for _ in 0..2 {
+            match tokio::time::timeout(TIMEOUT, attachment.next()).await {
+                Ok(Some(AttachItem::Attached { mode, .. })) => {
+                    assert_eq!(mode, AttachMode::Snapshot);
+                }
+                Ok(Some(AttachItem::Snapshot { bytes, .. })) => {
+                    seen = visible(&bytes).as_string();
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        drop(attachment);
+        if seen.contains(&expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no output without attachments: {seen:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
 }

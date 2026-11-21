@@ -830,3 +830,30 @@ fn wait_for_exit(
         manager.retire(&terminal.id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalManager;
+    use crate::attach::Attachment;
+
+    fn is_send<T: Send>() {}
+    fn is_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn handles_cross_threads_and_tasks() {
+        is_send_sync::<TerminalManager>();
+        is_send::<Attachment>();
+    }
+
+    #[tokio::test]
+    async fn the_next_future_is_send() {
+        fn send_future<F: std::future::Future + Send>(_: &F) {}
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::default(),
+            "0.0.0-test",
+        ));
+        if let Ok(mut attachment) = manager.attach("missing", None) {
+            send_future(&attachment.next());
+        }
+    }
+}

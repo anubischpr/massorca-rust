@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,6 @@ use massorca_core_terminal::{
 };
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Wide enough that ConPTY does not wrap the lines the tests read.
 pub const SIZE: PtySize = PtySize {
     cols: 200,
@@ -108,6 +107,31 @@ pub fn marker_command(tag: &str) -> (Vec<u8>, String) {
     } else {
         (line(&format!("echo {tag}-$((6*7))")), format!("{tag}-42"))
     }
+}
+
+/// `marker_command` after printing `file` to the terminal.
+pub fn print_file_then_marker(file: &Path, tag: &str) -> (Vec<u8>, String) {
+    let path = file.display();
+    if cfg!(windows) {
+        (
+            line(&format!("type \"{path}\" & echo {tag}-%OS%")),
+            format!("{tag}-Windows_NT"),
+        )
+    } else {
+        (
+            line(&format!("cat '{path}'; echo {tag}-$((6*7))")),
+            format!("{tag}-42"),
+        )
+    }
+}
+
+/// Writes a text file of at least `bytes` bytes for flooding a terminal.
+pub fn big_file(dir: &Path, bytes: usize) -> PathBuf {
+    let path = dir.join("flood.txt");
+    let row = format!("{}\r\n", "abcdefghij".repeat(7));
+    let text = row.repeat(bytes / row.len() + 1);
+    std::fs::write(&path, text).expect("write the flood file");
+    path
 }
 
 /// Polls `done` until it holds, or panics after `TIMEOUT`.
