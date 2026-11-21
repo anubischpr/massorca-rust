@@ -7,6 +7,7 @@ use crate::components::extension_card::{ExtensionCard, ExtensionState};
 use crate::components::notification_card::{
     NotificationCard, NotificationKind, NotificationStack, UpdateState,
 };
+use crate::components::secret_request_card::{SecretRequestCard, SecretState};
 use crate::icon::IconName;
 use crate::tokens::{SPACE_3, SPACE_4};
 use gpui::{
@@ -24,6 +25,11 @@ pub fn stories() -> Vec<Story> {
             name: "Extension card",
             spec: "ExtensionCard.md",
             render: extension_story,
+        },
+        Story {
+            name: "Secret request card",
+            spec: "SecretRequestCard.md",
+            render: secret_story,
         },
     ]
 }
@@ -271,4 +277,92 @@ fn ghost(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id, label)
         .variant(ButtonVariant::Ghost)
         .size(ButtonSize::Compact)
+}
+
+fn secret_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    let asked = |id: &'static str, state: SecretState| {
+        SecretRequestCard::new(id, "OPENAI_API_KEY", "Claude needs a secret", state)
+            .reason("Calls the OpenAI API for this project.")
+            .scope("for project oppm")
+            .host("VPS")
+            .on_action(|_, _, _| {})
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Agent needs one: the reason is shown",
+            asked("secret-pending", SecretState::Pending),
+            cx,
+        ))
+        .child(variant(
+            "User asked: no reason line",
+            SecretRequestCard::new(
+                "secret-user",
+                "OPENAI_API_KEY",
+                "Add a secret for oppm",
+                SecretState::Pending,
+            )
+            .scope("for project oppm")
+            .host("VPS")
+            .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Modal open: both buttons wait",
+            asked("secret-entering", SecretState::Entering),
+            cx,
+        ))
+        .child(variant(
+            "Settled: stored, linked and declined",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_3))
+                .child(
+                    SecretRequestCard::new(
+                        "secret-stored",
+                        "OPENAI_API_KEY",
+                        "",
+                        SecretState::Stored,
+                    )
+                    .scope("for project oppm"),
+                )
+                .child(
+                    SecretRequestCard::new(
+                        "secret-linked",
+                        "GITHUB_TOKEN",
+                        "",
+                        SecretState::Linked,
+                    )
+                    .scope("linked from project NexusCare"),
+                )
+                .child(
+                    SecretRequestCard::new(
+                        "secret-declined",
+                        "SMTP_PASSWORD",
+                        "",
+                        SecretState::Declined,
+                    )
+                    .scope("for project oppm"),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Not saved: retry or decline",
+            asked(
+                "secret-failed",
+                SecretState::Failed {
+                    reason: "the vault is locked".into(),
+                },
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Host unreachable: Add is disabled, Decline works",
+            asked("secret-unreachable", SecretState::Pending).unreachable(true),
+            cx,
+        ))
+        .into_any_element()
 }
