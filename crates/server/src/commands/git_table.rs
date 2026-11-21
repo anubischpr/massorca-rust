@@ -83,6 +83,12 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
             workspace_args(json!({})),
         ),
         command(
+            "git.watch",
+            "Stream what changes in a workspace",
+            "git.watch",
+            workspace_args(json!({ "max_events": { "type": "integer", "minimum": 1 } })),
+        ),
+        command(
             "git.log",
             "Show the history of a workspace, a page at a time",
             "git.log",

@@ -7,6 +7,7 @@ mod index;
 mod log;
 mod remote;
 mod status;
+mod watch;
 
 use clap::{Args, Subcommand};
 use massorca_profile::Profile;
@@ -36,6 +37,8 @@ pub enum GitCommand {
     Push(remote::PushArgs),
     /// Aborts the merge, rebase, cherry-pick or revert in progress.
     Abort(WorkspaceArg),
+    /// Prints what changes in a workspace (working tree, index, HEAD, refs) until interrupted.
+    Watch(watch::WatchArgs),
     /// Lists the files a comparison changes, with line counts.
     Diff(diff::DiffArgs),
     /// Shows the history, newest first, a page at a time.
@@ -87,6 +90,7 @@ pub async fn execute(
         GitCommand::Pull(args) => remote::run_pull(&client, args, output).await,
         GitCommand::Push(args) => remote::run_push(&client, args, output).await,
         GitCommand::Abort(workspace) => remote::run_abort(&client, workspace, output).await,
+        GitCommand::Watch(args) => watch::run(&client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,

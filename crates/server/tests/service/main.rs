@@ -16,6 +16,7 @@ mod git_index;
 mod git_log;
 mod git_remote;
 mod git_status;
+mod git_watch;
 mod handshake;
 mod lifecycle;
 mod projects;

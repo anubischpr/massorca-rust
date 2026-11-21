@@ -9,6 +9,7 @@ pub mod index;
 pub mod log;
 pub mod remote;
 pub mod status;
+pub mod watch;
 
 use serde::{Deserialize, Serialize};
 

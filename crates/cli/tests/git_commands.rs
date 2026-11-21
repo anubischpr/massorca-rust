@@ -333,3 +333,40 @@ fn push_fetch_and_pull_through_the_cli() {
         .code(1)
         .stderr(contains("git.no_operation"));
 }
+
+#[test]
+fn watch_prints_ready_then_the_change_and_stops_after_max_events() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let mut child = sandbox
+        .command("default")
+        .args([
+            "--json",
+            "git",
+            "watch",
+            "-w",
+            "feature",
+            "--max-events",
+            "1",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let ready: serde_json::Value =
+        serde_json::from_str(&lines.next().expect("a ready line").expect("read")).expect("json");
+    assert_eq!(ready["result"]["ready"], true);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::fs::write(dir.join("new.txt"), "x").expect("write");
+    let changed: serde_json::Value =
+        serde_json::from_str(&lines.next().expect("a change line").expect("read")).expect("json");
+    assert!(
+        changed["result"]["kinds"]
+            .as_array()
+            .is_some_and(|kinds| !kinds.is_empty())
+    );
+    assert!(child.wait().expect("wait").success());
+}
