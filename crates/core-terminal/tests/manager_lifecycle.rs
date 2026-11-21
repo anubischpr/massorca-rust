@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use manager_support::{
-    Managed, SIZE, TIMEOUT, is_gone, line, marker_command, script_shell, spec, visible, wait_until,
-    watch,
+    Managed, SIZE, TIMEOUT, Watch, is_gone, line, marker_command, script_shell, spec, visible,
+    wait_until, watch,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
@@ -183,45 +183,81 @@ fn child_pid(text: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// A shell that starts a background process, prints `child=<pid>;`, then runs `then`.
+fn background_shell(then: &str) -> ShellChoice {
+    if cfg!(windows) {
+        let script = format!(
+            "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','120','127.0.0.1' \
+             -NoNewWindow -PassThru; Write-Output ('child=' + $p.Id + ';'); {then}"
+        );
+        ShellChoice {
+            program: "powershell.exe".to_owned(),
+            args: vec![
+                "-NoLogo".to_owned(),
+                "-NoProfile".to_owned(),
+                "-Command".to_owned(),
+                script,
+            ],
+        }
+    } else {
+        ShellChoice {
+            program: "sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                format!("sleep 120 & echo \"child=$!;\"; {then}"),
+            ],
+        }
+    }
+}
+
+/// Reads the pid that `background_shell` prints.
+async fn read_child_pid(watch: &mut Watch) -> u32 {
+    loop {
+        if let Some(pid) = child_pid(&watch.visible.as_string()) {
+            return pid;
+        }
+        assert!(
+            !watch.ended,
+            "the shell ended before printing its child: {:?}",
+            watch.visible.tail()
+        );
+        watch.step().await;
+    }
+}
+
 #[tokio::test]
 async fn kill_ends_a_background_grandchild() {
     let dir = temp_dir();
     let manager = Managed::new();
     let mut create = spec("ws", dir.path());
-    create.shell = Some(if cfg!(windows) {
-        ShellChoice {
-            program: "powershell.exe".to_owned(),
-            args: [
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','120','127.0.0.1' \
-                 -NoNewWindow -PassThru; Write-Output ('child=' + $p.Id + ';'); Start-Sleep 120",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-        }
-    } else {
-        ShellChoice {
-            program: "sh".to_owned(),
-            args: ["-c", "sleep 120 & echo \"child=$!;\"; sleep 120"]
-                .map(str::to_owned)
-                .to_vec(),
-        }
-    });
+    create.shell = Some(background_shell("sleep 120"));
     let info = manager.create(create).expect("create");
     let mut watch = watch(&manager, &info.id, None).await;
-    watch.wait_for_text(";").await;
-    let pid = loop {
-        if let Some(pid) = child_pid(&watch.visible.as_string()) {
-            break pid;
-        }
-        watch.step().await;
-    };
+    let pid = read_child_pid(&mut watch).await;
     assert!(!is_gone(pid), "the grandchild {pid} runs before the kill");
 
     manager.kill(&info.id, false).expect("kill");
 
+    wait_until("the grandchild to end", || is_gone(pid));
+}
+
+#[tokio::test]
+async fn kill_after_the_shell_exited_ends_what_it_left_running() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    create.shell = Some(background_shell("exit 0"));
+    let info = manager.create(create).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    let pid = read_child_pid(&mut watch).await;
+    let exited = watch.wait_for_exit().await;
+    assert_eq!(exited.state, TerminalState::Exited);
+
+    let killed = manager
+        .kill(&info.id, false)
+        .expect("kill an exited terminal");
+
+    assert_eq!(killed.state, TerminalState::Exited);
     wait_until("the grandchild to end", || is_gone(pid));
 }
 

@@ -36,16 +36,25 @@ process groups. If the service itself dies, its terminals must die too
   processes are the shell's session (sid = shell pid), whatever process
   groups job control creates.
 - A graceful kill sends `SIGHUP` then `SIGCONT` to every process of the
-  session (so stopped jobs see it), waits up to 5 s for the shell to be
-  reaped, then sends `SIGKILL` to whatever of the session remains. `force`
+  session (so stopped jobs see it), closes the pty, waits up to 5 s for the
+  exit, then sends `SIGKILL` to whatever of the session remains. `force`
   sends `SIGKILL` at once.
-- Finding the session: on Linux, scan `/proc/<pid>/stat` for processes whose
-  session is the shell's pid. On macOS (not a Phase 2 exit target), signal
-  the shell's process group and the pty's foreground process group
-  (`tcgetpgrp`, `portable-pty`'s `process_group_leader`).
-- The scan runs before the shell is reaped, so its pid (the session id)
-  cannot have been reused yet. Signals go through `rustix`'s safe
-  `kill_process`/`kill_process_group`.
+- Finding the session: on Linux, read `/proc/<pid>/stat` for processes whose
+  session is the shell's pid (zombies excluded). On macOS (not a Phase 2 exit
+  target, no `/proc`), record the shell's process group and the pty's
+  foreground process group (`tcgetpgrp`, `portable-pty`'s
+  `process_group_leader`).
+- **Scan order.** The waiter observes the shell's exit without reaping it
+  (`waitid` with `WNOWAIT`), so the shell stays an unreaped zombie and its pid,
+  the session id and group id, stays held. Every scan runs before the reap.
+  The reap runs under the tree's lock and marks the tree reaped in the same
+  step. After it nothing scans: a signal goes only to the members recorded
+  before the reap, and each is checked again just before its signal (Linux:
+  pid, start time and session; macOS: the recorded group). A pid can be reused
+  after the reap, so a scan then could name an unrelated process.
+- Signals go through `rustix`'s safe `kill_process`/`kill_process_group`.
+- A kill of an exited terminal still runs the tree kill; it reaches only what
+  was recorded before the reap, so it is idempotent and harmless.
 - If the service dies, closing the master hangs up the session leader; the
   kernel then hangs up the foreground group. Background jobs that ignore
   `SIGHUP` can survive a service crash; a clean stop kills them as above.

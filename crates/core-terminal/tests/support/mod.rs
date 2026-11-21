@@ -215,7 +215,7 @@ pub fn start(spec: &SpawnSpec) -> Running {
         exit: wait_for_exit(child),
         master,
         output,
-        end: Some(Box::new(move || tree.kill())),
+        end: Some(Box::new(move || tree.kill(None))),
     }
 }
 

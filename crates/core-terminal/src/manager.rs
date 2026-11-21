@@ -395,7 +395,7 @@ impl TerminalManager {
             })
         });
         if let Err(error) = started {
-            terminal.tree.kill();
+            terminal.tree.kill(None);
             close_off_thread(&terminal.master);
             drop(lock(&self.inner.registry).forget(&id));
             return Err(TerminalError::Spawn(error.to_string()));
@@ -742,23 +742,35 @@ impl Terminal {
 
     /// Graceful: hang up and close the terminal, wait up to `grace`, then kill the tree.
     /// Force: kill the tree at once. Either way, what is left of the tree is killed.
+    /// An exited terminal still gets the tree kill: it only reaches what was recorded.
     fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
-        {
+        let exited = {
             let mut core = lock(&self.core);
-            if matches!(core.status, Status::Exited(_)) {
-                return self.info_locked(&core);
+            let exited = matches!(core.status, Status::Exited(_));
+            if !exited {
+                core.kill_reason.get_or_insert(reason);
             }
-            core.kill_reason.get_or_insert(reason);
+            exited
+        };
+        if exited {
+            self.tree.kill(self.master.foreground_process_group());
+            return self.info();
         }
         if !force {
-            self.tree.hangup();
+            self.tree.hangup(self.master.foreground_process_group());
             close_off_thread(&self.master);
             self.wait_for_exit(grace);
         }
-        self.tree.kill();
+        self.tree.kill(self.master.foreground_process_group());
         // A waiter retrying a failed wait tries again now.
         self.changed.notify_all();
         self.wait_for_exit(EXIT_MARGIN)
+    }
+
+    /// Reaps the shell once it has exited, through the tree (0031).
+    fn reap(&self, child: &mut PtyChild) -> io::Result<ExitInfo> {
+        self.tree
+            .reap_shell(|| self.master.foreground_process_group(), || child.wait())
     }
 
     fn wait_for_exit(&self, timeout: Duration) -> TerminalInfo {
@@ -862,7 +874,7 @@ fn wait_for_exit(
 ) {
     let mut pause = WAIT_RETRY_FIRST;
     let exit = loop {
-        match child.wait() {
+        match terminal.reap(&mut child) {
             Ok(exit) => break exit,
             Err(error) => {
                 terminal.mark_unverifiable(&error);

@@ -38,7 +38,7 @@ struct Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        self.tree.kill();
+        self.tree.kill(None);
         self.master.close();
     }
 }
@@ -164,7 +164,7 @@ fn kill_ends_the_shell_and_the_processes_it_started() {
     let before = wait_for_members(&running.tree, 2);
 
     let killed_at = Instant::now();
-    running.tree.kill();
+    running.tree.kill(None);
     let exit = running
         .exit
         .recv_timeout(KILL_BOUND)
@@ -180,7 +180,7 @@ fn hangup_ends_an_interactive_shell() {
     let running = start(&tree_spec(shell_program(), &["-i"]));
     wait_for_members(&running.tree, 1);
 
-    running.tree.hangup();
+    running.tree.hangup(None);
 
     let exit = running
         .exit
@@ -213,7 +213,7 @@ fn kill_reaches_a_job_that_runs_in_its_own_process_group() {
     );
 
     let before = running.tree.members();
-    running.tree.kill();
+    running.tree.kill(None);
     running
         .exit
         .recv_timeout(KILL_BOUND)
@@ -237,8 +237,8 @@ fn kill_is_idempotent_and_leaves_no_members() {
     let running = start(&tree_spec(program, args));
     let before = wait_for_members(&running.tree, 1);
 
-    running.tree.kill();
-    running.tree.kill();
+    running.tree.kill(None);
+    running.tree.kill(None);
 
     running
         .exit
