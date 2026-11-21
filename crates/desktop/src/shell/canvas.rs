@@ -48,7 +48,16 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, settings, start, &setup_rows, window, cx, &theme))
+        .child(conversation(
+            model,
+            &shell,
+            settings,
+            start,
+            &setup_rows,
+            window,
+            cx,
+            &theme,
+        ))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));

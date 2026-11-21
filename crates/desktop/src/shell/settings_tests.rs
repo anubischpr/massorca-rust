@@ -3,10 +3,10 @@
 //! no service runs.
 
 use super::*;
-use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::model::navigation::Page;
 use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
+use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
 use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
@@ -74,7 +74,14 @@ fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     let (handle, script) = ServiceHandle::scripted();
     let (shell, cx) = cx.add_window_view(|window, cx| {
         let store = cx.new(|cx| ServiceStore::following(rx, cx));
-        Shell::with_store(store, Some(handle), None, UnavailableTeams.teams(), window, cx)
+        Shell::with_store(
+            store,
+            Some(handle),
+            None,
+            UnavailableTeams.teams(),
+            window,
+            cx,
+        )
     });
     updates
         .send(StoreUpdate::Connection(ConnectionState::Connected {

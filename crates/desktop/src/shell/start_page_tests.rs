@@ -2,8 +2,8 @@
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
 use super::*;
-use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::model::canvas::Canvas;
+use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{ConnectionState, Script, StoreUpdate};
 use gpui::{AppContext, TestAppContext, VisualTestContext};
@@ -40,7 +40,14 @@ fn rig(
     let (handle, script) = ServiceHandle::scripted();
     let (shell, cx) = cx.add_window_view(|window, cx| {
         let store = cx.new(|cx| ServiceStore::following(rx, cx));
-        Shell::with_store(store, Some(handle), None, UnavailableTeams.teams(), window, cx)
+        Shell::with_store(
+            store,
+            Some(handle),
+            None,
+            UnavailableTeams.teams(),
+            window,
+            cx,
+        )
     });
     updates
         .send(StoreUpdate::Connection(ConnectionState::Connected {
