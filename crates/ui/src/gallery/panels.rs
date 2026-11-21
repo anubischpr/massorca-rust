@@ -2,6 +2,7 @@
 //! project and work panel tabs, and the browser chrome.
 
 use super::{Story, variant};
+use crate::components::browser_chrome::{BrowserChrome, SiteSecurity};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::extension_card::{ExtensionCard, ExtensionState};
 use crate::components::notification_card::{
@@ -9,8 +10,10 @@ use crate::components::notification_card::{
 };
 use crate::components::project_sidebar_tabs::{ProjectSidebarTabs, ProjectTab, core_tabs};
 use crate::components::secret_request_card::{SecretRequestCard, SecretState};
+use crate::components::text_field::TextField;
 use crate::components::work_panel_tabs::{WorkPanelTabs, WorkTab, WorkTabKind};
 use crate::icon::IconName;
+use crate::theme::ActiveTheme;
 use crate::tokens::{SPACE_3, SPACE_4};
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
@@ -42,6 +45,11 @@ pub fn stories() -> Vec<Story> {
             name: "Work panel tabs",
             spec: "WorkPanelTabs.md",
             render: work_tabs_story,
+        },
+        Story {
+            name: "Browser chrome",
+            spec: "BrowserChrome.md",
+            render: browser_story,
         },
     ]
 }
@@ -448,6 +456,91 @@ fn work_tabs_story(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant(
             "Empty: four ways to start",
             WorkPanelTabs::new("work-tabs-empty", Vec::new()).on_action(|_, _, _| {}),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn browser_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let local = window.use_keyed_state("browser-chrome/local", cx, |_, cx| {
+        TextField::new(cx).with_text("localhost:3000")
+    });
+    let insecure = window.use_keyed_state("browser-chrome/insecure", cx, |_, cx| {
+        TextField::new(cx).with_text("http://intranet.test/reports")
+    });
+    let broken = window.use_keyed_state("browser-chrome/broken", cx, |_, cx| {
+        TextField::new(cx).with_text("https://expired.test")
+    });
+    let loading = window.use_keyed_state("browser-chrome/loading", cx, |_, cx| {
+        TextField::new(cx).with_text("https://docs.rs/gpui")
+    });
+    let agent = window.use_keyed_state("browser-chrome/agent", cx, |_, cx| {
+        TextField::new(cx).with_text("https://vps.example.test/app")
+    });
+    let page = |height: f32| {
+        div()
+            .h(px(height))
+            .bg(cx.theme().palette.surface.sunken)
+            .into_any_element()
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Local page: no indicator, back and forward available",
+            BrowserChrome::new("chrome-local", local.clone(), "localhost:3000")
+                .history(true, true)
+                .content(page(96.))
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Remote page over http: a warning, the host chip, and no forward history",
+            BrowserChrome::new("chrome-insecure", insecure, "http://intranet.test/reports")
+                .security(SiteSecurity::NotSecure)
+                .host("VPS")
+                .history(true, false)
+                .content(page(96.))
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Certificate problem",
+            BrowserChrome::new("chrome-broken", broken, "https://expired.test")
+                .security(SiteSecurity::CertificateError)
+                .content(page(96.))
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Loading: Stop replaces Reload, with the progress line",
+            BrowserChrome::new("chrome-loading", loading, "https://docs.rs/gpui")
+                .security(SiteSecurity::Secure)
+                .loading(true, Some(0.4))
+                .content(page(96.))
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "An agent drives the tab, at 125 percent zoom",
+            BrowserChrome::new("chrome-agent", agent, "https://vps.example.test/app")
+                .security(SiteSecurity::Secure)
+                .host("VPS")
+                .agent(true)
+                .zoom(125)
+                .content(page(96.))
+                .on_action(|_, _, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Narrow tab: find and grab move into More",
+            div().w(px(360.)).child(
+                BrowserChrome::new("chrome-compact", local.clone(), "localhost:3000")
+                    .compact(true)
+                    .content(page(64.))
+                    .on_action(|_, _, _| {}),
+            ),
             cx,
         ))
         .into_any_element()
