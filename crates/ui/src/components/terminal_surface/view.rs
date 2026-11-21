@@ -32,6 +32,17 @@ pub type ResizeHandler = Rc<dyn Fn(u16, u16, &mut Window, &mut App)>;
 /// Restarts the process once it has exited.
 pub type RestartHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
+/// The pane's accessibility role: an application, as TerminalSurface.md names it.
+const ACCESSIBILITY_ROLE: Role = Role::Application;
+
+/// The pane's accessible name: "Terminal: <title>", or "Terminal" until the program sets one.
+fn accessible_name(title: Option<&str>) -> String {
+    match title {
+        Some(title) if !title.is_empty() => format!("Terminal: {title}"),
+        _ => "Terminal".to_owned(),
+    }
+}
+
 /// One terminal drawn as a grid of text cells. Feed it with [`TerminalSurface::apply`];
 /// keys, pastes and resizes leave through the callbacks it was given.
 pub struct TerminalSurface {
@@ -266,10 +277,7 @@ impl Render for TerminalSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = cx.theme().palette;
         let focused = self.focus.is_focused(window);
-        let label = match self.feed.title() {
-            Some(title) => format!("Terminal: {title}"),
-            None => "Terminal".to_owned(),
-        };
+        let label = accessible_name(self.feed.title().as_deref());
         let exit = self.feed.exit();
         let surface = cx.entity();
         let grid = canvas(
@@ -286,7 +294,7 @@ impl Render for TerminalSurface {
             .bg(palette.terminal.bg)
             .font_family(FONT_MONO)
             .track_focus(&self.focus)
-            .role(Role::Terminal)
+            .role(ACCESSIBILITY_ROLE)
             .aria_label(label)
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -439,5 +447,18 @@ fn scroll_key(key: &str, mods: Modifiers) -> Option<Scroll> {
         "home" => Some(Scroll::Top),
         "end" => Some(Scroll::Bottom),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pane_is_an_application_named_after_its_title() {
+        assert_eq!(ACCESSIBILITY_ROLE, Role::Application);
+        assert_eq!(accessible_name(Some("zsh, oppm")), "Terminal: zsh, oppm");
+        assert_eq!(accessible_name(Some("")), "Terminal");
+        assert_eq!(accessible_name(None), "Terminal");
     }
 }
