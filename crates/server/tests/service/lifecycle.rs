@@ -11,7 +11,8 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use super::common::{
-    SERVER_VERSION, connect, profile, service_config, service_json, start, stop, temp_home,
+    SERVER_VERSION, connect, profile, register_stuck, service_config, service_json, start, stop,
+    temp_home,
 };
 
 #[tokio::test]
@@ -255,47 +256,13 @@ async fn a_squatter_on_the_endpoint_name_stops_the_service_from_starting() {
     );
 }
 
-/// Sets its flag when dropped; a handler future is dropped only when it finishes or the runtime cancels it.
-struct DropFlag(Arc<AtomicBool>);
-
-impl Drop for DropFlag {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-
 #[tokio::test]
 async fn a_handler_still_running_at_the_grace_limit_is_dropped_before_the_profile_is_released() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
-    let demo = Owner::Extension("demo".to_owned());
-    let _capability = running
-        .registries()
-        .capabilities
-        .register("demo/1", demo.clone())
-        .expect("the capability registers");
     let entered = Arc::new(Notify::new());
     let dropped = Arc::new(AtomicBool::new(false));
-    let (started, flag) = (Arc::clone(&entered), Arc::clone(&dropped));
-    let _stuck = running
-        .registries()
-        .methods
-        .register(
-            demo,
-            "ext.demo.stuck",
-            "demo/1",
-            Permission::Read,
-            move |_ctx: RequestCtx, _params: Value| {
-                let (started, flag) = (Arc::clone(&started), Arc::clone(&flag));
-                async move {
-                    let _sentinel = DropFlag(flag);
-                    started.notify_one();
-                    std::future::pending::<()>().await;
-                    Ok::<Value, ErrorBody>(Value::Null)
-                }
-            },
-        )
-        .expect("the method registers");
+    let _stuck = register_stuck(&running, Arc::clone(&entered), Arc::clone(&dropped));
 
     let client = connect(home.path(), "default").await;
     let call = tokio::spawn(async move {

@@ -1,7 +1,7 @@
 //! Concurrency on one connection: requests overlap, and a slow request does not hold up the others.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use massorca_protocol::ErrorBody;
@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Barrier, Notify, Semaphore};
 use tokio::time::timeout;
 
-use super::common::{connect, start, stop, temp_home};
+use super::common::{connect, register_stuck, start, stop, temp_home};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_requests_share_one_connection() {
@@ -229,4 +229,36 @@ async fn wait_for_count(count: &AtomicUsize, expected: usize) {
     })
     .await
     .unwrap_or_else(|_| panic!("the count did not reach {expected}"));
+}
+
+/// A client that disconnects takes its requests with it: their handlers are cancelled as soon as the service sees the
+/// disconnect, not when the service shuts down.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_disconnected_client_cancels_the_requests_it_left_in_flight() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let entered = Arc::new(Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let _stuck = register_stuck(&running, Arc::clone(&entered), Arc::clone(&dropped));
+
+    let client = connect(home.path(), "default").await;
+    let call = tokio::spawn(async move {
+        client
+            .call::<_, Value>("ext.demo.stuck", &Value::Null)
+            .await
+    });
+    timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the call reached its handler");
+
+    // Aborting the task drops its client, which closes the connection.
+    call.abort();
+    timeout(Duration::from_secs(5), async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the handler is cancelled once the service sees the disconnect");
+    stop(running).await;
 }
