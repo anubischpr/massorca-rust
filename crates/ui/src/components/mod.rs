@@ -20,6 +20,7 @@ pub mod popover;
 pub mod progress;
 pub mod scroll_area;
 pub mod search_field;
+pub mod secret_request_card;
 pub mod segmented_control;
 pub mod select;
 pub mod sheet;
