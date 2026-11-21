@@ -1,0 +1,153 @@
+//! Gallery stories for the session group: the session views of the Work panel and the Session summary.
+
+use super::{Story, variant};
+use crate::components::diff_view::{
+    DiffLine, DiffModel, DiffStatus, DiffView, FileDiff, FileStatus, Hunk,
+};
+use crate::tokens::SPACE_4;
+use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
+use std::ops::Range;
+
+pub fn stories() -> Vec<Story> {
+    vec![Story {
+        name: "Diff view",
+        spec: "DiffView.md",
+        render: diff_view,
+    }]
+}
+
+/// One file with two changes: 30 unchanged lines hidden before the first, 5 after the second.
+fn sample_file(path: &str) -> FileDiff {
+    let first = Hunk {
+        heading: Some("fn load()".into()),
+        old_start: 40,
+        old_len: 4,
+        new_start: 40,
+        new_len: 4,
+        hidden_before: (10..40u32)
+            .map(|n| DiffLine::context(n, n, format!("let step_{n} = next();")))
+            .collect(),
+        lines: vec![
+            DiffLine::context(40, 40, "let config = Config::default();"),
+            DiffLine::removed(41, "let path = \"settings.toml\";")
+                .with_changed(vec![Range { start: 20, end: 24 }]),
+            DiffLine::added(41, "let path = \"settings.json\";")
+                .with_changed(vec![Range { start: 20, end: 24 }]),
+            DiffLine::context(42, 42, "let loaded = read(&path)?;"),
+        ],
+    };
+    let second = Hunk {
+        heading: None,
+        old_start: 80,
+        old_len: 1,
+        new_start: 80,
+        new_len: 2,
+        hidden_before: Vec::new(),
+        lines: vec![
+            DiffLine::context(80, 80, "Ok(loaded)"),
+            DiffLine::added(81, "// Settings are read once per session."),
+        ],
+    };
+    FileDiff {
+        path: path.into(),
+        status: FileStatus::Modified,
+        hunks: vec![first, second],
+        hidden_after: (81..86u32)
+            .map(|n| DiffLine::context(n, n + 1, format!("fn helper_{n}() {{}}")))
+            .collect(),
+    }
+}
+
+fn diff_view(_: &mut Window, cx: &mut App) -> AnyElement {
+    let ready = DiffModel::new(sample_file("src/settings/load.rs"));
+    let mut drafted = DiffModel::new(sample_file("src/settings/load.rs"));
+    drafted.add_draft(0, 1, "Keep the old format readable for one release.");
+    drafted.add_draft(1, 1, "Mention the new file in the changelog.");
+    let empty = DiffModel::new(FileDiff {
+        path: "src/settings/empty.rs".into(),
+        status: FileStatus::Added,
+        hunks: Vec::new(),
+        hidden_after: Vec::new(),
+    });
+    let frame = |height: f32, child: DiffView| div().h(px(height)).w_full().child(child);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Ready: a collapsed block, two changes and context, with the base named",
+            frame(
+                360.,
+                DiffView::new("gallery-diff-ready", ready).compare("vs origin/main"),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Draft notes; the host cannot be reached, so Send to agent is off",
+            frame(
+                360.,
+                DiffView::new("gallery-diff-offline", drafted).disconnected(true),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Conflicted hunks skipped, read-only compare",
+            frame(
+                240.,
+                DiffView::new(
+                    "gallery-diff-conflicts",
+                    DiffModel::new(sample_file("src/settings/merge.rs")),
+                )
+                .conflicts_skipped(true)
+                .read_only(true),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Loading: skeleton lines, the spinner after 200 ms",
+            frame(
+                200.,
+                DiffView::new("gallery-diff-loading", empty.clone()).status(DiffStatus::Loading),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Empty: no changes in this file",
+            frame(
+                160.,
+                DiffView::new("gallery-diff-empty", empty.clone()).status(DiffStatus::Empty),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Failed, with Retry",
+            frame(
+                160.,
+                DiffView::new("gallery-diff-failed", empty.clone())
+                    .status(DiffStatus::Failed("The file could not be read.".into())),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Large: confirmed before it draws",
+            frame(
+                160.,
+                DiffView::new("gallery-diff-large", empty.clone())
+                    .status(DiffStatus::Large { lines: 12_431 }),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Binary file changed",
+            frame(
+                120.,
+                DiffView::new("gallery-diff-binary", empty).status(DiffStatus::Binary {
+                    before: "2.1 MB".into(),
+                    after: "2.3 MB".into(),
+                }),
+            ),
+            cx,
+        ))
+        .into_any_element()
+}

@@ -1357,11 +1357,13 @@ impl RenderOnce for DiffView {
                         .child(plural(drafts, "draft note", "draft notes")),
                 )
                 .child(
-                    Button::new("diff-send", "Send to agent")
-                        .variant(ButtonVariant::Primary)
-                        .size(ButtonSize::Compact)
-                        .disabled(self.disconnected)
-                        .on_click(on(&handler, DiffAction::SendToAgent)),
+                    div().debug_selector(|| "diff-send-slot".into()).child(
+                        Button::new("diff-send", "Send to agent")
+                            .variant(ButtonVariant::Primary)
+                            .size(ButtonSize::Compact)
+                            .disabled(self.disconnected)
+                            .on_click(on(&handler, DiffAction::SendToAgent)),
+                    ),
                 )
         });
         let conflicts = self.conflicts_skipped.then(|| {
@@ -1675,5 +1677,105 @@ mod split_tests {
             "@@ -1,2 +1,1 @@ fn one()"
         );
         assert_eq!(FileStatus::Renamed.letter(), "R");
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+    use gpui::{Context, Modifiers, Render, TestAppContext};
+    use std::cell::RefCell;
+
+    /// One hunk with 30 unchanged lines hidden before it, so the first row is a collapsed block.
+    fn hidden_model() -> DiffModel {
+        let hunk = Hunk {
+            heading: None,
+            old_start: 31,
+            old_len: 2,
+            new_start: 31,
+            new_len: 2,
+            hidden_before: (1..31u32)
+                .map(|n| DiffLine::context(n, n, format!("line {n}")))
+                .collect(),
+            lines: vec![DiffLine::removed(31, "old"), DiffLine::added(31, "new")],
+        };
+        DiffModel::new(FileDiff {
+            path: "src/lib.rs".into(),
+            status: FileStatus::Modified,
+            hunks: vec![hunk],
+            hidden_after: Vec::new(),
+        })
+    }
+
+    struct Harness {
+        model: DiffModel,
+        disconnected: bool,
+        actions: Rc<RefCell<Vec<DiffAction>>>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let actions = self.actions.clone();
+            div().w(px(640.)).h(px(400.)).child(
+                DiffView::new("diff", self.model.clone())
+                    .disconnected(self.disconnected)
+                    .on_action(move |action, _, _| actions.borrow_mut().push(action)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_collapsed_block_click_asks_for_the_next_lines(cx: &mut TestAppContext) {
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| Harness {
+            model: hidden_model(),
+            disconnected: false,
+            actions: actions.clone(),
+        });
+        cx.run_until_parked();
+        let center = cx
+            .debug_bounds("diff-collapsed-0")
+            .expect("the collapsed block is drawn")
+            .center();
+        cx.simulate_click(center, Modifiers::none());
+        assert_eq!(actions.borrow().as_slice(), [DiffAction::Reveal { gap: 0 }]);
+    }
+
+    #[gpui::test]
+    fn send_to_agent_asks_the_owner_when_the_host_is_reachable(cx: &mut TestAppContext) {
+        let mut model = hidden_model();
+        assert!(model.add_draft(0, 1, "check this"));
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| Harness {
+            model,
+            disconnected: false,
+            actions: actions.clone(),
+        });
+        cx.run_until_parked();
+        let send = cx
+            .debug_bounds("diff-send-slot")
+            .expect("send is drawn")
+            .center();
+        cx.simulate_click(send, Modifiers::none());
+        assert_eq!(actions.borrow().as_slice(), [DiffAction::SendToAgent]);
+    }
+
+    #[gpui::test]
+    fn send_to_agent_does_nothing_while_the_host_is_unreachable(cx: &mut TestAppContext) {
+        let mut model = hidden_model();
+        assert!(model.add_draft(0, 1, "check this"));
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| Harness {
+            model,
+            disconnected: true,
+            actions: actions.clone(),
+        });
+        cx.run_until_parked();
+        let send = cx
+            .debug_bounds("diff-send-slot")
+            .expect("send is drawn")
+            .center();
+        cx.simulate_click(send, Modifiers::none());
+        assert!(actions.borrow().is_empty());
     }
 }
