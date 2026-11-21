@@ -1,0 +1,13 @@
+[package]
+name = "massorca-protocol"
+description = "Message types, framing, versions and capabilities of the MassOrca protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
