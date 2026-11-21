@@ -15,6 +15,7 @@ massorca-ui = { path = "crates/ui" }
 massorca-profile = { path = "crates/profile" }
 massorca-core-store = { path = "crates/core-store" }
 massorca-core-git = { path = "crates/core-git" }
+massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
@@ -27,6 +28,7 @@ anyhow = "1.0.104"
 clap = { version = "4.6.9", features = ["derive", "env"] }
 directories = "6.0.0"
 libc = "0.2.191"
+notify = "9.0.0"
 dunce = "1.0.5"
 interprocess = { version = "2.4.9", features = ["tokio"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
