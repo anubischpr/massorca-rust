@@ -4,4 +4,5 @@
 
 pub mod process_tree;
 pub mod pty;
+pub mod ring;
 pub mod shell;
