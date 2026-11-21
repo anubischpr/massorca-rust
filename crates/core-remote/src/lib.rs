@@ -2,6 +2,7 @@
 //!
 //! Decisions 0043 to 0045. Everything is synchronous: the CLI calls it from `spawn_blocking`.
 
+pub mod ssh;
 pub mod tailscale;
 
 mod process;
