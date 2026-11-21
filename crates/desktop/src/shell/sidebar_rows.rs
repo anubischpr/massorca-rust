@@ -129,8 +129,6 @@ fn nav_icon(kind: NavKind) -> IconName {
         NavKind::Tasks => IconName::ListChecks,
         NavKind::Automations => IconName::CalendarClock,
         NavKind::Mobile => IconName::Smartphone,
-        NavKind::ConferenceRoom => IconName::Users,
-        NavKind::Board => IconName::Kanban,
     }
 }
 

@@ -51,6 +51,9 @@ fn conversation(canvas: &Canvas, theme: &Theme) -> impl IntoElement {
         Canvas::Session(title) => {
             placeholder(title, "The conversation is not built yet.", theme).into_any_element()
         }
+        Canvas::Team(page) => {
+            placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
+        }
         Canvas::Page(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }

@@ -8,6 +8,7 @@ mod service_banner;
 mod sidebar;
 mod sidebar_rows;
 mod status_bar;
+mod teams;
 mod title_bar;
 mod tooltip;
 mod workspace_dialog_views;
@@ -19,6 +20,7 @@ use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::shell_state::ShellModel;
+use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
 use actions::{
@@ -69,10 +71,16 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// Fills the store from sample data, once; nothing changes it afterwards.
-    pub fn new(data: &impl DataSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Fills the store from sample data, once; nothing changes it afterwards. The Bot Teams data
+    /// comes from `teams`, the same way (`--sample` selects both).
+    pub fn new(
+        data: &impl DataSource,
+        teams: &impl TeamsSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let store = cx.new(|_| ServiceStore::sample(data));
-        Self::with_store(store, None, None, window, cx)
+        Self::with_store(store, None, None, teams.teams(), window, cx)
     }
 
     /// Follows a running service through the bridge of `source`.
@@ -84,13 +92,21 @@ impl Shell {
         let handle = source.handle();
         let (bridge, updates) = source.into_parts();
         let store = cx.new(|cx| ServiceStore::following(updates, cx));
-        Self::with_store(store, Some(handle), Some(bridge), window, cx)
+        Self::with_store(
+            store,
+            Some(handle),
+            Some(bridge),
+            UnavailableTeams.teams(),
+            window,
+            cx,
+        )
     }
 
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
         bridge: Option<ServiceBridge>,
+        teams: TeamsState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -106,8 +122,10 @@ impl Shell {
         let rail = RailState::new(snapshot.usage.len(), cx);
         let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
+        let mut model = ShellModel::new(snapshot, width);
+        model.set_teams(teams);
         Self {
-            model: ShellModel::new(snapshot, width),
+            model,
             focus,
             rail,
             zones,
@@ -280,8 +298,15 @@ impl Render for Shell {
             .flex_row()
             .when(self.model.sidebar_inline(), |el| {
                 el.child(
-                    sidebar::sidebar(&self.model, &self.search, false, window, cx)
-                        .track_focus(self.zones.get(Zone::Sidebar)),
+                    sidebar::sidebar(
+                        &self.model,
+                        &self.search,
+                        false,
+                        self.rail.morph_generation(),
+                        window,
+                        cx,
+                    )
+                    .track_focus(self.zones.get(Zone::Sidebar)),
                 )
             })
             .child(
@@ -297,8 +322,15 @@ impl Render for Shell {
             )
             .when(self.model.sidebar_overlay(), |el| {
                 el.child(
-                    sidebar::sidebar(&self.model, &self.search, true, window, cx)
-                        .track_focus(self.zones.get(Zone::Sidebar)),
+                    sidebar::sidebar(
+                        &self.model,
+                        &self.search,
+                        true,
+                        self.rail.morph_generation(),
+                        window,
+                        cx,
+                    )
+                    .track_focus(self.zones.get(Zone::Sidebar)),
                 )
             })
             .when(self.model.overlay().is_some(), |el| {
