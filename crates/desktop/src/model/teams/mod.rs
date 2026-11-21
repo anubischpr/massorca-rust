@@ -4,12 +4,16 @@
 mod board;
 mod page;
 mod sample;
+mod sidebar;
 mod state;
 mod types;
 
 pub use board::{Landing, PickStep};
 pub use page::TeamPage;
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
+pub use sidebar::{
+    ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamRow, TeamsSidebar, teams_sidebar,
+};
 pub use state::{NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
 pub use types::{
     AddressId, BoardOwner, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId,
