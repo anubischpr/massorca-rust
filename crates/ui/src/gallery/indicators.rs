@@ -5,6 +5,7 @@ use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::progress::{ProgressBar, ProgressState, Spinner};
 use crate::components::skeleton::{LineWidth, Skeleton, SkeletonShape};
+use crate::components::usage_ring::{UsageReading, UsageRing, UsageSlot};
 use crate::icon::IconSize;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{RADIUS_MD, SPACE_2, SPACE_4};
@@ -31,6 +32,11 @@ pub fn stories() -> Vec<Story> {
             name: "Skeleton",
             spec: "Skeleton.md",
             render: skeleton,
+        },
+        Story {
+            name: "Usage ring",
+            spec: "UsageRing.md",
+            render: usage_ring,
         },
     ]
 }
@@ -236,6 +242,71 @@ fn skeleton(_: &mut Window, cx: &mut App) -> AnyElement {
             div()
                 .w(width)
                 .child(Skeleton::new(SkeletonShape::Row).delayed("gallery-skeleton-row")),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn usage_ring(_: &mut Window, cx: &mut App) -> AnyElement {
+    let slot = |index: u8| UsageSlot::new(index).expect("slots run from 1 to 6");
+    let slots = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Claude, UsageReading::Percent(20.0)).slot(slot(1)))
+        .child(UsageRing::new(AgentKind::Codex, UsageReading::Percent(35.0)).slot(slot(2)))
+        .child(UsageRing::new(AgentKind::Antigravity, UsageReading::Percent(50.0)).slot(slot(3)))
+        .child(UsageRing::new(AgentKind::GentleShell, UsageReading::Percent(62.0)).slot(slot(4)))
+        .child(UsageRing::new(AgentKind::Gemini, UsageReading::Percent(40.0)).slot(slot(5)))
+        .child(UsageRing::new(AgentKind::OpenCode, UsageReading::Percent(10.0)).slot(slot(6)));
+    let thresholds = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Claude, UsageReading::Percent(62.0)).resets_in("2 days"))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(84.0),
+        ))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(97.0),
+        ))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(120.0),
+        ));
+    let states = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::Loading))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::NotReported))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::Unavailable))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Failed { last: Some(62.0) },
+        ))
+        .child(
+            UsageRing::new(AgentKind::Claude, UsageReading::Percent(62.0))
+                .disconnected("5 min ago"),
+        );
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant("Provider slots 1 to 6", slots, cx))
+        .child(variant(
+            "Warn from 80 percent, limit from 95",
+            thresholds,
+            cx,
+        ))
+        .child(variant(
+            "Loading, empty, unavailable, error and unreachable",
+            states,
             cx,
         ))
         .into_any_element()

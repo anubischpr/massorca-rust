@@ -1,6 +1,16 @@
 //! UsageRing: one provider's usage as a ring around the provider's own mark.
 
-use crate::tokens::{Color, Palette};
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind, NameTooltip};
+use crate::components::progress::{arc_points, ring_in, spin_angle_now, stroke_polyline};
+use crate::theme::ActiveTheme;
+use crate::tokens::{
+    BORDER_WIDTH_THICK, Color, DURATION_TOOLTIP_DELAY, Palette, SIZE_ICON_SM, SIZE_INDICATOR_DOT,
+    SIZE_USAGE_RING,
+};
+use gpui::{
+    App, AppContext, Bounds, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
+};
 
 /// Usage from which the arc turns to the warning colour (design-system 2.12).
 pub const WARN_PERCENT: f32 = 80.0;
@@ -227,6 +237,150 @@ pub fn corner_dot(reading: UsageReading, dimmed: bool) -> Option<CornerDot> {
     }
 }
 
+/// Top-left corner of a corner dot, centred on the mark's top-right corner.
+fn dot_origin() -> (f32, f32) {
+    let mark_offset = (SIZE_USAGE_RING - SIZE_ICON_SM) / 2.0;
+    (
+        mark_offset + SIZE_ICON_SM - SIZE_INDICATOR_DOT / 2.0,
+        mark_offset - SIZE_INDICATOR_DOT / 2.0,
+    )
+}
+
+fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, track: Hsla, arc: Option<UsageArc>) {
+    let (centre, radius) = ring_in(bounds, BORDER_WIDTH_THICK);
+    stroke_polyline(
+        window,
+        &arc_points(centre, radius, 0.0, 360.0),
+        BORDER_WIDTH_THICK,
+        track,
+        true,
+    );
+    if let Some(arc) = arc {
+        stroke_polyline(
+            window,
+            &arc_points(centre, radius, arc.start, arc.sweep),
+            BORDER_WIDTH_THICK,
+            Hsla::from(arc.color),
+            arc.sweep >= 360.0,
+        );
+    }
+}
+
+/// A 32 px ring around a provider's mark, showing one provider's usage. It is a read-only meter.
+#[derive(Debug, IntoElement)]
+pub struct UsageRing {
+    agent: AgentKind,
+    reading: UsageReading,
+    slot: UsageSlot,
+    resets_in: Option<SharedString>,
+    host_age: Option<SharedString>,
+}
+
+impl UsageRing {
+    pub fn new(agent: AgentKind, reading: UsageReading) -> Self {
+        Self {
+            agent,
+            reading,
+            slot: UsageSlot::default(),
+            resets_in: None,
+            host_age: None,
+        }
+    }
+
+    /// Sets the provider slot that picks the arc colour.
+    pub fn slot(mut self, slot: UsageSlot) -> Self {
+        self.slot = slot;
+        self
+    }
+
+    /// Sets the reset time shown in the name, such as "2 days".
+    pub fn resets_in(mut self, resets_in: impl Into<SharedString>) -> Self {
+        self.resets_in = Some(resets_in.into());
+        self
+    }
+
+    /// Marks the host as unreachable, with the age of the last known value, such as "5 min ago".
+    pub fn disconnected(mut self, age: impl Into<SharedString>) -> Self {
+        self.host_age = Some(age.into());
+        self
+    }
+}
+
+impl RenderOnce for UsageRing {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let palette = cx.theme().palette;
+        let dimmed = self.host_age.is_some();
+        let loading = matches!(self.reading, UsageReading::Loading);
+        if loading {
+            window.request_animation_frame();
+        }
+        let spin_start = if loading { spin_angle_now() } else { 0.0 };
+        let arc = arc_for(self.reading, dimmed, self.slot, &palette, spin_start);
+        let track = Hsla::from(palette.usage.ring_track);
+        let name = SharedString::from(usage_name(
+            self.agent.label(),
+            self.reading,
+            self.resets_in.as_deref(),
+            self.host_age.as_deref(),
+        ));
+        let value = match self.reading {
+            UsageReading::Percent(percent) => Some(f64::from(clamp_percent(percent))),
+            _ => None,
+        };
+        let mark_offset = (SIZE_USAGE_RING - SIZE_ICON_SM) / 2.0;
+        let mut ring = div()
+            .id(SharedString::from(format!(
+                "usage-ring-{}",
+                self.agent.label()
+            )))
+            .relative()
+            .flex_none()
+            .size(px(SIZE_USAGE_RING))
+            .role(Role::ProgressIndicator)
+            .aria_label(name.clone())
+            .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
+            .tooltip(move |_, cx| cx.new(|_| NameTooltip(name.clone())).into())
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, (), window, _| paint_ring(window, bounds, track, arc),
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(mark_offset))
+                    .left(px(mark_offset))
+                    .child(AgentIcon::new(self.agent).size(AgentIconSize::Small)),
+            );
+        if let Some(value) = value {
+            ring = ring.aria_numeric_value(value);
+        }
+        if let Some(dot) = corner_dot(self.reading, dimmed) {
+            ring = ring.child(corner_dot_element(dot, &palette));
+        }
+        ring
+    }
+}
+
+fn corner_dot_element(dot: CornerDot, palette: &Palette) -> Div {
+    let color = match dot {
+        CornerDot::Warn => palette.usage.ring_warn,
+        CornerDot::Limit => palette.usage.ring_limit,
+        CornerDot::Danger => palette.status.danger_solid,
+    };
+    let (left, top) = dot_origin();
+    div()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .size(px(SIZE_INDICATOR_DOT))
+        .rounded_full()
+        .bg(color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +598,12 @@ mod tests {
             Some(CornerDot::Danger)
         );
         assert_eq!(corner_dot(UsageReading::Percent(97.0), true), None);
+    }
+
+    #[test]
+    fn the_corner_dot_sits_on_the_mark_corner() {
+        let (left, top) = dot_origin();
+        assert_close(left, 21.0);
+        assert_close(top, 5.0);
     }
 }
