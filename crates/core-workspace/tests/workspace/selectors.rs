@@ -106,3 +106,23 @@ fn an_unknown_workspace_is_not_found() {
         codes::WORKSPACE_NOT_FOUND,
     );
 }
+
+#[test]
+fn a_relative_path_selector_is_refused_rather_than_resolved_against_the_service_directory() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    fx.create(&project.name, "wt");
+
+    expect_code(
+        fx.workspaces.show_workspace("./wt"),
+        massorca_protocol::codes::REQUEST_INVALID_PARAMS,
+    );
+    expect_code(
+        fx.workspaces.show_workspace("sub/wt"),
+        massorca_protocol::codes::REQUEST_INVALID_PARAMS,
+    );
+    expect_code(
+        fx.workspaces.show_project("../repo"),
+        massorca_protocol::codes::REQUEST_INVALID_PARAMS,
+    );
+}
