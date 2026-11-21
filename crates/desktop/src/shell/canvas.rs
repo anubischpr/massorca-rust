@@ -5,7 +5,7 @@ use crate::model::canvas::Canvas;
 use crate::model::navigation::Mode;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
-use gpui::{Context, Div, IntoElement, MouseButton, MouseDownEvent, div, img, prelude::*, px};
+use gpui::{Context, Div, IntoElement, MouseButton, div, img, prelude::*, px};
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
@@ -17,7 +17,8 @@ use massorca_ui::{ActiveTheme, TextStyled, Theme};
 pub(super) fn canvas(model: &ShellModel, cx: &mut Context<Shell>) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
-    let mut surface = div()
+    let surface = div()
+        .debug_selector(|| "canvas".to_owned())
         .relative()
         .flex()
         .flex_row()
@@ -34,16 +35,6 @@ pub(super) fn canvas(model: &ShellModel, cx: &mut Context<Shell>) -> Div {
                 .into_iter()
                 .map(|region| region_column(region, &theme)),
         );
-    if overlay.is_some() {
-        // A click on the Canvas closes the overlay; a click on the overlay itself does not.
-        surface = surface.on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|shell, _: &MouseDownEvent, _, cx| {
-                shell.model.close_overlay();
-                cx.notify();
-            }),
-        );
-    }
     surface.children(overlay.map(|region| overlay_panel(region, &theme)))
 }
 

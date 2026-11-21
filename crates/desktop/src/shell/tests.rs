@@ -108,6 +108,32 @@ fn a_title_bar_toggle_opens_its_region_inline(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_sidebar_leaves_full_pages_and_returns_with_the_mode_home(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+    click(cx, "rail-tasks");
+    assert!(!shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+    click(cx, "rail-mode");
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+}
+
+#[gpui::test]
+fn a_click_on_the_canvas_closes_the_sidebar_overlay(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    cx.simulate_resize(size(px(900.), px(600.)));
+    shell.update(cx, |shell, cx| {
+        shell.model.toggle_sidebar();
+        cx.notify();
+    });
+    draw(cx);
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_overlay()));
+    click(cx, "canvas");
+    assert!(!shell.read_with(cx, |shell, _| shell.model().sidebar_overlay()));
+}
+
+#[gpui::test]
 fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppContext) {
     setup(cx);
     let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));

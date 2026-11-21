@@ -3,13 +3,19 @@
 mod actions;
 mod canvas;
 mod rail;
+mod sidebar;
+mod sidebar_rows;
 mod title_bar;
 mod tooltip;
 
 use crate::data::DataSource;
 use crate::model::shell_state::ShellModel;
 use actions::CloseOverlay;
-use gpui::{App, Context, FocusHandle, IntoElement, Render, WeakEntity, Window, div, prelude::*};
+use gpui::{
+    App, Context, Entity, FocusHandle, IntoElement, MouseButton, MouseDownEvent, Render,
+    WeakEntity, Window, div, prelude::*,
+};
+use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::text_field;
 use massorca_ui::{ActiveTheme, TextStyled};
 use rail::RailState;
@@ -24,6 +30,7 @@ pub struct Shell {
     /// Holds keyboard focus when no control does, so shell keys reach the root.
     focus: FocusHandle,
     rail: RailState,
+    search: Entity<SearchField>,
 }
 
 impl Shell {
@@ -34,10 +41,12 @@ impl Shell {
         focus.focus(window, cx);
         let snapshot = data.snapshot();
         let rail = RailState::new(snapshot.usage.len(), cx);
+        let search = cx.new(|cx| SearchField::new("Search", cx));
         Self {
             model: ShellModel::new(snapshot, width),
             focus,
             rail,
+            search,
         }
     }
 
@@ -69,6 +78,42 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme);
         let rail = rail::rail(&self.model, &self.rail, cx);
         let canvas = canvas::canvas(&self.model, cx);
+        // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
+        // an overlay closes it; the overlays stop their own clicks from reaching the body.
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_row()
+            .when(self.model.sidebar_inline(), |el| {
+                el.child(sidebar::sidebar(
+                    &self.model,
+                    &self.search,
+                    false,
+                    window,
+                    cx,
+                ))
+            })
+            .child(canvas)
+            .when(self.model.sidebar_overlay(), |el| {
+                el.child(sidebar::sidebar(
+                    &self.model,
+                    &self.search,
+                    true,
+                    window,
+                    cx,
+                ))
+            })
+            .when(self.model.overlay().is_some(), |el| {
+                el.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _: &MouseDownEvent, _, cx| {
+                        shell.model.close_overlay();
+                        cx.notify();
+                    }),
+                )
+            });
         div()
             .size_full()
             .flex()
@@ -90,7 +135,7 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .child(title_bar)
-                    .child(div().flex_1().min_h_0().flex().flex_row().child(canvas)),
+                    .child(body),
             )
     }
 }
