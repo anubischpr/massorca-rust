@@ -3,13 +3,9 @@
 
 mod manager_support;
 
-use std::time::Duration;
-
 use manager_support::{Managed, is_gone, marker_command, script_shell, spec, wait_until, watch};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{ExitReason, TerminalState};
-
-const QUIET: Duration = Duration::from_millis(300);
 
 #[tokio::test]
 async fn an_unverifiable_terminal_stays_usable_until_a_reap_confirms_its_exit() {
@@ -48,7 +44,11 @@ async fn an_unverifiable_terminal_stays_usable_until_a_reap_confirms_its_exit() 
         first.step().await;
     }
     let mut second = watch(&manager, &info.id, None).await;
-    second.settle(QUIET).await;
+    // Items arrive in order, so an `Exited` would come before this marker.
+    let (command, expected) = marker_command("attached");
+    manager.input(&info.id, &command).expect("input");
+    first.wait_for_text(&expected).await;
+    second.wait_for_text(&expected).await;
     assert!(first.exited.is_none() && !first.ended);
     assert!(second.exited.is_none() && !second.ended);
 

@@ -3,17 +3,14 @@
 
 mod manager_support;
 
-use std::time::Duration;
-
 use manager_support::{
-    Managed, SIZE, TIMEOUT, big_file, marker_command, print_file_then_marker, script_shell, spec,
-    visible, wait_until, watch,
+    Managed, SIZE, TIMEOUT, Watch, big_file, marker_command, print_file_then_marker, script_shell,
+    spec, visible, wait_until, watch,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::ring::RING_CAPACITY;
 use massorca_core_terminal::{AttachItem, AttachMode, TerminalState};
 
-const QUIET: Duration = Duration::from_millis(300);
 /// The attachment queue limit of 0034.
 const QUEUE_CHUNKS: usize = 256;
 
@@ -59,7 +56,7 @@ async fn reattaching_with_since_resumes_with_exactly_the_missed_bytes() {
     let (command, expected) = marker_command("between");
     manager.input(&info.id, &command).expect("input");
     truth.wait_for_text(&expected).await;
-    truth.settle(QUIET).await;
+    // Everything up to the marker, by offset; output still arriving is beyond `until`.
     let until = truth.offset();
 
     let mut resumed = watch(&manager, &info.id, Some(since)).await;
@@ -113,9 +110,8 @@ async fn two_attachments_receive_the_same_output() {
     manager.input(&info.id, &command).expect("input");
     first.wait_for_text(&expected).await;
     second.wait_for_text(&expected).await;
-    first.settle(QUIET).await;
-    second.settle(QUIET).await;
 
+    // Compared over the offsets both have read, which hold the marker.
     let start = first.base.max(second.base);
     let end = first.offset().min(second.offset());
     assert!(end > start);
@@ -153,7 +149,8 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
     let info = manager.create(spec("ws", dir.path())).expect("create");
     let mut reader = watch(&manager, &info.id, None).await;
     reader.wait_for_output().await;
-    let mut stalled = manager.attach(&info.id, None).expect("attach");
+    let stalled = manager.attach(&info.id, None).expect("attach");
+    let mut stalled = Watch::from_attachment(&manager, &info.id, stalled);
     let items_before = reader.output_items;
     let file = big_file(dir.path(), RING_CAPACITY * 3 / 2);
     let (command, expected) = print_file_then_marker(&file, "stalled");
@@ -165,25 +162,27 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
         "only {} chunks: the queue never filled",
         reader.output_items - items_before
     );
-    reader.settle(QUIET).await;
+    let seen = reader.offset();
 
-    let mut first_content = None;
-    while first_content.is_none() {
-        let item = tokio::time::timeout(TIMEOUT, stalled.next())
-            .await
-            .expect("an item")
-            .expect("not ended");
-        match item {
-            AttachItem::Attached { .. } => {}
-            other => first_content = Some(other),
-        }
-    }
-    let Some(AttachItem::Snapshot { offset, bytes, .. }) = first_content else {
-        panic!("a lagging attachment resumes with a snapshot: {first_content:?}");
+    // The snapshot is taken when the client reads, after everything the reader has seen.
+    assert!(matches!(
+        stalled.step().await,
+        Some(AttachItem::Attached { .. })
+    ));
+    let Some(AttachItem::Snapshot { offset, bytes, .. }) = stalled.step().await else {
+        panic!("a lagging attachment resumes with a snapshot");
     };
-    assert_eq!(offset, reader.offset());
-    assert_eq!(stalled.offset(), offset);
+    assert!(offset >= seen, "snapshot at {offset}, reader saw {seen}");
     assert!(visible(&bytes).contains(&expected));
+
+    // Output continues from the snapshot's offset with nothing lost.
+    let (command, expected) = marker_command("caught-up");
+    manager.input(&info.id, &command).expect("input");
+    stalled.wait_for_text(&expected).await;
+    reader.wait_for_offset(stalled.offset()).await;
+    let from = (offset - reader.base) as usize;
+    let to = (stalled.offset() - reader.base) as usize;
+    assert_eq!(stalled.output[..], reader.output[from..to]);
 }
 
 #[tokio::test]

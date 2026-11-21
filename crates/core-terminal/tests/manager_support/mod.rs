@@ -241,25 +241,7 @@ pub struct Watch {
 /// Attaches and reads up to the first byte of live output (the snapshot, if any).
 pub async fn watch(manager: &TerminalManager, id: &str, since: Option<u64>) -> Watch {
     let attachment = manager.attach(id, since).expect("attach");
-    let mut watch = Watch {
-        attachment,
-        manager: manager.clone(),
-        id: id.to_owned(),
-        mode: AttachMode::Snapshot,
-        info: manager.get(id).expect("the terminal exists"),
-        base: 0,
-        snapshot: Vec::new(),
-        snapshot_size: (0, 0),
-        snapshots: 0,
-        output: Vec::new(),
-        output_items: 0,
-        visible: Visible::default(),
-        resized: Vec::new(),
-        exited: None,
-        ended: false,
-        history_pending: false,
-        queries_scanned: 0,
-    };
+    let mut watch = Watch::from_attachment(manager, id, attachment);
     match watch.step().await {
         Some(AttachItem::Attached { mode, .. }) => {
             if mode == AttachMode::Snapshot {
@@ -275,6 +257,29 @@ pub async fn watch(manager: &TerminalManager, id: &str, since: Option<u64>) -> W
 }
 
 impl Watch {
+    /// A watch that has read nothing yet.
+    pub fn from_attachment(manager: &TerminalManager, id: &str, attachment: Attachment) -> Self {
+        Self {
+            attachment,
+            manager: manager.clone(),
+            id: id.to_owned(),
+            mode: AttachMode::Snapshot,
+            info: manager.get(id).expect("the terminal exists"),
+            base: 0,
+            snapshot: Vec::new(),
+            snapshot_size: (0, 0),
+            snapshots: 0,
+            output: Vec::new(),
+            output_items: 0,
+            visible: Visible::default(),
+            resized: Vec::new(),
+            exited: None,
+            ended: false,
+            history_pending: false,
+            queries_scanned: 0,
+        }
+    }
+
     /// Offset of the next byte this watch expects.
     pub fn offset(&self) -> u64 {
         self.base + self.output.len() as u64
@@ -393,18 +398,6 @@ impl Watch {
             self.step().await;
         }
         self.exited.clone().expect("exited before the end")
-    }
-
-    /// Reads until no item arrives for `quiet`.
-    pub async fn settle(&mut self, quiet: Duration) {
-        let deadline = Instant::now() + TIMEOUT;
-        while let Ok(item) = tokio::time::timeout(quiet, self.attachment.next()).await {
-            assert!(Instant::now() < deadline, "the terminal never went quiet");
-            self.apply(&item);
-            if item.is_none() {
-                return;
-            }
-        }
     }
 }
 
