@@ -76,7 +76,7 @@ impl Shell {
     }
 
     /// Mod+K: opens the palette, or closes it when it is open.
-    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.palette().is_some() {
             self.close_palette(window, cx);
             return;
