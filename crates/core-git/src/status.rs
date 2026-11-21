@@ -80,7 +80,7 @@ impl Git {
 }
 
 /// The tree with no entries; every git version knows its id without storing it.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 #[derive(Debug, Clone, Copy)]
 enum Side {

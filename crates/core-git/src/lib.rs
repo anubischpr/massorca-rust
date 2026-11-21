@@ -4,6 +4,7 @@
 //! Each command runs without a shell and with a timeout, and uses only commands
 //! and options that exist in Git 2.25 (ADR 0007).
 
+mod diff;
 mod error;
 mod git;
 mod process;
