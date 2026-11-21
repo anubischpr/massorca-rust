@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use massorca_core_agents::Agents;
 use massorca_core_store::Store;
 use massorca_core_terminal::TerminalManager;
 use massorca_core_workspace::Workspaces;
@@ -39,6 +40,8 @@ pub struct AppState {
     pub workspaces: Arc<Workspaces>,
     /// The service's terminals (decision 0033); they end with the service.
     pub terminals: TerminalManager,
+    /// Agent sessions and their runs (decision 0051).
+    pub agents: Agents,
     pub server: PeerInfo,
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.

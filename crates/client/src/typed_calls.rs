@@ -1,6 +1,9 @@
 //! Typed helpers over the methods of the core features.
 
-use massorca_protocol::methods::agents::{self, AgentKinds};
+use massorca_protocol::methods::agents::{
+    self, AgentKinds, AgentListParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentStartParams, AgentStopParams,
+};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
 use massorca_protocol::methods::projects::{
@@ -169,6 +172,54 @@ impl Client {
     /// `agent.kinds`: every declared agent kind, whether it is installed, and its problems.
     pub async fn agent_kinds(&self) -> Result<AgentKinds, ClientError> {
         self.call(agents::KINDS, &()).await
+    }
+
+    /// `agent.start`: starts an agent session in a workspace.
+    pub async fn agent_start(
+        &self,
+        params: &AgentStartParams,
+    ) -> Result<AgentSession, ClientError> {
+        self.call(agents::START, params).await
+    }
+
+    /// `agent.list`: sessions newest first, or only those of one workspace (a selector).
+    pub async fn agent_list(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<AgentSessionList, ClientError> {
+        let params = AgentListParams {
+            workspace: workspace.map(str::to_owned),
+        };
+        self.call(agents::LIST, &params).await
+    }
+
+    /// `agent.show`: one session, by id or a unique id prefix of at least 8 characters.
+    pub async fn agent_show(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::SHOW, &session_ref(session)).await
+    }
+
+    /// `agent.stop`: ends the session's run; `force` skips the grace period.
+    pub async fn agent_stop(
+        &self,
+        session: &str,
+        force: bool,
+    ) -> Result<AgentSession, ClientError> {
+        let params = AgentStopParams {
+            session: session.to_owned(),
+            force,
+        };
+        self.call(agents::STOP, &params).await
+    }
+
+    /// `agent.forget`: deletes the record of a session whose run has ended.
+    pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::FORGET, &session_ref(session)).await
+    }
+}
+
+fn session_ref(session: &str) -> AgentSessionRef {
+    AgentSessionRef {
+        session: session.to_owned(),
     }
 }
 

@@ -121,6 +121,27 @@ On top of the terminal environment (0032): `MASSORCA_AGENT_SESSION`,
 home variable when the profile has a home for it (0056), minus the kind's
 `strip_env` in that case, then the caller's `env`.
 
+Limitation: a terminal's environment (0032) can add variables but not remove
+inherited ones, and `core-terminal` is not changed in this phase. Until it can,
+a stripped variable is set to the empty string instead of removed. Agents treat
+an empty key as missing in practice, but a program that checks only for the
+variable's presence still sees it. Removing it belongs to the terminals chain.
+
+Session selectors (`agent.show`, `stop`, `forget`, and the CLI) take the full
+id or a unique id prefix of at least 8 characters, resolved by the service; a
+prefix shared by several sessions is refused with `selector.ambiguous`. UUID v7
+ids start with their creation time, so sessions started close together need a
+longer prefix.
+
+Until the status store arrives, `agent.forget` of a session whose run is live is
+refused with `agent.busy`, and a first prompt for a kind whose `prompt.mode` is
+`none` is refused with `agent.prompt_invalid` instead of waiting for `idle`.
+
+A run whose terminal is gone without an exit the service saw (closed with
+`terminal close`, or dropped from the terminal manager's list of exited
+terminals) is recorded as `exited` with reason `exited` and no code, at the time
+it was noticed.
+
 ## CLI
 
 ```

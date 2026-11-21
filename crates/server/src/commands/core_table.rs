@@ -230,6 +230,58 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.kinds",
             no_args(),
         ),
+        command(
+            "agent.start",
+            "Start an agent in a workspace",
+            "agent.start",
+            json!({
+                "type": "object",
+                "required": ["workspace", "kind"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "read_only": { "type": "boolean" },
+                    "title": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.list",
+            "List agent sessions",
+            "agent.list",
+            json!({ "type": "object", "properties": { "workspace": { "type": "string" } } }),
+        ),
+        command(
+            "agent.status",
+            "Show an agent session's execution and activity",
+            "agent.show",
+            json!({ "type": "object", "properties": { "session": { "type": "string" } } }),
+        ),
+        command(
+            "agent.stop",
+            "Stop an agent session's run",
+            "agent.stop",
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": { "session": { "type": "string" }, "force": { "type": "boolean" } }
+            }),
+        ),
+        command(
+            "agent.forget",
+            "Forget an agent session whose run has ended",
+            "agent.forget",
+            selector("session"),
+        ),
+        command(
+            "agent.attach",
+            "Attach to an agent session's terminal",
+            "agent.show",
+            selector("session"),
+        ),
     ]
 }
 
