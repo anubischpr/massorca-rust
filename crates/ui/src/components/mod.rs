@@ -1,0 +1,28 @@
+//! Components of the design system, one module per spec in docs/design/components.
+
+pub mod agent_icon;
+pub mod agent_status;
+pub mod badge;
+pub mod banner;
+pub mod button;
+pub mod card;
+pub mod checkbox;
+pub mod dialog;
+pub mod empty_state;
+pub mod error_state;
+pub mod icon_button;
+pub mod kbd;
+pub mod list_row;
+pub mod menu;
+pub mod popover;
+pub mod progress;
+pub mod search_field;
+pub mod segmented_control;
+pub mod select;
+pub mod sidebar_row;
+pub mod skeleton;
+pub mod switch;
+pub mod text_field;
+pub mod toast;
+pub mod tooltip;
+pub mod usage_ring;
