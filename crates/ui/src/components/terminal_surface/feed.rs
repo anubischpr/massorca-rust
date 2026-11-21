@@ -185,6 +185,7 @@ impl TerminalFeed {
     }
 
     /// The bytes the emulator owes the program (cursor reports and the like), taken once.
+    /// The surface does not forward them: with several clients attached, each would answer.
     pub fn take_replies(&mut self) -> Vec<u8> {
         self.reports
             .lock()
