@@ -385,3 +385,97 @@ fn highest_id(teams: &[Team]) -> u32 {
     }
     highest
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::sample::{SampleTeamsSource, TeamsSource};
+    use super::*;
+
+    fn new_team(name: &str, host: usize) -> NewTeam {
+        NewTeam {
+            name: name.into(),
+            purpose: "  Ops  ".into(),
+            host,
+            workspaces: true,
+        }
+    }
+
+    #[test]
+    fn a_team_needs_a_trimmed_name_up_to_the_limit_and_a_free_name_on_its_host() {
+        let mut state = SampleTeamsSource.teams();
+        assert_eq!(
+            state.create_team(new_team("   ", 0)),
+            Err(TeamError::NameRequired)
+        );
+        let long = "x".repeat(NAME_LIMIT + 1);
+        assert_eq!(
+            state.create_team(new_team(&long, 0)),
+            Err(TeamError::NameTooLong)
+        );
+        assert_eq!(
+            state.create_team(new_team("desarrollo", 1)),
+            Err(TeamError::NameTaken),
+            "the name is taken on VPS, case aside"
+        );
+        let id = state.create_team(new_team("  Ops  ", 0)).unwrap();
+        let created = state.team(id).unwrap();
+        assert_eq!(
+            (created.name.as_str(), created.purpose.as_str()),
+            ("Ops", "Ops")
+        );
+        assert!(created.workspaces && created.bots.is_empty());
+        assert_eq!(state.selected(), Some(id));
+    }
+
+    #[test]
+    fn the_first_bot_added_leads_the_team() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state.create_team(new_team("Ops", 0)).unwrap();
+        assert_eq!(state.team(id).unwrap().lead, None);
+        let bot = state
+            .add_bot(
+                id,
+                NewBot {
+                    name: "Nora".into(),
+                    role: String::new(),
+                    agent: Agent::Codex,
+                },
+            )
+            .unwrap();
+        let team = state.team(id).unwrap();
+        assert_eq!(team.lead, Some(bot));
+        assert_eq!(team.lead_name(), Some("Nora"));
+    }
+
+    #[test]
+    fn a_brief_is_saved_trimmed_and_a_link_can_be_set_and_cleared() {
+        let mut state = SampleTeamsSource.teams();
+        let (team, project) = (TeamId(1), ProjectId(1));
+        state.save_brief(team, project, "  New brief  ").unwrap();
+        state
+            .link_project(team, project, Some("oppm".into()))
+            .unwrap();
+        let linked = state.team(team).unwrap().project(project).unwrap();
+        assert_eq!(linked.brief, "New brief");
+        assert_eq!(linked.link.as_deref(), Some("oppm"));
+        state.link_project(team, project, None).unwrap();
+        assert_eq!(
+            state.team(team).unwrap().project(project).unwrap().link,
+            None
+        );
+    }
+
+    #[test]
+    fn nothing_changes_without_a_connected_service() {
+        let mut offline = TeamsState::unavailable();
+        assert_eq!(
+            offline.create_team(new_team("Ops", 0)),
+            Err(TeamError::Unavailable)
+        );
+        assert_eq!(
+            offline.save_brief(TeamId(1), ProjectId(1), "x"),
+            Err(TeamError::Unavailable)
+        );
+        assert!(offline.teams().is_empty());
+    }
+}
