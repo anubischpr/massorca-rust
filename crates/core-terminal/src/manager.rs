@@ -25,6 +25,8 @@ pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 /// How long the reader may drain after the program exits (0030).
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
+/// The cursor position query (DSR 6). ConPTY renders nothing until it is answered.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -338,6 +340,7 @@ impl TerminalManager {
                 ring: ByteRing::new(RING_CAPACITY),
                 size: spec.size,
                 status: Status::Live,
+                query_match: 0,
             }),
         });
         {
@@ -454,13 +457,36 @@ struct Core {
     ring: ByteRing,
     size: PtySize,
     status: Status,
+    /// Bytes of a cursor query matched at the end of the previous read.
+    query_match: usize,
 }
 
 impl Core {
-    /// Applies one PTY read to the screen and the ring.
-    fn ingest(&mut self, chunk: &[u8]) {
-        self.screen.process(chunk);
+    /// Applies one PTY read to the screen and the ring. Returns the replies to cursor queries,
+    /// which are written after the lock is released.
+    fn ingest(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let mut replies = Vec::new();
+        let mut fed = 0;
+        for (index, &byte) in chunk.iter().enumerate() {
+            self.query_match = if byte == CURSOR_QUERY[self.query_match] {
+                self.query_match + 1
+            } else {
+                usize::from(byte == CURSOR_QUERY[0])
+            };
+            if self.query_match == CURSOR_QUERY.len() {
+                self.query_match = 0;
+                // The answer is the cursor as of the query, not as of the end of the read.
+                self.screen.process(&chunk[fed..=index]);
+                fed = index + 1;
+                let (row, col) = self.screen.cursor_position();
+                replies.extend_from_slice(
+                    format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
+                );
+            }
+        }
+        self.screen.process(&chunk[fed..]);
         self.ring.push(chunk);
+        replies
     }
 }
 
@@ -536,7 +562,11 @@ fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<(
             // On Windows a read fails once the pseudoconsole is closed: end of output.
             Err(_) => break,
         };
-        lock(&terminal.core).ingest(&buffer[..read]);
+        let replies = lock(&terminal.core).ingest(&buffer[..read]);
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = terminal.master.write_all(&replies);
+        }
     }
 }
 

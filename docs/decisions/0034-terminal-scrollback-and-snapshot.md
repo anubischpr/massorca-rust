@@ -40,6 +40,10 @@ rendered snapshot on reattach rather than a raw replay.
   **256 chunks** (a chunk is one PTY read, up to 64 KiB). When the queue is
   full the attachment is marked lagging, its queue is dropped, and it gets a
   new snapshot when it next reads. The PTY reader never blocks on a client.
+- **Cursor-position queries.** While no client is attached, the service
+  answers `ESC [ 6 n` from the model's cursor. ConPTY sends that query when a
+  terminal starts and renders nothing until it is answered; an attached
+  client's emulator answers it instead (TERM-15).
 - **No disk history in Phase 2.** Nothing is written to disk: no checkpoints,
   no output log, no cold restore (TERM-08, TERM-09 are later). Terminal
   output is never logged.

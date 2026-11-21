@@ -81,6 +81,11 @@ impl Screen {
         (cols.get(), rows.get())
     }
 
+    /// (row, col), 0-based.
+    pub fn cursor_position(&self) -> (u16, u16) {
+        self.parser.screen().cursor_position()
+    }
+
     pub fn title(&self) -> Option<&str> {
         self.parser.callbacks().title.as_deref()
     }
