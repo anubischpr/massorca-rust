@@ -601,6 +601,7 @@ impl RenderOnce for ExtensionCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn grid_has_one_two_or_three_columns_by_width() {
@@ -626,5 +627,70 @@ mod tests {
             last_known_line(false, "1 h ago"),
             "Last known: disabled, 1 h ago"
         );
+    }
+
+    #[gpui::test]
+    fn name_and_switch_send_their_actions(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: false,
+        });
+        cx.run_until_parked();
+
+        let name = cx.debug_bounds("name").expect("name is drawn").center();
+        cx.simulate_click(name, gpui::Modifiers::none());
+        let switch = cx.debug_bounds("switch").expect("switch is drawn");
+        let mut toggle = switch.center();
+        toggle.x = switch.right() - px(16.);
+        cx.simulate_click(toggle, gpui::Modifiers::none());
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![ExtensionAction::Open, ExtensionAction::Toggle(false)]
+        );
+    }
+
+    #[gpui::test]
+    fn install_sends_the_install_action(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: true,
+        });
+        cx.run_until_parked();
+
+        let install = cx
+            .debug_bounds("install")
+            .expect("install is drawn")
+            .center();
+        cx.simulate_click(install, gpui::Modifiers::none());
+
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Install]);
+    }
+
+    /// Hosts one card, installed and enabled or in the catalog, and records the actions it sends.
+    struct ActionHarness {
+        seen: Rc<RefCell<Vec<ExtensionAction>>>,
+        catalog: bool,
+    }
+
+    impl gpui::Render for ActionHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let seen = self.seen.clone();
+            let state = if self.catalog {
+                ExtensionState::Catalog
+            } else {
+                ExtensionState::Installed {
+                    enabled: true,
+                    update: None,
+                }
+            };
+            div().child(
+                ExtensionCard::new("acme", "Acme Metrics", state)
+                    .settings(true)
+                    .on_action(move |action, _, _| seen.borrow_mut().push(action)),
+            )
+        }
     }
 }
