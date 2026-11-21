@@ -1,6 +1,11 @@
 //! Typed helpers over the `git/1` methods (decision 0010).
 
 use massorca_protocol::methods::git::commit::{self, GitCommitParams, GitCommitted};
+use massorca_protocol::methods::git::GitWorkspaceRef;
+use massorca_protocol::methods::git::branch::{
+    self, GitBranch, GitBranchCreateParams, GitBranchDeleteParams, GitBranchDeleted,
+    GitBranchRenameParams, GitBranchSwitchParams, GitBranchSwitched, GitBranches,
+};
 use massorca_protocol::methods::git::diff::{
     self, GitDiff, GitDiffFile, GitDiffFileParams, GitDiffParams,
 };
@@ -58,5 +63,42 @@ impl Client {
         params: &GitDiffFileParams,
     ) -> Result<GitDiffFile, ClientError> {
         self.call(diff::DIFF_FILE, params).await
+    }
+
+    /// `git.branches`: the local branches, the current one first.
+    pub async fn git_branches(&self, params: &GitWorkspaceRef) -> Result<GitBranches, ClientError> {
+        self.call(branch::BRANCHES, params).await
+    }
+
+    /// `git.branch_create`: creates a branch with no upstream, and checks it out with `switch`.
+    pub async fn git_branch_create(
+        &self,
+        params: &GitBranchCreateParams,
+    ) -> Result<GitBranch, ClientError> {
+        self.call(branch::BRANCH_CREATE, params).await
+    }
+
+    /// `git.branch_switch`: checks out a local branch; a conflicting change lists its files in `data.paths`.
+    pub async fn git_branch_switch(
+        &self,
+        params: &GitBranchSwitchParams,
+    ) -> Result<GitBranchSwitched, ClientError> {
+        self.call(branch::BRANCH_SWITCH, params).await
+    }
+
+    /// `git.branch_rename`: renames a branch without overwriting another.
+    pub async fn git_branch_rename(
+        &self,
+        params: &GitBranchRenameParams,
+    ) -> Result<GitBranch, ClientError> {
+        self.call(branch::BRANCH_RENAME, params).await
+    }
+
+    /// `git.branch_delete`: deletes a branch and returns the commit it pointed at.
+    pub async fn git_branch_delete(
+        &self,
+        params: &GitBranchDeleteParams,
+    ) -> Result<GitBranchDeleted, ClientError> {
+        self.call(branch::BRANCH_DELETE, params).await
     }
 }

@@ -9,6 +9,7 @@ mod core_methods;
 mod events;
 mod frames;
 mod git_commit;
+mod git_branches;
 mod git_diff;
 mod git_fixture;
 mod git_index;
