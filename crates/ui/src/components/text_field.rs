@@ -1,6 +1,18 @@
-//! Single-line text input and its editing model.
+//! Single-line text input: the editing model, and the entity that edits it through
+//! the platform input handler (typing and IME).
 
 use std::ops::Range;
+
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    App, Bounds, ClipboardItem, Context, CursorStyle, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ShapedLine, SharedString,
+    Styled, UTF16Selection, Window, actions, div, point, px,
+};
+
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{Color, Palette, RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_2, TYPE_BODY};
 
 const ZWJ: char = '\u{200D}';
 
@@ -50,6 +62,11 @@ impl TextBuffer {
         } else {
             self.selected.end
         }
+    }
+
+    /// The cursor sits at the start of the selection.
+    pub fn reversed(&self) -> bool {
+        self.reversed
     }
 
     pub fn marked(&self) -> Option<Range<usize>> {
@@ -308,6 +325,508 @@ impl TextBuffer {
     }
 }
 
+actions!(
+    text_field,
+    [
+        Backspace,
+        Delete,
+        MoveLeft,
+        MoveRight,
+        SelectLeft,
+        SelectRight,
+        MoveHome,
+        MoveEnd,
+        SelectHome,
+        SelectEnd,
+        SelectAll,
+        CopySelection,
+        CutSelection,
+        PasteText,
+        Submit,
+    ]
+);
+
+const KEY_CONTEXT: &str = "TextField";
+const FIELD_GROUP: &str = "text-field";
+
+/// Binds the text field keys under its key context; apps call this once at startup.
+pub fn bind_keys(cx: &mut App) {
+    let context = Some(KEY_CONTEXT);
+    // `KeyBinding::new` cannot resolve `secondary-`, so Mod is spelled out per OS.
+    let [select_all, copy, cut, paste] = if cfg!(target_os = "macos") {
+        ["cmd-a", "cmd-c", "cmd-x", "cmd-v"]
+    } else {
+        ["ctrl-a", "ctrl-c", "ctrl-x", "ctrl-v"]
+    };
+    cx.bind_keys([
+        KeyBinding::new("backspace", Backspace, context),
+        KeyBinding::new("delete", Delete, context),
+        KeyBinding::new("left", MoveLeft, context),
+        KeyBinding::new("right", MoveRight, context),
+        KeyBinding::new("shift-left", SelectLeft, context),
+        KeyBinding::new("shift-right", SelectRight, context),
+        KeyBinding::new("home", MoveHome, context),
+        KeyBinding::new("end", MoveEnd, context),
+        KeyBinding::new("shift-home", SelectHome, context),
+        KeyBinding::new("shift-end", SelectEnd, context),
+        KeyBinding::new(select_all, SelectAll, context),
+        KeyBinding::new(copy, CopySelection, context),
+        KeyBinding::new(cut, CutSelection, context),
+        KeyBinding::new(paste, PasteText, context),
+        KeyBinding::new("enter", Submit, context),
+    ]);
+}
+
+/// What a [`TextField`] emits; subscribe with `cx.subscribe`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextFieldEvent {
+    /// The text changed by typing, paste, composition, clearing or `set_text`.
+    Changed,
+    /// Enter was pressed in the field.
+    Submitted,
+}
+
+/// Single-line text input. It owns its text and focus; forms subscribe to its events.
+#[derive(Debug)]
+pub struct TextField {
+    focus_handle: FocusHandle,
+    buffer: TextBuffer,
+    placeholder: SharedString,
+    disabled: bool,
+    read_only: bool,
+    /// The last paint, for pointer hit tests and IME geometry.
+    last_layout: Option<ShapedLine>,
+    last_bounds: Option<Bounds<Pixels>>,
+    scroll_x: Pixels,
+    selecting: bool,
+}
+
+impl EventEmitter<TextFieldEvent> for TextField {}
+
+impl Focusable for TextField {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl TextField {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle().tab_stop(true),
+            buffer: TextBuffer::new(""),
+            placeholder: SharedString::default(),
+            disabled: false,
+            read_only: false,
+            last_layout: None,
+            last_bounds: None,
+            scroll_x: px(0.),
+            selecting: false,
+        }
+    }
+
+    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
+        self.placeholder = text.into();
+        self
+    }
+
+    pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
+        self.buffer = TextBuffer::new(text.as_ref());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn text(&self) -> &str {
+        self.buffer.text()
+    }
+
+    /// Replaces the text; emits `Changed` only when it differs.
+    pub fn set_text(&mut self, text: impl AsRef<str>, window: &mut Window, cx: &mut Context<Self>) {
+        let changed = self.buffer.set_text(text.as_ref());
+        self.after_edit(changed, window, cx);
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        self.disabled = disabled;
+        cx.notify();
+    }
+
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
+        cx.notify();
+    }
+
+    /// Moves focus into the field; a disabled field never takes focus.
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        if !self.disabled {
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn editable(&self) -> bool {
+        !self.disabled && !self.read_only
+    }
+
+    fn after_edit(&mut self, changed: bool, window: &Window, cx: &mut Context<Self>) {
+        if changed {
+            window.notify_text_input_changed(&self.focus_handle);
+            cx.emit(TextFieldEvent::Changed);
+        }
+        window.notify_text_selection_changed(&self.focus_handle);
+        cx.notify();
+    }
+
+    /// Applies a text change when the field accepts input.
+    fn edit(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut TextBuffer) -> bool,
+    ) {
+        if self.editable() {
+            let changed = change(&mut self.buffer);
+            self.after_edit(changed, window, cx);
+        }
+    }
+
+    /// Moves or selects the caret without changing the text.
+    fn move_caret(
+        &mut self,
+        change: impl FnOnce(&mut TextBuffer),
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        change(&mut self.buffer);
+        window.notify_text_selection_changed(&self.focus_handle);
+        cx.notify();
+    }
+
+    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(window, cx, TextBuffer::backspace);
+    }
+
+    fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(window, cx, TextBuffer::delete);
+    }
+
+    fn move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::move_left, window, cx);
+    }
+
+    fn move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::move_right, window, cx);
+    }
+
+    fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::select_left, window, cx);
+    }
+
+    fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::select_right, window, cx);
+    }
+
+    fn move_home(&mut self, _: &MoveHome, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::move_home, window, cx);
+    }
+
+    fn move_end(&mut self, _: &MoveEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::move_end, window, cx);
+    }
+
+    fn select_home(&mut self, _: &SelectHome, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::select_home, window, cx);
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::select_end, window, cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_caret(TextBuffer::select_all, window, cx);
+    }
+
+    fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.buffer.selected_text();
+        if !selected.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(selected.to_owned()));
+        }
+    }
+
+    fn cut_selection(&mut self, _: &CutSelection, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_selection(&CopySelection, window, cx);
+        self.edit(window, cx, |buffer| buffer.insert(""));
+    }
+
+    fn paste_text(&mut self, _: &PasteText, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            let text = single_line(&text);
+            self.edit(window, cx, |buffer| buffer.insert(&text));
+        }
+    }
+
+    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Submitted);
+    }
+
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
+        self.focus(window, cx);
+        window.request_virtual_keyboard();
+        self.selecting = true;
+        let index = self.index_for(event.position);
+        let extend = event.modifiers.shift;
+        self.move_caret(
+            move |buffer| {
+                if extend {
+                    buffer.select_to(index)
+                } else {
+                    buffer.move_to(index)
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selecting {
+            let index = self.index_for(event.position);
+            self.move_caret(move |buffer| buffer.select_to(index), window, cx);
+        }
+    }
+
+    fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.selecting = false;
+    }
+
+    /// The last paint, while it still shows the current text.
+    fn current_line(&self) -> Option<&ShapedLine> {
+        let line = self.last_layout.as_ref()?;
+        (self.buffer.is_empty() || line.text.as_ref() == self.buffer.text()).then_some(line)
+    }
+
+    /// The text offset under a window position, snapped to a grapheme boundary.
+    fn index_for(&self, position: Point<Pixels>) -> usize {
+        let (Some(bounds), Some(line)) = (self.last_bounds, self.current_line()) else {
+            return self.buffer.cursor();
+        };
+        let x = position.x - bounds.left() + self.scroll_x;
+        self.buffer.snap_to_grapheme(line.closest_index_for_x(x))
+    }
+
+    /// Outline colour and width for the current state; focus draws a 2 px inside border.
+    fn outline(&self, focused: bool, palette: &Palette) -> (Color, f32) {
+        if self.disabled {
+            (palette.border.disabled, 1.)
+        } else if focused {
+            (palette.border.focus, 2.)
+        } else if self.read_only {
+            (palette.border.subtle, 1.)
+        } else {
+            (palette.border.strong, 1.)
+        }
+    }
+}
+
+impl Render for TextField {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = cx.theme().palette;
+        let focused = self.focus_handle.is_focused(window);
+        let enabled = !self.disabled;
+        let (outline, width) = self.outline(focused, &palette);
+        let (text_color, fill_color) = if self.disabled {
+            (palette.text.disabled, palette.fill.disabled)
+        } else {
+            (palette.text.primary, palette.surface.sunken)
+        };
+        let field = div()
+            .group(FIELD_GROUP)
+            .key_context(KEY_CONTEXT)
+            .when(enabled, |field| {
+                field
+                    .track_focus(&self.focus_handle)
+                    .cursor(CursorStyle::IBeam)
+            })
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::move_left))
+            .on_action(cx.listener(Self::move_right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::move_home))
+            .on_action(cx.listener(Self::move_end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::cut_selection))
+            .on_action(cx.listener(Self::paste_text))
+            .on_action(cx.listener(Self::submit))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .h(px(SIZE_CONTROL_DEFAULT))
+            .w_full()
+            .px(px(SPACE_2 - (width - 1.)))
+            .rounded(px(RADIUS_MD))
+            .bg(fill_color)
+            .border_color(outline)
+            .text_color(text_color)
+            .text_style(TYPE_BODY);
+        if width > 1. {
+            field.border_2()
+        } else {
+            field.border_1()
+        }
+    }
+}
+
+impl EntityInputHandler for TextField {
+    fn text_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.buffer.range_from_utf16(&range_utf16);
+        adjusted_range.replace(self.buffer.range_to_utf16(&range));
+        Some(self.buffer.text()[range].to_owned())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.buffer.range_to_utf16(&self.buffer.selected()),
+            reversed: self.buffer.reversed(),
+        })
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        self.buffer
+            .marked()
+            .map(|range| self.buffer.range_to_utf16(&range))
+    }
+
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.buffer.unmark();
+        self.after_edit(false, window, cx);
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = strip_line_breaks(text);
+        self.edit(window, cx, |buffer| buffer.replace_text(range_utf16, &text));
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = strip_line_breaks(new_text);
+        self.edit(window, cx, |buffer| {
+            buffer.replace_and_mark(range_utf16, &text, new_selected_range)
+        });
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let line = self.current_line()?;
+        let range = self.buffer.range_from_utf16(&range_utf16);
+        let left = element_bounds.left() - self.scroll_x;
+        Some(Bounds::from_corners(
+            point(left + line.x_for_index(range.start), element_bounds.top()),
+            point(left + line.x_for_index(range.end), element_bounds.bottom()),
+        ))
+    }
+
+    fn selection_bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Bounds<Pixels>> {
+        self.bounds_for_range(range_utf16, element_bounds, window, cx)
+            .into_iter()
+            .collect()
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        position: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        let bounds = self.last_bounds?;
+        let line = self.current_line()?;
+        let index = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
+        Some(self.buffer.offset_to_utf16(index))
+    }
+
+    fn set_selected_text_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.buffer.select_utf16(range_utf16);
+        self.after_edit(false, window, cx);
+    }
+
+    fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        Some(self.buffer.utf16_len())
+    }
+
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        self.editable()
+    }
+}
+
+/// Typed line breaks never enter a single-line field.
+fn strip_line_breaks(text: &str) -> String {
+    text.replace(['\r', '\n'], "")
+}
+
+/// Pasted line breaks become single spaces.
+fn single_line(text: &str) -> String {
+    text.trim_end_matches(['\r', '\n'])
+        .replace("\r\n", "\n")
+        .replace(['\r', '\n'], " ")
+}
+
 /// Byte offsets where extended grapheme clusters start. Approximates UAX #29 for
 /// combining marks, variation selectors, emoji modifiers, ZWJ sequences and flags.
 fn grapheme_starts(text: &str) -> Vec<usize> {
@@ -535,5 +1054,11 @@ mod tests {
         assert_eq!(buffer.selected_text(), "old 漢字");
         assert!(buffer.insert("new"));
         assert_eq!(buffer.text(), "new");
+    }
+
+    #[test]
+    fn line_breaks_follow_the_single_line_rules() {
+        assert_eq!(single_line("a\r\nb\n"), "a b");
+        assert_eq!(strip_line_breaks("a\nb"), "ab");
     }
 }
