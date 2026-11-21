@@ -7,6 +7,7 @@
 mod error;
 mod git;
 mod process;
+mod refs;
 mod repository;
 mod version;
 

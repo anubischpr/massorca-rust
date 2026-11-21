@@ -74,6 +74,13 @@ pub fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
     run_git(repo, &["-c", hooks.as_str(), "commit", "-q", "-m", message]);
 }
 
+/// Creates `branch` with one commit adding `file`, then returns to `main`.
+pub fn commit_on_branch(repo: &Path, branch: &str, file: &str) {
+    run_git(repo, &["checkout", "-q", "-b", branch]);
+    commit_file(repo, file, "work\n", &format!("work on {branch}"));
+    run_git(repo, &["checkout", "-q", "main"]);
+}
+
 /// The path with symlinks, short Windows names and verbatim prefixes resolved.
 pub fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).expect("canonicalize test path")
