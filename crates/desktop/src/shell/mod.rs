@@ -5,8 +5,11 @@ mod canvas;
 mod palette;
 mod rail;
 mod service_banner;
+mod settings;
+mod setup;
 mod sidebar;
 mod sidebar_rows;
+mod start_page;
 mod status_bar;
 mod teams;
 mod title_bar;
@@ -19,6 +22,7 @@ use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
@@ -32,7 +36,7 @@ use gpui::{
     Subscription, WeakEntity, Window, div, prelude::*,
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
-use massorca_ui::components::search_field::SearchField;
+use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
@@ -42,6 +46,10 @@ use zones::ZoneFocus;
 
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod settings_tests;
+#[cfg(test)]
+mod start_page_tests;
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +63,17 @@ pub struct Shell {
     /// One focus handle per frame zone, which F6 moves between.
     zones: ZoneFocus,
     search: Entity<SearchField>,
+    /// The Settings page: its section, its search text and the workspace folder.
+    settings: SettingsModel,
+    /// The Settings search field; the text it settles on becomes `settings.query`.
+    settings_search: Entity<SearchField>,
+    _settings_search_changes: Subscription,
+    /// The workspace folder's text field, shown on the Settings page.
+    settings_folder: Entity<TextField>,
+    /// The disabled state the field was last set to, so a frame does not notify it again.
+    settings_folder_disabled: bool,
+    _settings_folder_changes: Subscription,
+    _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
     palette_input: Option<Entity<TextField>>,
     /// The control that had focus when the palette opened; focus returns to it.
@@ -120,6 +139,9 @@ impl Shell {
         let snapshot = store.read(cx).snapshot(Instant::now());
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
+            if store.read(cx).state().connection.is_connected() {
+                shell.settings.folder.forget_read_failure();
+            }
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -128,12 +150,46 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let settings_folder =
+            cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
+        let folder_changes = cx.subscribe(
+            &settings_folder,
+            |shell, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Changed => {
+                    let text = field.read(cx).text().to_owned();
+                    shell.settings.folder.typed(&text);
+                    cx.notify();
+                }
+                TextFieldEvent::Submitted => shell.save_folder(cx),
+            },
+        );
+        let folder_focus = settings_folder.read(cx).focus_handle(cx);
+        let folder_blur = cx.on_blur(&folder_focus, window, |shell, window, cx| {
+            shell.save_folder_on_blur(window, cx);
+        });
+        let settings_search_changes = cx.subscribe(
+            &settings_search,
+            |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.settings.query = query.to_string();
+                    cx.notify();
+                }
+            },
+        );
         Self {
             model,
             focus,
             rail,
             zones,
             search,
+            settings: SettingsModel::default(),
+            settings_search,
+            _settings_search_changes: settings_search_changes,
+            settings_folder,
+            settings_folder_disabled: false,
+            _settings_folder_changes: folder_changes,
+            _settings_folder_blur: folder_blur,
             palette_input: None,
             palette_restore: None,
             palette_events: None,
@@ -279,7 +335,42 @@ impl Render for Shell {
         let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
             .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
-        let canvas = canvas::canvas(&self.model, &self.zones, window, cx);
+        self.refresh_folder(cx);
+        self.sync_folder_field(window, cx);
+        let connection = self.store.read(cx).state().connection.clone();
+        let settings = settings::SettingsFrame {
+            model: &self.settings,
+            search: &self.settings_search,
+            connection,
+            shell: shell.clone(),
+            folder: &self.settings.folder,
+            folder_field: &self.settings_folder,
+        };
+        let setup_rows = crate::model::setup::checklist(
+            self.store.read(cx).state(),
+            if theme.is_dark() { "Dark" } else { "Light" },
+        );
+        let start = self
+            .model
+            .selected_workspace()
+            .and_then(|id| {
+                crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
+            })
+            .map(|page| start_page::StartFrame {
+                page,
+                shell: shell.clone(),
+            });
+        let canvas = canvas::canvas(
+            &self.model,
+            &self.zones,
+            canvas::PageFrames {
+                settings,
+                start,
+                setup_rows,
+            },
+            window,
+            cx,
+        );
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
@@ -397,6 +488,8 @@ impl Render for Shell {
                 } else if shell.model.usage_popover().is_some() {
                     shell.model.close_usage_popover();
                     cx.notify();
+                } else if shell.settings.folder.dirty() {
+                    shell.revert_folder(window, cx);
                 } else {
                     shell.model.close_overlay();
                     cx.notify();
