@@ -543,3 +543,148 @@ mod tests {
         assert_eq!(DialogWidth::default().px(), 440.0);
     }
 }
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::Button;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use gpui::{Context, Entity, Render, TestAppContext, VisualTestContext};
+    use std::cell::Cell;
+
+    type Count = Rc<Cell<u32>>;
+
+    /// Hosts an opener button and one dialog whose state the test drives.
+    struct Harness {
+        opener: FocusHandle,
+        open: bool,
+        busy: bool,
+        variant: DialogVariant,
+        actions: Count,
+        dismissals: Count,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let actions = self.actions.clone();
+            let dismissals = self.dismissals.clone();
+            div()
+                .p(px(SPACE_2))
+                .child(Button::new("dialog-opener", "Delete").focus_handle(self.opener.clone()))
+                .child(
+                    Dialog::new("dialog-under-test", "Delete secret DB_PASSWORD?")
+                        .variant(self.variant)
+                        .open(self.open)
+                        .busy(self.busy)
+                        .loss(["3 projects", "2 routines stop"])
+                        .action("Delete secret (3 projects use it)")
+                        .on_action(move |_, _| actions.set(actions.get() + 1))
+                        .on_dismiss(move |_, _| dismissals.set(dismissals.get() + 1)),
+                )
+        }
+    }
+
+    /// Opens a window with the harness, focuses its opener and returns the window context.
+    fn open_window(
+        cx: &mut TestAppContext,
+        variant: DialogVariant,
+    ) -> (
+        Entity<Harness>,
+        &mut VisualTestContext,
+        Count,
+        Count,
+        FocusHandle,
+    ) {
+        let actions: Count = Rc::default();
+        let dismissals: Count = Rc::default();
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            open: false,
+            busy: false,
+            variant,
+            actions: actions.clone(),
+            dismissals: dismissals.clone(),
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        (view, cx, actions, dismissals, opener)
+    }
+
+    fn set_open(view: &Entity<Harness>, cx: &mut VisualTestContext, open: bool) {
+        view.update(cx, |harness, cx| {
+            harness.open = open;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_destructive_dialog_starts_on_cancel_so_enter_cancels(cx: &mut TestAppContext) {
+        let (view, cx, actions, dismissals, _opener) = open_window(cx, DialogVariant::Destructive);
+        set_open(&view, cx, true);
+        press_key(cx, "enter");
+        assert_eq!(dismissals.get(), 1, "Enter on the default focus cancels");
+        assert_eq!(
+            actions.get(),
+            0,
+            "the danger action is never the Enter target"
+        );
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_and_is_ignored_while_busy(cx: &mut TestAppContext) {
+        let (view, cx, _actions, dismissals, _opener) = open_window(cx, DialogVariant::Confirm);
+        set_open(&view, cx, true);
+        press_key(cx, "escape");
+        assert_eq!(dismissals.get(), 1);
+
+        view.update(cx, |harness, cx| {
+            harness.busy = true;
+            cx.notify();
+        });
+        set_open(&view, cx, true);
+        press_key(cx, "escape");
+        assert_eq!(dismissals.get(), 1, "Escape does nothing while busy");
+    }
+
+    #[gpui::test]
+    fn tab_and_shift_tab_cycle_between_cancel_and_the_action(cx: &mut TestAppContext) {
+        let (view, cx, actions, dismissals, _opener) = open_window(cx, DialogVariant::Confirm);
+        set_open(&view, cx, true);
+        // A confirm starts on its action; Tab wraps to Cancel, Shift+Tab returns to the action.
+        press_key(cx, "tab");
+        press_key(cx, "enter");
+        assert_eq!(dismissals.get(), 1);
+        assert_eq!(actions.get(), 0);
+
+        set_open(&view, cx, true);
+        press_key(cx, "shift-tab");
+        press_key(cx, "enter");
+        assert_eq!(actions.get(), 1);
+    }
+
+    #[gpui::test]
+    fn clicking_the_action_runs_it(cx: &mut TestAppContext) {
+        let (view, cx, actions, dismissals, _opener) = open_window(cx, DialogVariant::Destructive);
+        set_open(&view, cx, true);
+        let action = cx
+            .debug_bounds("dialog-action")
+            .expect("the action is drawn")
+            .center();
+        cx.simulate_click(action, gpui::Modifiers::none());
+        assert_eq!(actions.get(), 1);
+        assert_eq!(dismissals.get(), 0);
+    }
+
+    #[gpui::test]
+    fn closing_the_dialog_returns_focus_to_the_opener(cx: &mut TestAppContext) {
+        let (view, cx, _actions, _dismissals, opener) = open_window(cx, DialogVariant::Confirm);
+        set_open(&view, cx, true);
+        cx.update(|window, _| assert!(!opener.is_focused(window), "focus moved into the dialog"));
+        set_open(&view, cx, false);
+        cx.update(|window, _| assert!(opener.is_focused(window), "focus is back on the opener"));
+    }
+}
