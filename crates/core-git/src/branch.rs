@@ -116,6 +116,91 @@ impl Git {
         self.branch_entry(dir, name)
     }
 
+    /// Checks out the local branch `branch` in `dir`; git keeps local changes that do not conflict.
+    pub fn branch_switch(&self, dir: &Path, branch: &str) -> Result<(), BranchError> {
+        self.require_branch(dir, branch)?;
+        let current = self.current_branch(dir)?;
+        if current.as_deref() != Some(branch)
+            && self
+                .worktree_list(dir)?
+                .iter()
+                .any(|entry| entry.branch.as_deref() == Some(branch))
+        {
+            return Err(refused(
+                codes::BRANCH_CHECKED_OUT,
+                format!("branch `{branch}` is checked out in another worktree"),
+            ));
+        }
+        let captured = self.run_mutation(Some(dir), ["checkout", "-q", branch, "--"])?;
+        checkout_result(captured.require_success())
+    }
+
+    /// Renames `from` to `to`; never overwrites an existing branch.
+    pub fn branch_rename(
+        &self,
+        dir: &Path,
+        from: &str,
+        to: &str,
+    ) -> Result<GitBranch, BranchError> {
+        self.require_branch(dir, from)?;
+        self.require_new_name(dir, to)?;
+        self.run_mutation(Some(dir), ["branch", "-m", "--", from, to])?
+            .require_success()?;
+        self.branch_entry(dir, to)
+    }
+
+    /// Deletes `branch` and returns the commit it pointed at. A branch checked out in any worktree, or named
+    /// in `in_use`, is always refused; an unmerged one needs `force`.
+    pub fn branch_delete(
+        &self,
+        dir: &Path,
+        branch: &str,
+        force: bool,
+        in_use: &[String],
+    ) -> Result<String, BranchError> {
+        let reference = format!("refs/heads/{branch}");
+        let Some(commit) = self.commit_of(dir, &reference)? else {
+            return Err(refused(
+                codes::BRANCH_NOT_FOUND,
+                format!("branch `{branch}` does not exist"),
+            ));
+        };
+        if self
+            .worktree_list(dir)?
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some(branch))
+        {
+            return Err(refused(
+                codes::BRANCH_CHECKED_OUT,
+                format!("branch `{branch}` is checked out in a worktree"),
+            ));
+        }
+        if in_use.iter().any(|held| held == branch) {
+            return Err(refused(
+                codes::BRANCH_IN_USE,
+                format!(
+                    "a workspace was created on branch `{branch}`; remove the workspace instead"
+                ),
+            ));
+        }
+        if force {
+            self.delete_branch_at(dir, branch, &commit)?;
+        } else if !self.delete_branch_if_merged(dir, branch)? {
+            return Err(refused(
+                codes::BRANCH_UNMERGED,
+                format!("branch `{branch}` is not merged; pass force to delete it"),
+            ));
+        }
+        Ok(commit)
+    }
+
+    /// Deletes `branch` only while it still points at `commit`, so a branch moved meanwhile is kept.
+    pub fn delete_branch_at(&self, dir: &Path, branch: &str, commit: &str) -> Result<(), GitError> {
+        let reference = format!("refs/heads/{branch}");
+        self.run_mutation(Some(dir), ["update-ref", "-d", reference.as_str(), commit])?
+            .require_success()
+    }
+
     /// The short name of the branch checked out in `dir`; `None` when HEAD is detached.
     pub(crate) fn current_branch(&self, dir: &Path) -> Result<Option<String>, GitError> {
         let captured = self.run(Some(dir), ["symbolic-ref", "-q", "HEAD"])?;
@@ -144,6 +229,17 @@ impl Git {
             Some(0) => Ok(Some(captured.text()?.trim_end().to_owned())),
             Some(1) => Ok(None),
             _ => Err(captured.failure()),
+        }
+    }
+
+    fn require_branch(&self, dir: &Path, branch: &str) -> Result<(), BranchError> {
+        if self.branch_exists(dir, branch)? {
+            Ok(())
+        } else {
+            Err(refused(
+                codes::BRANCH_NOT_FOUND,
+                format!("branch `{branch}` does not exist"),
+            ))
         }
     }
 
