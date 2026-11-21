@@ -63,9 +63,9 @@ fn knob_left(checked: bool) -> f32 {
 /// gets its own animation id, so it moves once and is then still (handoff 2.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToggleMotion {
-    from: bool,
-    to: bool,
-    changes: usize,
+    pub(crate) from: bool,
+    pub(crate) to: bool,
+    pub(crate) changes: usize,
 }
 
 impl ToggleMotion {
@@ -145,7 +145,11 @@ fn paint(checked: bool, visual: Visual, p: &Palette) -> Paint {
 }
 
 /// A line under the switch: helper text, or the error with its glyph (Switch.md, error).
-fn helper_line(text: SharedString, colour: Color, glyph: Option<IconName>) -> impl IntoElement {
+pub(crate) fn helper_line(
+    text: SharedString,
+    colour: Color,
+    glyph: Option<IconName>,
+) -> impl IntoElement {
     div()
         .flex()
         .items_center()
