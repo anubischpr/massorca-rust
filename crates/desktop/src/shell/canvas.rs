@@ -1,10 +1,13 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::settings::{self, SettingsFrame};
+use super::setup;
+use super::start_page::{self, StartFrame};
 use super::teams;
 use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
-use crate::model::navigation::Mode;
+use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
@@ -21,9 +24,17 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Canvas: the Conversation and the inline regions, with an open overlay on top (D-SH-01).
+/// What the full pages and the start page draw from, gathered by the shell for one frame.
+pub(super) struct PageFrames<'a> {
+    pub settings: SettingsFrame<'a>,
+    pub start: Option<StartFrame>,
+    pub setup_rows: Vec<crate::model::setup::SetupRow>,
+}
+
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
+    pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -42,7 +53,7 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, window, cx, &theme))
+        .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -56,10 +67,30 @@ pub(super) fn canvas(
 fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
+    pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
-) -> impl IntoElement {
+) -> AnyElement {
+    // The Settings page fills the Canvas, so it is not centred in a box.
+    if model.canvas() == Canvas::Page(Page::Settings) {
+        return settings::settings_page(pages.settings, window, cx);
+    }
+    if model.canvas() == Canvas::Page(Page::Setup) {
+        return setup::setup_page(&pages.setup_rows, cx);
+    }
+    // The start page is laid out from the top, so it is not centred in a box either.
+    if let Canvas::Workspace(_) = model.canvas() {
+        return match pages.start {
+            Some(frame) => start_page::start_page(frame, cx),
+            None => placeholder(
+                "Workspace",
+                "This workspace is not listed by the service.",
+                theme,
+            )
+            .into_any_element(),
+        };
+    }
     let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
         Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
@@ -87,6 +118,13 @@ fn conversation(
         Canvas::Team(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }
+        // Drawn above: the start page is not centred in the box below.
+        Canvas::Workspace(_) => placeholder(
+            "Workspace",
+            "This workspace is not listed by the service.",
+            theme,
+        )
+        .into_any_element(),
         Canvas::Page(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }
@@ -99,6 +137,7 @@ fn conversation(
         .items_center()
         .justify_center()
         .child(body)
+        .into_any_element()
 }
 
 /// The start page with no session open: the rose logo and the question (A40).
