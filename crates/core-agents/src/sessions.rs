@@ -1,12 +1,17 @@
-//! Agent sessions (decision 0051): the service object that starts runs in terminals, keeps session rows, and reads
-//! each session's execution from its terminal.
+//! Agent sessions (decision 0051): the service object that starts runs in terminals, keeps session rows, reads each
+//! session's execution from its terminal, and keeps each session's status (0052, 0053).
 //!
 //! Calls block (store, process spawn), so the service runs them on its blocking pool.
+//!
+//! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
+//! row, and handed to the change listener in that same order.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::thread;
+use std::time::Duration;
 
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
@@ -18,7 +23,8 @@ use massorca_core_terminal::{
 };
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
-    Activity, AgentKinds, AgentSession, AgentStartParams, Execution,
+    Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams, Execution,
+    MAX_HOOK_PAYLOAD_BYTES,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -30,6 +36,22 @@ use crate::catalog::Catalog;
 use crate::launch::{self, LaunchError, LaunchInput, Run};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
+use crate::status::{self, HookRules};
+
+/// How often the terminals of live runs are checked for an exit (0052).
+pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// One applied status change, in the order the store applied it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// The session's full record after the change.
+    Updated(Box<AgentSession>),
+    /// The session was forgotten; its id.
+    Forgotten(String),
+}
+
+/// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
+pub type Listener = Box<dyn Fn(Change) + Send + Sync>;
 
 /// Shortest id prefix a session selector may be.
 pub const MIN_SELECTOR_PREFIX: usize = 8;
@@ -154,24 +176,52 @@ impl fmt::Debug for Agents {
 
 struct Inner {
     config: AgentsConfig,
-    /// Session id to the current run's hook token (0053). Held in memory only.
-    tokens: Mutex<HashMap<String, String>>,
+    /// The status store's lock and its live runs: session id to the run's hook token and rules (0053). The token is
+    /// held in memory only.
+    status: Mutex<LiveRuns>,
+    listener: OnceLock<Listener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
 }
+
+/// A run whose exit the service has not seen yet.
+struct LiveRun {
+    token: String,
+    rules: HookRules,
+}
+
+type LiveRuns = HashMap<String, LiveRun>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Agents {
+    /// The service, with its exit sweep running every [`SWEEP_INTERVAL`] for as long as the service exists.
     pub fn new(config: AgentsConfig) -> Self {
-        Self {
+        let agents = Self {
             inner: Arc::new(Inner {
                 config,
-                tokens: Mutex::new(HashMap::new()),
+                status: Mutex::new(HashMap::new()),
+                listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
             }),
+        };
+        let weak = Arc::downgrade(&agents.inner);
+        let _ = thread::Builder::new()
+            .name("agent-status-sweep".to_owned())
+            .spawn(move || sweep_loop(&weak));
+        agents
+    }
+
+    /// Sets the receiver of every status change. Only the first call takes effect.
+    pub fn set_listener(&self, listener: Listener) {
+        let _ = self.inner.listener.set(listener);
+    }
+
+    fn notify(&self, change: Change) {
+        if let Some(listener) = self.inner.listener.get() {
+            listener(change);
         }
     }
 
@@ -300,8 +350,85 @@ impl Agents {
             remove_dir(&run_dir);
             return Err(error.into());
         }
-        lock(&self.inner.tokens).insert(session_id, token);
-        self.view(row)
+        let mut live = lock(&self.inner.status);
+        live.insert(
+            session_id,
+            LiveRun {
+                token,
+                rules: HookRules::of(&decl),
+            },
+        );
+        let session = self.view_with(&mut live, row)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(session)
+    }
+
+    /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
+    /// `agent.hook_refused` and changes nothing; an event the kind does not map, or maps to `ignore`, changes nothing.
+    pub fn hook(&self, params: &AgentHookParams) -> Result<(), AgentError> {
+        if params
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.len() > MAX_HOOK_PAYLOAD_BYTES)
+        {
+            return Err(AgentError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("a hook payload holds at most {MAX_HOOK_PAYLOAD_BYTES} bytes"),
+            ));
+        }
+        let mut live = lock(&self.inner.status);
+        let rules = match live.get(&params.session) {
+            Some(run) if tokens_match(&run.token, &params.token) => run.rules.clone(),
+            _ => {
+                return Err(AgentError::new(
+                    codes::AGENT_HOOK_REFUSED,
+                    "the report does not match a live run of this session",
+                ));
+            }
+        };
+        let Some(report) =
+            status::report(&rules, &params.event, params.payload.as_deref(), now_ms())
+        else {
+            return Ok(());
+        };
+        let mut row = self.reload(&params.session)?;
+        let result = if report.activity.state == "done" {
+            report.result
+        } else {
+            row.result.take()
+        };
+        let learned = report.learned_ref.filter(|_| row.agent_ref.is_none());
+        self.store().set_agent_session_status(
+            &row.id,
+            Some(&report.activity),
+            result.as_deref(),
+            learned.as_deref(),
+        )?;
+        row.activity = Some(report.activity);
+        row.result = result;
+        if row.agent_ref.is_none() {
+            row.agent_ref = learned;
+        }
+        let session = self.view_with(&mut live, row)?;
+        self.notify(Change::Updated(Box::new(session)));
+        Ok(())
+    }
+
+    /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports.
+    pub fn sweep(&self) -> Result<(), AgentError> {
+        let mut live = lock(&self.inner.status);
+        let ids: Vec<String> = live.keys().cloned().collect();
+        for id in ids {
+            match self.store().get_agent_session(&id)? {
+                Some(row) => {
+                    self.view_with(&mut live, row)?;
+                }
+                None => {
+                    live.remove(&id);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Sessions newest first, optionally only those of one workspace (a selector).
@@ -315,6 +442,11 @@ impl Agents {
             .into_iter()
             .map(|row| self.view(row))
             .collect()
+    }
+
+    /// The id of a workspace, by id, name or path.
+    pub fn workspace_id(&self, selector: &str) -> Result<String, AgentError> {
+        Ok(self.inner.config.workspaces.show_workspace(selector)?.id)
     }
 
     /// One session, by id or by a unique id prefix of at least [`MIN_SELECTOR_PREFIX`] characters.
@@ -333,8 +465,11 @@ impl Agents {
             match self.inner.config.terminals.kill(terminal, force) {
                 Ok(info) => {
                     if let Some(exit) = info.exit {
-                        self.store()
-                            .set_agent_session_exit(&row.id, &run_exit_of(&exit))?;
+                        let mut live = lock(&self.inner.status);
+                        let mut row = self.reload(&row.id)?;
+                        if row.exit.is_none() {
+                            self.record_exit(&mut live, &mut row, run_exit_of(&exit))?;
+                        }
                     }
                 }
                 Err(TerminalError::NotFound) => {}
@@ -348,7 +483,8 @@ impl Agents {
     /// Deletes the record of a session whose run has ended, with its terminal and generated files.
     pub fn forget(&self, selector: &str) -> Result<AgentSession, AgentError> {
         let row = self.resolve(selector)?;
-        let session = self.view(row)?;
+        let mut live = lock(&self.inner.status);
+        let session = self.view_with(&mut live, row)?;
         if session.execution.state != TerminalState::Exited {
             return Err(AgentError::new(
                 codes::AGENT_BUSY,
@@ -360,14 +496,29 @@ impl Agents {
             let _ = self.inner.config.terminals.close(terminal);
         }
         remove_dir(&paths::run_dir(self.profile_dir(), &session.id));
-        lock(&self.inner.tokens).remove(&session.id);
+        live.remove(&session.id);
+        self.notify(Change::Forgotten(session.id.clone()));
         Ok(session)
     }
 
     /// Marks every session whose run was live when the service last stopped as exited with reason `service_stopped`
     /// (0051). Called once at service start, before any run exists. Returns how many sessions changed.
+    /// A run that was `working` or `waiting` then is `done` with outcome `interrupted` (0052).
     pub fn mark_stale_on_startup(&self) -> Result<u64, AgentError> {
-        Ok(self.store().mark_agent_runs_service_stopped(now_ms())?)
+        let at = now_ms();
+        for row in self.store().list_agent_sessions(None)? {
+            if row.exit.is_none()
+                && let Some(activity) = status::on_exit(row.activity.as_ref(), at)
+            {
+                self.store().set_agent_session_status(
+                    &row.id,
+                    Some(&activity),
+                    row.result.as_deref(),
+                    None,
+                )?;
+            }
+        }
+        Ok(self.store().mark_agent_runs_service_stopped(at)?)
     }
 
     fn startable_kind(&self, id: &str) -> Result<(crate::KindDecl, PathBuf), AgentError> {
@@ -433,55 +584,113 @@ impl Agents {
         })
     }
 
+    fn view(&self, row: AgentSessionRow) -> Result<AgentSession, AgentError> {
+        let mut live = lock(&self.inner.status);
+        self.view_with(&mut live, row)
+    }
+
     /// The record of a row, with execution read from its terminal now. An end the terminal reports, or a terminal
-    /// that is gone without one, is written to the row, so it survives the terminal.
-    fn view(&self, mut row: AgentSessionRow) -> Result<AgentSession, AgentError> {
+    /// that is gone without one, is applied as a status change, so it survives the terminal.
+    fn view_with(
+        &self,
+        live: &mut LiveRuns,
+        mut row: AgentSessionRow,
+    ) -> Result<AgentSession, AgentError> {
         let execution = match (&row.exit, &row.terminal_id) {
-            (Some(exit), _) => exited(exit),
+            (Some(exit), _) => {
+                live.remove(&row.id);
+                exited(exit)
+            }
             (None, None) => Execution {
                 state: TerminalState::Exited,
                 exit: None,
             },
             (None, Some(terminal)) => match self.inner.config.terminals.get(terminal) {
                 Ok(info) => match info.state {
-                    CoreState::Live => live(TerminalState::Live),
-                    CoreState::Unverifiable => live(TerminalState::Unverifiable),
+                    CoreState::Live => running(TerminalState::Live),
+                    CoreState::Unverifiable => running(TerminalState::Unverifiable),
                     CoreState::Exited => {
                         let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
-                        self.record_exit(&mut row, exit)?
+                        self.record_exit(live, &mut row, exit)?
                     }
                 },
-                Err(TerminalError::NotFound) => self.record_exit(&mut row, gone())?,
+                Err(TerminalError::NotFound) => self.record_exit(live, &mut row, gone())?,
                 Err(error) => return Err(error.into()),
             },
         };
-        Ok(AgentSession {
-            id: row.id,
-            kind: row.kind,
-            workspace_id: row.workspace_id,
-            title: row.title,
-            read_only: row.read_only,
-            parent_id: row.parent_id,
-            brought_back_at_ms: row.brought_back_at,
-            agent_ref: row.agent_ref,
-            terminal_id: row.terminal_id,
-            created_at_ms: row.created_at,
-            execution,
-            activity: row.activity.as_ref().and_then(activity_of),
-            result: row.result,
-        })
+        Ok(record(row, execution))
     }
 
+    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once.
     fn record_exit(
         &self,
+        live: &mut LiveRuns,
         row: &mut AgentSessionRow,
         exit: RunExit,
     ) -> Result<Execution, AgentError> {
-        self.store().set_agent_session_exit(&row.id, &exit)?;
-        lock(&self.inner.tokens).remove(&row.id);
+        let changed = self.store().set_agent_session_exit(&row.id, &exit)?;
+        live.remove(&row.id);
+        if changed && let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+            self.store().set_agent_session_status(
+                &row.id,
+                Some(&activity),
+                row.result.as_deref(),
+                None,
+            )?;
+            row.activity = Some(activity);
+        }
         let execution = exited(&exit);
         row.exit = Some(exit);
+        if changed {
+            self.notify(Change::Updated(Box::new(record(
+                row.clone(),
+                execution.clone(),
+            ))));
+        }
         Ok(execution)
+    }
+}
+
+/// The wire record of a row with its execution.
+fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
+    AgentSession {
+        id: row.id,
+        kind: row.kind,
+        workspace_id: row.workspace_id,
+        title: row.title,
+        read_only: row.read_only,
+        parent_id: row.parent_id,
+        brought_back_at_ms: row.brought_back_at,
+        agent_ref: row.agent_ref,
+        terminal_id: row.terminal_id,
+        created_at_ms: row.created_at,
+        execution,
+        activity: row.activity.as_ref().and_then(activity_of),
+        result: row.result,
+    }
+}
+
+/// Compares two tokens without stopping at the first difference.
+fn tokens_match(expected: &str, given: &str) -> bool {
+    expected.len() == given.len()
+        && expected
+            .bytes()
+            .zip(given.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+/// Sweeps every [`SWEEP_INTERVAL`] until the service is gone.
+fn sweep_loop(service: &Weak<Inner>) {
+    loop {
+        thread::sleep(SWEEP_INTERVAL);
+        let Some(inner) = service.upgrade() else {
+            return;
+        };
+        let agents = Agents { inner };
+        if !lock(&agents.inner.status).is_empty() {
+            let _ = agents.sweep();
+        }
     }
 }
 
@@ -508,7 +717,7 @@ fn remove_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-fn live(state: TerminalState) -> Execution {
+fn running(state: TerminalState) -> Execution {
     Execution { state, exit: None }
 }
 
