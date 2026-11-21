@@ -51,9 +51,12 @@ rendered snapshot on reattach rather than a raw replay.
   answers `ESC [ 6 n` from the model's cursor. ConPTY sends that query when a
   terminal starts and renders nothing until it is answered; an attached
   client's emulator answers it instead (TERM-15). A query that arrives while
-  a client is attached is held until a client's reply comes through input;
-  any still held when the last client detaches are answered then, so a
-  client that never replies (a one-off screen read) cannot stall the shell.
+  a client is attached is held until a client's reply comes through input.
+  The service answers a held query itself when another client attaches (its
+  snapshot cannot show the query) and when every client that received it has
+  detached, so a client that stalls or never replies cannot stall the shell.
+  A client's late reply to a query the service already answered is dropped:
+  the shell would read it as typed input.
 - **No disk history in Phase 2.** Nothing is written to disk: no checkpoints,
   no output log, no cold restore (TERM-08, TERM-09 are later). Terminal
   output is never logged.
