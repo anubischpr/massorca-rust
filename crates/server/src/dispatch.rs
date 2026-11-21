@@ -11,7 +11,7 @@ use crate::abort_guard::AbortOnDrop;
 use crate::activity::Activity;
 use crate::context::RequestCtx;
 use crate::method::{Handler, StreamSource, encode};
-use crate::permission::{Principal, authorize};
+use crate::permission::authorize;
 use crate::session::Session;
 use crate::streams::forward;
 
@@ -41,9 +41,10 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
     }
 
     let ctx = RequestCtx {
-        principal: Principal::Owner,
+        principal: session.principal,
         state: Arc::clone(&session.state),
         connection_id: session.connection_id.clone(),
+        client_capabilities: Arc::clone(&session.client_capabilities),
     };
     if let Err(error) = authorize(&ctx.principal, entry.value.permission) {
         return reply(&session, id, Err(error)).await;

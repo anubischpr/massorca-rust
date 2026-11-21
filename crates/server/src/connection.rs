@@ -41,6 +41,8 @@ pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: Shut
                 state,
                 connection_id: negotiated.connection_id,
                 capabilities: negotiated.capabilities,
+                client_capabilities: Arc::new(negotiated.client_capabilities),
+                principal: negotiated.principal,
                 outbound: outbound.clone(),
                 streams: StreamTable::default(),
             });

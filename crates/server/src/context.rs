@@ -1,5 +1,6 @@
 //! The shared state of a running service, and the per-request context that handlers receive.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use massorca_core_store::Store;
@@ -44,4 +45,6 @@ pub struct RequestCtx {
     pub principal: Principal,
     pub state: Arc<AppState>,
     pub connection_id: String,
+    /// The capabilities the client listed in its `hello`. The service does not act on them yet.
+    pub client_capabilities: Arc<HashSet<String>>,
 }

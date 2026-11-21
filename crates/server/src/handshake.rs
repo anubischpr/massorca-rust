@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::context::AppState;
+use crate::permission::Principal;
 
 /// How long a client may take to send its first frame.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -25,7 +26,12 @@ const SUPPORTED: ProtocolRange = ProtocolRange {
 /// What a connection agreed in its handshake.
 pub(crate) struct Negotiated {
     pub(crate) connection_id: String,
+    /// The capabilities the service offered in `welcome`; a method of any other capability is refused.
     pub(crate) capabilities: HashSet<String>,
+    /// The capabilities the client listed in `hello`. Recorded for handlers; no behaviour depends on them yet.
+    pub(crate) client_capabilities: HashSet<String>,
+    /// Who the connection acts as. A local connection acts as the owner of the profile.
+    pub(crate) principal: Principal,
 }
 
 /// Answers the first frame. `None` closes the connection; a refusal, when one is due, is already queued.
@@ -47,7 +53,12 @@ pub(crate) async fn accept(
             return None;
         }
     };
-    let Message::Hello { protocol, .. } = first else {
+    let Message::Hello {
+        protocol,
+        capabilities: offered,
+        ..
+    } = first
+    else {
         refuse(
             outbound,
             ErrorBody::new(codes::PROTOCOL_HANDSHAKE, "the first message must be hello"),
@@ -76,6 +87,8 @@ pub(crate) async fn accept(
     Some(Negotiated {
         connection_id,
         capabilities: capabilities.into_iter().collect(),
+        client_capabilities: offered.into_iter().collect(),
+        principal: Principal::Owner,
     })
 }
 

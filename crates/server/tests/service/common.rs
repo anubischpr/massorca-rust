@@ -159,6 +159,22 @@ pub fn hello() -> Message {
     })
 }
 
+/// A `hello` offering the one protocol version this build speaks, and the listed capabilities.
+pub fn hello_offering(capabilities: &[&str]) -> Message {
+    Message::Hello {
+        protocol: ProtocolRange {
+            min: MIN_PROTOCOL_VERSION,
+            max: PROTOCOL_VERSION,
+        },
+        client: PeerInfo {
+            name: "raw-test-client".to_owned(),
+            version: "0.0.0-test".to_owned(),
+        },
+        capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
+        auth: None,
+    }
+}
+
 pub fn request(id: u64, method: &str, params: Value) -> Message {
     Message::Request {
         id,
