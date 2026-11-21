@@ -854,7 +854,10 @@ impl Render for TextField {
         } else {
             Role::TextInput
         };
-        let name = self.label.clone();
+        // A search box has no visible label: its placeholder names it.
+        let name = self.label.clone().or_else(|| {
+            (self.search && !self.placeholder.is_empty()).then(|| self.placeholder.clone())
+        });
         let description = self.error.clone().or_else(|| self.helper.clone());
         let placeholder = self.placeholder.clone();
         let value = SharedString::from(self.text().to_owned());
@@ -1590,5 +1593,22 @@ mod a11y_tests {
     fn a_search_field_is_a_searchbox(cx: &mut TestAppContext) {
         let node = view(cx, |cx| TextField::new(cx).search()).expect("the field is reported");
         assert_eq!(node.role(), Role::SearchInput);
+    }
+}
+
+#[cfg(test)]
+mod search_name_tests {
+    use super::*;
+    use crate::a11y::probe::view;
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_search_field_is_named_by_its_placeholder(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| {
+            TextField::new(cx).placeholder("Search files").search()
+        })
+        .expect("the field is reported");
+        assert_eq!(node.role(), Role::SearchInput);
+        assert_eq!(node.label(), Some("Search files"));
     }
 }
