@@ -3,6 +3,7 @@
 //! Paths are workspace-relative, UTF-8, with `/` separators.
 
 pub mod diff;
+pub mod index;
 pub mod log;
 pub mod status;
 
