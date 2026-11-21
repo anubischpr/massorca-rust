@@ -27,7 +27,7 @@ pub use branch::BranchError;
 pub use classify::failure_code;
 pub use commit::{CommitError, CommitRequest};
 pub use error::GitError;
-pub use git::{DEFAULT_TIMEOUT, Git};
+pub use git::{DEFAULT_TIMEOUT, Git, redact_urls};
 pub use index::{DiscardError, DiscardWaivers, PathSet};
 pub use log::LogCursor;
 pub use repository::WorktreeChanges;
