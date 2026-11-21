@@ -8,6 +8,8 @@ mod config;
 mod core_methods;
 mod events;
 mod frames;
+mod git_fixture;
+mod git_status;
 mod handshake;
 mod lifecycle;
 mod projects;
