@@ -10,6 +10,8 @@ mod sidebar_rows;
 mod status_bar;
 mod title_bar;
 mod tooltip;
+mod workspace_dialog_views;
+mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
@@ -26,11 +28,13 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
     Subscription, WeakEntity, Window, div, prelude::*,
 };
+use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
 use std::time::Instant;
+use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
 #[cfg(test)]
@@ -53,13 +57,14 @@ pub struct Shell {
     /// The control that had focus when the palette opened; focus returns to it.
     palette_restore: Option<FocusHandle>,
     palette_events: Option<Subscription>,
-    /// What the Sidebar, status bar and notice derive from (decision 0028).
-    _store: Entity<ServiceStore>,
+    /// What the Sidebar, status bar and dialogs derive from (decision 0028).
+    store: Entity<ServiceStore>,
     /// The way to ask the service for something. None on sample data.
     service: Option<ServiceHandle>,
     /// Keeps the bridge's runtime alive for as long as the shell lives.
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
+    dialogs: WorkspaceDialogs,
 }
 
 impl Shell {
@@ -109,10 +114,11 @@ impl Shell {
             palette_input: None,
             palette_restore: None,
             palette_events: None,
-            _store: store,
+            store,
             service,
             _bridge: bridge,
             _store_changes: store_changes,
+            dialogs: WorkspaceDialogs::default(),
         }
     }
 
@@ -276,6 +282,22 @@ impl Render for Shell {
             (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
             _ => None,
         };
+        let projects = self.store.read(cx).state().projects.clone();
+        let create = self
+            .dialogs
+            .create
+            .as_ref()
+            .map(|dialog| workspace_dialog_views::create_dialog(dialog, &projects, &shell, cx));
+        let remove = self
+            .dialogs
+            .remove
+            .as_ref()
+            .map(|flow| workspace_dialog_views::remove_dialog(flow, &shell, cx));
+        let menu = self
+            .dialogs
+            .menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         div()
             .size_full()
             .flex()
@@ -319,5 +341,8 @@ impl Render for Shell {
                     .child(body),
             )
             .when_some(palette, |el, palette| el.child(palette))
+            .when_some(create, |el, dialog| el.child(dialog))
+            .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(menu, |el, menu| el.child(menu))
     }
 }

@@ -59,11 +59,11 @@ pub(super) fn sidebar(
     };
     match model.sidebar() {
         SidebarContent::Workspaces { nav, tree } => {
-            let column = column.child(create_button()).child(search.clone());
+            let column = column.child(create_button(&shell)).child(search.clone());
             let column = nav_rows(column, &nav, "nav", &shell, window, cx);
             column
                 .child(projects_header(&theme))
-                .child(tree_list(&tree, window, cx, &theme))
+                .child(tree_list(&tree, &shell, window, cx, &theme))
                 .child(footer())
         }
         SidebarContent::BotTeams { rows } => nav_rows(column, &rows, "team", &shell, window, cx),
@@ -95,11 +95,15 @@ fn row_focus(window: &mut Window, cx: &mut App, key: String) -> FocusHandle {
         .clone()
 }
 
-fn create_button() -> impl IntoElement {
+fn create_button(shell: &gpui::WeakEntity<Shell>) -> impl IntoElement {
+    let shell = shell.clone();
     Button::new("sidebar-create", "Create")
         .variant(ButtonVariant::Primary)
         .size(ButtonSize::Default)
         .leading_icon(IconName::Plus)
+        .on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_create(window, cx));
+        })
 }
 
 fn projects_header(theme: &Theme) -> impl IntoElement {
@@ -154,7 +158,13 @@ fn header_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
 }
 
 /// The project tree, scrollable on its own. Empty, it says so (A10).
-fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme) -> Stateful<Div> {
+fn tree_list(
+    tree: &[TreeRow],
+    shell: &gpui::WeakEntity<Shell>,
+    window: &mut Window,
+    cx: &mut App,
+    theme: &Theme,
+) -> Stateful<Div> {
     let mut list = div()
         .id("sidebar-tree")
         .flex_1()
@@ -175,7 +185,7 @@ fn tree_list(tree: &[TreeRow], window: &mut Window, cx: &mut App, theme: &Theme)
     }
     for (index, row) in tree.iter().enumerate() {
         let focus = row_focus(window, cx, format!("tree-{index}"));
-        list = list.child(tree_row(row, index, &focus));
+        list = list.child(tree_row(row, index, &focus, shell));
     }
     list
 }
