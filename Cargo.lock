@@ -3418,6 +3418,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "massorca-profile",
  "massorca-protocol",
  "rcgen",
  "ring",
@@ -3429,6 +3430,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
  "x509-parser",
 ]
 
@@ -3481,6 +3483,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
