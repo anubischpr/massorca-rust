@@ -2,12 +2,30 @@
 //!
 //! `FileTreeState` holds the rules without a window: the tree built from a flat listing,
 //! the folders the user opened, the name filter and its matches, the cursor and the open
-//! file. Paths use `/` and carry no leading slash.
+//! file. `FileTreeView` draws them: the search field and the rows. Paths use `/` and carry no leading slash.
 
-use crate::components::list_row::{ListMove, move_index};
-use gpui::SharedString;
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::list_row::{
+    ListMove, RowDensity, RowLines, TREE_INDENT, list_move, move_index, row_height,
+};
+use crate::components::search_field::{SearchField, SearchFieldEvent};
+use crate::components::tooltip::{Tooltip, tooltip_view};
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::Surface;
+use crate::theme::{ActiveTheme, TextStyled, Theme};
+use crate::tokens::{
+    BORDER_WIDTH_THICK, Color, Palette, RADIUS_MD, RADIUS_XS, SIZE_ICON_SM, SIZE_ICON_XS, SPACE_1,
+    SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_LABEL,
+};
+use gpui::{
+    AnyElement, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, HighlightStyle,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, Role,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, StyledText, Subscription,
+    UniformListScrollHandle, Window, div, px, uniform_list,
+};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::ops::Range;
 
 /// Git status of a file. Renamed and conflicted files need a letter and a token that the
@@ -515,6 +533,496 @@ impl FileTreeState {
 
     fn clamp_cursor(&mut self) {
         self.cursor = self.cursor.min(self.visible().len().saturating_sub(1));
+    }
+}
+
+/// The icon before a file name: the agent mark for CLAUDE.md and AGENTS.md, a typed badge
+/// for the file types with a colour, and a grey document for every other file (A46 to A48).
+fn file_glyph(name: &str, p: &Palette) -> AnyElement {
+    let agent = match name {
+        "CLAUDE.md" => Some(AgentKind::Claude),
+        "AGENTS.md" => Some(AgentKind::Codex),
+        _ => None,
+    };
+    if let Some(kind) = agent {
+        return AgentIcon::new(kind)
+            .size(AgentIconSize::Small)
+            .into_any_element();
+    }
+    let badge = name
+        .rsplit_once('.')
+        .and_then(|(_, extension)| typed_badge(&extension.to_ascii_lowercase()));
+    match badge {
+        Some(badge) => {
+            let ink = colour(badge.ink);
+            let tile = div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_none()
+                .min_w(px(SIZE_ICON_SM))
+                .h(px(SIZE_ICON_SM))
+                .px(px(SPACE_1))
+                .rounded(px(RADIUS_XS))
+                .text_style(TYPE_CAPTION)
+                .text_color(ink)
+                .child(badge.label);
+            match badge.fill {
+                Some(fill) => tile.bg(colour(fill)),
+                None => tile.border_1().border_color(ink),
+            }
+            .into_any_element()
+        }
+        None => div()
+            .flex_none()
+            .w(px(SIZE_ICON_XS))
+            .h(px(SIZE_ICON_SM))
+            .rounded(px(RADIUS_XS))
+            .bg(p.text.tertiary)
+            .into_any_element(),
+    }
+}
+
+/// A typed file's badge: its short name, its colour and an optional fill behind it.
+struct TypedBadge {
+    label: &'static str,
+    ink: u32,
+    fill: Option<u32>,
+}
+
+/// Representative colours of the file types (A47). They are literal values, not tokens yet
+/// (decision 0027).
+fn typed_badge(extension: &str) -> Option<TypedBadge> {
+    let (label, ink, fill) = match extension {
+        "ts" => ("TS", 0x3178c6, None),
+        "tsx" => ("TSX", 0x61dafb, None),
+        "js" => ("JS", 0xf7df1e, None),
+        "jsx" => ("JSX", 0x61dafb, None),
+        "rs" => ("RS", 0xdea584, None),
+        "py" => ("PY", 0xffd43b, Some(0x3776ab)),
+        "css" => ("CSS", 0x663399, None),
+        "json" => ("{}", 0xcbcb41, None),
+        _ => return None,
+    };
+    Some(TypedBadge { label, ink, fill })
+}
+
+fn colour(rgb: u32) -> Color {
+    Color::rgba8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 1.0)
+}
+
+/// The git letter's colour (FileTree.md, Anatomy).
+fn git_ink(git: GitStatus, p: &Palette) -> Color {
+    match git {
+        GitStatus::Modified => p.status.warning_fg,
+        GitStatus::Added => p.diff.add_fg,
+        GitStatus::Deleted => p.diff.remove_fg,
+        GitStatus::Untracked => p.status.info_fg,
+    }
+}
+
+/// What a file tree reports to its owner. The tree has already moved its cursor, opened or
+/// closed the folder, or made the file the open one by the time the owner hears of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileTreeEvent {
+    /// A file was opened: Enter, a click, or a content match.
+    Opened(SharedString),
+    /// A folder was opened or closed.
+    Toggled { path: SharedString, expanded: bool },
+    /// The query changed.
+    Query(SharedString),
+    /// A row asked for its menu: a right click, Shift+F10 or the Menu key.
+    ContextMenu(SharedString),
+}
+
+/// Fully transparent: no fill at rest, and no focus ring unless the row has the cursor.
+const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
+
+/// The file tree: a search field above the rows. The
+/// entity owns its [`FileTreeState`] and emits [`FileTreeEvent`]s.
+pub struct FileTreeView {
+    id: ElementId,
+    label: SharedString,
+    state: FileTreeState,
+    density: RowDensity,
+    surface: Surface,
+    search: Entity<SearchField>,
+    focus: FocusHandle,
+    scroll: UniformListScrollHandle,
+    _search_events: Subscription,
+}
+
+impl EventEmitter<FileTreeEvent> for FileTreeView {}
+
+impl fmt::Debug for FileTreeView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileTreeView")
+            .field("id", &self.id)
+            .field("scope", &self.state.scope())
+            .field("cursor", &self.state.cursor())
+            .finish_non_exhaustive()
+    }
+}
+
+impl FileTreeView {
+    /// `label` is the tree's accessible name, "Files" or "Team files".
+    pub fn new(
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        state: FileTreeState,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let query = state.query().to_owned();
+        let search = cx.new(|cx| SearchField::with_query("Search files", &query, cx));
+        let search_events = cx.subscribe(&search, |this, _, event: &SearchFieldEvent, cx| {
+            this.on_search(event, cx);
+        });
+        Self {
+            id: id.into(),
+            label: label.into(),
+            state,
+            density: RowDensity::default(),
+            surface: Surface::default(),
+            search,
+            focus: cx.focus_handle(),
+            scroll: UniformListScrollHandle::new(),
+            _search_events: search_events,
+        }
+    }
+
+    pub fn density(mut self, density: RowDensity) -> Self {
+        self.density = density;
+        self
+    }
+
+    /// The surface the rows sit on: the canvas by default, the frame in the Project sidebar.
+    pub fn surface(mut self, surface: Surface) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    pub fn state(&self) -> &FileTreeState {
+        &self.state
+    }
+
+    /// The keyboard focus of the tree, which is one Tab stop after the search field.
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    /// The search field, for an owner that sets its query.
+    pub fn search_field(&self) -> Entity<SearchField> {
+        self.search.clone()
+    }
+
+    /// Replaces the listing. Open folders and the open file stay while they still exist.
+    pub fn set_entries(&mut self, entries: Vec<FileEntry>, cx: &mut Context<Self>) {
+        self.state.set_entries(entries);
+        cx.notify();
+    }
+
+    fn on_search(&mut self, event: &SearchFieldEvent, cx: &mut Context<Self>) {
+        if let SearchFieldEvent::Search(query) = event {
+            self.state.set_query(query);
+            cx.emit(FileTreeEvent::Query(query.clone()));
+            cx.notify();
+        }
+    }
+
+    fn move_cursor(&mut self, movement: ListMove, cx: &mut Context<Self>) {
+        self.state.move_cursor(movement);
+        self.reveal_cursor();
+        cx.notify();
+    }
+
+    fn reveal_cursor(&self) {
+        self.scroll
+            .scroll_to_item(self.state.cursor(), ScrollStrategy::Nearest);
+    }
+
+    /// Enter: opens the file under the cursor or opens and closes its folder.
+    fn activate(&mut self, cx: &mut Context<Self>) {
+        match self.state.activate() {
+            Some(TreeActivation::Open(path)) => cx.emit(FileTreeEvent::Opened(path)),
+            Some(TreeActivation::Toggled { path, expanded }) => {
+                cx.emit(FileTreeEvent::Toggled { path, expanded });
+            }
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// A click focuses the row and then acts on it, as Enter does.
+    fn click(&mut self, path: &SharedString, cx: &mut Context<Self>) {
+        self.state.focus_path(path);
+        self.activate(cx);
+    }
+
+    fn context_menu(&mut self, path: &SharedString, cx: &mut Context<Self>) {
+        self.state.focus_path(path);
+        cx.emit(FileTreeEvent::ContextMenu(path.clone()));
+        cx.notify();
+    }
+
+    fn menu_at_cursor(&mut self, cx: &mut Context<Self>) {
+        let cursor = self.state.cursor();
+        if let Some(path) = self.state.visible().get(cursor).map(|row| row.path.clone()) {
+            cx.emit(FileTreeEvent::ContextMenu(path));
+        }
+    }
+
+    /// Tree keys work in the Names scope only.
+    fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.state.scope() == SearchScope::Content {
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        let handled = if let Some(movement) = list_move(key) {
+            self.move_cursor(movement, cx);
+            true
+        } else {
+            match key {
+                "right" | "left" => {
+                    if key == "right" {
+                        self.state.right();
+                    } else {
+                        self.state.left();
+                    }
+                    self.reveal_cursor();
+                    cx.notify();
+                    true
+                }
+                "enter" => {
+                    self.activate(cx);
+                    true
+                }
+                "menu" => {
+                    self.menu_at_cursor(cx);
+                    true
+                }
+                "f10" if modifiers.shift => {
+                    self.menu_at_cursor(cx);
+                    true
+                }
+                _ => self.type_ahead(key, modifiers, cx),
+            }
+        };
+        if handled {
+            cx.stop_propagation();
+        }
+    }
+
+    /// A single letter jumps to the next name that starts with it.
+    fn type_ahead(
+        &mut self,
+        key: &str,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut chars = key.chars();
+        let (Some(letter), None) = (chars.next(), chars.next()) else {
+            return false;
+        };
+        if !letter.is_alphanumeric() || modifiers.control || modifiers.alt || modifiers.platform {
+            return false;
+        }
+        if self.state.type_ahead(letter) {
+            self.reveal_cursor();
+            cx.notify();
+        }
+        true
+    }
+
+    /// The rows of the visible tree.
+    fn list(&self, context: RowContext) -> AnyElement {
+        let rows = self.state.visible();
+        uniform_list((self.id.clone(), "rows"), rows.len(), move |range, _, _| {
+            range
+                .map(|index| render_row(&context, index, &rows[index]))
+                .collect()
+        })
+        .track_scroll(&self.scroll)
+        .flex_1()
+        .min_h_0()
+        .into_any_element()
+    }
+}
+
+/// What every row needs from its tree, captured once per frame.
+#[derive(Clone)]
+struct RowContext {
+    entity: Entity<FileTreeView>,
+    theme: Theme,
+    surface: Surface,
+    height: f32,
+    focused: bool,
+    cursor: usize,
+    active: Option<SharedString>,
+}
+
+fn render_row(context: &RowContext, index: usize, row: &VisibleRow) -> AnyElement {
+    let p = context.theme.palette;
+    let fills = context.surface.fills(&context.theme);
+    let active = context.active.as_ref() == Some(&row.path);
+    let at_cursor = context.focused && context.cursor == index;
+    let hover = if active { fills.selected } else { fills.hover };
+    let ink = if row.ignored {
+        p.text.tertiary
+    } else {
+        p.text.primary
+    };
+    let word = match (row.git, row.ignored) {
+        (Some(git), _) => Some(git.word()),
+        (None, true) => Some("ignored"),
+        (None, false) => None,
+    };
+    let label = match word {
+        Some(word) => format!("{}, {word}", row.name),
+        None => row.name.to_string(),
+    };
+    let highlights = row.matches.iter().map(|range| {
+        (
+            range.clone(),
+            HighlightStyle {
+                background_color: Some(p.r#match.bg.into()),
+                ..Default::default()
+            },
+        )
+    });
+    let (click_entity, click_path) = (context.entity.clone(), row.path.clone());
+    let (menu_entity, menu_path) = (context.entity.clone(), row.path.clone());
+    let mut line = div()
+        .id(("file-row", index))
+        .debug_selector(move || format!("file-row-{index}"))
+        .role(Role::TreeItem)
+        .aria_label(label)
+        .aria_selected(active)
+        .aria_level(row.depth + 1)
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .h(px(context.height))
+        .pl(px(SPACE_2 + row.depth as f32 * TREE_INDENT))
+        .pr(px(SPACE_2))
+        .rounded(px(RADIUS_MD))
+        .border_2()
+        .border_color(if at_cursor { p.border.focus } else { CLEAR })
+        .bg(if active { fills.selected } else { CLEAR })
+        .hover(move |s| s.bg(hover))
+        .active(move |s| s.bg(fills.pressed))
+        .cursor_pointer()
+        .tooltip(tooltip_view(Tooltip::new(row.path.clone())))
+        .on_click(move |_, _, cx| {
+            click_entity.update(cx, |tree, cx| tree.click(&click_path, cx));
+        })
+        .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+            menu_entity.update(cx, |tree, cx| tree.context_menu(&menu_path, cx));
+        });
+    if let Some(open) = row.expanded {
+        line = line.aria_expanded(open);
+    }
+    line = line.child(match row.expanded {
+        Some(open) => Icon::new(if open {
+            IconName::ChevronDown
+        } else {
+            IconName::ChevronRight
+        })
+        .size(IconSize::XSmall)
+        .color(p.text.secondary)
+        .into_any_element(),
+        None => div().flex_none().w(px(SIZE_ICON_XS)).into_any_element(),
+    });
+    line = line.child(if row.is_dir {
+        Icon::new(IconName::Folder)
+            .size(IconSize::Small)
+            .color(p.text.secondary)
+            .into_any_element()
+    } else {
+        file_glyph(&row.name, &p)
+    });
+    line = line.child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(ink)
+            .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
+    );
+    if let Some(git) = row.git {
+        line = line.child(
+            div()
+                .flex_none()
+                .w(px(SIZE_ICON_SM))
+                .flex()
+                .justify_end()
+                .text_style(TYPE_LABEL)
+                .text_color(git_ink(git, &p))
+                .child(git.letter().to_string()),
+        );
+    }
+    if active {
+        line = line.child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(BORDER_WIDTH_THICK))
+                .bg(p.accent.fg),
+        );
+    }
+    line.into_any_element()
+}
+
+impl Render for FileTreeView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let context = RowContext {
+            entity: cx.entity(),
+            theme,
+            surface: self.surface,
+            height: row_height(RowLines::One, self.density),
+            focused: self.focus.is_focused(window),
+            cursor: self.state.cursor(),
+            active: self.state.active().cloned(),
+        };
+
+        let body = self.list(context);
+
+        div()
+            .id(self.id.clone())
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .text_style(TYPE_BODY)
+            .text_color(p.text.primary)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .p(px(SPACE_2))
+                    .child(self.search.clone()),
+            )
+            .child(
+                div()
+                    .id((self.id.clone(), "tree"))
+                    .track_focus(&self.focus)
+                    .tab_stop(true)
+                    .role(Role::Tree)
+                    .aria_label(self.label.clone())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        this.on_key(event, cx);
+                    }))
+                    .child(body),
+            )
     }
 }
 
