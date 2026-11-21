@@ -640,3 +640,153 @@ mod tests {
         assert!(ScrollAxis::Both.supports(Track::Horizontal));
     }
 }
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use gpui::{
+        Context, Entity, Modifiers, MouseButton, Render, TestAppContext, VisualTestContext, div,
+        point, px,
+    };
+
+    /// The viewport's height and the 50 rows that overflow it.
+    const VIEWPORT: f32 = 200.0;
+    const ROWS: usize = 50;
+    const OVERFLOW: f32 = ROWS as f32 * ROW_STEP_PX - VIEWPORT;
+
+    /// Hosts one fixed-size scroll area over 50 rows, and a second control the tests can focus.
+    struct Harness {
+        area: FocusHandle,
+        other: FocusHandle,
+        handle: ScrollHandle,
+        preview: Option<ScrollPreview>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let rows = div().flex().flex_col().children(
+                (0..ROWS).map(|row| div().h(px(ROW_STEP_PX)).child(format!("Row {row}"))),
+            );
+            let mut area = ScrollArea::new("scroll-under-test")
+                .handle(self.handle.clone())
+                .focus_handle(self.area.clone())
+                .child(rows);
+            if let Some(preview) = self.preview {
+                area = area.preview(preview);
+            }
+            div()
+                .flex()
+                .child(div().w(px(240.)).h(px(VIEWPORT)).child(area))
+                .child(
+                    div()
+                        .id("other-control")
+                        .track_focus(&self.other)
+                        .tab_stop(true)
+                        .size(px(10.)),
+                )
+        }
+    }
+
+    /// Opens the harness with the area focused, and returns its handle, its focus and the other control's.
+    fn open(
+        cx: &mut TestAppContext,
+        preview: Option<ScrollPreview>,
+    ) -> (
+        Entity<Harness>,
+        &mut VisualTestContext,
+        ScrollHandle,
+        FocusHandle,
+        FocusHandle,
+    ) {
+        let handle = ScrollHandle::new();
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            area: cx.focus_handle(),
+            other: cx.focus_handle(),
+            handle: handle.clone(),
+            preview,
+        });
+        cx.run_until_parked();
+        let (area, other) = view.read_with(cx, |h, _| (h.area.clone(), h.other.clone()));
+        focus_and_draw(cx, &area);
+        (view, cx, handle, area, other)
+    }
+
+    /// Presses a key, then draws, so the next press sees the bounds of the new frame.
+    fn press(cx: &mut VisualTestContext, key: &str) {
+        press_key(cx, key);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    fn scrolled(handle: &ScrollHandle) -> f32 {
+        -f32::from(handle.offset().y)
+    }
+
+    #[gpui::test]
+    fn keys_scroll_the_area_only_while_it_has_the_focus(cx: &mut TestAppContext) {
+        let (_view, cx, handle, area, other) = open(cx, None);
+        focus_and_draw(cx, &other);
+        press(cx, "down");
+        assert_eq!(scrolled(&handle), 0.0, "another control has the focus");
+        focus_and_draw(cx, &area);
+        press(cx, "down");
+        assert_eq!(scrolled(&handle), ROW_STEP_PX);
+    }
+
+    #[gpui::test]
+    fn page_keys_move_a_viewport_and_home_and_end_reach_the_ends(cx: &mut TestAppContext) {
+        let (_view, cx, handle, _area, _other) = open(cx, None);
+        press(cx, "pagedown");
+        assert_eq!(scrolled(&handle), VIEWPORT);
+        press(cx, "down");
+        assert_eq!(scrolled(&handle), VIEWPORT + ROW_STEP_PX);
+        press(cx, "end");
+        assert_eq!(scrolled(&handle), OVERFLOW);
+        press(cx, "down");
+        assert_eq!(scrolled(&handle), OVERFLOW, "the end stops the scroll");
+        press(cx, "home");
+        assert_eq!(scrolled(&handle), 0.0);
+        press(cx, "pageup");
+        assert_eq!(scrolled(&handle), 0.0, "the top stops it");
+    }
+
+    #[gpui::test]
+    fn dragging_the_thumb_scrolls_the_content_in_proportion(cx: &mut TestAppContext) {
+        let (_view, cx, handle, _area, _other) = open(cx, Some(ScrollPreview::Thumbs));
+        let thumb = cx
+            .debug_bounds("thumb-v")
+            .expect("the thumb is drawn")
+            .center();
+        let length = VIEWPORT * VIEWPORT / (VIEWPORT + OVERFLOW);
+        let half_travel = (VIEWPORT - length) / 2.0;
+        // The first move past the drag threshold starts the drag, so a later move carries it.
+        cx.simulate_mouse_down(thumb, MouseButton::Left, Modifiers::none());
+        for step in [1.0, half_travel / 2.0, half_travel] {
+            cx.simulate_mouse_move(
+                thumb + point(px(0.), px(step)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+        }
+        cx.simulate_mouse_up(
+            thumb + point(px(0.), px(half_travel)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        assert!(
+            (scrolled(&handle) - OVERFLOW / 2.0).abs() < 1.0,
+            "half the travel is half the overflow, got {}",
+            scrolled(&handle)
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_on_the_track_below_the_thumb_pages_down(cx: &mut TestAppContext) {
+        let (_view, cx, handle, _area, _other) = open(cx, Some(ScrollPreview::Thumbs));
+        let track = cx.debug_bounds("track-v").expect("the track is drawn");
+        let below = point(track.center().x, track.bottom() - px(5.));
+        cx.simulate_click(below, Modifiers::none());
+        assert_eq!(scrolled(&handle), VIEWPORT);
+    }
+}
