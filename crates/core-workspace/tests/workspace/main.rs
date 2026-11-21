@@ -6,4 +6,6 @@ mod errors;
 mod fixture;
 mod names;
 mod projects;
+mod read;
 mod rollback;
+mod selectors;
