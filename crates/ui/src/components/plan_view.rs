@@ -7,6 +7,7 @@ use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::empty_state::EmptyState;
 use crate::components::error_state::ErrorState;
+use crate::components::segmented_control::{Segment, SegmentedControl};
 use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
@@ -411,6 +412,7 @@ struct PlanUi {
     scroll: ScrollHandle,
     expanded: HashSet<StepPath>,
     cursor: usize,
+    document: bool,
 }
 
 /// The plan: its header and progress, the steps or the document, and its states (PlanView.md).
@@ -708,6 +710,29 @@ fn loading_body(id: &ElementId, p: &Palette) -> AnyElement {
         .into_any_element()
 }
 
+/// The plan document as plain paragraphs: no Markdown renderer exists yet, so the text is shown as
+/// written, split at blank lines.
+fn document_body(text: &str, p: &Palette) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .px(px(SPACE_3))
+        .py(px(SPACE_3))
+        .children(
+            text.split("\n\n")
+                .map(str::trim)
+                .filter(|paragraph| !paragraph.is_empty())
+                .map(|paragraph| {
+                    div()
+                        .text_style(TYPE_BODY)
+                        .text_color(p.text.primary)
+                        .child(paragraph.to_owned())
+                }),
+        )
+        .into_any_element()
+}
+
 impl RenderOnce for PlanView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = *cx.theme();
@@ -720,19 +745,22 @@ impl RenderOnce for PlanView {
             scroll: ScrollHandle::new(),
             expanded: init.default_expanded(),
             cursor: 0,
+            document: init.steps.is_empty(),
         });
-        let (focus, scroll, expanded, cursor) = {
+        let (focus, scroll, expanded, cursor, document) = {
             let s = state.read(cx);
             (
                 s.focus.clone(),
                 s.scroll.clone(),
                 s.expanded.clone(),
                 s.cursor,
+                s.document,
             )
         };
         let card = self.variant == PlanVariant::Card;
         let interactive = !card;
         let stale = matches!(self.status, PlanStatus::Stale(_));
+        let show_document = plan.document.is_some() && (plan.steps.is_empty() || document) && !card;
         let rows = if card {
             plan.card_rows()
         } else {
@@ -751,6 +779,19 @@ impl RenderOnce for PlanView {
         let handler = self.on_action.clone();
 
         let header = (!card).then(|| {
+            let mode = (!plan.steps.is_empty() && plan.document.is_some()).then(|| {
+                let state = state.clone();
+                SegmentedControl::new(
+                    "plan-mode",
+                    "Plan view",
+                    vec![Segment::text("Steps"), Segment::text("Document")],
+                )
+                .selected(usize::from(show_document))
+                .on_change(move |index, window, cx| {
+                    state.update(cx, |s, _| s.document = index == 1);
+                    window.refresh();
+                })
+            });
             let caption = match &self.status {
                 PlanStatus::Stale(age) => div()
                     .flex()
@@ -804,6 +845,7 @@ impl RenderOnce for PlanView {
                 )
                 .child(progress_track(plan.fraction(), &p))
                 .child(caption)
+                .children(mode)
         });
 
         let empty = plan.steps.is_empty() && plan.document.is_none();
@@ -820,6 +862,9 @@ impl RenderOnce for PlanView {
             PlanStatus::Ready | PlanStatus::Stale(_) if empty => {
                 EmptyState::new("plan-empty", "The agent has not shared a plan yet.")
                     .into_any_element()
+            }
+            PlanStatus::Ready | PlanStatus::Stale(_) if show_document => {
+                document_body(plan.document.as_deref().unwrap_or_default(), &p)
             }
             PlanStatus::Ready | PlanStatus::Stale(_) => {
                 let keys = plan.clone();

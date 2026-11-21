@@ -4,16 +4,25 @@ use super::{Story, variant};
 use crate::components::diff_view::{
     DiffLine, DiffModel, DiffStatus, DiffView, FileDiff, FileStatus, Hunk,
 };
+use crate::components::plan_view::{Plan, PlanStatus, PlanStep, PlanVariant, PlanView, StepStatus};
 use crate::tokens::SPACE_4;
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 use std::ops::Range;
+use std::rc::Rc;
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Diff view",
-        spec: "DiffView.md",
-        render: diff_view,
-    }]
+    vec![
+        Story {
+            name: "Diff view",
+            spec: "DiffView.md",
+            render: diff_view,
+        },
+        Story {
+            name: "Plan view",
+            spec: "PlanView.md",
+            render: plan_view,
+        },
+    ]
 }
 
 /// One file with two changes: 30 unchanged lines hidden before the first, 5 after the second.
@@ -146,6 +155,90 @@ fn diff_view(_: &mut Window, cx: &mut App) -> AnyElement {
                     before: "2.1 MB".into(),
                     after: "2.3 MB".into(),
                 }),
+            ),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn plan_view(_: &mut Window, cx: &mut App) -> AnyElement {
+    let plan = Rc::new(Plan {
+        steps: vec![
+            PlanStep::new("Read the spec", StepStatus::Done),
+            PlanStep::new("Write the parser", StepStatus::InProgress).with_children(vec![
+                PlanStep::new("Tokens", StepStatus::Done),
+                PlanStep::new("Grammar", StepStatus::Pending),
+            ]),
+            PlanStep::new("Write the tests", StepStatus::Pending),
+            PlanStep::new("Publish notes", StepStatus::Skipped),
+            PlanStep::new("Ship", StepStatus::Blocked).blocked_by("Waiting for review"),
+        ],
+        document: Some(
+            "The parser reads the spec in one pass.\n\nTests cover every token kind.".into(),
+        ),
+    });
+    let document_only = Plan {
+        steps: Vec::new(),
+        document: Some("First, read the spec.\n\nThen write the parser.".into()),
+    };
+    let frame = |height: f32, child: PlanView| div().h(px(height)).w_full().child(child);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Tab: progress, the current step with its sub-steps, a blocked step with its reason",
+            frame(
+                360.,
+                PlanView::new("gallery-plan-tab", plan.clone()).updated("Updated 2 min ago"),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Document only: the plan text as paragraphs",
+            frame(200., PlanView::new("gallery-plan-doc", document_only)),
+            cx,
+        ))
+        .child(variant(
+            "Card form: the first rows and an Open plan link",
+            frame(
+                240.,
+                PlanView::new("gallery-plan-card", plan.clone()).variant(PlanVariant::Card),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Loading",
+            frame(
+                160.,
+                PlanView::new("gallery-plan-loading", Plan::default()).status(PlanStatus::Loading),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Empty",
+            frame(
+                120.,
+                PlanView::new("gallery-plan-empty", Plan::default()).status(PlanStatus::Empty),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Failed, with Retry",
+            frame(
+                120.,
+                PlanView::new("gallery-plan-failed", Plan::default())
+                    .status(PlanStatus::Failed("The agent stopped responding.".into())),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Host unreachable: the last plan, dated",
+            frame(
+                300.,
+                PlanView::new("gallery-plan-stale", plan)
+                    .status(PlanStatus::Stale("5 min ago".into())),
             ),
             cx,
         ))
