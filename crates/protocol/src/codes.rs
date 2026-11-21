@@ -50,8 +50,6 @@ pub const TERMINAL_EXITED: &str = "terminal.exited";
 /// The OS error text travels in the error `message`.
 pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
 pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
-/// The client did not negotiate `binary-frames/1`, which `terminal.attach` requires.
-pub const TERMINAL_BINARY_FRAMES_REQUIRED: &str = "terminal.binary_frames_required";
 pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
 pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
 

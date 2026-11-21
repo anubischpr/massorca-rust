@@ -15,9 +15,10 @@ come later and must not need a different stream.
 
 **Capabilities.** `terminals/1` holds the methods. `binary-frames/1` enables
 frame kind `0x02`; the service offers it in `welcome`, and a client lists it
-in `hello` to say it can read it. `terminal.attach` requires both, and fails
-with `terminal.binary_frames_required` otherwise. Every client we ship goes
-through the Rust `client` crate, so one output path is enough.
+in `hello` to say it can read it. `terminal.attach` is a byte-stream method, so
+the dispatcher refuses it with `stream.binary_frames_required` before the
+handler runs when the client did not offer `binary-frames/1`. Every client we
+ship goes through the Rust `client` crate, so one output path is enough.
 
 **Frame kind `0x02`, stream bytes.** Body: kind byte `0x02`, `stream` as u64
 big-endian, then an opaque payload whose meaning belongs to the stream. It is
@@ -58,8 +59,7 @@ the service ends the stream.
 
 **Errors.** `terminal.not_found`, `terminal.exited` (input or resize on an
 exited terminal), `terminal.spawn_failed` (with the OS error in `message`),
-`terminal.input_too_large`, `terminal.binary_frames_required`,
-`terminal.invalid_size`, `terminal.limit_reached` (the live-terminal limit of 0033).
+`terminal.input_too_large`, `terminal.invalid_size`, `terminal.limit_reached` (the live-terminal limit of 0033).
 
 **Evolution.** Everything is additive inside `terminals/1`: new optional
 params (a phone's smaller scrollback, a startup command, a shell kind), new
