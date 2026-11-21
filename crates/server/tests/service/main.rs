@@ -12,3 +12,4 @@ mod handshake;
 mod lifecycle;
 mod projects;
 mod registries;
+mod workspaces;

@@ -31,6 +31,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::EVENTS,
             capabilities::PROJECTS,
             capabilities::SERVICE,
+            capabilities::WORKSPACES,
         ]
     );
     assert!(!welcome.connection_id.is_empty());
