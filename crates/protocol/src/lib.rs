@@ -7,6 +7,7 @@ pub mod codes;
 pub mod frame;
 pub mod message;
 pub mod methods;
+pub mod pairing;
 pub mod version;
 
 pub use frame::{

@@ -4,6 +4,7 @@
 //! (`project`, `workspace`) resolve by id, then exact name, then path.
 
 pub mod config;
+pub mod devices;
 pub mod events;
 pub mod projects;
 pub mod service;

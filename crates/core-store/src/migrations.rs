@@ -14,8 +14,9 @@ pub struct Migration {
 }
 
 /// Schema steps in order. The number applied is the database's `user_version`; shipped steps are never edited.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    sql: r#"
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        sql: r#"
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK(kind IN ('git','folder')),
@@ -48,8 +49,24 @@ CREATE TABLE settings (
     PRIMARY KEY(owner, key)
 );
 "#,
-    foreign_keys_off: false,
-}];
+        foreign_keys_off: false,
+    },
+    Migration {
+        // Paired network devices (decision 0041). Only the hash of a device's public key is kept.
+        sql: r#"
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_pin TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER,
+    revoked_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
+];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.
