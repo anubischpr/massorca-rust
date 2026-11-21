@@ -83,7 +83,19 @@ async fn a_shutdown_request_stops_the_service_and_frees_the_profile() {
         .await
         .expect("wait returns in time")
         .expect("the service stopped cleanly");
-    let restarted = start(home.path(), "default").await;
+    // A pipe with a connected client cannot be taken over, so the client goes first, as a CLI would.
+    drop(client);
+    // Windows releases the pipe a moment after the accept loop ends, so the restart retries until the profile is free.
+    let restarted = timeout(Duration::from_secs(5), async {
+        loop {
+            match Service::start(service_config(home.path(), "default")).await {
+                Ok(running) => break running,
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("the profile is freed in time");
     stop(restarted).await;
 }
 
@@ -191,5 +203,53 @@ async fn service_json_describes_the_service_and_stays_after_shutdown() {
     assert!(
         profile(home.path(), "default").info_path().exists(),
         "service.json stays in place after shutdown"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_profile_directory_and_socket_are_private_to_their_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::common::{profile, start, stop, temp_home};
+
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let profile = profile(home.path(), "default");
+
+    let dir_mode = std::fs::metadata(profile.dir())
+        .expect("the profile directory")
+        .permissions()
+        .mode();
+    let socket_mode = std::fs::metadata(profile.socket_path())
+        .expect("the socket file")
+        .permissions()
+        .mode();
+    assert_eq!(dir_mode & 0o777, 0o700);
+    assert_eq!(socket_mode & 0o777, 0o600);
+    stop(running).await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_squatter_on_the_endpoint_name_stops_the_service_from_starting() {
+    use interprocess::local_socket::ListenerOptions;
+    use massorca_profile::{ensure_dir, local_socket_name};
+    use massorca_server::Service;
+
+    use super::common::{profile, service_config, temp_home};
+
+    let home = temp_home();
+    let profile = profile(home.path(), "default");
+    ensure_dir(&profile).expect("the profile directory exists");
+    let _squatter = ListenerOptions::new()
+        .name(local_socket_name(&profile).expect("the endpoint name"))
+        .create_tokio()
+        .expect("the squatter listens");
+
+    let started = Service::start(service_config(home.path(), "default")).await;
+    assert!(
+        started.is_err(),
+        "a service must not start beside a listener that already holds the endpoint name"
     );
 }

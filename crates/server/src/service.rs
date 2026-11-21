@@ -4,8 +4,12 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use interprocess::local_socket::ListenerOptions;
+use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_store::{Store, now_ms};
+#[cfg(windows)]
+use massorca_profile::owner_only_security_descriptor;
+#[cfg(unix)]
+use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::service::ServiceInfo;
@@ -45,9 +49,7 @@ impl Service {
         instance_lock::remove_stale_socket(&profile)?;
 
         let store = open_store(profile.store_path()).await?;
-        let listener = ListenerOptions::new()
-            .name(local_socket_name(&profile)?)
-            .create_tokio()?;
+        let listener = bind_endpoint(&profile)?;
 
         let registries = Registries::default();
         let registrations = features::register_core(&registries)?;
@@ -130,4 +132,24 @@ impl Drop for RunningService {
     fn drop(&mut self) {
         self.shutdown.shutdown();
     }
+}
+
+/// Binds the endpoint so that only the current user can reach it. On Windows the pipe is created with an owner-only
+/// descriptor; on Unix the socket file is restricted to its owner once bound.
+#[cfg(windows)]
+fn bind_endpoint(profile: &Profile) -> Result<Listener, ServiceError> {
+    use interprocess::os::windows::local_socket::ListenerOptionsExt;
+    Ok(ListenerOptions::new()
+        .name(local_socket_name(profile)?)
+        .security_descriptor(owner_only_security_descriptor()?)
+        .create_tokio()?)
+}
+
+#[cfg(unix)]
+fn bind_endpoint(profile: &Profile) -> Result<Listener, ServiceError> {
+    let listener = ListenerOptions::new()
+        .name(local_socket_name(profile)?)
+        .create_tokio()?;
+    restrict_socket(profile)?;
+    Ok(listener)
 }

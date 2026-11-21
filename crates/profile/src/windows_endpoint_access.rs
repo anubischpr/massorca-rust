@@ -5,6 +5,8 @@
 use std::io;
 use std::ptr;
 
+use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+use widestring::U16CString;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
@@ -15,6 +17,13 @@ use windows_sys::Win32::System::Threading::{
 /// The SDDL of a descriptor that grants full access to the current user and nobody else. `P` stops inheritance from the parent directory.
 pub fn owner_only_sddl() -> io::Result<String> {
     Ok(format!("D:P(A;;GA;;;{})", current_user_sid()?))
+}
+
+/// The descriptor the service pipe is created with: full access for the current user, and nothing for anyone else.
+pub fn owner_only_security_descriptor() -> io::Result<SecurityDescriptor> {
+    let sddl = U16CString::from_str(owner_only_sddl()?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    SecurityDescriptor::deserialize(&sddl)
 }
 
 /// Whether the process `pid` runs as the current user. A process whose token cannot be read is an error, never a match.
@@ -103,7 +112,84 @@ impl Drop for Handle {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_user_sid, owner_only_sddl, process_belongs_to_current_user};
+    use std::io;
+    use std::ptr;
+
+    use interprocess::os::windows::security_descriptor::AsSecurityDescriptor;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce,
+        GetAclInformation, GetSecurityDescriptorDacl,
+    };
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+
+    use super::{
+        SecurityDescriptor, current_user_sid, owner_only_sddl, owner_only_security_descriptor,
+        process_belongs_to_current_user, wide_to_string,
+    };
+
+    #[test]
+    fn the_pipe_descriptor_grants_exactly_one_allowed_ace_to_the_current_user() {
+        let descriptor = owner_only_security_descriptor().expect("the descriptor");
+        let sid = current_user_sid().expect("the current user's SID");
+        assert_eq!(allowed_sids(&descriptor), vec![sid]);
+    }
+
+    /// The SID strings of the allowed ACEs in the descriptor's DACL.
+    fn allowed_sids(descriptor: &SecurityDescriptor) -> Vec<String> {
+        let mut present = 0;
+        let mut acl: *mut ACL = ptr::null_mut();
+        let mut defaulted = 0;
+        // SAFETY: the descriptor outlives the call, and the three out-pointers are valid for writes.
+        let read = unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor.borrow().as_sd().cast_mut(),
+                &mut present,
+                &mut acl,
+                &mut defaulted,
+            )
+        };
+        assert_ne!(read, 0, "{}", io::Error::last_os_error());
+        assert_ne!(present, 0, "the descriptor has a DACL");
+
+        let mut info = ACL_SIZE_INFORMATION::default();
+        // SAFETY: `acl` came from the descriptor above, and `info` is the size the call is told it has.
+        let sized = unsafe {
+            GetAclInformation(
+                acl,
+                ptr::from_mut(&mut info).cast(),
+                size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        };
+        assert_ne!(sized, 0, "{}", io::Error::last_os_error());
+
+        (0..info.AceCount)
+            .filter_map(|index| {
+                let mut ace = ptr::null_mut();
+                // SAFETY: `index` is below AceCount, so the ACE exists in the DACL and `ace` is a valid out-pointer.
+                assert_ne!(unsafe { GetAce(acl, index, &mut ace) }, 0);
+                // SAFETY: the ACE header is the first field of every ACE, so reading it is valid.
+                let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+                (u32::from(header.AceType) == ACCESS_ALLOWED_ACE_TYPE).then(|| {
+                    // SAFETY: an ACCESS_ALLOWED_ACE stores its SID at SidStart, which stays inside the ACE.
+                    let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+                    sid_text(ptr::from_ref(&allowed.SidStart).cast_mut().cast())
+                })
+            })
+            .collect()
+    }
+
+    fn sid_text(sid: *mut std::ffi::c_void) -> String {
+        let mut text: *mut u16 = ptr::null_mut();
+        // SAFETY: `sid` points at a valid SID inside an ACE of the descriptor, and `text` receives a LocalAlloc'd string.
+        assert_ne!(unsafe { ConvertSidToStringSidW(sid, &mut text) }, 0);
+        let value = wide_to_string(text);
+        // SAFETY: the string was allocated by ConvertSidToStringSidW, so LocalFree releases it exactly once.
+        unsafe { LocalFree(text.cast()) };
+        value
+    }
 
     #[test]
     fn owner_only_sddl_grants_full_access_to_the_current_user_alone() {

@@ -16,4 +16,6 @@ pub use profile::{Profile, ensure_dir};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
-pub use windows_endpoint_access::{owner_only_sddl, process_belongs_to_current_user};
+pub use windows_endpoint_access::{
+    owner_only_sddl, owner_only_security_descriptor, process_belongs_to_current_user,
+};
