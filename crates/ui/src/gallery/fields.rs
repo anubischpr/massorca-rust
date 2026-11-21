@@ -3,16 +3,45 @@
 use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
 
 use super::{Story, variant};
+use crate::components::search_field::SearchField;
 use crate::components::text_field::TextField;
 use crate::icon::IconName;
 use crate::tokens::SPACE_4;
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Text field",
-        spec: "TextField.md",
-        render: text_field_story,
-    }]
+    vec![
+        Story {
+            name: "Text field",
+            spec: "TextField.md",
+            render: text_field_story,
+        },
+        Story {
+            name: "Search field",
+            spec: "SearchField.md",
+            render: search_field_story,
+        },
+    ]
+}
+
+fn search_field_story(window: &mut Window, cx: &mut App) -> AnyElement {
+    let idle = window.use_keyed_state("search-field/idle", cx, |_, cx| {
+        SearchField::new("Search files", cx)
+    });
+    let results = window.use_keyed_state("search-field/results", cx, |_, cx| {
+        SearchField::with_query("Search files", "oppm", cx).result_count(Some(12))
+    });
+    let no_matches = window.use_keyed_state("search-field/no-matches", cx, |_, cx| {
+        SearchField::with_query("Search files", "oppm", cx).result_count(Some(0))
+    });
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant("Idle", idle, cx))
+        .child(variant("Results", results, cx))
+        .child(variant("No matches", no_matches, cx))
+        .into_any_element()
 }
 
 fn text_field_story(window: &mut Window, cx: &mut App) -> AnyElement {
