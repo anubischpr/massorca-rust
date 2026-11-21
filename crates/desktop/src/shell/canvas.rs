@@ -2,6 +2,7 @@
 
 use super::Shell;
 use super::settings::{self, SettingsFrame};
+use super::start_page::{self, StartFrame};
 use super::teams;
 use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
@@ -26,6 +27,7 @@ pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
     settings: SettingsFrame<'_>,
+    start: Option<StartFrame>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -44,7 +46,7 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(model, &shell, settings, window, cx, &theme))
+        .child(conversation(model, &shell, settings, start, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -59,6 +61,7 @@ fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     settings: SettingsFrame<'_>,
+    start: Option<StartFrame>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
@@ -66,6 +69,18 @@ fn conversation(
     // The Settings page fills the Canvas, so it is not centred in a box.
     if model.canvas() == Canvas::Page(Page::Settings) {
         return settings::settings_page(settings, window, cx);
+    }
+    // The start page is laid out from the top, so it is not centred in a box either.
+    if let Canvas::Workspace(_) = model.canvas() {
+        return match start {
+            Some(frame) => start_page::start_page(frame, cx),
+            None => placeholder(
+                "Workspace",
+                "This workspace is not listed by the service.",
+                theme,
+            )
+            .into_any_element(),
+        };
     }
     let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
@@ -94,6 +109,13 @@ fn conversation(
         Canvas::Team(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }
+        // Drawn above: the start page is not centred in the box below.
+        Canvas::Workspace(_) => placeholder(
+            "Workspace",
+            "This workspace is not listed by the service.",
+            theme,
+        )
+        .into_any_element(),
         Canvas::Page(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }

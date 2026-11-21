@@ -44,7 +44,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(data::stories());
     all.extend(overlays::stories());
     all.extend(feedback::stories());
-all.extend(layout::stories());
+    all.extend(layout::stories());
     all.extend(panels::stories());
     all.extend(session::stories());
     all.extend(composer::stories());

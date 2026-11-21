@@ -8,6 +8,7 @@ mod service_banner;
 mod settings;
 mod sidebar;
 mod sidebar_rows;
+mod start_page;
 mod status_bar;
 mod teams;
 mod title_bar;
@@ -46,6 +47,8 @@ use zones::ZoneFocus;
 mod service_tests;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod start_page_tests;
 #[cfg(test)]
 mod tests;
 
@@ -342,7 +345,17 @@ impl Render for Shell {
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
         };
-        let canvas = canvas::canvas(&self.model, &self.zones, settings, window, cx);
+        let start = self
+            .model
+            .selected_workspace()
+            .and_then(|id| {
+                crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
+            })
+            .map(|page| start_page::StartFrame {
+                page,
+                shell: shell.clone(),
+            });
+        let canvas = canvas::canvas(&self.model, &self.zones, settings, start, window, cx);
         let status = status_bar::status_bar(
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
