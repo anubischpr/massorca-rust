@@ -10,6 +10,7 @@ mod events;
 mod frames;
 mod handshake;
 mod lifecycle;
+mod network;
 mod projects;
 mod registries;
 mod workspaces;
