@@ -22,6 +22,7 @@ pub mod list_row;
 pub mod menu;
 pub mod model_picker;
 pub mod notification_card;
+pub mod picker;
 pub mod plan_view;
 pub mod popover;
 pub mod progress;
