@@ -57,6 +57,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::GIT_DETACHED_HEAD, "git.detached_head"),
     (codes::GIT_NO_OPERATION, "git.no_operation"),
     (codes::GIT_LOCAL_CHANGES, "git.local_changes"),
+    (codes::GIT_WATCH_UNAVAILABLE, "git.watch_unavailable"),
     (codes::WORKSPACE_NOT_FOUND, "workspace.not_found"),
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
