@@ -9,12 +9,16 @@ mod sidebar_rows;
 mod status_bar;
 mod title_bar;
 mod tooltip;
+mod zones;
 
 use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction};
+use crate::model::region_cycle::Zone;
 use crate::model::shell_state::ShellModel;
-use actions::{CloseOverlay, OpenSettings, ToggleCommandPalette};
+use actions::{
+    CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenSettings, ToggleCommandPalette,
+};
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
     Subscription, WeakEntity, Window, div, prelude::*,
@@ -23,6 +27,7 @@ use massorca_ui::components::search_field::SearchField;
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use zones::ZoneFocus;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +39,8 @@ pub struct Shell {
     /// Holds keyboard focus when no control does, so shell keys reach the root.
     focus: FocusHandle,
     rail: RailState,
+    /// One focus handle per frame zone, which F6 moves between.
+    zones: ZoneFocus,
     search: Entity<SearchField>,
     /// The palette's query field, present while the palette is open.
     palette_input: Option<Entity<TextField>>,
@@ -50,11 +57,13 @@ impl Shell {
         focus.focus(window, cx);
         let snapshot = data.snapshot();
         let rail = RailState::new(snapshot.usage.len(), cx);
+        let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
         Self {
             model: ShellModel::new(snapshot, width),
             focus,
             rail,
+            zones,
             search,
             palette_input: None,
             palette_restore: None,
@@ -155,10 +164,12 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         let shell = cx.entity().downgrade();
-        let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme);
-        let rail = rail::rail(&self.model, &self.rail, cx);
-        let canvas = canvas::canvas(&self.model, cx);
-        let status = status_bar::status_bar(&self.model.snapshot().status, &theme);
+        let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
+            .track_focus(self.zones.get(Zone::TitleBar));
+        let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
+        let canvas = canvas::canvas(&self.model, &self.zones, cx);
+        let status = status_bar::status_bar(&self.model.snapshot().status, &theme)
+            .track_focus(self.zones.get(Zone::StatusBar));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -168,13 +179,10 @@ impl Render for Shell {
             .flex()
             .flex_row()
             .when(self.model.sidebar_inline(), |el| {
-                el.child(sidebar::sidebar(
-                    &self.model,
-                    &self.search,
-                    false,
-                    window,
-                    cx,
-                ))
+                el.child(
+                    sidebar::sidebar(&self.model, &self.search, false, window, cx)
+                        .track_focus(self.zones.get(Zone::Sidebar)),
+                )
             })
             .child(
                 div()
@@ -187,13 +195,10 @@ impl Render for Shell {
                     .child(status),
             )
             .when(self.model.sidebar_overlay(), |el| {
-                el.child(sidebar::sidebar(
-                    &self.model,
-                    &self.search,
-                    true,
-                    window,
-                    cx,
-                ))
+                el.child(
+                    sidebar::sidebar(&self.model, &self.search, true, window, cx)
+                        .track_focus(self.zones.get(Zone::Sidebar)),
+                )
             })
             .when(self.model.overlay().is_some(), |el| {
                 el.on_mouse_down(
@@ -225,6 +230,12 @@ impl Render for Shell {
                     shell.model.close_overlay();
                     cx.notify();
                 }
+            }))
+            .on_action(cx.listener(|shell, _: &CycleRegionForward, window, cx| {
+                shell.cycle_region(false, window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &CycleRegionBackward, window, cx| {
+                shell.cycle_region(true, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &ToggleCommandPalette, window, cx| {
                 shell.toggle_palette(window, cx);

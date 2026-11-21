@@ -5,6 +5,7 @@ pub mod morph;
 pub mod navigation;
 pub mod palette;
 pub mod rail;
+pub mod region_cycle;
 pub mod regions;
 pub mod roving;
 pub mod shell;

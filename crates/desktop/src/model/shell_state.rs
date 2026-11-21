@@ -4,6 +4,7 @@
 use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
+use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
@@ -155,6 +156,20 @@ impl ShellModel {
             self.navigation.mode,
             self.snapshot.session_title.as_deref(),
         )
+    }
+
+    /// The zones F6 cycles through now: the frame's parts, and the regions on screen.
+    pub fn focus_zones(&self) -> Vec<Zone> {
+        Zone::ORDER
+            .into_iter()
+            .filter(|zone| match zone {
+                Zone::Sidebar => self.sidebar_inline() || self.sidebar_overlay(),
+                Zone::SessionSummary => self.region_visible(Region::SessionSummary),
+                Zone::WorkPanel => self.region_visible(Region::WorkPanel),
+                Zone::ProjectSidebar => self.region_visible(Region::ProjectSidebar),
+                Zone::TitleBar | Zone::Rail | Zone::Conversation | Zone::StatusBar => true,
+            })
+            .collect()
     }
 
     /// The palette while it is open.
@@ -315,6 +330,36 @@ mod tests {
         snapshot.session_title = None;
         let model = ShellModel::new(snapshot, 1440.0);
         assert_eq!(model.canvas(), Canvas::Home(Mode::Workspaces));
+    }
+
+    #[test]
+    fn the_f6_cycle_skips_hidden_regions_and_joins_an_open_one() {
+        let mut model = shell(1440.0);
+        assert_eq!(
+            model.focus_zones(),
+            vec![
+                Zone::TitleBar,
+                Zone::Rail,
+                Zone::Sidebar,
+                Zone::Conversation,
+                Zone::StatusBar,
+            ]
+        );
+        model.toggle_region(Region::WorkPanel);
+        assert_eq!(
+            model.focus_zones()[3..6],
+            [Zone::Conversation, Zone::WorkPanel, Zone::StatusBar]
+        );
+        model.open_page(Page::Tasks);
+        assert_eq!(
+            model.focus_zones(),
+            vec![
+                Zone::TitleBar,
+                Zone::Rail,
+                Zone::Conversation,
+                Zone::StatusBar
+            ]
+        );
     }
 
     #[test]

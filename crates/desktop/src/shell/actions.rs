@@ -6,6 +6,8 @@ actions!(
     shell,
     [
         CloseOverlay,
+        CycleRegionForward,
+        CycleRegionBackward,
         RailPrevious,
         RailNext,
         RailFirst,
@@ -27,6 +29,8 @@ pub fn bind_keys(cx: &mut App) {
     };
     cx.bind_keys([
         KeyBinding::new("escape", CloseOverlay, None),
+        KeyBinding::new("f6", CycleRegionForward, None),
+        KeyBinding::new("shift-f6", CycleRegionBackward, None),
         KeyBinding::new(palette_key, ToggleCommandPalette, None),
         KeyBinding::new(settings_key, OpenSettings, None),
         KeyBinding::new("up", RailPrevious, Some("ActivityRail")),

@@ -41,6 +41,11 @@ struct ModeMorph {
 }
 
 impl RailState {
+    /// The item F6 lands on: the one with the tab stop, so the arrow keys carry on from it.
+    pub(super) fn focus_target(&self) -> &FocusHandle {
+        &self.handles[self.roving]
+    }
+
     pub(super) fn new(usage_rings: usize, cx: &mut App) -> Self {
         let handles = rail_items(usage_rings)
             .iter()

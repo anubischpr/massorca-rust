@@ -1,11 +1,13 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
 use crate::model::navigation::Mode;
+use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
-use gpui::{Context, Div, IntoElement, MouseButton, div, img, prelude::*, px};
+use gpui::{Context, Div, FocusHandle, IntoElement, MouseButton, div, img, prelude::*, px};
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
@@ -14,11 +16,12 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Canvas: the Conversation and the inline regions, with an open overlay on top (D-SH-01).
-pub(super) fn canvas(model: &ShellModel, cx: &mut Context<Shell>) -> Div {
+pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<Shell>) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
+        .track_focus(zones.get(Zone::Conversation))
         .relative()
         .flex()
         .flex_row()
@@ -29,13 +32,14 @@ pub(super) fn canvas(model: &ShellModel, cx: &mut Context<Shell>) -> Div {
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
         .child(conversation(&model.canvas(), &theme))
-        .children(
-            model
-                .inline_regions()
-                .into_iter()
-                .map(|region| region_column(region, &theme)),
-        );
-    surface.children(overlay.map(|region| overlay_panel(region, &theme)))
+        .children(model.inline_regions().into_iter().map(|region| {
+            region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
+        }));
+    surface.children(
+        overlay.map(|region| {
+            overlay_panel(region, zones.get(Zone::of_region(region)).clone(), &theme)
+        }),
+    )
 }
 
 fn conversation(canvas: &Canvas, theme: &Theme) -> impl IntoElement {
@@ -101,8 +105,9 @@ fn placeholder(title: &str, note: &str, theme: &Theme) -> impl IntoElement {
 }
 
 /// A region docked beside the Conversation, at its default width (D-SH-01).
-fn region_column(region: Region, theme: &Theme) -> impl IntoElement {
+fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
+        .track_focus(&focus)
         .flex_none()
         .w(px(region.default_width()))
         .min_w(px(region.min_width()))
@@ -115,8 +120,9 @@ fn region_column(region: Region, theme: &Theme) -> impl IntoElement {
 }
 
 /// A region open over the Canvas when the window is too narrow to fit it inline (X1).
-fn overlay_panel(region: Region, theme: &Theme) -> impl IntoElement {
+fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
+        .track_focus(&focus)
         .absolute()
         .top_0()
         .bottom_0()

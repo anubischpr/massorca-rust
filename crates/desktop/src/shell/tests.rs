@@ -3,6 +3,7 @@
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
 use crate::model::navigation::{Mode, Page};
+use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::ShellSnapshot;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px, size};
@@ -242,6 +243,28 @@ fn the_arrow_keys_move_the_active_palette_row(cx: &mut TestAppContext) {
             .map(|palette| palette.active_index())
     });
     assert_eq!(active, Some(1));
+}
+
+fn zone_has_focus(shell: &Entity<Shell>, cx: &mut VisualTestContext, zone: Zone) -> bool {
+    cx.update(|window, cx| shell.read(cx).zones.get(zone).is_focused(window))
+}
+
+#[gpui::test]
+fn f6_moves_focus_through_the_frame_and_shift_f6_steps_back(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes("f6");
+    draw(cx);
+    assert!(zone_has_focus(&shell, cx, Zone::TitleBar));
+    cx.simulate_keystrokes("f6");
+    draw(cx);
+    let rail_item_focused =
+        cx.update(|window, cx| shell.read(cx).rail.focus_target().is_focused(window));
+    assert!(rail_item_focused);
+    cx.simulate_keystrokes("shift-f6");
+    draw(cx);
+    assert!(zone_has_focus(&shell, cx, Zone::TitleBar));
 }
 
 #[gpui::test]
