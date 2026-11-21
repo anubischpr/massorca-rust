@@ -411,3 +411,222 @@ pub fn parent_location(location: &str) -> Option<String> {
         head.to_owned()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One line per row: `[overline]` for a group, the label for an entry.
+    fn labels(state: &PickerState) -> Vec<String> {
+        state
+            .rows()
+            .iter()
+            .map(|row| match row {
+                PickerRow::Group(name) => format!("[{name}]"),
+                PickerRow::Entry { label, .. } => label.to_string(),
+            })
+            .collect()
+    }
+
+    fn highlights(state: &PickerState) -> Vec<Vec<Range<usize>>> {
+        state
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                PickerRow::Entry { matches, .. } => Some(matches),
+                PickerRow::Group(_) => None,
+            })
+            .collect()
+    }
+
+    fn branches() -> PickerState {
+        PickerState::new(
+            "branches",
+            vec![
+                PickerItem::new("main", "main"),
+                PickerItem::new("feature/map", "feature/map"),
+                PickerItem::new("release", "release"),
+            ],
+        )
+    }
+
+    #[test]
+    fn items_of_one_group_sit_under_one_overline() {
+        let state = PickerState::new(
+            "branches",
+            vec![
+                PickerItem::new("a", "Alpha").group("RECENT"),
+                PickerItem::new("b", "Beta").group("RECENT"),
+                PickerItem::new("c", "Gamma").group("ALL"),
+                PickerItem::new("d", "Delta"),
+            ],
+        );
+        assert_eq!(
+            labels(&state),
+            ["[RECENT]", "Alpha", "Beta", "[ALL]", "Gamma", "Delta"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn a_query_keeps_the_matching_items_and_marks_their_characters() {
+        let mut state = branches();
+        state.set_query("ma");
+        assert_eq!(labels(&state), ["main", "feature/map"].map(String::from));
+        assert_eq!(highlights(&state), vec![vec![0..2], vec![8..10]]);
+        let first_active = state.rows().iter().any(
+            |row| matches!(row, PickerRow::Entry { active: true, label, .. } if label == "main"),
+        );
+        assert!(first_active, "the top match is the active row");
+    }
+
+    #[test]
+    fn the_active_row_moves_and_stops_at_both_ends() {
+        let mut state = branches();
+        state.move_active(ListMove::Next);
+        state.move_active(ListMove::Next);
+        state.move_active(ListMove::Next);
+        assert_eq!(state.active(), 2, "stops at the last row");
+        state.move_active(ListMove::Previous);
+        assert_eq!(state.active(), 1);
+        state.move_active(ListMove::First);
+        assert_eq!(state.active(), 0);
+        state.move_active(ListMove::Last);
+        assert_eq!(state.active(), 2);
+    }
+
+    #[test]
+    fn a_creatable_picker_offers_only_the_create_row_when_nothing_matches() {
+        let mut state = branches().creatable("Create branch");
+        state.set_query("feat/x");
+        assert_eq!(state.entries(), vec![PickerEntry::Create("feat/x".into())]);
+        assert_eq!(
+            labels(&state),
+            ["Create branch \"feat/x\""].map(String::from)
+        );
+        assert!(!state.is_empty());
+        let plain = {
+            let mut plain = branches();
+            plain.set_query("feat/x");
+            plain
+        };
+        assert!(
+            plain.is_empty(),
+            "without creation there is nothing to choose"
+        );
+    }
+
+    #[test]
+    fn choosing_an_item_makes_it_the_value_and_marks_its_row() {
+        let mut state = branches();
+        state.move_active(ListMove::Next);
+        assert_eq!(
+            state.choose_active(),
+            Some(PickerChoice::Item("feature/map".into()))
+        );
+        assert_eq!(
+            state.selected_key(),
+            Some(&SharedString::from("feature/map"))
+        );
+        let selected: Vec<bool> = state
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                PickerRow::Entry { selected, .. } => Some(*selected),
+                PickerRow::Group(_) => None,
+            })
+            .collect();
+        assert_eq!(selected, [false, true, false]);
+    }
+
+    #[test]
+    fn folder_mode_goes_up_with_a_parent_row_and_moves_in_and_out_of_folders() {
+        let mut state = PickerState::new(
+            "folders",
+            vec![
+                PickerItem::new("/projects/massorca/crates", "crates").folder(),
+                PickerItem::new("/projects/massorca/README.md", "README.md"),
+            ],
+        )
+        .folder("/projects/massorca");
+        assert_eq!(
+            labels(&state),
+            ["..", "crates", "README.md"].map(String::from)
+        );
+        assert_eq!(state.enter_folder(), None, "the parent row is not a folder");
+        state.move_active(ListMove::Next);
+        assert_eq!(
+            state.enter_folder(),
+            Some(PickerChoice::Navigate("/projects/massorca/crates".into()))
+        );
+        state.move_active(ListMove::Next);
+        assert_eq!(state.enter_folder(), None, "a file cannot be entered");
+        assert_eq!(
+            state.leave_folder(),
+            Some(PickerChoice::Navigate("/projects".into()))
+        );
+        state.move_active(ListMove::First);
+        assert_eq!(
+            state.choose_active(),
+            Some(PickerChoice::Navigate("/projects".into()))
+        );
+    }
+
+    #[test]
+    fn the_root_has_no_parent_row_and_nothing_to_leave_to() {
+        let state = PickerState::new("folders", Vec::new()).folder("/");
+        assert!(state.is_empty());
+        assert_eq!(state.leave_folder(), None);
+    }
+
+    #[test]
+    fn crumbs_collapse_the_middle_of_a_long_path() {
+        let short = PickerState::new("folders", Vec::new()).folder("/a/b/c");
+        assert_eq!(short.crumbs(), ["a", "b", "c"].map(SharedString::from));
+        let long = PickerState::new("folders", Vec::new()).folder("/a/b/c/d/e");
+        assert_eq!(
+            long.crumbs(),
+            ["a", "...", "d", "e"].map(SharedString::from)
+        );
+    }
+
+    #[test]
+    fn the_copy_names_what_is_chosen() {
+        let mut state = branches();
+        state.set_items(Vec::new());
+        assert_eq!(state.empty_title(), SharedString::from("No branches yet"));
+        state.set_query("x");
+        assert_eq!(
+            state.empty_title(),
+            SharedString::from("No branches match \"x\"")
+        );
+        assert_eq!(
+            state.error_title(),
+            SharedString::from("Could not load branches.")
+        );
+        assert_eq!(state.loading_text(), SharedString::from("Loading branches"));
+        let folder = PickerState::new("folders", Vec::new()).folder("/a");
+        assert_eq!(
+            folder.empty_title(),
+            SharedString::from("This folder is empty")
+        );
+    }
+
+    #[test]
+    fn a_shorter_listing_keeps_the_value_and_clamps_the_active_row() {
+        let mut state = branches().selected("release");
+        state.move_active(ListMove::Last);
+        state.set_items(vec![PickerItem::new("main", "main")]);
+        assert_eq!(state.active(), 0);
+        assert_eq!(state.selected_key(), Some(&SharedString::from("release")));
+        assert_eq!(state.selected_item(), None, "the chosen item is gone");
+    }
+
+    #[test]
+    fn parent_locations_stop_at_the_root() {
+        assert_eq!(parent_location("/"), None);
+        assert_eq!(parent_location("/a"), Some("/".to_owned()));
+        assert_eq!(parent_location("/a/b/"), Some("/a".to_owned()));
+        assert_eq!(parent_location("a"), None);
+        assert_eq!(parent_location("a/b"), Some("a".to_owned()));
+    }
+}
