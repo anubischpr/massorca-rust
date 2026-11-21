@@ -4,6 +4,7 @@ mod config;
 mod events;
 mod projects;
 mod service;
+mod terminals;
 mod workspace_domain;
 mod workspaces;
 
@@ -29,6 +30,7 @@ pub(crate) fn register_core(
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
     handles.extend(workspaces::register(registries)?);
+    handles.extend(terminals::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

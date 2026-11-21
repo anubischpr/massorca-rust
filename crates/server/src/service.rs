@@ -8,6 +8,8 @@ use std::time::Duration;
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
+use massorca_core_terminal::shell::EnvSnapshot;
+use massorca_core_terminal::{ManagerConfig, TerminalManager};
 use massorca_core_workspace::Workspaces;
 #[cfg(windows)]
 use massorca_profile::owner_only_security_descriptor;
@@ -64,6 +66,11 @@ impl Service {
         let git = Git::discover().unwrap_or_else(|_| Git::with_binary("git"));
         let default_root = PathBuf::from(features::default_workspace_root()?);
         let workspaces = Arc::new(Workspaces::new(store.clone(), git, default_root));
+        let mut terminal_config =
+            ManagerConfig::new(EnvSnapshot::current(), server_version.clone());
+        terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
+        terminal_config.massorca_profile = Some(profile.name().to_owned());
+        let terminals = TerminalManager::new(terminal_config);
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -71,6 +78,7 @@ impl Service {
             shutdown: shutdown.clone(),
             registries,
             workspaces,
+            terminals: terminals.clone(),
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
@@ -80,13 +88,17 @@ impl Service {
         });
         service_json::write(&profile, &server_version, started_at_ms)?;
 
-        let task = tokio::spawn(accept_loop::run(
-            listener,
-            Arc::clone(&state),
-            signal,
-            lock,
-            registrations,
-        ));
+        // Terminals end as soon as shutdown is requested, alongside the connections' grace period.
+        let mut terminals_signal = signal.clone();
+        let terminals_stop = tokio::spawn(async move {
+            terminals_signal.wait().await;
+            let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
+        });
+        let accept_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            accept_loop::run(listener, accept_state, signal, lock, registrations).await;
+            let _ = terminals_stop.await;
+        });
         Ok(RunningService {
             state,
             shutdown,
