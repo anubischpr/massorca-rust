@@ -3,10 +3,24 @@
 //! counts and the summary, the rows that show for the collapsed set and the depth limit, and the
 //! focus moves. The view draws what the model says.
 
-use crate::components::agent_icon::AgentKind;
-use crate::components::agent_status::AgentState;
-use crate::tokens::{SIZE_ICON_MD, SPACE_2};
-use gpui::{App, SharedString, Window};
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
+use crate::components::badge::Badge;
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::icon_button::IconButton;
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::{FocusRing, StateFill, Surface};
+use crate::theme::{ActiveTheme, TextStyled, Theme};
+use crate::tokens::{
+    Palette, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_COMFORTABLE, SIZE_ICON_MD, SIZE_ICON_XS, SPACE_1,
+    SPACE_2, SPACE_3, SPACE_HALF, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_MONO_SM,
+};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, App, ElementId, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
+    ParentElement, RenderOnce, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, px,
+};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -462,6 +476,549 @@ pub fn handle_key(
         },
     };
     (true, action)
+}
+
+/// The view's own state, kept by its element id.
+struct TreeUi {
+    focus: FocusHandle,
+    scroll: ScrollHandle,
+    open: bool,
+    cursor: usize,
+}
+
+/// What the rows read from the view.
+struct Look {
+    p: Palette,
+    theme: Theme,
+    variant: TreeVariant,
+    selected: Option<SharedString>,
+    cursor: usize,
+    focused: bool,
+    handler: Option<TreeActionHandler>,
+}
+
+/// A click listener that sends one action to the handler.
+fn on(
+    handler: &Option<TreeActionHandler>,
+    action: TreeAction,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let handler = handler.clone();
+    move |window, cx| emit(&handler, action.clone(), window, cx)
+}
+
+fn emit(
+    handler: &Option<TreeActionHandler>,
+    action: TreeAction,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(handler) = handler {
+        handler(action, window, cx);
+    }
+}
+
+/// One node row: the expander or step number, the status glyph, the agent's icon, the title,
+/// and below it the badges, the place it runs and the task or the reason.
+fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> AnyElement {
+    let Row::Node {
+        path,
+        depth,
+        expanded,
+        step,
+    } = row
+    else {
+        return div().into_any_element();
+    };
+    let Some(node) = node_at(roots, path) else {
+        return div().into_any_element();
+    };
+    let p = &look.p;
+    let card = look.variant == TreeVariant::Card;
+    let selected = look.selected.as_ref() == Some(&node.id);
+    let unreachable = node.state == AgentState::Unreachable;
+    let fill = if unreachable {
+        Some(p.agent.unreachable_bg)
+    } else {
+        node.state.row_tint(p)
+    };
+    let title_color = if unreachable {
+        p.text.tertiary
+    } else {
+        p.text.primary
+    };
+    let id = node.id.clone();
+    let handler = look.handler.clone();
+
+    let toggle = match expanded {
+        Some(open) => {
+            let icon = if *open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            };
+            let (toggle_id, toggle_handler) = (id.clone(), handler.clone());
+            div()
+                .id(("tree-toggle", index))
+                .flex_none()
+                .w(px(SIZE_ICON_XS))
+                .cursor_pointer()
+                .child(
+                    Icon::new(icon)
+                        .size(IconSize::XSmall)
+                        .color(p.text.secondary),
+                )
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    emit(
+                        &toggle_handler,
+                        TreeAction::Toggle(toggle_id.clone()),
+                        window,
+                        cx,
+                    );
+                })
+                .into_any_element()
+        }
+        None => div()
+            .flex_none()
+            .w(px(SIZE_ICON_XS))
+            .text_style(TYPE_MONO_SM)
+            .text_color(p.text.tertiary)
+            .child(step.map(|number| number.to_string()).unwrap_or_default())
+            .into_any_element(),
+    };
+
+    let mut name_line = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(toggle)
+        .child(AgentStatus::new(node.state).size(AgentStatusSize::Small))
+        .child(AgentIcon::new(node.agent).size(AgentIconSize::Medium))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_BODY_STRONG)
+                .text_color(title_color)
+                .child(node.title.clone()),
+        );
+    if !card {
+        name_line = name_line
+            .child(
+                div()
+                    .flex_none()
+                    .text_style(TYPE_CAPTION)
+                    .tabular_figures()
+                    .text_color(node.state.color(p))
+                    .child(node.state.label()),
+            )
+            .children(node.duration.clone().map(|duration| {
+                div()
+                    .flex_none()
+                    .text_style(TYPE_CAPTION)
+                    .tabular_figures()
+                    .text_color(p.text.tertiary)
+                    .child(duration)
+            }));
+    }
+
+    let line = if unreachable {
+        SharedString::from(format!(
+            "Last known: {}, {}",
+            node.state.label().to_lowercase(),
+            node.last_known.as_deref().unwrap_or("unknown")
+        ))
+    } else if node.state == AgentState::Error {
+        node.reason.clone().unwrap_or_else(|| node.task.clone())
+    } else {
+        node.task.clone()
+    };
+    let mut meta = div().flex().items_center().gap(px(SPACE_2)).min_w_0();
+    if let Some(role) = node.role.clone() {
+        meta = meta.child(Badge::text(role));
+    }
+    if look.variant == TreeVariant::BotTeams
+        && let Some(competence) = node.competence.clone()
+    {
+        meta = meta.child(Badge::text(competence));
+    }
+    if look.variant == TreeVariant::Workspaces {
+        if let Some(model) = node.model.clone() {
+            meta = meta.child(
+                div()
+                    .flex_none()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.tertiary)
+                    .child(model),
+            );
+        }
+        let place = node
+            .branch
+            .clone()
+            .unwrap_or_else(|| SharedString::from("Current worktree"));
+        meta = meta.child(
+            div()
+                .flex_none()
+                .text_style(TYPE_MONO_SM)
+                .text_color(p.text.tertiary)
+                .child(place),
+        );
+    }
+    meta = meta.child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_style(TYPE_BODY_SM)
+            .text_color(p.text.secondary)
+            .child(line),
+    );
+    if !card {
+        let mut actions = div()
+            .id(("tree-actions", index))
+            .flex()
+            .items_center()
+            .gap(px(SPACE_1))
+            .flex_none()
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new(("tree-open", index), "Open")
+                    .variant(ButtonVariant::Ghost)
+                    .size(ButtonSize::Compact)
+                    .on_click(on(&handler, TreeAction::Open(id.clone()))),
+            );
+        if node.commits_ready > 0 {
+            actions = actions
+                .child(Badge::text(format!("{} commits ready", node.commits_ready)))
+                .child(
+                    Button::new(("tree-review", index), "Review")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact)
+                        .on_click(on(&handler, TreeAction::Review(id.clone()))),
+                );
+        }
+        meta = meta.child(actions);
+    }
+
+    let select_id = id.clone();
+    let select_handler = handler.clone();
+    let mut el = div()
+        .id(("tree-row", index))
+        .relative()
+        .role(Role::TreeItem)
+        .aria_level(depth + 1)
+        .aria_selected(selected)
+        .aria_label(match &node.duration {
+            Some(duration) => format!(
+                "{}, {}, {}, {}",
+                node.title,
+                node.name,
+                node.state.label(),
+                duration
+            ),
+            None => format!("{}, {}, {}", node.title, node.name, node.state.label()),
+        })
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_1))
+        .min_h(px(SIZE_CONTROL_COMFORTABLE))
+        .pl(px(SPACE_2 + *depth as f32 * INDENT_STEP))
+        .pr(px(SPACE_2))
+        .py(px(SPACE_1))
+        .rounded(px(RADIUS_MD))
+        .cursor_pointer()
+        .state_fills(&look.theme, Surface::Raised)
+        .when_some(fill, |el, color| el.bg(color))
+        .when(selected, |el| el.bg(p.fill.selected_raised))
+        .on_click(move |_, window, cx| {
+            emit(
+                &select_handler,
+                TreeAction::Select(select_id.clone()),
+                window,
+                cx,
+            )
+        });
+    if let Some(open) = expanded {
+        el = el.aria_expanded(*open);
+    }
+    if look.focused && look.cursor == index {
+        el = el.border_2().border_color(p.border.focus);
+    }
+    if selected {
+        el = el.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(SPACE_HALF))
+                .bg(p.accent.fg),
+        );
+    }
+    if card {
+        el = el.child(name_line);
+    } else {
+        el = el.child(name_line).child(meta);
+    }
+    el.into_any_element()
+}
+
+/// The caption above a set of children, and the rows that fold or cut a list.
+fn other_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> AnyElement {
+    let p = &look.p;
+    match row {
+        Row::Caption { depth, run } => div()
+            .id(("tree-caption", index))
+            .pl(px(SPACE_2 + *depth as f32 * INDENT_STEP))
+            .py(px(SPACE_1))
+            .text_style(TYPE_CAPTION)
+            .text_color(p.text.tertiary)
+            .child(run.caption())
+            .into_any_element(),
+        Row::Deeper { depth, count, .. } => div()
+            .pl(px(SPACE_2 + *depth as f32 * INDENT_STEP))
+            .child(
+                Button::new(("tree-deeper", index), format!("+{count} deeper"))
+                    .variant(ButtonVariant::Ghost)
+                    .size(ButtonSize::Compact)
+                    .on_click(on(
+                        &look.handler,
+                        TreeAction::Deeper(row_id(roots, row).unwrap_or_default()),
+                    )),
+            )
+            .into_any_element(),
+        Row::ShowMore { depth, hidden, .. } => div()
+            .pl(px(SPACE_2 + *depth as f32 * INDENT_STEP))
+            .child(
+                Button::new(("tree-more", index), format!("Show {hidden} more"))
+                    .variant(ButtonVariant::Ghost)
+                    .size(ButtonSize::Compact)
+                    .on_click(on(
+                        &look.handler,
+                        TreeAction::ShowMore(row_id(roots, row).unwrap_or_default()),
+                    )),
+            )
+            .into_any_element(),
+        Row::Node { .. } => node_row(index, row, roots, look),
+    }
+}
+
+/// A delegation tree: its header with the summary and a collapse, and its rows, which move with
+/// the arrow keys, Enter opens a child, and a letter jumps to the next title that starts with it
+/// (DelegationTree.md).
+#[derive(IntoElement)]
+pub struct DelegationTree {
+    id: ElementId,
+    roots: Rc<Vec<DelegationNode>>,
+    variant: TreeVariant,
+    collapsed: HashSet<SharedString>,
+    shown_all: HashSet<SharedString>,
+    selected: Option<SharedString>,
+    depth_limit: usize,
+    on_action: Option<TreeActionHandler>,
+}
+
+impl std::fmt::Debug for DelegationTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelegationTree")
+            .field("id", &self.id)
+            .field("roots", &self.roots.len())
+            .finish()
+    }
+}
+
+impl DelegationTree {
+    pub fn new(id: impl Into<ElementId>, roots: impl Into<Rc<Vec<DelegationNode>>>) -> Self {
+        Self {
+            id: id.into(),
+            roots: roots.into(),
+            variant: TreeVariant::Workspaces,
+            collapsed: HashSet::new(),
+            shown_all: HashSet::new(),
+            selected: None,
+            depth_limit: DEPTH_LIMIT,
+            on_action: None,
+        }
+    }
+
+    pub fn variant(mut self, variant: TreeVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// The nodes the owner has collapsed, by id.
+    pub fn collapsed(mut self, collapsed: HashSet<SharedString>) -> Self {
+        self.collapsed = collapsed;
+        self
+    }
+
+    /// The parents whose long lists the owner has opened in full, by id.
+    pub fn shown_all(mut self, shown_all: HashSet<SharedString>) -> Self {
+        self.shown_all = shown_all;
+        self
+    }
+
+    /// The row whose thread is open: a 2 px accent bar on its leading edge.
+    pub fn selected(mut self, id: Option<SharedString>) -> Self {
+        self.selected = id;
+        self
+    }
+
+    pub fn depth_limit(mut self, limit: usize) -> Self {
+        self.depth_limit = limit;
+        self
+    }
+
+    pub fn on_action(
+        mut self,
+        listener: impl Fn(TreeAction, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_action = Some(Rc::new(listener));
+        self
+    }
+}
+
+impl RenderOnce for DelegationTree {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let id = self.id.clone();
+        let state = window.use_keyed_state(id.clone(), cx, |_, cx| TreeUi {
+            focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
+            open: true,
+            cursor: 0,
+        });
+        let (focus, scroll, open, cursor) = {
+            let s = state.read(cx);
+            (s.focus.clone(), s.scroll.clone(), s.open, s.cursor)
+        };
+        let roots = self.roots.clone();
+        let visible = rows(&roots, &self.collapsed, &self.shown_all, self.depth_limit);
+        let totals = counts(&roots);
+        let card = self.variant == TreeVariant::Card;
+        let handler = self.on_action.clone();
+        let look = Look {
+            p,
+            theme,
+            variant: self.variant,
+            selected: self.selected.clone(),
+            cursor,
+            focused: focus.is_focused(window),
+            handler: handler.clone(),
+        };
+
+        let header = (!card).then(|| {
+            let toggle = state.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .child(
+                    Icon::new(IconName::Users)
+                        .size(IconSize::Small)
+                        .color(p.text.secondary),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_style(TYPE_BODY_STRONG)
+                        .text_color(p.text.primary)
+                        .child("Delegation"),
+                )
+                .child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .tabular_figures()
+                        .text_color(p.text.secondary)
+                        .child(summary(totals)),
+                )
+                .child(
+                    IconButton::new(
+                        "tree-collapse",
+                        if open {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        },
+                        if open {
+                            "Collapse delegation"
+                        } else {
+                            "Expand delegation"
+                        },
+                    )
+                    .on_click(move |window, cx| {
+                        toggle.update(cx, |s, _| s.open = !s.open);
+                        window.refresh();
+                    }),
+                )
+        });
+
+        let body = open.then(|| {
+            let elements: Vec<AnyElement> = visible
+                .iter()
+                .enumerate()
+                .map(|(index, row)| match row {
+                    Row::Node { .. } => node_row(index, row, &roots, &look),
+                    _ => other_row(index, row, &roots, &look),
+                })
+                .collect();
+            let key_roots = roots.clone();
+            let key_state = state.clone();
+            let key_handler = handler.clone();
+            let key_scroll = scroll.clone();
+            let (key_collapsed, key_shown, depth) = (
+                self.collapsed.clone(),
+                self.shown_all.clone(),
+                self.depth_limit,
+            );
+            div()
+                .id((id.clone(), "tree"))
+                .role(Role::Tree)
+                .aria_label("Delegation")
+                .track_focus(&focus)
+                .tab_stop(true)
+                .focus_ring(&theme)
+                .track_scroll(&scroll)
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_1))
+                .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let (used, action) = key_state.update(cx, |s, _| {
+                        let rows = rows(&key_roots, &key_collapsed, &key_shown, depth);
+                        let result = handle_key(&key_roots, &rows, &mut s.cursor, key);
+                        key_scroll.scroll_to_item(s.cursor);
+                        result
+                    });
+                    if used {
+                        cx.stop_propagation();
+                        window.refresh();
+                        if let Some(action) = action {
+                            emit(&key_handler, action, window, cx);
+                        }
+                    }
+                })
+                .children(elements)
+        });
+
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .min_w_0()
+            .when(!card, |el| {
+                el.p(px(SPACE_3))
+                    .rounded(px(RADIUS_LG))
+                    .border_1()
+                    .border_color(p.border.default)
+                    .bg(p.surface.raised)
+            })
+            .children(header)
+            .children(body)
+    }
 }
 
 #[cfg(test)]
