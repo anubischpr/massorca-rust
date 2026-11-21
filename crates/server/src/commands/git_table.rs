@@ -78,6 +78,46 @@ pub(super) fn git_commands() -> Vec<CommandDescriptor> {
                 "max_bytes": { "type": "integer", "minimum": 1 }
             })),
         ),
+        command(
+            "git.branches",
+            "List the local branches, the current one first",
+            "git.branches",
+            workspace_args(json!({})),
+        ),
+        command(
+            "git.branch-create",
+            "Create a branch with no upstream",
+            "git.branch_create",
+            workspace_args(json!({
+                "name": { "type": "string" },
+                "start": { "type": "string" },
+                "switch": { "type": "boolean" }
+            })),
+        ),
+        command(
+            "git.switch",
+            "Check out a local branch",
+            "git.branch_switch",
+            workspace_args(json!({ "branch": { "type": "string" } })),
+        ),
+        command(
+            "git.branch-rename",
+            "Rename a branch",
+            "git.branch_rename",
+            workspace_args(json!({
+                "from": { "type": "string" },
+                "to": { "type": "string" }
+            })),
+        ),
+        command(
+            "git.branch-delete",
+            "Delete a merged branch, or any with force; returns the commit it pointed at",
+            "git.branch_delete",
+            workspace_args(json!({
+                "branch": { "type": "string" },
+                "force": { "type": "boolean" }
+            })),
+        ),
     ]
 }
 

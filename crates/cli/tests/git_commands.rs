@@ -250,3 +250,59 @@ fn commit_then_amend_through_the_cli() {
         .code(1)
         .stderr(contains("git.nothing_to_commit"));
 }
+
+#[test]
+fn branch_commands_create_switch_rename_list_and_delete() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+
+    let created = sandbox.json_ok(
+        "default",
+        &["git", "branch-create", "topic", "--switch", "-w", "feature"],
+    );
+    assert_eq!(created["name"], "topic");
+    assert_eq!(created["current"], true);
+    sandbox
+        .run("default", &["git", "switch", "feature", "-w", "feature"])
+        .success();
+    sandbox
+        .run(
+            "default",
+            &["git", "branch-rename", "topic", "topic-2", "-w", "feature"],
+        )
+        .success();
+
+    let listed = sandbox.json_ok("default", &["git", "branches", "-w", "feature"]);
+    assert_eq!(listed["branches"][0]["name"], "feature");
+    // The project's own branch is `main` or `master`, depending on the developer's `init.defaultBranch`.
+    let primary = listed["branches"][1]["name"]
+        .as_str()
+        .expect("branch name")
+        .to_owned();
+    assert_eq!(listed["branches"][1]["checked_out_elsewhere"], true);
+    assert_eq!(listed["branches"][2]["name"], "topic-2");
+    let text = sandbox
+        .run("default", &["git", "branches", "-w", "feature"])
+        .success();
+    let text = stdout_text(&text);
+    assert!(text.contains("* feature "), "{text}");
+    assert!(
+        text.contains(&format!("  {primary} ")) && text.contains("(checked out elsewhere)"),
+        "{text}"
+    );
+
+    sandbox
+        .run(
+            "default",
+            &["git", "branch-delete", &primary, "-w", "feature"],
+        )
+        .code(1)
+        .stderr(contains("branch.checked_out"));
+    let deleted = sandbox.json_ok(
+        "default",
+        &["git", "branch-delete", "topic-2", "-w", "feature"],
+    );
+    assert_eq!(deleted["branch"], "topic-2");
+    assert!(deleted["commit"].as_str().is_some_and(|c| c.len() >= 40));
+    assert!(dir.join("README.md").exists());
+}

@@ -10,7 +10,33 @@ const PATTERNS: &[(&str, &str)] = &[
     (codes::GIT_INDEX_LOCKED, "index.lock': File exists"),
     (codes::GIT_IDENTITY_UNKNOWN, "Please tell me who you are"),
     (codes::GIT_IDENTITY_UNKNOWN, "empty ident name"),
+    // Both the local-changes and the untracked-files refusals end their heading this way.
+    (
+        codes::GIT_CHECKOUT_WOULD_OVERWRITE,
+        "would be overwritten by checkout:",
+    ),
 ];
+
+/// The files a refused checkout names: the tab-indented lines under each "would be overwritten" heading, sorted.
+pub(crate) fn overwritten_paths(error: &GitError) -> Vec<String> {
+    let GitError::Failed { stderr, .. } = error else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    let mut listing = false;
+    for line in stderr.lines() {
+        if line.contains("would be overwritten by checkout:") {
+            listing = true;
+        } else if let Some(path) = line.strip_prefix('\t').filter(|_| listing) {
+            paths.push(path.trim_end().to_owned());
+        } else {
+            listing = false;
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
 
 /// The protocol code a failed git command maps to, when its message is one the table knows.
 pub fn failure_code(error: &GitError) -> Option<&'static str> {

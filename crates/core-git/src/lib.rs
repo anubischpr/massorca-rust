@@ -4,6 +4,7 @@
 //! Each command runs without a shell and with a timeout, and uses only commands
 //! and options that exist in Git 2.25 (ADR 0007).
 
+mod branch;
 mod classify;
 mod commit;
 mod diff;
@@ -22,6 +23,7 @@ mod worktree;
 mod worktree_locks;
 mod worktree_porcelain;
 
+pub use branch::BranchError;
 pub use classify::failure_code;
 pub use commit::{CommitError, CommitRequest};
 pub use error::GitError;

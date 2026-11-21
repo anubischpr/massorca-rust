@@ -1,5 +1,6 @@
 //! `massorca git ...`: the `git/1` methods on a workspace, one module per command group (decision 0010).
 
+mod branch;
 mod commit;
 mod diff;
 mod index;
@@ -32,6 +33,16 @@ pub enum GitCommand {
     Log(log::LogArgs),
     /// Shows the patch of one file.
     Patch(diff::PatchArgs),
+    /// Lists the local branches, the current one first.
+    Branches(branch::BranchesArgs),
+    /// Creates a branch with no upstream, at HEAD or `--start`.
+    BranchCreate(branch::CreateArgs),
+    /// Checks out a local branch; refuses when local changes would be overwritten.
+    Switch(branch::SwitchArgs),
+    /// Renames a branch; never overwrites another.
+    BranchRename(branch::RenameArgs),
+    /// Deletes a merged branch, or any with `--force`; prints the commit it pointed at.
+    BranchDelete(branch::DeleteArgs),
 }
 
 /// The workspace a git command acts on.
@@ -66,5 +77,10 @@ pub async fn execute(
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
+        GitCommand::Branches(args) => branch::run_list(&client, args, output).await,
+        GitCommand::BranchCreate(args) => branch::run_create(&client, args, output).await,
+        GitCommand::Switch(args) => branch::run_switch(&client, args, output).await,
+        GitCommand::BranchRename(args) => branch::run_rename(&client, args, output).await,
+        GitCommand::BranchDelete(args) => branch::run_delete(&client, args, output).await,
     }
 }

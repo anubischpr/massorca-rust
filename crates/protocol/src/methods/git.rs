@@ -2,6 +2,7 @@
 //!
 //! Paths are workspace-relative, UTF-8, with `/` separators.
 
+pub mod branch;
 pub mod commit;
 pub mod diff;
 pub mod index;
