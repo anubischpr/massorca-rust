@@ -232,3 +232,37 @@ async fn attaching_to_an_exited_terminal_shows_its_last_screen() {
     assert_eq!(exited.state, TerminalState::Exited);
     assert!(next().await.is_none());
 }
+
+#[tokio::test]
+async fn an_attachment_receives_all_output_before_exited() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    let script = if cfg!(windows) {
+        "for /l %i in (1,1,3000) do @echo line-%i"
+    } else {
+        "i=1; while [ $i -le 3000 ]; do echo line-$i; i=$((i+1)); done"
+    };
+    create.shell = Some(script_shell(script));
+    let info = manager.create(create).expect("create");
+    let mut first = watch(&manager, &info.id, None).await;
+
+    let exited = first.wait_for_exit().await;
+
+    assert_eq!(exited.state, TerminalState::Exited);
+    assert!(
+        first.visible.contains("line-3000"),
+        "the last line must arrive before exited, ending {:?}",
+        first.visible.tail()
+    );
+    // Nothing reaches the terminal after `Exited`: resuming from there finds no output.
+    let mut resumed = watch(&manager, &info.id, Some(first.offset())).await;
+    resumed.wait_for_exit().await;
+    assert_eq!(resumed.mode, AttachMode::Resume);
+    assert_eq!(
+        resumed.offset(),
+        first.offset(),
+        "output after exited: {:?}",
+        String::from_utf8_lossy(&resumed.output)
+    );
+}

@@ -31,9 +31,11 @@ the better. Research checked crate sources and platform documentation on
   limit of 0033.
 - **Exit comes from the process, not from end of output.** On Windows the
   pseudoconsole keeps the output pipe open after the child exits, so the
-  waiter thread's `wait` decides `exited`. The reader then drains for at most
-  500 ms and the pseudoconsole is closed off the reader thread: before
-  Windows 11 24H2, `ClosePseudoConsole` blocks until its output is drained.
+  waiter thread's `wait` decides `exited`. The pseudoconsole is then closed
+  off the reader thread (before Windows 11 24H2, `ClosePseudoConsole` blocks
+  until its output is drained), which ends the output, and the exit is
+  recorded once the reader reaches that end (at most 5 s; 500 ms on Unix), so
+  attachments receive all output before `exited`.
   On Linux a read returns buffered output first and then `EIO`, which counts
   as end of output, as does a zero-length read.
 - **We resolve the program path ourselves** (`PATH`, and `PATHEXT` on

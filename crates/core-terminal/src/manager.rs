@@ -24,7 +24,13 @@ use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, r
 /// Largest input accepted per call (0033).
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
-/// How long the reader may drain after the program exits (0030).
+/// How long the exit waits for the reader to reach end of output once the terminal is
+/// closed (0030). Windows ends the output only when the pseudoconsole closes, so it
+/// waits for the close to flush; on Unix end of output comes when the last holder of the
+/// terminal goes, and a background process may hold it for good.
+#[cfg(windows)]
+const DRAIN_LIMIT: Duration = Duration::from_secs(5);
+#[cfg(not(windows))]
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
 /// How long a kill waits for the exit after the tree is killed.
 const EXIT_MARGIN: Duration = Duration::from_secs(2);
@@ -822,9 +828,10 @@ fn wait_for_exit(
     manager: &Weak<Inner>,
 ) {
     let result = child.wait();
-    // Disconnects when the reader ends; output still arriving after this is not awaited.
-    let _ = drained.recv_timeout(DRAIN_LIMIT);
+    // Close first: on Windows that is what ends the output. The channel disconnects when
+    // the reader ends, so every attachment has all the output before `Exited`.
     close_off_thread(&terminal.master);
+    let _ = drained.recv_timeout(DRAIN_LIMIT);
     terminal.record_exit(result);
     if let Some(manager) = manager.upgrade() {
         manager.retire(&terminal.id);
