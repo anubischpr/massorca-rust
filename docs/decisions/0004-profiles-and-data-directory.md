@@ -11,7 +11,8 @@ retrofitting isolation later means migrating every path.
 ## Decision
 
 - **Home.** `MASSORCA_HOME` if set, otherwise the platform data directory from
-  the `directories` crate: `%APPDATA%\MassOrca` on Windows,
+  the `directories` crate (`BaseDirs::data_dir()` plus the app folder):
+  `%APPDATA%\MassOrca` on Windows,
   `$XDG_DATA_HOME/massorca` (or `~/.local/share/massorca`) on Linux,
   `~/Library/Application Support/MassOrca` on macOS.
 - **Profile.** `--profile <name>` on any command, else `MASSORCA_PROFILE`,
@@ -26,6 +27,8 @@ retrofitting isolation later means migrating every path.
   service.sock    Unix socket (Unix only)
   store.sqlite3   durable state (0005)
   logs/           service logs (0006)
+  extensions/     reserved for extensions: pkgs/, dev/, data/, lock.json
+                  (docs/architecture/extensions.md); not created in Phase 1
   ```
 
 - **Socket name.** Unix: `<profile dir>/service.sock`. Windows: the named pipe
