@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 dunce.workspace = true
+massorca-protocol.workspace = true
 thiserror.workspace = true
 
 # A job object kills every process git starts, through a safe API.

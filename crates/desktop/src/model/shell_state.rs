@@ -36,6 +36,8 @@ pub struct ShellModel {
     status_items: StatusItemVisibility,
     /// The commands and workspaces the palette ran last, for its Recent rows.
     recent: RecentActions,
+    /// The workspace the Sidebar opened; its start page shows while no session is open.
+    selected_workspace: Option<String>,
 }
 
 impl ShellModel {
@@ -51,6 +53,7 @@ impl ShellModel {
             usage_popover: None,
             status_items: StatusItemVisibility::default(),
             recent: RecentActions::default(),
+            selected_workspace: None,
         }
     }
 
@@ -210,13 +213,37 @@ impl ShellModel {
         }
     }
 
-    /// The Canvas content for the current page, mode and open session.
+    /// The Canvas content for the current page, mode and open session. A selected workspace shows
+    /// its start page on the Workspaces home until a session opens.
     pub fn canvas(&self) -> Canvas {
+        let on_start_page = self.navigation.page == Page::Home
+            && self.navigation.mode == Mode::Workspaces
+            && self.snapshot.session_title.is_none();
+        if let (true, Some(id)) = (on_start_page, &self.selected_workspace) {
+            return Canvas::Workspace(id.clone());
+        }
         Canvas::of(
             self.navigation.page,
             self.navigation.mode,
             self.snapshot.session_title.as_deref(),
         )
+    }
+
+    /// The workspace the Sidebar or the start page chose, if any.
+    pub fn selected_workspace(&self) -> Option<&str> {
+        self.selected_workspace.as_deref()
+    }
+
+    /// A click on a workspace opens its start page, leaving any full page first (D-WS-01).
+    pub fn open_workspace(&mut self, id: impl Into<String>) {
+        self.selected_workspace = Some(id.into());
+        self.navigation.open(Page::Home);
+    }
+
+    /// Chooses the workspace whose start page shows, or none for the start page with no workspace.
+    pub fn select_workspace(&mut self, id: Option<String>) {
+        self.selected_workspace = id;
+        self.navigation.open(Page::Home);
     }
 
     /// The zones F6 cycles through now: the frame's parts, and the regions on screen.

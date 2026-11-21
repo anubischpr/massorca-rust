@@ -34,10 +34,63 @@ pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
+/// A branch name git does not accept.
+pub const BRANCH_NAME_INVALID: &str = "branch.name_invalid";
+/// A branch is not merged into its upstream or HEAD; deleting it needs `force`.
+pub const BRANCH_UNMERGED: &str = "branch.unmerged";
+/// A branch is checked out in a worktree; it cannot be deleted, or switched to from another worktree.
+pub const BRANCH_CHECKED_OUT: &str = "branch.checked_out";
+/// A workspace was created on the branch; removing that workspace is the path that deletes it.
+pub const BRANCH_IN_USE: &str = "branch.in_use";
 pub const BASE_NOT_FOUND: &str = "base.not_found";
 pub const GIT_UNAVAILABLE: &str = "git.unavailable";
 pub const GIT_FAILED: &str = "git.failed";
 pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
+/// A git method named a folder workspace, or a path git does not treat as a repository.
+pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
+/// A request path is absolute, has a `..` segment or a NUL, so it could leave the workspace.
+pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
+/// A revision does not resolve to a commit.
+pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
+/// A discard named untracked files without `delete_untracked`; `data.paths` lists them.
+pub const GIT_DISCARD_UNTRACKED: &str = "git.discard_untracked";
+/// A discard named files whose only changes are staged, without `include_staged`; `data.paths` lists them.
+pub const GIT_DISCARD_STAGED: &str = "git.discard_staged";
+/// A discard named unmerged files; resolve or abort the operation first. `data.paths` lists them.
+pub const GIT_PATH_CONFLICTED: &str = "git.path_conflicted";
+/// A discard named a directory; it acts on the files status lists only. `data.paths` lists them.
+pub const GIT_PATH_IS_DIRECTORY: &str = "git.path_is_directory";
+/// A request named both `paths` and `all`, or neither.
+pub const GIT_PATHS_REQUIRED: &str = "git.paths_required";
+/// Another process holds the index lock (`index.lock`); retry once it finishes.
+pub const GIT_INDEX_LOCKED: &str = "git.index_locked";
+/// A commit with nothing staged, or with an empty message.
+pub const GIT_NOTHING_TO_COMMIT: &str = "git.nothing_to_commit";
+pub const GIT_COMMIT_MESSAGE_EMPTY: &str = "git.commit_message_empty";
+/// An amend of a commit a remote-tracking branch contains, without `allow_published`.
+pub const GIT_COMMIT_PUBLISHED: &str = "git.commit_published";
+/// An amend before the first commit.
+pub const GIT_NO_COMMITS: &str = "git.no_commits";
+/// Git has no user name or email for the commit; set `user.name` and `user.email`.
+pub const GIT_IDENTITY_UNKNOWN: &str = "git.identity_unknown";
+/// A checkout would overwrite local changes or untracked files; `data.paths` lists them.
+pub const GIT_CHECKOUT_WOULD_OVERWRITE: &str = "git.checkout_would_overwrite";
+/// A remote asked for credentials the host's git setup does not supply; authenticate in a terminal, then retry.
+pub const GIT_AUTH_REQUIRED: &str = "git.auth_required";
+/// SSH does not know the remote host's key; accept it once in a terminal, then retry.
+pub const GIT_HOST_KEY_UNKNOWN: &str = "git.host_key_unknown";
+/// The remote host could not be reached: name resolution, connection or timeout.
+pub const GIT_REMOTE_UNREACHABLE: &str = "git.remote_unreachable";
+/// The remote answered that the repository does not exist, or the remote is not configured.
+pub const GIT_REMOTE_NOT_FOUND: &str = "git.remote_not_found";
+/// The branch has no upstream to pull from.
+pub const GIT_NO_UPSTREAM: &str = "git.no_upstream";
+/// HEAD is not on a branch.
+pub const GIT_DETACHED_HEAD: &str = "git.detached_head";
+/// No merge, rebase, cherry-pick or revert is in progress.
+pub const GIT_NO_OPERATION: &str = "git.no_operation";
+/// A merge or rebase would overwrite local changes; commit, stash elsewhere or discard them first.
+pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

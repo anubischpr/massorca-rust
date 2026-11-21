@@ -67,6 +67,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkspaceCommand,
     },
+    /// Reads and changes the git state of a workspace.
+    Git {
+        #[command(subcommand)]
+        command: crate::git::GitCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
