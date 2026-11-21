@@ -1,7 +1,7 @@
 mod common;
 
-use common::{assert_conflict, project_row};
-use massorca_core_store::{ProjectKind, Store};
+use common::{assert_conflict, project_row, workspace_row};
+use massorca_core_store::{ProjectKind, Store, StoreError};
 
 fn store() -> Store {
     Store::open_in_memory().expect("in-memory store opens")
@@ -82,4 +82,20 @@ fn delete_project_reports_whether_a_row_was_removed() {
     assert!(store.delete_project(&row.id).unwrap());
     assert_eq!(store.get_project(&row.id).unwrap(), None);
     assert!(!store.delete_project(&row.id).unwrap());
+}
+
+#[test]
+fn deleting_a_project_with_workspaces_is_restricted() {
+    let store = store();
+    let project = project_row("alpha", "key-alpha");
+    store.insert_project(&project).unwrap();
+    let workspace = workspace_row(&project.id, "feature", "ws-feature");
+    store.insert_workspace(&workspace).unwrap();
+
+    let error = store.delete_project(&project.id).unwrap_err();
+    assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
+    assert!(store.get_project(&project.id).unwrap().is_some());
+
+    assert!(store.delete_workspace(&workspace.id).unwrap());
+    assert!(store.delete_project(&project.id).unwrap());
 }
