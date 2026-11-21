@@ -12,16 +12,24 @@ that a newer binary can upgrade while an older one refuses to damage.
 
 - **Engine.** SQLite through `rusqlite` with the `bundled` feature (no system
   library on any platform), WAL journal, `synchronous=NORMAL`,
-  `foreign_keys=ON`, a busy timeout.
+  `foreign_keys=ON`, a busy timeout. The switch to WAL can fail with
+  `SQLITE_BUSY` at once while another opener holds the write lock, skipping the
+  busy timeout, so it is retried until that timeout.
 - **Access.** One connection owned by the store behind a mutex; async callers
   go through `tokio::task::spawn_blocking`. SQLite serialises writes anyway,
   and one connection keeps transactions simple.
 - **Migrations.** Our own small runner: an ordered list of SQL steps; the
-  applied count is SQLite's `user_version`. Each step runs in a transaction.
-  A database whose `user_version` is newer than the binary knows is refused
-  (`store.newer_schema`) and never touched. Before migrating an existing
-  database the file is copied to `store.sqlite3.bak-v<old>`; the last five
-  backups are kept.
+  applied count is SQLite's `user_version`. Each step runs in its own
+  `BEGIN IMMEDIATE` transaction that re-reads `user_version` first and skips a
+  step another process has already applied, so two processes opening the same
+  old file migrate it once between them. A table rebuild sets
+  `foreign_keys_off`: enforcement is switched off around that step's
+  transaction and restored after it, and the step is rolled back unless
+  `PRAGMA foreign_key_check` comes back empty. A database whose `user_version`
+  is newer than the binary knows is refused (`store.newer_schema`) and never
+  touched. Before the first step of a run on an existing database, the file is
+  copied to `store.sqlite3.bak-v<old>` under that write lock, once per run; the
+  last five backups are kept.
 - **What is durable.** Projects and workspaces, including a workspace's
   `removing` state, written before any file is deleted so an interrupted
   removal is visible and can be resumed. Connections, streams and anything
