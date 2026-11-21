@@ -106,17 +106,20 @@ impl DataSource for SampleDataSource {
                 UsageModel {
                     agent: Agent::Claude,
                     percent: Some(62),
-                    resets_in: "Resets in 2 days".into(),
+                    slot: 1,
+                    resets_in: "2 days".into(),
                 },
                 UsageModel {
                     agent: Agent::Codex,
                     percent: Some(35),
-                    resets_in: "Resets in 5 days".into(),
+                    slot: 2,
+                    resets_in: "5 days".into(),
                 },
                 UsageModel {
                     agent: Agent::OpenCode,
                     percent: Some(10),
-                    resets_in: "Resets in 6 days".into(),
+                    slot: 3,
+                    resets_in: "6 days".into(),
                 },
             ],
             status: StatusBarModel {
@@ -129,6 +132,8 @@ impl DataSource for SampleDataSource {
                 hosts_unreachable: 1,
             },
             session_title: Some("Implementation of master catalogs".into()),
+            active_session: Some("s1".into()),
+            prototypes: 3,
         }
     }
 }

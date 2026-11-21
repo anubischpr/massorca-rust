@@ -43,6 +43,8 @@ pub enum Page {
     Calendar,
     Marketplace,
     Settings,
+    /// Opened from the Workspaces Sidebar, not the rail (A9).
+    Automations,
 }
 
 impl Page {
@@ -58,6 +60,7 @@ impl Page {
             Page::Calendar => "Calendar",
             Page::Marketplace => "Marketplace",
             Page::Settings => "Settings",
+            Page::Automations => "Automations",
         }
     }
 }

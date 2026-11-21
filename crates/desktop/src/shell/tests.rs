@@ -2,11 +2,11 @@
 
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
-use crate::model::navigation::Page;
+use crate::model::navigation::{Mode, Page};
 use crate::model::regions::Region;
 use crate::model::shell::ShellSnapshot;
-use gpui::{TestAppContext, px, size};
-use massorca_ui::{Appearance, Theme};
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px, size};
+use massorca_ui::{ActiveTheme, Appearance, Theme};
 
 /// The sample data without an open session: the landing view.
 struct Landing;
@@ -26,8 +26,26 @@ fn setup(cx: &mut TestAppContext) {
     });
 }
 
-fn draw(cx: &mut gpui::VisualTestContext) {
+fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// Clicks the centre of the element with this debug selector, after a fresh draw.
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    draw(cx);
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element with selector {selector}"));
+    cx.simulate_click(bounds.center(), Modifiers::default());
+}
+
+fn navigation(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Mode, Page) {
+    shell.read_with(cx, |shell, _| {
+        (
+            shell.model().navigation().mode,
+            shell.model().navigation().page,
+        )
+    })
 }
 
 #[gpui::test]
@@ -55,6 +73,64 @@ fn the_landing_view_with_a_region_open_renders_in_both_themes(cx: &mut TestAppCo
         shell.read_with(cx, |shell, _| shell.model().inline_regions()),
         vec![Region::WorkPanel]
     );
+}
+
+#[gpui::test]
+fn the_mode_button_returns_home_first_and_then_switches_twice(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    click(cx, "rail-tasks");
+    assert_eq!(navigation(&shell, cx), (Mode::Workspaces, Page::Tasks));
+    click(cx, "rail-mode");
+    assert_eq!(navigation(&shell, cx), (Mode::Workspaces, Page::Home));
+    click(cx, "rail-mode");
+    assert_eq!(navigation(&shell, cx), (Mode::BotTeams, Page::Home));
+}
+
+#[gpui::test]
+fn the_rail_theme_toggle_switches_the_appearance(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    click(cx, "rail-theme");
+    let appearance = cx.update(|_, cx| cx.theme().appearance);
+    assert_eq!(appearance, Appearance::Light);
+}
+
+#[gpui::test]
+fn a_title_bar_toggle_opens_its_region_inline(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    click(cx, "tip:Work panel");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.model().inline_regions()),
+        vec![Region::WorkPanel]
+    );
+}
+
+#[gpui::test]
+fn the_sidebar_leaves_full_pages_and_returns_with_the_mode_home(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+    click(cx, "rail-tasks");
+    assert!(!shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+    click(cx, "rail-mode");
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_inline()));
+}
+
+#[gpui::test]
+fn a_click_on_the_canvas_closes_the_sidebar_overlay(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    cx.simulate_resize(size(px(900.), px(600.)));
+    shell.update(cx, |shell, cx| {
+        shell.model.toggle_sidebar();
+        cx.notify();
+    });
+    draw(cx);
+    assert!(shell.read_with(cx, |shell, _| shell.model().sidebar_overlay()));
+    click(cx, "canvas");
+    assert!(!shell.read_with(cx, |shell, _| shell.model().sidebar_overlay()));
 }
 
 #[gpui::test]
