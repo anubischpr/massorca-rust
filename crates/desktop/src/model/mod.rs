@@ -11,6 +11,7 @@ pub mod region_cycle;
 pub mod regions;
 pub mod roving;
 pub mod service_view;
+pub mod settings;
 pub mod settings_sections;
 pub mod shell;
 pub mod shell_state;
