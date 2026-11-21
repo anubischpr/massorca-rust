@@ -1,5 +1,6 @@
 //! Runs one request in dispatch order: method, capability, permission, params, handler (ADR 0002).
 
+use std::future::Future;
 use std::sync::Arc;
 
 use massorca_protocol::methods::events::Subscribed;
@@ -48,13 +49,32 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
 
     match &entry.value.handler {
         Handler::Call(call) => {
-            let result = call(ctx, params).await;
+            let result = guarded(&method, call(ctx, params)).await;
             reply(&session, id, result).await;
         }
-        Handler::Stream(open) => match open(ctx, params).await {
+        Handler::Stream(open) => match guarded(&method, open(ctx, params)).await {
             Ok(source) => open_stream(&session, id, source).await,
             Err(error) => reply(&session, id, Err(error)).await,
         },
+    }
+}
+
+/// Runs a handler on its own task, so a panic in it is answered as `internal` and the request is never left waiting.
+async fn guarded<T, F>(method: &str, future: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, ErrorBody>> + Send + 'static,
+{
+    match tokio::spawn(future).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => {
+            tracing::error!(method, "a method handler panicked");
+            Err(ErrorBody::new(
+                codes::INTERNAL,
+                "the method failed unexpectedly",
+            ))
+        }
+        Err(_) => Err(ErrorBody::new(codes::INTERNAL, "the method was cancelled")),
     }
 }
 

@@ -1,14 +1,16 @@
 //! Core methods: identity, dispatch errors, parameter decoding, registration rules and the command table.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use massorca_protocol::methods::config::ConfigList;
 use massorca_protocol::methods::{config, events, projects, service, workspaces};
-use massorca_protocol::{PROTOCOL_VERSION, capabilities, codes};
+use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
-    MethodError, MethodInfo, Owner, Permission, RegistrationError, core_commands,
+    MethodError, MethodInfo, Owner, Permission, RegistrationError, RequestCtx, core_commands,
 };
 use serde_json::{Value, json};
+use tokio::time::timeout;
 
 use super::common::{SERVER_VERSION, connect, echo, remote_code, start, stop, temp_home};
 
@@ -229,4 +231,46 @@ fn command_ids_are_the_cli_paths_and_unique() {
             expected.replace('.', " ")
         );
     }
+}
+
+/// A handler that panics, so the test can check the request is still answered.
+async fn panicking(_ctx: RequestCtx, _params: Value) -> Result<Value, ErrorBody> {
+    panic!("a handler bug")
+}
+
+#[tokio::test]
+async fn a_panicking_handler_is_answered_as_internal_and_the_connection_keeps_working() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    // The handle keeps the method registered for the test's duration.
+    let _panicking = running
+        .registries()
+        .methods
+        .register(
+            Owner::Core,
+            "test.panic",
+            capabilities::SERVICE,
+            Permission::Read,
+            panicking,
+        )
+        .expect("the method is registered");
+    let client = connect(home.path(), "default").await;
+
+    let answer = timeout(
+        Duration::from_secs(5),
+        client.call::<_, Value>("test.panic", &Value::Null),
+    )
+    .await
+    .expect("the request is answered instead of hanging");
+    let error = answer.expect_err("the panicking call fails");
+    assert_eq!(remote_code(&error), codes::INTERNAL);
+
+    let info = timeout(
+        Duration::from_secs(5),
+        client.call::<_, Value>(service::INFO, &Value::Null),
+    )
+    .await
+    .expect("the connection still answers");
+    assert!(info.is_ok(), "{info:?}");
+    stop(running).await;
 }
