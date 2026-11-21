@@ -15,6 +15,8 @@ pub enum Canvas {
     Team(TeamPage),
     /// A full page, which covers the Canvas and hides every region (A8).
     Page(Page),
+    /// A workspace's start page, with no session open (D-AG-01). Its id is the workspace's.
+    Workspace(String),
 }
 
 impl Canvas {

@@ -2,6 +2,7 @@
 
 mod config;
 mod events;
+mod git;
 mod projects;
 mod service;
 mod workspace_domain;
@@ -29,6 +30,7 @@ pub(crate) fn register_core(
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
     handles.extend(workspaces::register(registries)?);
+    handles.extend(git::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

@@ -45,6 +45,8 @@ pub enum Page {
     Calendar,
     Marketplace,
     Settings,
+    /// The setup checklist, a full page opened from Settings, General (D-OB-12).
+    Setup,
     /// Opened from the Workspaces Sidebar, not the rail (A9).
     Automations,
     /// A Bot Teams page. It keeps the Sidebar open, unlike a full page (screens 3, decision 1).
@@ -64,6 +66,7 @@ impl Page {
             Page::Calendar => "Calendar",
             Page::Marketplace => "Marketplace",
             Page::Settings => "Settings",
+            Page::Setup => "Setup",
             Page::Automations => "Automations",
             Page::Team(page) => page.title(),
         }
