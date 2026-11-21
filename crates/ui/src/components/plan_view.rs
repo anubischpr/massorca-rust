@@ -3,8 +3,26 @@
 //! current and next steps, the rows that show for the expansion state, and the card rows. The
 //! view draws what the model says.
 
-use gpui::SharedString;
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::empty_state::EmptyState;
+use crate::components::error_state::ErrorState;
+use crate::components::skeleton::{LineWidth, Skeleton};
+use crate::icon::{Icon, IconName, IconSize};
+use crate::style::FocusRing;
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{
+    Palette, RADIUS_FULL, RADIUS_MD, SIZE_ICON_SM, SIZE_ICON_XS, SIZE_PROGRESS_HEIGHT, SPACE_1,
+    SPACE_2, SPACE_3, SPACE_4, SPACE_HALF, TYPE_BODY, TYPE_BODY_SM, TYPE_CAPTION, TYPE_TITLE_SM,
+};
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyElement, App, Div, ElementId, Entity, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, RenderOnce, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px, relative,
+};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 /// Rows the Session summary card shows at most.
 pub const CARD_ROWS: usize = 6;
@@ -347,5 +365,566 @@ mod tests {
             words,
             vec!["not started", "in progress", "done", "skipped", "blocked"]
         );
+    }
+}
+
+/// How the plan is loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlanStatus {
+    /// The steps and the document draw.
+    Ready,
+    /// Skeleton rows while the plan loads.
+    Loading,
+    /// "The agent has not shared a plan yet."
+    Empty,
+    /// "Could not load the plan." with Retry; the reason is shown under it.
+    Failed(SharedString),
+    /// The host cannot be reached: the last plan stays, dated.
+    Stale(SharedString),
+}
+
+/// The tab shows the whole plan; the card shows its first rows and an Open plan link.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlanVariant {
+    #[default]
+    Tab,
+    Card,
+}
+
+/// What the reader asked for. The owner acts on it; the cursor and the expansion stay in the view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlanAction {
+    /// Open the plan as a Work panel tab.
+    Open,
+    /// Copy the text of a step.
+    Copy(SharedString),
+    /// Load the plan again.
+    Retry,
+}
+
+/// Receives the actions of a PlanView.
+pub type PlanActionHandler = Rc<dyn Fn(PlanAction, &mut Window, &mut App)>;
+
+/// The view's own state, kept by its element id.
+struct PlanUi {
+    focus: FocusHandle,
+    scroll: ScrollHandle,
+    expanded: HashSet<StepPath>,
+    cursor: usize,
+}
+
+/// The plan: its header and progress, the steps or the document, and its states (PlanView.md).
+#[derive(IntoElement)]
+pub struct PlanView {
+    id: ElementId,
+    plan: Rc<Plan>,
+    status: PlanStatus,
+    variant: PlanVariant,
+    updated: Option<SharedString>,
+    on_action: Option<PlanActionHandler>,
+}
+
+impl std::fmt::Debug for PlanView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanView")
+            .field("id", &self.id)
+            .field("status", &self.status)
+            .finish()
+    }
+}
+
+impl PlanView {
+    pub fn new(id: impl Into<ElementId>, plan: impl Into<Rc<Plan>>) -> Self {
+        Self {
+            id: id.into(),
+            plan: plan.into(),
+            status: PlanStatus::Ready,
+            variant: PlanVariant::Tab,
+            updated: None,
+            on_action: None,
+        }
+    }
+
+    pub fn status(mut self, status: PlanStatus) -> Self {
+        self.status = status;
+        self
+    }
+
+    pub fn variant(mut self, variant: PlanVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// "Updated 2 min ago", as the caller words it.
+    pub fn updated(mut self, text: impl Into<SharedString>) -> Self {
+        self.updated = Some(text.into());
+        self
+    }
+
+    pub fn on_action(
+        mut self,
+        listener: impl Fn(PlanAction, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_action = Some(Rc::new(listener));
+        self
+    }
+}
+
+/// A click listener that sends one action to the handler.
+fn on(
+    handler: &Option<PlanActionHandler>,
+    action: PlanAction,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let handler = handler.clone();
+    move |window, cx| {
+        if let Some(handler) = &handler {
+            handler(action.clone(), window, cx);
+        }
+    }
+}
+
+fn emit(
+    handler: &Option<PlanActionHandler>,
+    action: PlanAction,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(handler) = handler {
+        handler(action, window, cx);
+    }
+}
+
+/// Flips a step between shown and hidden sub-steps.
+fn toggle(expanded: &mut HashSet<StepPath>, path: &StepPath) {
+    if !expanded.remove(path) {
+        expanded.insert(path.clone());
+    }
+}
+
+/// Applies a key to the step list. Returns whether the key was used, and the action it asks for.
+fn handle_key(
+    rows: &[Row],
+    state: &mut PlanUi,
+    key: &str,
+    secondary: bool,
+) -> (bool, Option<PlanAction>) {
+    let last = rows.len().saturating_sub(1);
+    let row = rows.get(state.cursor);
+    match key {
+        "down" => state.cursor = (state.cursor + 1).min(last),
+        "up" => state.cursor = state.cursor.saturating_sub(1),
+        "home" => state.cursor = 0,
+        "end" => state.cursor = last,
+        "right" | "left" | "enter" => {
+            let Some(row) = row else {
+                return (false, None);
+            };
+            let Some(open) = row.expanded else {
+                return (false, None);
+            };
+            let flip = match key {
+                "right" => !open,
+                "left" => open,
+                _ => true,
+            };
+            if flip {
+                toggle(&mut state.expanded, &row.path);
+            }
+        }
+        "c" if secondary => return (true, row.map(|row| PlanAction::Copy(row.text.clone()))),
+        _ => return (false, None),
+    }
+    (true, None)
+}
+
+/// The header's progress bar: a 4 px track with the accent fill to the finished share.
+fn progress_track(fraction: f32, p: &Palette) -> Div {
+    div()
+        .relative()
+        .w_full()
+        .h(px(SIZE_PROGRESS_HEIGHT))
+        .rounded(px(RADIUS_FULL))
+        .bg(p.progress.track)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(relative(fraction))
+                .rounded(px(RADIUS_FULL))
+                .bg(p.accent.r#default),
+        )
+}
+
+/// The status glyph of a step. Done follows AgentStatus (ring with a check, agent.done).
+fn glyph(status: StepStatus, stale: bool, p: &Palette) -> AnyElement {
+    match status {
+        StepStatus::Pending => AgentStatus::new(AgentState::Idle).into_any_element(),
+        StepStatus::InProgress if stale => {
+            AgentStatus::new(AgentState::Unreachable).into_any_element()
+        }
+        StepStatus::InProgress => AgentStatus::new(AgentState::Running).into_any_element(),
+        StepStatus::Done => AgentStatus::new(AgentState::Done).into_any_element(),
+        StepStatus::Blocked => AgentStatus::new(AgentState::Error).into_any_element(),
+        StepStatus::Skipped => div()
+            .relative()
+            .flex_none()
+            .size(px(SIZE_ICON_SM))
+            .child(
+                Icon::new(IconName::Circle)
+                    .size(IconSize::Small)
+                    .color(p.text.tertiary),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(SPACE_HALF))
+                    .left(px(SPACE_HALF))
+                    .child(
+                        Icon::new(IconName::Minus)
+                            .size(IconSize::XSmall)
+                            .color(p.text.tertiary),
+                    ),
+            )
+            .into_any_element(),
+    }
+}
+
+/// What a step row needs from the view.
+struct Look {
+    p: Palette,
+    stale: bool,
+    current: Option<StepPath>,
+    cursor: usize,
+    focused: bool,
+    interactive: bool,
+    state: Entity<PlanUi>,
+}
+
+/// One step row: indent by depth, the expander, the glyph and the text.
+fn step_row(index: usize, row: &Row, look: &Look) -> AnyElement {
+    let p = &look.p;
+    let current = look.current.as_ref() == Some(&row.path);
+    let text_color = if row.status == StepStatus::Skipped {
+        p.text.tertiary
+    } else {
+        p.text.primary
+    };
+    let expander = match row.expanded {
+        Some(open) => {
+            let icon = if open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            };
+            Icon::new(icon)
+                .size(IconSize::XSmall)
+                .color(p.text.secondary)
+                .into_any_element()
+        }
+        None => div().flex_none().w(px(SIZE_ICON_XS)).into_any_element(),
+    };
+    let mut text = div().flex().flex_col().flex_1().min_w_0().child(
+        div()
+            .text_style(TYPE_BODY)
+            .text_color(text_color)
+            .child(row.text.clone()),
+    );
+    if let Some(reason) = row.reason.clone() {
+        text = text.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.secondary)
+                .child(reason),
+        );
+    }
+    let state = look.state.clone();
+    let path = row.path.clone();
+    let parent = row.expanded.is_some();
+    let interactive = look.interactive;
+    let hover = p.fill.hover_canvas;
+    let focus_ring = p.border.focus;
+    let mut el = div()
+        .id(("plan-row", index))
+        .relative()
+        .flex()
+        .items_start()
+        .gap(px(SPACE_2))
+        .py(px(SPACE_1))
+        .pl(px(SPACE_2 + row.depth as f32 * SPACE_4))
+        .pr(px(SPACE_2))
+        .rounded(px(RADIUS_MD))
+        .role(Role::ListItem)
+        .aria_label(format!("{}, {}", row.text, row.status.label()))
+        .hover(move |s| s.bg(hover))
+        .when(current, |el| el.bg(p.accent.subtle_canvas))
+        .when(look.focused && look.cursor == index, |el| {
+            el.border_2().border_color(focus_ring)
+        })
+        .on_click(move |_, window, cx| {
+            state.update(cx, |s, _| {
+                s.cursor = index;
+                if parent && interactive {
+                    toggle(&mut s.expanded, &path);
+                }
+            });
+            window.refresh();
+        })
+        .child(expander)
+        .child(glyph(row.status, look.stale, p))
+        .child(text);
+    if current {
+        el = el.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(SPACE_HALF))
+                .bg(p.accent.fg),
+        );
+    }
+    el.into_any_element()
+}
+
+/// The skeleton of a plan that is loading: a header and six rows of two lengths.
+fn loading_body(id: &ElementId, p: &Palette) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .p(px(SPACE_3))
+        .id((id.clone(), "loading"))
+        .children((0..6).map(|i| {
+            let width = if i % 2 == 0 {
+                LineWidth::Full
+            } else {
+                LineWidth::Most
+            };
+            Skeleton::line(width)
+        }))
+        .bg(p.surface.canvas)
+        .into_any_element()
+}
+
+impl RenderOnce for PlanView {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let p = theme.palette;
+        let id = self.id.clone();
+        let plan = self.plan.clone();
+        let init = plan.clone();
+        let state = window.use_keyed_state(id.clone(), cx, move |_, cx| PlanUi {
+            focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
+            expanded: init.default_expanded(),
+            cursor: 0,
+        });
+        let (focus, scroll, expanded, cursor) = {
+            let s = state.read(cx);
+            (
+                s.focus.clone(),
+                s.scroll.clone(),
+                s.expanded.clone(),
+                s.cursor,
+            )
+        };
+        let card = self.variant == PlanVariant::Card;
+        let interactive = !card;
+        let stale = matches!(self.status, PlanStatus::Stale(_));
+        let rows = if card {
+            plan.card_rows()
+        } else {
+            plan.rows(&expanded)
+        };
+        let current = plan.current();
+        let look = Look {
+            p,
+            stale,
+            current: current.clone(),
+            cursor,
+            focused: focus.is_focused(window),
+            interactive,
+            state: state.clone(),
+        };
+        let handler = self.on_action.clone();
+
+        let header = (!card).then(|| {
+            let caption = match &self.status {
+                PlanStatus::Stale(age) => div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .child(AgentStatus::new(AgentState::Unreachable).size(AgentStatusSize::XSmall))
+                    .child(
+                        div()
+                            .text_style(TYPE_CAPTION)
+                            .text_color(p.text.tertiary)
+                            .child(format!("Last update {age}. VPS can't be reached.")),
+                    )
+                    .into_any_element(),
+                _ => div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(p.text.tertiary)
+                    .child(self.updated.clone().unwrap_or_default())
+                    .into_any_element(),
+            };
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .px(px(SPACE_3))
+                .pt(px(SPACE_3))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SPACE_2))
+                        .child(
+                            Icon::new(IconName::ListChecks)
+                                .size(IconSize::Small)
+                                .color(p.text.secondary),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_style(TYPE_TITLE_SM)
+                                .text_color(p.text.primary)
+                                .child("Plan"),
+                        )
+                        .child(
+                            div()
+                                .text_style(TYPE_CAPTION)
+                                .tabular_figures()
+                                .text_color(p.text.secondary)
+                                .child(plan.progress_text()),
+                        ),
+                )
+                .child(progress_track(plan.fraction(), &p))
+                .child(caption)
+        });
+
+        let empty = plan.steps.is_empty() && plan.document.is_none();
+        let body = match self.status.clone() {
+            PlanStatus::Loading => loading_body(&id, &p),
+            PlanStatus::Failed(reason) => ErrorState::new("plan-error", "Could not load the plan.")
+                .explanation(reason)
+                .on_retry(on(&handler, PlanAction::Retry))
+                .into_any_element(),
+            PlanStatus::Empty => {
+                EmptyState::new("plan-empty", "The agent has not shared a plan yet.")
+                    .into_any_element()
+            }
+            PlanStatus::Ready | PlanStatus::Stale(_) if empty => {
+                EmptyState::new("plan-empty", "The agent has not shared a plan yet.")
+                    .into_any_element()
+            }
+            PlanStatus::Ready | PlanStatus::Stale(_) => {
+                let keys = plan.clone();
+                let key_state = state.clone();
+                let key_handler = handler.clone();
+                let key_scroll = scroll.clone();
+                let jump_index = current
+                    .as_ref()
+                    .and_then(|path| rows.iter().position(|row| &row.path == path));
+                let jump = jump_index.map(|index| {
+                    let state = state.clone();
+                    Button::new("plan-jump", "Jump to current step")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact)
+                        .leading_icon(IconName::Locate)
+                        .on_click(move |window, cx| {
+                            state.update(cx, |s, _| {
+                                s.cursor = index;
+                                s.scroll.scroll_to_item(index);
+                            });
+                            window.refresh();
+                        })
+                });
+                let elements: Vec<AnyElement> = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| step_row(index, row, &look))
+                    .collect();
+                let list = div()
+                    .id((id.clone(), "steps"))
+                    .role(Role::List)
+                    .aria_label("Plan steps")
+                    .track_focus(&focus)
+                    .tab_stop(interactive)
+                    .focus_ring(&theme)
+                    .track_scroll(&scroll)
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                        if !interactive {
+                            return;
+                        }
+                        let secondary = event.keystroke.modifiers.secondary(cx);
+                        let key = event.keystroke.key.as_str();
+                        let (used, action) = key_state.update(cx, |s, _| {
+                            let rows = if card {
+                                keys.card_rows()
+                            } else {
+                                keys.rows(&s.expanded)
+                            };
+                            let result = handle_key(&rows, s, key, secondary);
+                            key_scroll.scroll_to_item(s.cursor);
+                            result
+                        });
+                        if used {
+                            cx.stop_propagation();
+                            window.refresh();
+                            if let Some(action) = action {
+                                emit(&key_handler, action, window, cx);
+                            }
+                        }
+                    })
+                    .children(elements);
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .children(jump.map(|button| {
+                        div()
+                            .flex()
+                            .justify_end()
+                            .px(px(SPACE_3))
+                            .pb(px(SPACE_2))
+                            .child(button)
+                    }))
+                    .into_any_element()
+            }
+        };
+
+        let footer = card.then(|| {
+            div()
+                .flex()
+                .justify_end()
+                .px(px(SPACE_3))
+                .pb(px(SPACE_2))
+                .child(
+                    Button::new("plan-open", "Open plan")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact)
+                        .on_click(on(&handler, PlanAction::Open)),
+                )
+        });
+
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .children(header)
+            .child(body)
+            .children(footer)
     }
 }
