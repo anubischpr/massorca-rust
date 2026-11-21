@@ -8,10 +8,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+massorca-core-store.workspace = true
+massorca-core-terminal.workspace = true
+massorca-core-workspace.workspace = true
 massorca-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
