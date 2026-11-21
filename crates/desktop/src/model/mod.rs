@@ -6,3 +6,4 @@ pub mod palette;
 pub mod regions;
 pub mod shell;
 pub mod shell_state;
+pub mod title_bar;

@@ -2,11 +2,13 @@
 
 mod actions;
 mod canvas;
+mod title_bar;
+mod tooltip;
 
 use crate::data::DataSource;
 use crate::model::shell_state::ShellModel;
 use actions::CloseOverlay;
-use gpui::{App, Context, FocusHandle, IntoElement, Render, Window, div, prelude::*};
+use gpui::{App, Context, FocusHandle, IntoElement, Render, WeakEntity, Window, div, prelude::*};
 use massorca_ui::components::text_field;
 use massorca_ui::{ActiveTheme, TextStyled};
 
@@ -44,11 +46,21 @@ pub fn bind_keys(cx: &mut App) {
     actions::bind_keys(cx);
 }
 
+/// Applies a control's change to the shell and redraws it. A closed window does nothing.
+fn change(shell: &WeakEntity<Shell>, cx: &mut App, apply: impl FnOnce(&mut Shell)) {
+    let _ = shell.update(cx, |shell, cx| {
+        apply(shell);
+        cx.notify();
+    });
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
+        let shell = cx.entity().downgrade();
+        let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme);
         let canvas = canvas::canvas(&self.model, cx);
         div()
             .size_full()
@@ -62,6 +74,15 @@ impl Render for Shell {
                 shell.model.close_overlay();
                 cx.notify();
             }))
-            .child(canvas)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(title_bar)
+                    .child(div().flex_1().min_h_0().flex().flex_row().child(canvas)),
+            )
     }
 }

@@ -2,7 +2,7 @@
 //! and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
-use super::navigation::Navigation;
+use super::navigation::{Navigation, Page};
 use super::regions::{Placement, Region, RegionState};
 use super::shell::ShellSnapshot;
 
@@ -94,6 +94,28 @@ impl ShellModel {
 
     pub fn close_overlay(&mut self) {
         self.regions.close_overlay();
+    }
+
+    /// The Sidebar toggle: shows or hides the Sidebar, inline or as the overlay.
+    pub fn toggle_sidebar(&mut self) {
+        self.toggle_region(Region::Sidebar);
+    }
+
+    pub fn open_page(&mut self, page: Page) {
+        self.navigation.open(page);
+    }
+
+    pub fn go_back(&mut self) {
+        self.navigation.back();
+    }
+
+    pub fn go_forward(&mut self) {
+        self.navigation.forward();
+    }
+
+    /// The mode button (P6). Returns true when the mode changed.
+    pub fn press_mode_switch(&mut self) -> bool {
+        self.navigation.press_mode_switch()
     }
 
     /// The Canvas content for the current page, mode and open session.
