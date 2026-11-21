@@ -161,6 +161,34 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("terminal"),
         ),
         command(
+            "terminal.screen",
+            "Print a terminal's current screen as text",
+            "terminal.attach",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "scrollback": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "terminal.attach",
+            "Attach to a terminal's output",
+            "terminal.attach",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "since": { "type": "integer" },
+                    "cols": { "type": "integer" },
+                    "rows": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
             "terminal.send",
             "Type into a terminal",
             "terminal.input",

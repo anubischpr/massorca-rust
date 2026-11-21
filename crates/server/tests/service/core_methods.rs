@@ -33,10 +33,11 @@ const PHASE1_METHODS: [&str; 14] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
-const TERMINAL_METHODS: [&str; 7] = [
+const TERMINAL_METHODS: [&str; 8] = [
     "terminal.create",
     "terminal.list",
     "terminal.show",
+    "terminal.attach",
     "terminal.input",
     "terminal.resize",
     "terminal.kill",

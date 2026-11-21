@@ -6,15 +6,20 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use interprocess::local_socket::tokio::Stream;
+use interprocess::local_socket::traits::tokio::Stream as _;
 use massorca_client::{Client, ClientError, ConnectOptions};
-use massorca_profile::Profile;
+use massorca_profile::{Profile, local_socket_name};
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::{
     self, MAX_INPUT_BYTES, Terminal, TerminalCreateParams, TerminalInputParams, TerminalKillParams,
     TerminalList, TerminalListParams, TerminalRef, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
-use massorca_protocol::{PeerInfo, codes};
+use massorca_protocol::{
+    MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, PeerInfo, ProtocolRange,
+    capabilities, codes, read_message, write_message,
+};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -266,6 +271,84 @@ async fn an_unknown_workspace_is_refused_as_the_workspace_show_would_refuse_it()
         .await
         .expect_err("there is no such workspace");
     assert_eq!(remote_code(&error), codes::WORKSPACE_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn attach_is_refused_when_the_client_did_not_offer_binary_frames() {
+    let home = temp_home();
+    let running = start(home.path()).await;
+    let client = connect(home.path()).await;
+    let workspace = workspace(&client, home.path()).await;
+    let created = client
+        .terminal_create(&create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+
+    let socket = local_socket_name(&profile(home.path())).expect("the socket name");
+    let stream = Stream::connect(socket)
+        .await
+        .expect("the raw connection opens");
+    let mut writer: &Stream = &stream;
+    write_message(
+        &mut writer,
+        &Message::Hello {
+            protocol: ProtocolRange {
+                min: MIN_PROTOCOL_VERSION,
+                max: PROTOCOL_VERSION,
+            },
+            client: PeerInfo {
+                name: "raw-test-client".to_owned(),
+                version: "0.0.0-test".to_owned(),
+            },
+            capabilities: vec![capabilities::TERMINALS.to_owned()],
+            auth: None,
+        },
+        MAX_FRAME_LEN_LOCAL,
+    )
+    .await
+    .expect("hello is sent");
+    let mut reader: &Stream = &stream;
+    let welcome = read_message(&mut reader, MAX_FRAME_LEN_LOCAL)
+        .await
+        .expect("the welcome reads")
+        .expect("the welcome arrives");
+    assert!(matches!(welcome, Message::Welcome { .. }));
+
+    let mut writer: &Stream = &stream;
+    write_message(
+        &mut writer,
+        &Message::Request {
+            id: 1,
+            method: "terminal.attach".to_owned(),
+            params: serde_json::json!({ "terminal": created.id }),
+        },
+        MAX_FRAME_LEN_LOCAL,
+    )
+    .await
+    .expect("the attach request is sent");
+    let mut reader: &Stream = &stream;
+    let answer = timeout(
+        Duration::from_secs(5),
+        read_message(&mut reader, MAX_FRAME_LEN_LOCAL),
+    )
+    .await
+    .expect("the service answers")
+    .expect("the answer reads")
+    .expect("the answer arrives");
+    match answer {
+        Message::Response {
+            id: 1,
+            error: Some(error),
+            ..
+        } => assert_eq!(error.code, codes::STREAM_BINARY_FRAMES_REQUIRED),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    client
+        .terminal_close(&created.id)
+        .await
+        .expect("cleanup closes the terminal");
     stop(running).await;
 }
 
