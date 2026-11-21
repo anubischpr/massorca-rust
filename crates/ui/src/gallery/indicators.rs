@@ -2,11 +2,13 @@
 
 use super::{Story, variant};
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::progress::{ProgressBar, ProgressState, Spinner};
 use crate::components::skeleton::{LineWidth, Skeleton, SkeletonShape};
+use crate::components::usage_ring::{UsageReading, UsageRing, UsageSlot};
 use crate::icon::IconSize;
-use crate::theme::TextStyled;
-use crate::tokens::{SPACE_2, SPACE_4};
+use crate::theme::{ActiveTheme, TextStyled};
+use crate::tokens::{RADIUS_MD, SPACE_2, SPACE_4};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
@@ -17,6 +19,11 @@ pub fn stories() -> Vec<Story> {
             render: agent_icon,
         },
         Story {
+            name: "Agent status",
+            spec: "AgentStatus.md",
+            render: agent_status,
+        },
+        Story {
             name: "Progress",
             spec: "Progress.md",
             render: progress,
@@ -25,6 +32,11 @@ pub fn stories() -> Vec<Story> {
             name: "Skeleton",
             spec: "Skeleton.md",
             render: skeleton,
+        },
+        Story {
+            name: "Usage ring",
+            spec: "UsageRing.md",
+            render: usage_ring,
         },
     ]
 }
@@ -60,6 +72,70 @@ fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Every agent", marks, cx))
         .child(variant("Sizes, 12 to 24 px", sizes, cx))
         .child(variant("Icon beside a name", beside_name, cx))
+        .into_any_element()
+}
+
+fn agent_status(_: &mut Window, cx: &mut App) -> AnyElement {
+    let palette = cx.theme().palette;
+    let states_at = |size: AgentStatusSize| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_4))
+            .children(AgentState::ALL.map(|state| AgentStatus::new(state).size(size)))
+    };
+    let row = |state: AgentState, name: &'static str| {
+        let text = if state == AgentState::Unreachable {
+            palette.text.tertiary
+        } else {
+            palette.text.primary
+        };
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .p(px(SPACE_2))
+            .rounded(px(RADIUS_MD))
+            .text_body()
+            .text_color(text)
+            .child(AgentStatus::new(state))
+            .child(name);
+        if let Some(tint) = state.row_tint(&palette) {
+            row = row.bg(tint);
+        }
+        row
+    };
+    let tinted = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .child(row(AgentState::Waiting, "Session needs an answer"))
+        .child(row(AgentState::Error, "Build failed"));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant(
+            "Six states, 20 px",
+            states_at(AgentStatusSize::Medium),
+            cx,
+        ))
+        .child(variant(
+            "Six states, 16 px",
+            states_at(AgentStatusSize::Small),
+            cx,
+        ))
+        .child(variant(
+            "Six states, 12 px",
+            states_at(AgentStatusSize::XSmall),
+            cx,
+        ))
+        .child(variant("Waiting and error tint the row", tinted, cx))
+        .child(variant(
+            "Unreachable dims the row by text colour",
+            row(AgentState::Unreachable, "Last known running, 5 min ago"),
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -166,6 +242,71 @@ fn skeleton(_: &mut Window, cx: &mut App) -> AnyElement {
             div()
                 .w(width)
                 .child(Skeleton::new(SkeletonShape::Row).delayed("gallery-skeleton-row")),
+            cx,
+        ))
+        .into_any_element()
+}
+
+fn usage_ring(_: &mut Window, cx: &mut App) -> AnyElement {
+    let slot = |index: u8| UsageSlot::new(index).expect("slots run from 1 to 6");
+    let slots = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Claude, UsageReading::Percent(20.0)).slot(slot(1)))
+        .child(UsageRing::new(AgentKind::Codex, UsageReading::Percent(35.0)).slot(slot(2)))
+        .child(UsageRing::new(AgentKind::Antigravity, UsageReading::Percent(50.0)).slot(slot(3)))
+        .child(UsageRing::new(AgentKind::GentleShell, UsageReading::Percent(62.0)).slot(slot(4)))
+        .child(UsageRing::new(AgentKind::Gemini, UsageReading::Percent(40.0)).slot(slot(5)))
+        .child(UsageRing::new(AgentKind::OpenCode, UsageReading::Percent(10.0)).slot(slot(6)));
+    let thresholds = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Claude, UsageReading::Percent(62.0)).resets_in("2 days"))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(84.0),
+        ))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(97.0),
+        ))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Percent(120.0),
+        ));
+    let states = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_4))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::Loading))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::NotReported))
+        .child(UsageRing::new(AgentKind::Cursor, UsageReading::Unavailable))
+        .child(UsageRing::new(
+            AgentKind::Claude,
+            UsageReading::Failed { last: Some(62.0) },
+        ))
+        .child(
+            UsageRing::new(AgentKind::Claude, UsageReading::Percent(62.0))
+                .disconnected("5 min ago"),
+        );
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_4))
+        .child(variant("Provider slots 1 to 6", slots, cx))
+        .child(variant(
+            "Warn from 80 percent, limit from 95",
+            thresholds,
+            cx,
+        ))
+        .child(variant(
+            "Loading, empty, unavailable, error and unreachable",
+            states,
             cx,
         ))
         .into_any_element()
