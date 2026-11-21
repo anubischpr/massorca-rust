@@ -524,7 +524,10 @@ fn a_worktree_git_no_longer_recognises_is_an_orphan_and_its_files_are_never_dele
 
     let removed = remove_with(&fx, "lost", forget_orphan());
     assert!(removed.directory_kept);
-    assert_eq!(entries(Path::new(&lost.path)), [".git", "README.md", "work.txt"]);
+    assert_eq!(
+        entries(Path::new(&lost.path)),
+        [".git", "README.md", "work.txt"]
+    );
     expect_code(
         fx.workspaces.show_workspace(&lost.id),
         codes::WORKSPACE_NOT_FOUND,
