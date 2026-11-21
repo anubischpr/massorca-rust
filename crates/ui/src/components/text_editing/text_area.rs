@@ -332,3 +332,151 @@ impl InputHost for TextArea {
 }
 
 impl_input_handler!(TextArea);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{ClipboardItem, Entity, EntityInputHandler, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+
+    /// Subscribes to an area and collects the events it emits.
+    fn record_events(
+        area: &Entity<TextArea>,
+        cx: &mut VisualTestContext,
+    ) -> Rc<RefCell<Vec<TextAreaEvent>>> {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(area, move |_, event: &TextAreaEvent, _| {
+                sink.borrow_mut().push(*event)
+            })
+            .detach();
+        });
+        events
+    }
+
+    /// Focuses an area and redraws, so the platform input handler is installed.
+    fn focus_and_draw(area: &Entity<TextArea>, cx: &mut VisualTestContext) {
+        area.update_in(cx, |area, window, cx| {
+            area.focus(window, cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+    }
+
+    fn text_of(area: &Entity<TextArea>, cx: &VisualTestContext) -> String {
+        area.read_with(cx, |area, _| area.text().to_owned())
+    }
+
+    #[gpui::test]
+    fn typing_and_shift_enter_build_lines(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        focus_and_draw(&area, cx);
+        cx.simulate_input("ab");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("c");
+        assert_eq!(text_of(&area, cx), "ab\nc");
+    }
+
+    #[gpui::test]
+    fn plain_and_modified_enter_go_to_the_owner_without_text(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        let events = record_events(&area, cx);
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("secondary-enter");
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                TextAreaEvent::Key(TextAreaKey::Enter),
+                TextAreaEvent::Key(TextAreaKey::ModifiedEnter),
+            ]
+        );
+        assert_eq!(text_of(&area, cx), "");
+    }
+
+    #[gpui::test]
+    fn escape_and_up_on_an_empty_area_reach_the_owner(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        let events = record_events(&area, cx);
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes("escape up");
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                TextAreaEvent::Key(TextAreaKey::Escape),
+                TextAreaEvent::HistoryPrevious,
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn up_and_down_move_between_lines_once_drawn(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).with_text("ab\ncd"));
+        focus_and_draw(&area, cx);
+        cx.simulate_keystrokes("up");
+        assert!(area.read_with(cx, |area, _| area.cursor() < 3));
+        cx.simulate_keystrokes("down");
+        assert!(area.read_with(cx, |area, _| area.cursor() >= 3));
+    }
+
+    #[gpui::test]
+    fn paste_keeps_line_breaks_and_flattens_crlf(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        focus_and_draw(&area, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("x\r\ny".to_owned()));
+        cx.simulate_keystrokes("secondary-v");
+        assert_eq!(text_of(&area, cx), "x\ny");
+    }
+
+    #[gpui::test]
+    fn height_grows_with_the_text_and_stops_at_the_maximum(cx: &mut TestAppContext) {
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx).heights(44., 176.));
+        let empty = area.update_in(cx, |area, window, cx| area.height_for(px(300.), window, cx));
+        assert_eq!(f32::from(empty), 44.);
+        area.update_in(cx, |area, window, cx| {
+            area.set_text(
+                (0..30)
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                window,
+                cx,
+            );
+        });
+        let full = area.update_in(cx, |area, window, cx| area.height_for(px(300.), window, cx));
+        assert_eq!(f32::from(full), 176.);
+    }
+
+    #[gpui::test]
+    fn composition_is_marked_then_committed(cx: &mut TestAppContext) {
+        let (area, cx) = cx.add_window_view(|_, cx| TextArea::new(cx));
+        focus_and_draw(&area, cx);
+        area.update_in(cx, |area, window, cx| {
+            area.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+            assert_eq!(area.marked_text_range(window, cx), Some(0..2));
+        });
+        area.update_in(cx, |area, window, cx| {
+            area.replace_text_in_range(None, "你", window, cx);
+            assert_eq!(area.text(), "你");
+            assert_eq!(area.marked_text_range(window, cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn disabled_area_keeps_its_text(cx: &mut TestAppContext) {
+        let (area, cx) =
+            cx.add_window_view(|_, cx| TextArea::new(cx).with_text("draft").disabled(true));
+        focus_and_draw(&area, cx);
+        cx.simulate_input("x");
+        assert_eq!(text_of(&area, cx), "draft");
+        area.update_in(cx, |area, window, cx| {
+            assert!(!area.accepts_text_input(window, cx));
+        });
+    }
+}
