@@ -146,6 +146,75 @@ fn the_status_bar_sits_under_the_canvas_and_names_the_hosts(cx: &mut TestAppCont
     assert!(f32::from(hosts.left()) > f32::from(canvas.left()));
 }
 
+fn palette_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    }
+}
+
+fn palette_query(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<String> {
+    shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .palette()
+            .map(|palette| palette.query().to_owned())
+    })
+}
+
+#[gpui::test]
+fn mod_k_opens_the_palette_and_a_command_typed_into_it_runs_on_enter(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    assert_eq!(palette_query(&shell, cx).as_deref(), Some(""));
+    cx.simulate_input("theme");
+    draw(cx);
+    assert_eq!(palette_query(&shell, cx).as_deref(), Some("theme"));
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    assert_eq!(palette_query(&shell, cx), None);
+    let appearance = cx.update(|_, cx| cx.theme().appearance);
+    assert_eq!(appearance, Appearance::Light);
+}
+
+#[gpui::test]
+fn escape_closes_the_palette_and_returns_focus_to_the_shell(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(palette_query(&shell, cx), None);
+    let focused = cx.update(|window, cx| {
+        let focus = shell.read(cx).focus.clone();
+        focus.is_focused(window)
+    });
+    assert!(focused);
+}
+
+#[gpui::test]
+fn the_arrow_keys_move_the_active_palette_row(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    cx.simulate_keystrokes("down");
+    let active = shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .palette()
+            .map(|palette| palette.active_index())
+    });
+    assert_eq!(active, Some(1));
+}
+
 #[gpui::test]
 fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppContext) {
     setup(cx);

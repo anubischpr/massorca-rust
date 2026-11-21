@@ -224,7 +224,8 @@ fn nav_icon(kind: NavKind) -> IconName {
     }
 }
 
-fn glyph_state(state: AgentState) -> GlyphState {
+/// The status glyph of a session state, shared with the palette's session rows.
+pub(super) fn glyph_state(state: AgentState) -> GlyphState {
     match state {
         AgentState::Running => GlyphState::Running,
         AgentState::Waiting => GlyphState::Waiting,

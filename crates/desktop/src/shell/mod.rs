@@ -2,6 +2,7 @@
 
 mod actions;
 mod canvas;
+mod palette;
 mod rail;
 mod sidebar;
 mod sidebar_rows;
@@ -10,15 +11,17 @@ mod title_bar;
 mod tooltip;
 
 use crate::data::DataSource;
+use crate::model::navigation::Page;
+use crate::model::palette::{Command, PaletteAction};
 use crate::model::shell_state::ShellModel;
-use actions::CloseOverlay;
+use actions::{CloseOverlay, OpenSettings, ToggleCommandPalette};
 use gpui::{
-    App, Context, Entity, FocusHandle, IntoElement, MouseButton, MouseDownEvent, Render,
-    WeakEntity, Window, div, prelude::*,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
+    Subscription, WeakEntity, Window, div, prelude::*,
 };
 use massorca_ui::components::search_field::SearchField;
-use massorca_ui::components::text_field;
-use massorca_ui::{ActiveTheme, TextStyled};
+use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
 
 #[cfg(test)]
@@ -32,6 +35,11 @@ pub struct Shell {
     focus: FocusHandle,
     rail: RailState,
     search: Entity<SearchField>,
+    /// The palette's query field, present while the palette is open.
+    palette_input: Option<Entity<TextField>>,
+    /// The control that had focus when the palette opened; focus returns to it.
+    palette_restore: Option<FocusHandle>,
+    palette_events: Option<Subscription>,
 }
 
 impl Shell {
@@ -48,11 +56,82 @@ impl Shell {
             focus,
             rail,
             search,
+            palette_input: None,
+            palette_restore: None,
+            palette_events: None,
         }
     }
 
     pub fn model(&self) -> &ShellModel {
         &self.model
+    }
+
+    /// Mod+K: opens the palette, or closes it when it is open.
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.palette().is_some() {
+            self.close_palette(window, cx);
+            return;
+        }
+        self.palette_restore = window.focused(cx);
+        self.model.toggle_palette();
+        let input = cx.new(|cx| {
+            TextField::new(cx)
+                .placeholder("Search workspaces, tabs and commands")
+                .leading_icon(IconName::Search)
+        });
+        self.palette_events = Some(cx.subscribe_in(
+            &input,
+            window,
+            |shell, input, event: &TextFieldEvent, window, cx| match event {
+                TextFieldEvent::Changed => {
+                    let query = input.read(cx).text().to_owned();
+                    shell.model.set_palette_query(&query);
+                    cx.notify();
+                }
+                TextFieldEvent::Submitted => shell.confirm_palette(window, cx),
+            },
+        ));
+        let focus = input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        self.palette_input = Some(input);
+        cx.notify();
+    }
+
+    /// Closes the palette without running a row, and returns focus to the opener.
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.close_palette();
+        self.dismiss_palette(window, cx);
+    }
+
+    /// Runs the active row and closes the palette. A disabled row keeps it open.
+    fn confirm_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(action) = self.model.confirm_palette() else {
+            return;
+        };
+        self.dismiss_palette(window, cx);
+        match action {
+            PaletteAction::Command(Command::ToggleTheme) => Theme::toggle(cx),
+            other => self.model.run_palette_action(&other),
+        }
+        cx.notify();
+    }
+
+    /// Clears the query field and gives focus back to the control that opened the palette.
+    fn dismiss_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette_input = None;
+        self.palette_events = None;
+        let focus = self
+            .palette_restore
+            .take()
+            .unwrap_or_else(|| self.focus.clone());
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// A click on a palette row makes it active and runs it.
+    fn activate_palette_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.select_palette_row(index);
+        self.confirm_palette(window, cx);
     }
 }
 
@@ -125,6 +204,10 @@ impl Render for Shell {
                     }),
                 )
             });
+        let palette = match (self.model.palette(), self.palette_input.clone()) {
+            (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
+            _ => None,
+        };
         div()
             .size_full()
             .flex()
@@ -133,8 +216,21 @@ impl Render for Shell {
             .text_color(theme.palette.text.primary)
             .text_body()
             .track_focus(&self.focus)
-            .on_action(cx.listener(|shell, _: &CloseOverlay, _, cx| {
-                shell.model.close_overlay();
+            // Escape closes the palette first, then an overlay region. The palette's own
+            // Escape binding loses to this one, so the palette is handled here.
+            .on_action(cx.listener(|shell, _: &CloseOverlay, window, cx| {
+                if shell.model.palette().is_some() {
+                    shell.close_palette(window, cx);
+                } else {
+                    shell.model.close_overlay();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|shell, _: &ToggleCommandPalette, window, cx| {
+                shell.toggle_palette(window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenSettings, _, cx| {
+                shell.model.open_page(Page::Settings);
                 cx.notify();
             }))
             .child(rail)
@@ -148,5 +244,6 @@ impl Render for Shell {
                     .child(title_bar)
                     .child(body),
             )
+            .when_some(palette, |el, palette| el.child(palette))
     }
 }
