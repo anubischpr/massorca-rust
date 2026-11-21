@@ -7,9 +7,12 @@
 
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
-use crate::components::button::ButtonSize;
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::checkbox::Checkbox;
+use crate::components::empty_state::{EmptyState, EmptyStateVariant};
+use crate::components::error_state::{ErrorState, ErrorStateVariant};
 use crate::components::icon_button::IconButton;
+use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::tooltip::{Tooltip, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::Surface;
@@ -530,10 +533,16 @@ pub enum TableEvent {
     Checked { row: SharedString, checked: bool },
     /// A row's action button was pressed.
     Action { row: SharedString, column: usize },
+    /// The empty state's action was pressed.
+    EmptyAction,
+    /// Retry was pressed in the error state.
+    Retry,
 }
 
 /// Fully transparent: no fill at rest, and no focus ring until the cell has the cursor.
 const CLEAR: Color = Color::rgba8(0, 0, 0, 0.0);
+/// Skeleton rows shown while the rows load (Table.md, States).
+const LOADING_ROWS: usize = 5;
 /// The selection column is one 28 px control wide.
 const SELECTION_WIDTH: f32 = SIZE_CONTROL_DEFAULT;
 
@@ -595,6 +604,11 @@ impl TableView {
     /// Replaces the rows. The sort, selection and checkboxes stay where their keys still exist.
     pub fn set_rows(&mut self, rows: Vec<TableRow>, cx: &mut Context<Self>) {
         self.state.set_rows(rows);
+        cx.notify();
+    }
+
+    pub fn set_status(&mut self, status: TableStatus, cx: &mut Context<Self>) {
+        self.state.set_status(status);
         cx.notify();
     }
 
@@ -906,6 +920,69 @@ impl TableView {
             TableCell::Blank => div().into_any_element(),
         }
     }
+
+    fn loading_body(height: f32) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .children((0..LOADING_ROWS).map(|_| {
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(height))
+                    .px(px(SPACE_2))
+                    .child(Skeleton::line(LineWidth::Most))
+            }))
+            .into_any_element()
+    }
+
+    fn empty_body(
+        &self,
+        title: &SharedString,
+        explanation: Option<&SharedString>,
+        action: Option<&SharedString>,
+        entity: &Entity<Self>,
+    ) -> AnyElement {
+        let mut state = EmptyState::new((self.id.clone(), "empty"), title.clone())
+            .variant(EmptyStateVariant::Section);
+        if let Some(text) = explanation {
+            state = state.explanation(text.clone());
+        }
+        if let Some(label) = action {
+            let entity = entity.clone();
+            let button = Button::new((self.id.clone(), "empty-action"), label.clone())
+                .variant(ButtonVariant::Secondary)
+                .on_click(move |_, cx| {
+                    entity.update(cx, |_, cx| cx.emit(TableEvent::EmptyAction));
+                });
+            state = state.action(button);
+        }
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .p(px(SPACE_2))
+            .child(state)
+            .into_any_element()
+    }
+
+    fn error_body(&self, entity: &Entity<Self>) -> AnyElement {
+        let entity = entity.clone();
+        let error = ErrorState::new((self.id.clone(), "error"), "Could not load this table.")
+            .variant(ErrorStateVariant::Section)
+            .on_retry(move |_, cx| entity.update(cx, |_, cx| cx.emit(TableEvent::Retry)));
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .p(px(SPACE_2))
+            .child(error)
+            .into_any_element()
+    }
 }
 
 impl Render for TableView {
@@ -940,21 +1017,32 @@ impl Render for TableView {
         }
 
         let entity = cx.entity();
-        let view = entity.clone();
-        let body = uniform_list(
-            (self.id.clone(), "body"),
-            self.state.row_count(),
-            move |range, _, cx| {
-                let table = view.read(cx);
-                range
-                    .map(|index| table.render_row(&view, index, focused, cx))
-                    .collect()
-            },
-        )
-        .track_scroll(&self.scroll)
-        .flex_1()
-        .min_h_0()
-        .into_any_element();
+        let body = match self.state.status() {
+            TableStatus::Ready => {
+                let view = entity.clone();
+                uniform_list(
+                    (self.id.clone(), "body"),
+                    self.state.row_count(),
+                    move |range, _, cx| {
+                        let table = view.read(cx);
+                        range
+                            .map(|index| table.render_row(&view, index, focused, cx))
+                            .collect()
+                    },
+                )
+                .track_scroll(&self.scroll)
+                .flex_1()
+                .min_h_0()
+                .into_any_element()
+            }
+            TableStatus::Loading => Self::loading_body(height),
+            TableStatus::Empty {
+                title,
+                explanation,
+                action,
+            } => self.empty_body(title, explanation.as_ref(), action.as_ref(), &entity),
+            TableStatus::Error => self.error_body(&entity),
+        };
 
         div()
             .id(self.id.clone())
