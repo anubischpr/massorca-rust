@@ -4,7 +4,7 @@
 
 use super::super::Shell;
 use crate::model::shell::Agent;
-use crate::model::teams::{HostChoice, NewBot, NewTeam, ProjectId, TeamId, TeamPage};
+use crate::model::teams::{HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamId, TeamPage};
 use gpui::{
     App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
@@ -75,6 +75,10 @@ pub(in crate::shell) enum TeamConfirm {
         team: TeamId,
         project: ProjectId,
         name: String,
+    },
+    DeleteMemory {
+        team: TeamId,
+        memory: MemoryId,
     },
 }
 
@@ -293,6 +297,9 @@ impl Shell {
                     self.model.open_team_page(TeamPage::Board(team));
                 }
             }
+            TeamConfirm::DeleteMemory { team, memory } => {
+                let _ = self.model.teams_mut().delete_memory(team, memory);
+            }
         }
         cx.notify();
     }
@@ -436,25 +443,36 @@ fn edit_brief_view(form: &EditBriefDialog, shell: &WeakEntity<Shell>, cx: &App) 
     dialog
 }
 
-/// The confirm on screen: deleting a project removes its Board.
+/// The confirm on screen: a project's Board goes with it; a memory entry is forgotten.
 pub(in crate::shell) fn team_confirm_view(
     confirm: &TeamConfirm,
     shell: &WeakEntity<Shell>,
     cx: &App,
 ) -> Dialog {
     let theme = *cx.theme();
-    let TeamConfirm::DeleteProject { name, .. } = confirm;
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
-    Dialog::new("delete-project", format!("Delete project {name}?"))
-        .variant(DialogVariant::Destructive)
+    let (dialog, body, action) = match confirm {
+        TeamConfirm::DeleteProject { name, .. } => (
+            Dialog::new("delete-project", format!("Delete project {name}?"))
+                .variant(DialogVariant::Destructive),
+            "Its tasks are removed from the Board. This cannot be undone.",
+            "Delete project",
+        ),
+        TeamConfirm::DeleteMemory { .. } => (
+            Dialog::new("delete-memory", "Delete this memory?"),
+            "The team's bots stop using this note.",
+            "Delete memory",
+        ),
+    };
+    dialog
         .open(true)
         .child(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(theme.palette.text.secondary)
-                .child("Its tasks are removed from the Board. This cannot be undone."),
+                .child(body),
         )
-        .action("Delete project")
+        .action(action)
         .on_action(move |_, cx| {
             let _ = on_action.update(cx, |shell, cx| shell.confirm_team_delete(cx));
         })

@@ -70,6 +70,17 @@ fn conversation(
             teams::project_page(model, shell, team, project, window, cx)
         }
         Canvas::Team(TeamPage::Routines(team)) => teams::routines_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Files(team)) => match model.teams().team(team) {
+            Some(team) => teams::files_page(team, cx),
+            None => placeholder("Files", "This team is gone.", theme).into_any_element(),
+        },
+        Canvas::Team(TeamPage::Conference(_)) => placeholder(
+            "Conference room",
+            "The Conference room needs live agents and sessions, which are not built yet.",
+            theme,
+        )
+        .into_any_element(),
         Canvas::Session(title) => {
             placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
         }

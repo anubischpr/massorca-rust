@@ -2,7 +2,9 @@
 
 mod board;
 mod dialogs;
+mod files;
 mod home;
+mod memory;
 mod project;
 mod routines;
 mod sidebar;
@@ -15,7 +17,9 @@ use massorca_ui::{TextStyled, Theme};
 
 pub(super) use board::{board_columns, board_page};
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
+pub(super) use files::files_page;
 pub(super) use home::bot_teams_home;
+pub(super) use memory::memory_page;
 pub(super) use project::project_page;
 pub(super) use routines::routines_page;
 pub(super) use sidebar::teams_list;
@@ -35,4 +39,49 @@ fn team_pill(name: &str, team: TeamId, theme: &Theme) -> impl IntoElement {
                 .text_color(theme.palette.text.primary)
                 .child(name.to_owned()),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::data::SampleDataSource;
+    use crate::model::canvas::Canvas;
+    use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
+    use crate::shell::Shell;
+    use gpui::TestAppContext;
+    use massorca_ui::{Appearance, Theme};
+
+    #[gpui::test]
+    fn every_team_page_opens_and_draws_with_the_sample_team(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            crate::shell::bind_keys(cx);
+        });
+        let (shell, cx) = cx.add_window_view(|window, cx| {
+            Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+        });
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            cx.notify();
+        });
+        let team = TeamId(1);
+        let pages = [
+            TeamPage::Conference(team),
+            TeamPage::Board(team),
+            TeamPage::Routines(team),
+            TeamPage::Memory(team),
+            TeamPage::Files(team),
+            TeamPage::Project(team, ProjectId(1)),
+            TeamPage::NewRoutine(team),
+        ];
+        for page in pages {
+            shell.update(cx, |shell, cx| {
+                shell.model.open_team_page(page);
+                cx.notify();
+            });
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            shell.read_with(cx, |shell, _| {
+                assert_eq!(shell.model().canvas(), Canvas::Team(page));
+            });
+        }
+    }
 }
