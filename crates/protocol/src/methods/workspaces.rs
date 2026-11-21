@@ -16,6 +16,9 @@ pub const REMOVE: &str = "workspace.remove";
 pub enum WorkspaceKind {
     Worktree,
     Folder,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +26,9 @@ pub enum WorkspaceKind {
 pub enum WorkspaceState {
     Ready,
     Removing,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Params of `workspace.create`.

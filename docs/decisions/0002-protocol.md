@@ -31,7 +31,9 @@ the negotiated limit (default 8 MiB local, 1 MiB network) close the
 connection rather than being truncated.
 
 **Serialization.** JSON with `serde`. Readers ignore unknown fields; writers
-omit `None` fields. Bulk binary data (terminal output in Phase 2) gets its own
+omit `None` fields. Every enum that crosses the wire decodes an unknown value
+to an `Unknown` fallback; the full list is "Wire compatibility rules" in
+`docs/architecture/core.md`. Bulk binary data (terminal output in Phase 2) gets its own
 frame kind behind a capability rather than base64 inside JSON.
 
 **Messages.** Every JSON message has a `type`:

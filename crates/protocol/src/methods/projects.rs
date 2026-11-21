@@ -16,6 +16,9 @@ pub const REMOVE: &str = "project.remove";
 pub enum ProjectKind {
     Git,
     Folder,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Params of `project.add`. Unset options take the service's defaults.

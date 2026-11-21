@@ -433,3 +433,30 @@ fn config_list_has_the_documented_shape() {
 fn config_default_owner_is_core() {
     assert_eq!(config::DEFAULT_OWNER, "core");
 }
+
+#[test]
+fn unknown_project_kind_in_a_list_decodes_as_unknown() {
+    let mut project = sample_project_json();
+    project["kind"] = json!("future_kind");
+    let list: projects::ProjectList =
+        serde_json::from_value(json!({ "projects": [project, sample_project_json()] }))
+            .expect("decodes");
+    assert_eq!(list.projects[0].kind, projects::ProjectKind::Unknown);
+    assert_eq!(list.projects[1], sample_project());
+}
+
+#[test]
+fn unknown_workspace_kind_and_state_in_a_list_decode_as_unknown() {
+    let mut workspace = sample_workspace_json();
+    workspace["kind"] = json!("future_kind");
+    workspace["state"] = json!("archiving");
+    let list: workspaces::WorkspaceList =
+        serde_json::from_value(json!({ "workspaces": [workspace, sample_workspace_json()] }))
+            .expect("decodes");
+    assert_eq!(list.workspaces[0].kind, workspaces::WorkspaceKind::Unknown);
+    assert_eq!(
+        list.workspaces[0].state,
+        workspaces::WorkspaceState::Unknown
+    );
+    assert_eq!(list.workspaces[1], sample_workspace());
+}

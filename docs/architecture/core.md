@@ -35,6 +35,20 @@ for every surface.
    `result` or a typed `error`. A request can open a stream; the service then
    pushes `event` frames until `end` or `cancel`.
 
+## Wire compatibility rules
+
+Clients and services update independently, so every protocol type follows
+these rules (0002):
+
+- Fields are additive only: new fields are optional, and none is removed or
+  retyped inside a protocol version.
+- Readers ignore unknown fields.
+- Every enum that crosses the wire has an `Unknown` fallback, so a value from a
+  newer peer decodes instead of failing the whole message. This build never
+  sends `Unknown`.
+- Unknown message types decode as unknown and are ignored.
+- New frame kinds are used only after a capability for them is negotiated.
+
 ## Method registry
 
 Handlers are registered by method name together with the capability they
