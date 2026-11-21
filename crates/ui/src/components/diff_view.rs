@@ -4,12 +4,21 @@
 //! blocks, split pairs, notes and counts derived from them. The core computes the hunks off the
 //! render path; the view only draws what the model says.
 
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
+use crate::components::badge::Badge;
+use crate::components::banner::{Banner, BannerVariant};
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::empty_state::EmptyState;
+use crate::components::error_state::ErrorState;
+use crate::components::icon_button::IconButton;
+use crate::components::progress::Spinner;
+use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
-    Color, Palette, SIZE_DIFF_GUTTER, SIZE_DIFF_MARKER, SPACE_1, SPACE_2, SPACE_3, TYPE_CAPTION,
-    TYPE_MONO, TYPE_MONO_SM,
+    Color, Palette, SIZE_DIFF_GUTTER, SIZE_DIFF_MARKER, SIZE_TOOLBAR, SPACE_1, SPACE_2, SPACE_3,
+    TYPE_BODY_SM, TYPE_CAPTION, TYPE_MONO, TYPE_MONO_SM,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -602,37 +611,6 @@ struct Look {
 }
 
 /// The changes of one file: toolbar, review bar, body and change ruler (DiffView.md).
-#[derive(IntoElement)]
-pub struct DiffView {
-    id: ElementId,
-    model: Rc<DiffModel>,
-    on_action: Option<DiffActionHandler>,
-}
-
-impl std::fmt::Debug for DiffView {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DiffView").field("id", &self.id).finish()
-    }
-}
-
-impl DiffView {
-    pub fn new(id: impl Into<ElementId>, model: impl Into<Rc<DiffModel>>) -> Self {
-        Self {
-            id: id.into(),
-            model: model.into(),
-            on_action: None,
-        }
-    }
-
-    pub fn on_action(
-        mut self,
-        listener: impl Fn(DiffAction, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_action = Some(Rc::new(listener));
-        self
-    }
-}
-
 fn emit(
     handler: &Option<DiffActionHandler>,
     action: DiffAction,
@@ -1040,6 +1018,183 @@ fn ready_body(
         .into_any_element()
 }
 
+/// What the body shows in place of the diff while the file is not ready to draw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffStatus {
+    /// The diff draws.
+    Ready,
+    /// Skeleton lines, and a spinner after 200 ms.
+    Loading,
+    /// "No changes in this file." with "Show file".
+    Empty,
+    /// "Could not load this diff", with the reason and Retry.
+    Failed(SharedString),
+    /// A diff too large to draw before the reader confirms it.
+    Large { lines: usize },
+    /// A binary file, with its size before and after.
+    Binary {
+        before: SharedString,
+        after: SharedString,
+    },
+}
+
+/// The changes of one file: toolbar, review bar, body and change ruler (DiffView.md).
+#[derive(IntoElement)]
+pub struct DiffView {
+    id: ElementId,
+    model: Rc<DiffModel>,
+    status: DiffStatus,
+    split_available: bool,
+    disconnected: bool,
+    read_only: bool,
+    conflicts_skipped: bool,
+    compare: Option<SharedString>,
+    on_action: Option<DiffActionHandler>,
+}
+
+impl std::fmt::Debug for DiffView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffView")
+            .field("id", &self.id)
+            .field("status", &self.status)
+            .finish()
+    }
+}
+
+impl DiffView {
+    pub fn new(id: impl Into<ElementId>, model: impl Into<Rc<DiffModel>>) -> Self {
+        Self {
+            id: id.into(),
+            model: model.into(),
+            status: DiffStatus::Ready,
+            split_available: true,
+            disconnected: false,
+            read_only: false,
+            conflicts_skipped: false,
+            compare: None,
+            on_action: None,
+        }
+    }
+
+    pub fn status(mut self, status: DiffStatus) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// Whether the tab is at least `SPLIT_MIN_WIDTH` wide; a narrower tab draws inline.
+    pub fn split_available(mut self, available: bool) -> Self {
+        self.split_available = available;
+        self
+    }
+
+    /// The host cannot be reached: the last diff stays, and Edit and Send to agent are disabled.
+    pub fn disconnected(mut self, disconnected: bool) -> Self {
+        self.disconnected = disconnected;
+        self
+    }
+
+    /// A compare view (an external change): no Edit and no notes.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn conflicts_skipped(mut self, skipped: bool) -> Self {
+        self.conflicts_skipped = skipped;
+        self
+    }
+
+    /// The base the diff compares with, such as "vs origin/main".
+    pub fn compare(mut self, base: impl Into<SharedString>) -> Self {
+        self.compare = Some(base.into());
+        self
+    }
+
+    pub fn on_action(
+        mut self,
+        listener: impl Fn(DiffAction, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_action = Some(Rc::new(listener));
+        self
+    }
+}
+
+/// A click listener that sends one action to the handler.
+fn on(
+    handler: &Option<DiffActionHandler>,
+    action: DiffAction,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let handler = handler.clone();
+    move |window, cx| emit(&handler, action, window, cx)
+}
+
+/// The directory part (with its slash) and the file name of a path.
+fn split_path(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(index) => path.split_at(index + 1),
+        None => ("", path),
+    }
+}
+
+/// The file chip's icon: the agent mark for CLAUDE.md and AGENTS.md, else a grey document.
+fn file_icon(path: &str, p: &Palette) -> AnyElement {
+    match split_path(path).1 {
+        "CLAUDE.md" => AgentIcon::new(AgentKind::Claude)
+            .size(AgentIconSize::Small)
+            .into_any_element(),
+        "AGENTS.md" => AgentIcon::new(AgentKind::Codex)
+            .size(AgentIconSize::Small)
+            .into_any_element(),
+        _ => Icon::new(IconName::File)
+            .size(IconSize::Small)
+            .color(p.text.tertiary)
+            .into_any_element(),
+    }
+}
+
+/// "12,431": thousands separated by commas.
+fn grouped(value: usize) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// "1 draft note" and "3 draft notes".
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// The skeleton of the body and the spinner that shows after 200 ms (Loading).
+fn loading_body(id: &ElementId, p: &Palette) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .p(px(SPACE_3))
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .child(Spinner::new().delayed((id.clone(), "spinner"))),
+        )
+        .children((0..14).map(|i| {
+            let width = if i % 2 == 0 {
+                LineWidth::Full
+            } else {
+                LineWidth::Most
+            };
+            Skeleton::line(width)
+        }))
+        .bg(p.surface.sunken)
+        .into_any_element()
+}
+
 impl RenderOnce for DiffView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = *cx.theme();
@@ -1052,7 +1207,7 @@ impl RenderOnce for DiffView {
             change: None,
             mode: ViewMode::Inline,
         });
-        let (focus, scroll, cursor, change, mode) = {
+        let (focus, scroll, cursor, change, stored) = {
             let s = state.read(cx);
             (
                 s.focus.clone(),
@@ -1062,15 +1217,227 @@ impl RenderOnce for DiffView {
                 s.mode,
             )
         };
+        let mode = if self.split_available {
+            stored
+        } else {
+            ViewMode::Inline
+        };
+        let model = self.model.clone();
+        let handler = self.on_action.clone();
+        let editable = !self.read_only && !self.disconnected;
+        let (added, removed) = model.counts();
+        let (dir, name) = split_path(&model.file().path);
+        let (dir, name) = (dir.to_owned(), name.to_owned());
         let look = Look {
             p,
             cursor,
             change,
             focused: focus.is_focused(window),
-            handler: self.on_action.clone(),
+            handler: handler.clone(),
             theme,
         };
-        let body = ready_body(&id, self.model, state, look, mode, &focus, scroll);
+
+        let split_toggle = IconButton::new("diff-split", IconName::PanelLeft, "Split view")
+            .toggle(mode == ViewMode::Split)
+            .disabled(!self.split_available)
+            .disabled_reason("Widen the Work panel to use split view")
+            .on_click({
+                let state = state.clone();
+                move |window, cx| {
+                    state.update(cx, |s, _| {
+                        s.mode = match s.mode {
+                            ViewMode::Inline => ViewMode::Split,
+                            ViewMode::Split => ViewMode::Inline,
+                        }
+                    });
+                    window.refresh();
+                }
+            });
+        let step = |next: bool| {
+            let (state, model) = (state.clone(), model.clone());
+            move |window: &mut Window, cx: &mut App| {
+                state.update(cx, |s, _| {
+                    let target = if next {
+                        model.next_change(s.change)
+                    } else {
+                        model.previous_change(s.change)
+                    };
+                    if let Some(index) = target {
+                        select_change(&model, s, index);
+                    }
+                });
+                window.refresh();
+            }
+        };
+        let toolbar = div()
+            .id("diff-toolbar")
+            .role(Role::Toolbar)
+            .aria_label("Diff toolbar")
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .h(px(SIZE_TOOLBAR))
+            .px(px(SPACE_2))
+            .min_w_0()
+            .border_b_1()
+            .border_color(p.border.subtle)
+            .child(Badge::text(model.file().status.letter()))
+            .child(file_icon(&model.file().path, &p))
+            .child(
+                div()
+                    .flex()
+                    .min_w_0()
+                    .truncate()
+                    .text_style(TYPE_MONO_SM)
+                    .child(div().text_color(p.text.tertiary).child(dir))
+                    .child(div().text_color(p.text.primary).child(name)),
+            )
+            .when_some(self.compare.clone(), |el, base| {
+                el.child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.tertiary)
+                        .whitespace_nowrap()
+                        .child(base),
+                )
+            })
+            .child(
+                div()
+                    .text_style(TYPE_MONO_SM)
+                    .tabular_figures()
+                    .text_color(p.diff.add_fg)
+                    .id("diff-counts")
+                    .aria_label(format!("{added} added, {removed} removed"))
+                    .child(format!("+{added}")),
+            )
+            .child(
+                div()
+                    .text_style(TYPE_MONO_SM)
+                    .tabular_figures()
+                    .text_color(p.diff.remove_fg)
+                    .child(format!("-{removed}")),
+            )
+            .child(div().flex_1())
+            .child(split_toggle)
+            .child(
+                IconButton::new("diff-previous", IconName::ChevronUp, "Previous change")
+                    .disabled(model.previous_change(change).is_none())
+                    .on_click(step(false)),
+            )
+            .child(
+                IconButton::new("diff-next", IconName::ChevronDown, "Next change")
+                    .disabled(model.next_change(change).is_none())
+                    .on_click(step(true)),
+            )
+            .child(
+                IconButton::new("diff-edit", IconName::Pencil, "Edit")
+                    .disabled(!editable)
+                    .on_click(on(&handler, DiffAction::Edit)),
+            )
+            .child(
+                IconButton::new("diff-more", IconName::Ellipsis, "More")
+                    .on_click(on(&handler, DiffAction::More)),
+            );
+
+        let drafts = model.drafts();
+        let review = (drafts > 0).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(px(SPACE_3))
+                .py(px(SPACE_2))
+                .bg(p.surface.raised)
+                .border_b_1()
+                .border_color(p.border.subtle)
+                .child(
+                    div()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(p.text.secondary)
+                        .child(plural(drafts, "draft note", "draft notes")),
+                )
+                .child(
+                    Button::new("diff-send", "Send to agent")
+                        .variant(ButtonVariant::Primary)
+                        .size(ButtonSize::Compact)
+                        .disabled(self.disconnected)
+                        .on_click(on(&handler, DiffAction::SendToAgent)),
+                )
+        });
+        let conflicts = self.conflicts_skipped.then(|| {
+            Banner::new(
+                "diff-conflicts",
+                BannerVariant::Info,
+                "Conflicted hunks are skipped. Resolve them in the merge view.",
+            )
+        });
+        let offline = self.disconnected.then(|| {
+            Banner::new(
+                "diff-offline",
+                BannerVariant::Unreachable,
+                "Showing the last loaded diff. VPS can't be reached; changes made since may be missing.",
+            )
+        });
+
+        let body = match self.status {
+            DiffStatus::Ready => ready_body(
+                &id,
+                model.clone(),
+                state.clone(),
+                look,
+                mode,
+                &focus,
+                scroll,
+            ),
+            DiffStatus::Loading => loading_body(&id, &p),
+            DiffStatus::Empty => EmptyState::new("diff-empty", "No changes in this file.")
+                .action(
+                    Button::new("diff-show-file", "Show file")
+                        .variant(ButtonVariant::Ghost)
+                        .on_click(on(&handler, DiffAction::ShowFile)),
+                )
+                .into_any_element(),
+            DiffStatus::Failed(reason) => ErrorState::new("diff-error", "Could not load this diff")
+                .explanation(reason)
+                .on_retry(on(&handler, DiffAction::Retry))
+                .into_any_element(),
+            DiffStatus::Large { lines } => Banner::new(
+                "diff-large",
+                BannerVariant::Info,
+                format!(
+                    "This diff is large ({} lines). Show it anyway?",
+                    grouped(lines)
+                ),
+            )
+            .action(
+                Button::new("diff-show-all", "Show diff")
+                    .variant(ButtonVariant::Primary)
+                    .on_click(on(&handler, DiffAction::ShowAnyway)),
+            )
+            .action(
+                Button::new("diff-as-source", "Open as source")
+                    .on_click(on(&handler, DiffAction::OpenAsSource)),
+            )
+            .into_any_element(),
+            DiffStatus::Binary { before, after } => div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .p(px(SPACE_3))
+                .child(
+                    div()
+                        .text_color(p.text.secondary)
+                        .child("Binary file changed"),
+                )
+                .child(
+                    div()
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.tertiary)
+                        .child(format!("{before} to {after}")),
+                )
+                .into_any_element(),
+        };
+
         div()
             .id(id)
             .flex()
@@ -1079,6 +1446,10 @@ impl RenderOnce for DiffView {
             .min_h_0()
             .min_w_0()
             .bg(p.surface.canvas)
+            .child(toolbar)
+            .children(review)
+            .children(conflicts)
+            .children(offline)
             .child(body)
     }
 }
