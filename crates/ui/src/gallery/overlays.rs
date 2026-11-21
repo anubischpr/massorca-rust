@@ -175,7 +175,6 @@ fn tooltip_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .use_keyed_state("tooltip-story/focus", cx, |_, cx| cx.focus_handle())
         .read(cx)
         .clone();
-    let _ = focus.clone();
 
     let trigger = TooltipTrigger::new(
         "tooltip-story/trigger",
