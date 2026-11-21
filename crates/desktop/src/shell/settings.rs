@@ -236,6 +236,7 @@ fn row(
         RowBody::Planned(Planned::Switch) => (
             row.disabled_reason(NOT_AVAILABLE),
             Switch::new(id.clone(), false)
+                .label(spec.label)
                 .disabled(true)
                 .into_any_element(),
         ),
@@ -243,7 +244,7 @@ fn row(
             row.disabled_reason(NOT_AVAILABLE),
             SegmentedControl::new(
                 id.clone(),
-                SharedString::from(format!("{id}-choice")),
+                spec.label,
                 options
                     .iter()
                     .map(|option| Segment::text(*option))
