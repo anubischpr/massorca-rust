@@ -3,6 +3,7 @@
 use super::{Story, variant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardPadding, CardVariant};
+use crate::components::empty_state::{EmptyState, EmptyStateVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::icon::IconName;
 use crate::style::Surface;
@@ -11,11 +12,92 @@ use crate::tokens::{SPACE_3, TYPE_BODY_SM};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
 
 pub fn stories() -> Vec<Story> {
-    vec![Story {
-        name: "Card",
-        spec: "Card.md",
-        render: card_story,
-    }]
+    vec![
+        Story {
+            name: "Card",
+            spec: "Card.md",
+            render: card_story,
+        },
+        Story {
+            name: "Empty state",
+            spec: "EmptyState.md",
+            render: empty_state_story,
+        },
+    ]
+}
+
+fn empty_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Page: display title, centred, one primary action",
+            EmptyState::new("empty-page", "No routines yet")
+                .variant(EmptyStateVariant::Page)
+                .icon(IconName::Workflow)
+                .explanation("Routines run a task on a schedule. Create one to start.")
+                .action(
+                    Button::new("empty-page-new", "New routine")
+                        .variant(ButtonVariant::Primary)
+                        .leading_icon(IconName::Plus),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Section: title-sm and one secondary action",
+            EmptyState::new("empty-section", "No files found")
+                .icon(IconName::Folder)
+                .explanation("This folder has no files that match the view.")
+                .action(
+                    Button::new("empty-section-add", "Add web address")
+                        .leading_icon(IconName::Globe),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Filtered: the title names the filter and Clear search clears it",
+            EmptyState::filtered("empty-filtered", "docs", |_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Compact: a label and one line inside a list",
+            EmptyState::new("empty-compact", "Nothing open")
+                .variant(EmptyStateVariant::Compact)
+                .explanation("Open a file to see it here.")
+                .action(
+                    Button::new("empty-compact-open", "Open file")
+                        .variant(ButtonVariant::Ghost)
+                        .size(ButtonSize::Compact),
+                ),
+            cx,
+        ))
+        .child(variant(
+            "Work panel (A43): a centred column of four actions, no panel or title",
+            EmptyState::work_panel(
+                "empty-work",
+                [
+                    ("New terminal", IconName::SquareTerminal),
+                    ("New browser tab", IconName::Globe),
+                    ("New Markdown", IconName::FileText),
+                    ("New mobile emulator", IconName::Smartphone),
+                ]
+                .map(|(label, icon)| {
+                    Button::new(label, label)
+                        .variant(ButtonVariant::Secondary)
+                        .leading_icon(icon)
+                }),
+            ),
+            cx,
+        ))
+        .child(variant(
+            "Host unreachable: say what is unknown, with no create action",
+            EmptyState::new("empty-host", "Host unreachable")
+                .explanation("Last known state, 5 min ago")
+                .note("Runs on the VPS host."),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn card_story(_: &mut Window, cx: &mut App) -> AnyElement {
