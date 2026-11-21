@@ -107,6 +107,29 @@ impl StatusBarModel {
         plural(self.ports, "port", "No ports")
     }
 
+    /// The agents item's tooltip, with the running count spelled out (D-SH-05).
+    pub fn agents_tooltip(&self) -> String {
+        match (self.waiting, self.running) {
+            (0, 0) => "Agents: none running".into(),
+            (0, r) => format!("Agents: {r} running"),
+            (w, 0) => format!("Agents: {w} waiting for you"),
+            (w, r) => format!("Agents: {w} waiting for you, {r} running"),
+        }
+    }
+
+    /// The hosts item's tooltip, which names the disconnected count.
+    pub fn hosts_tooltip(&self) -> String {
+        if self.hosts_unreachable > 0 {
+            format!(
+                "Hosts: {} connected, {} disconnected",
+                self.hosts_total.saturating_sub(self.hosts_unreachable),
+                self.hosts_unreachable
+            )
+        } else {
+            format!("Hosts: {} connected", self.hosts_total)
+        }
+    }
+
     pub fn hosts_text(&self) -> String {
         if self.hosts_unreachable > 0 {
             format!(
@@ -125,6 +148,23 @@ fn plural(n: u32, word: &str, none: &str) -> String {
         1 => format!("1 {word}"),
         n => format!("{n} {word}s"),
     }
+}
+
+/// The session with this id, searched through every project, host, workspace and child.
+pub fn find_session<'a>(projects: &'a [ProjectGroup], id: &str) -> Option<&'a SessionRow> {
+    projects
+        .iter()
+        .flat_map(|project| &project.hosts)
+        .flat_map(|host| &host.workspaces)
+        .flat_map(|workspace| &workspace.sessions)
+        .find_map(|session| find_in(session, id))
+}
+
+fn find_in<'a>(session: &'a SessionRow, id: &str) -> Option<&'a SessionRow> {
+    if session.id == id {
+        return Some(session);
+    }
+    session.children.iter().find_map(|child| find_in(child, id))
 }
 
 /// Everything the shell shows at one moment.
@@ -155,6 +195,26 @@ mod tests {
             hosts_total: 2,
             hosts_unreachable: 0,
         }
+    }
+
+    #[test]
+    fn find_session_reaches_child_sessions() {
+        use crate::data::{DataSource, SampleDataSource};
+        let snap = SampleDataSource.snapshot();
+        assert_eq!(
+            find_session(&snap.projects, "s1b").map(|s| s.title.as_str()),
+            Some("Catalog tests")
+        );
+        assert!(find_session(&snap.projects, "missing").is_none());
+    }
+
+    #[test]
+    fn status_tooltips_spell_out_the_counts() {
+        let mut s = status();
+        assert_eq!(s.agents_tooltip(), "Agents: 1 waiting for you, 2 running");
+        assert_eq!(s.hosts_tooltip(), "Hosts: 2 connected");
+        s.hosts_unreachable = 1;
+        assert_eq!(s.hosts_tooltip(), "Hosts: 1 connected, 1 disconnected");
     }
 
     #[test]

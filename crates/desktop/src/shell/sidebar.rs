@@ -133,7 +133,7 @@ fn projects_header(theme: &Theme) -> impl IntoElement {
                 ))
                 .child(header_button(
                     "sidebar-filter",
-                    IconName::List,
+                    IconName::ListFilter,
                     "Filter and sort",
                 ))
                 .child(header_button(
@@ -192,12 +192,8 @@ fn footer() -> impl IntoElement {
         .items_center()
         .gap(px(SPACE_HALF))
         .h(px(SIZE_CONTROL_DEFAULT))
-        .child(footer_button("sidebar-help", IconName::Info, "Help"))
-        .child(footer_button(
-            "sidebar-locate",
-            IconName::CircleDot,
-            "Locate",
-        ))
+        .child(footer_button("sidebar-help", IconName::CircleHelp, "Help"))
+        .child(footer_button("sidebar-locate", IconName::Locate, "Locate"))
         .child(footer_button(
             "sidebar-toggle-panel",
             IconName::PanelLeft,
