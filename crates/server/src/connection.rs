@@ -10,7 +10,7 @@ use crate::abort_guard::AbortOnDrop;
 use crate::context::AppState;
 use crate::dispatch;
 use crate::handshake;
-use crate::network::LiveGuard;
+use crate::network::{LiveGuard, Pending};
 use crate::session::Session;
 use crate::shutdown::ShutdownSignal;
 use crate::streams::StreamTable;
@@ -36,6 +36,7 @@ pub(crate) async fn serve(
     origin: Origin,
     state: Arc<AppState>,
     mut signal: ShutdownSignal,
+    mut pre_auth: Option<Pending>,
 ) {
     let FrameIo {
         mut inbound,
@@ -52,6 +53,9 @@ pub(crate) async fn serve(
         if let Some(negotiated) =
             handshake::accept(&mut inbound, &outbound, &state, max_frame_len, &origin).await
         {
+            if let Some(pending) = pre_auth.take() {
+                pending.authenticated();
+            }
             // Revoking the device closes this connection at once (decision 0041).
             let mut live = negotiated.live;
             let session = Arc::new(Session {
@@ -78,6 +82,8 @@ pub(crate) async fn serve(
     if !writer_ended {
         let _ = writer.await;
     }
+    // Dropping an unopened gate ends the reader, and with it the writer; a refusal must be flushed first.
+    drop(pre_auth);
 }
 
 /// Routes requests until the peer leaves or shutdown is requested, then lets in-flight requests finish and ends open streams.

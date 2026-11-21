@@ -1,5 +1,6 @@
 //! The network side of the service (decisions 0040 to 0045): listeners, the server identity, pairing and devices.
 
+mod admission;
 mod auth;
 mod listen;
 mod listener;
@@ -15,6 +16,7 @@ use massorca_profile::Profile;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
+pub(crate) use admission::Pending;
 pub(crate) use auth::{Authenticated, authenticate};
 pub use listen::{ListenSpec, ListenSpecError, NetworkConfig};
 pub(crate) use live::LiveGuard;

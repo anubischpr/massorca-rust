@@ -14,12 +14,13 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::connection::{self, Origin};
 use crate::context::AppState;
+use crate::network::admission::{Admission, PRE_AUTH_MAX_FRAME};
 use crate::network::listen::ListenSpec;
 use crate::network::state::ListenerState;
 use crate::shutdown::ShutdownSignal;
 use crate::transport;
 
-/// Network connections served at once; more are closed after the TLS handshake (decision 0040).
+/// Network connections served at once; more are closed before the TLS handshake (decision 0040).
 const MAX_CONNECTIONS: usize = 128;
 /// TLS and the WebSocket upgrade must finish within this; `hello` has its own limit.
 const UPGRADE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,6 +40,7 @@ pub(crate) async fn run(
         return;
     };
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let admission = Arc::new(Admission::default());
     let mut connections = JoinSet::new();
     loop {
         tokio::select! {
@@ -47,7 +49,7 @@ pub(crate) async fn run(
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => match accepted {
                 Ok((tcp, peer)) => {
-                    connections.spawn(serve(tcp, peer, Arc::clone(&state), acceptor.clone(), Arc::clone(&slots), signal.clone()));
+                    connections.spawn(serve(tcp, peer, Arc::clone(&state), acceptor.clone(), Arc::clone(&slots), Arc::clone(&admission), signal.clone()));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "accepting a network connection failed");
@@ -139,10 +141,15 @@ async fn serve(
     state: Arc<AppState>,
     acceptor: TlsAcceptor,
     slots: Arc<Semaphore>,
+    admission: Arc<Admission>,
     signal: ShutdownSignal,
 ) {
     let Ok(_slot) = slots.try_acquire_owned() else {
         tracing::warn!(%peer, "too many network connections; closing a new one");
+        return;
+    };
+    let Some(mut pending) = admission.try_enter(peer.ip()) else {
+        tracing::warn!(%peer, "too many unauthenticated network connections; closing a new one");
         return;
     };
     let _ = tcp.set_nodelay(true);
@@ -158,14 +165,24 @@ async fn serve(
         }
     };
     let Accepted { ws, client_pin, .. } = accepted;
+    let (opener, gate) = massorca_net::pre_auth_gate(PRE_AUTH_MAX_FRAME);
+    pending.set_opener(opener);
     let io = transport::spawn_with(MAX_FRAME_LEN_NETWORK, |queues| {
-        massorca_net::spawn_frame_tasks(
+        massorca_net::spawn_gated_frame_tasks(
             ws,
             MAX_FRAME_LEN_NETWORK,
             Keepalive::default(),
+            gate,
             queues.inbound,
             queues.outbound,
         )
     });
-    connection::serve(io, Origin::Network { client_pin, peer }, state, signal).await;
+    connection::serve(
+        io,
+        Origin::Network { client_pin, peer },
+        state,
+        signal,
+        Some(pending),
+    )
+    .await;
 }
