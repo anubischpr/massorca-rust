@@ -115,6 +115,7 @@ jobs:
         with:
           key: core-git-baseline
       - run: cargo test -p massorca-core-git --locked
+      - run: cargo test -p massorca-core-workspace --locked
 
   ui:
     needs: changes
