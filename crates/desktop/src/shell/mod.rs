@@ -16,13 +16,14 @@ mod zones;
 
 use crate::data::DataSource;
 use crate::model::navigation::Page;
-use crate::model::palette::{Command, PaletteAction};
+use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::shell_state::ShellModel;
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
 use actions::{
-    CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenSettings, ToggleCommandPalette,
+    CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenQuickOpen, OpenSettings,
+    ToggleCommandPalette,
 };
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
@@ -133,17 +134,46 @@ impl Shell {
         }
     }
 
-    /// Mod+K: opens the palette, or closes it when it is open.
+    /// Mod+K: opens the palette in the commands mode, or closes it when it is open.
     pub fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.palette().is_some() {
             self.close_palette(window, cx);
             return;
         }
-        self.palette_restore = window.focused(cx);
-        self.model.toggle_palette();
+        self.open_palette(PaletteMode::Commands, window, cx);
+    }
+
+    /// Mod+P: opens the palette in "Go to file" mode (D-CP-02). Pressed again it closes; over the
+    /// commands it switches to files.
+    pub fn toggle_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let quick_open = self
+            .model
+            .palette()
+            .is_some_and(|palette| palette.mode() == PaletteMode::GoToFile);
+        if quick_open {
+            self.close_palette(window, cx);
+        } else {
+            self.open_palette(PaletteMode::GoToFile, window, cx);
+        }
+    }
+
+    /// Opens the palette in `mode`, replacing one open in another mode. The control that had focus
+    /// when the first palette opened stays the one focus returns to.
+    fn open_palette(&mut self, mode: PaletteMode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.palette().is_some() {
+            self.palette_input = None;
+            self.palette_events = None;
+        } else {
+            self.palette_restore = window.focused(cx);
+        }
+        self.model.open_palette(mode);
+        let placeholder = match mode {
+            PaletteMode::Commands => "Search workspaces, tabs and commands",
+            PaletteMode::GoToFile => "Search files",
+        };
         let input = cx.new(|cx| {
             TextField::new(cx)
-                .placeholder("Search workspaces, tabs and commands")
+                .placeholder(placeholder)
                 .leading_icon(IconName::Search)
         });
         self.palette_events = Some(cx.subscribe_in(
@@ -329,6 +359,9 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|shell, _: &ToggleCommandPalette, window, cx| {
                 shell.toggle_palette(window, cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenQuickOpen, window, cx| {
+                shell.toggle_quick_open(window, cx);
             }))
             .on_action(cx.listener(|shell, _: &OpenSettings, _, cx| {
                 shell.model.open_page(Page::Settings);

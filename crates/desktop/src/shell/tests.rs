@@ -4,7 +4,7 @@ use super::workspace_dialogs::MenuTarget;
 use super::*;
 use crate::data::{DataSource, SampleDataSource};
 use crate::model::navigation::{Mode, Page};
-use crate::model::palette::PaletteGroup;
+use crate::model::palette::{PaletteGroup, PaletteMode, PaletteModel};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell::{Agent, ShellSnapshot, UsageModel, UsageStatus};
@@ -448,4 +448,31 @@ fn a_command_run_from_the_palette_comes_back_under_recent(cx: &mut TestAppContex
         (item.group, item.title.clone())
     });
     assert_eq!(first, (PaletteGroup::Recent, "Toggle theme".to_owned()));
+}
+
+fn quick_open_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-p"
+    } else {
+        "ctrl-p"
+    }
+}
+
+#[gpui::test]
+fn mod_p_opens_the_palette_in_go_to_file_mode_and_escape_closes_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    draw(cx);
+    cx.simulate_keystrokes(quick_open_key());
+    draw(cx);
+    let mode = shell.read_with(cx, |shell, _| {
+        shell.model().palette().map(PaletteModel::mode)
+    });
+    assert_eq!(mode, Some(PaletteMode::GoToFile));
+    assert!(
+        cx.debug_bounds("palette-mode").is_some(),
+        "the mode label is drawn"
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(palette_query(&shell, cx), None);
 }

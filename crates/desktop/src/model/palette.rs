@@ -28,6 +28,14 @@ impl PaletteGroup {
     }
 }
 
+/// What the palette searches: the commands and rows (Mod+K), or files (Mod+P, "Go to file").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaletteMode {
+    #[default]
+    Commands,
+    GoToFile,
+}
+
 /// What running an item does; the shell interprets it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteAction {
@@ -78,6 +86,7 @@ pub struct PaletteModel {
     query: String,
     matches: Vec<PaletteMatch>,
     active: usize,
+    mode: PaletteMode,
 }
 
 impl PaletteModel {
@@ -88,6 +97,16 @@ impl PaletteModel {
         };
         model.set_query("");
         model
+    }
+
+    /// The mode the palette opened in; it sets the label and the shortcut the view shows.
+    pub fn with_mode(mut self, mode: PaletteMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mode(&self) -> PaletteMode {
+        self.mode
     }
 
     pub fn items(&self) -> &[PaletteItem] {
@@ -482,5 +501,17 @@ mod tests {
         m.set_query("zzz");
         assert_eq!(m.empty_text(), None);
         assert!(m.no_match_text().is_some());
+    }
+
+    #[test]
+    fn go_to_file_has_no_rows_until_files_are_listed() {
+        let mut m = PaletteModel::new(Vec::new()).with_mode(PaletteMode::GoToFile);
+        assert_eq!(m.mode(), PaletteMode::GoToFile);
+        assert_eq!(m.empty_text().as_deref(), Some("Type to search"));
+        m.set_query("main.rs");
+        assert_eq!(
+            m.no_match_text().as_deref(),
+            Some("No matches for \u{201c}main.rs\u{201d}")
+        );
     }
 }

@@ -3,7 +3,7 @@
 
 use super::canvas::Canvas;
 use super::navigation::{Navigation, Page};
-use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
+use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
 use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
@@ -237,11 +237,23 @@ impl ShellModel {
         if self.palette.is_some() {
             self.palette = None;
         } else {
-            let all = palette_items(&self.snapshot);
-            let mut items = self.recent.rows(&all);
-            items.extend(all);
-            self.palette = Some(PaletteModel::new(items));
+            self.open_palette(PaletteMode::Commands);
         }
+    }
+
+    /// Opens the palette in a mode over the current snapshot. The commands come with their Recent
+    /// rows; "Go to file" has no files to list yet (D-CP-02).
+    pub fn open_palette(&mut self, mode: PaletteMode) {
+        let items = match mode {
+            PaletteMode::Commands => {
+                let all = palette_items(&self.snapshot);
+                let mut items = self.recent.rows(&all);
+                items.extend(all);
+                items
+            }
+            PaletteMode::GoToFile => Vec::new(),
+        };
+        self.palette = Some(PaletteModel::new(items).with_mode(mode));
     }
 
     pub fn close_palette(&mut self) {
