@@ -14,6 +14,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// that inherited the pipes must not hold the caller indefinitely.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
+/// How long a finished command with no deadline waits for a pipe held outside its process tree.
+const ESCAPED_GRACE: Duration = Duration::from_secs(30);
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -65,7 +68,13 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> i
     } else {
         // A process the child started still holds the output open.
         tree.kill();
-        if !wait_for_readers(&readers, Instant::now() + PIPE_GRACE) {
+        // What still holds it now is outside the tree: on Unix, a process another thread forked and has not yet
+        // exec'd keeps a copy of every pipe until it does, which on a loaded machine takes seconds. The command
+        // finished, so wait up to its own deadline rather than calling it timed out.
+        let until = deadline.map_or(Instant::now() + ESCAPED_GRACE, |deadline| {
+            deadline.max(Instant::now() + PIPE_GRACE)
+        });
+        if !wait_for_readers(&readers, until) {
             return Ok(Bounded::TimedOut);
         }
     }
@@ -82,7 +91,7 @@ pub(crate) fn run_bounded(command: &mut Command, timeout: Option<Duration>) -> i
 struct ProcessTree {
     #[cfg(unix)]
     group: u32,
-    /// `None` when the job could not be created or assigned; then only the child is killed.
+    /// `None` when the job could not be created; then only the child is killed.
     #[cfg(windows)]
     job: Option<win32job::Job>,
 }
@@ -97,17 +106,10 @@ impl ProcessTree {
         Ok((child, Self { group }))
     }
 
-    /// Processes the child starts before it joins the job escape it; assigning right
-    /// after the spawn keeps that window to the child's own startup.
+    /// The child is created inside the job, so nothing it starts escapes the job.
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        use std::os::windows::io::AsRawHandle;
-        let child = command.spawn()?;
-        let job = win32job::Job::create_with_limit_info(
-            win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
-        )
-        .ok()
-        .filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
+        let (child, job) = crate::windows_job_spawn::spawn_in_job(command, CREATE_NO_WINDOW)?;
         Ok((child, Self { job }))
     }
 
@@ -223,19 +225,30 @@ mod tests {
     #[test]
     fn child_sleeps_when_asked() {
         if let Some(pid_file) = std::env::var_os(CHILD_SPAWNS) {
+            let escape = std::env::var_os(CHILD_THEN).is_some_and(|then| then == "escape");
             let mut grandchild = test_binary();
             grandchild
                 .env_remove(CHILD_SPAWNS)
-                .env(CHILD_SLEEPS, "1")
+                .env(CHILD_SLEEPS, if escape { "6" } else { "120" })
                 .stdin(Stdio::null());
+            // A grandchild in a process group of its own is outside the tree a kill reaches.
+            #[cfg(unix)]
+            if escape {
+                use std::os::unix::process::CommandExt;
+                grandchild.process_group(0);
+            }
             let grandchild = grandchild.spawn().expect("spawn grandchild");
             std::fs::write(pid_file, grandchild.id().to_string()).expect("write pid");
             if std::env::var_os(CHILD_THEN).is_some_and(|then| then == "sleep") {
                 std::thread::sleep(Duration::from_secs(120));
             }
             leave_running(grandchild);
-        } else if std::env::var_os(CHILD_SLEEPS).is_some() {
-            std::thread::sleep(Duration::from_secs(120));
+        } else if let Some(seconds) = std::env::var_os(CHILD_SLEEPS) {
+            let seconds = seconds
+                .to_str()
+                .and_then(|text| text.parse().ok())
+                .unwrap_or(120);
+            std::thread::sleep(Duration::from_secs(seconds));
         }
     }
 
@@ -338,6 +351,21 @@ mod tests {
         }
         assert!(started.elapsed() < Duration::from_secs(30));
         assert_grandchild_dies(&pid_file);
+    }
+
+    /// The case a concurrent fork produces: the output stays held by a process the kill cannot reach, for a while.
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_child_whose_output_is_held_outside_its_tree_is_not_a_timeout() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (mut command, _pid_file) = child_with_grandchild("escape", dir.path());
+        let started = Instant::now();
+        let outcome = run_bounded(&mut command, Some(Duration::from_secs(120))).expect("spawn");
+        match outcome {
+            Bounded::Finished(output) => assert!(output.status.success()),
+            Bounded::TimedOut => panic!("a finished child was reported as timed out"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(60));
     }
 
     #[test]
