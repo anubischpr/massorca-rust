@@ -5,6 +5,8 @@ use std::num::NonZeroU16;
 
 use massorca_core_terminal::screen::{SCROLLBACK_ROWS, Screen};
 
+const EXIT_ALTERNATE: &[u8] = b"\x1b[?1049l";
+
 fn size(n: u16) -> NonZeroU16 {
     NonZeroU16::new(n).expect("test sizes are non-zero")
 }
@@ -171,6 +173,38 @@ fn wide_character_wrap_at_the_edge_keeps_its_text() {
     bytes.extend_from_slice(b"\r\n");
     bytes.extend(lines(8, |i| format!("n{i}")));
     check(10, 4, &bytes);
+}
+
+#[test]
+fn alternate_screen_draws_over_main_scrollback() {
+    let mut bytes = lines(40, |i| format!("main {i}"));
+    bytes.extend_from_slice(
+        b"\x1b[?1049h\x1b[2J\x1b[1;1Htop bar\x1b[3;5Halternate \x1b[7mtext\x1b[0m",
+    );
+    let mut screen = Screen::new(80, 24);
+    screen.process(&bytes);
+    let mut reference = reference(80, 24, &bytes);
+    let mut target = round_trip(&mut screen, &mut reference);
+    assert!(target.screen().alternate_screen());
+
+    // Leaving the alternate screen must show the main screen the snapshot carried.
+    reference.process(EXIT_ALTERNATE);
+    target.process(EXIT_ALTERNATE);
+    assert!(!target.screen().alternate_screen());
+    assert_visible_matches(&reference, &target);
+    assert_scrollback_matches(&mut reference, &mut target);
+}
+
+#[test]
+fn input_modes_and_cursor_style_are_restored() {
+    let bytes = b"\x1b[?1h\x1b=\x1b[?2004h\x1b[?1000h\x1b[?1006h\x1b[?25l\x1b[5 qhello";
+    check(80, 24, bytes);
+}
+
+#[test]
+fn mouse_motion_modes_round_trip() {
+    check(80, 24, b"\x1b[?1002h\x1b[?1005hmotion");
+    check(80, 24, b"\x1b[?1003h\x1b[?1006hany motion");
 }
 
 #[test]

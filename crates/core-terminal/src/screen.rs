@@ -15,6 +15,9 @@ const TITLE_MAX_CHARS: usize = 1024;
 
 const RESET: &str = "\x1bc";
 const CLEAR_ATTRS: &str = "\x1b[m";
+const HOME: &str = "\x1b[H";
+const ENTER_ALTERNATE_SCREEN: &str = "\x1b[?1049h";
+const EXIT_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 
 #[derive(Debug, Default)]
 struct TitleCallbacks {
@@ -84,12 +87,29 @@ impl Screen {
 
     /// Escape bytes that rebuild this screen in a fresh emulator of the same size.
     ///
-    /// Reset, the scrollback oldest first, then the visible rows, then the cursor.
+    /// Reset, the scrollback oldest first, then the visible rows, then cursor and input modes.
     /// Each row lands on the bottom of a blank screen, so scrollback scrolls off in order.
     pub fn snapshot(&mut self) -> Vec<u8> {
         let mut out = String::from(RESET);
-        write_rows(&mut out, self.parser.screen_mut(), true);
-        place_cursor(&mut out, self.parser.screen());
+        if self.parser.screen().alternate_screen() {
+            // The main screen is unreachable while the alternate one is active; a copy with the
+            // alternate screen left holds it.
+            let (rows, cols) = self.parser.screen().size();
+            let mut main = vt100::Parser::new(rows, cols, SCROLLBACK_ROWS);
+            *main.screen_mut() = self.parser.screen().clone();
+            main.process(EXIT_ALTERNATE_SCREEN.as_bytes());
+            write_rows(&mut out, main.screen_mut(), true);
+            place_cursor(&mut out, main.screen());
+            // Entering the alternate screen saves the cursor the main screen ends on.
+            out.push_str(ENTER_ALTERNATE_SCREEN);
+            out.push_str(HOME);
+            write_rows(&mut out, self.parser.screen_mut(), false);
+            place_cursor(&mut out, self.parser.screen());
+        } else {
+            write_rows(&mut out, self.parser.screen_mut(), true);
+            place_cursor(&mut out, self.parser.screen());
+        }
+        out.push_str(&self.parser.screen().input_mode_formatted());
         out.into_bytes()
     }
 }
