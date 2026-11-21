@@ -157,9 +157,15 @@ pub enum WorkspaceCommand {
     Rm {
         /// Workspace id, name or path.
         workspace: String,
-        /// Discard uncommitted changes in the worktree.
+        /// Discard uncommitted and untracked changes in the worktree.
         #[arg(long)]
         force: bool,
+        /// Delete ignored files in the worktree. Git does not list them, and force does not cover them.
+        #[arg(long)]
+        discard_ignored: bool,
+        /// Forget a workspace whose directory git does not recognise, keeping the directory.
+        #[arg(long)]
+        forget_orphan: bool,
     },
 }
 

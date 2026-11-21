@@ -34,10 +34,12 @@ pub async fn execute(
             output.success(&list, &lines);
         }
         ProjectCommand::Show { project } => {
+            let project = cwd_path::selector(&project)?;
             let shown = client.project_show(&ProjectRef { project }).await?;
             output.success(&shown, &workspace_text::project_details(&shown));
         }
         ProjectCommand::Rm { project } => {
+            let project = cwd_path::selector(&project)?;
             let removed: Project = client.project_remove(&ProjectRef { project }).await?;
             output.success(
                 &removed,

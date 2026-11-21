@@ -32,7 +32,11 @@ pub async fn execute(
         WorkspaceCommand::List(args) => {
             let list = client
                 .workspace_list(&WorkspaceListParams {
-                    project: args.project,
+                    project: args
+                        .project
+                        .as_deref()
+                        .map(cwd_path::selector)
+                        .transpose()?,
                 })
                 .await?;
             let lines = if list.workspaces.is_empty() {
@@ -43,12 +47,23 @@ pub async fn execute(
             output.success(&list, &lines);
         }
         WorkspaceCommand::Show { workspace } => {
+            let workspace = cwd_path::selector(&workspace)?;
             let shown: Workspace = client.workspace_show(&WorkspaceRef { workspace }).await?;
             output.success(&shown, &workspace_text::workspace_details(&shown));
         }
-        WorkspaceCommand::Rm { workspace, force } => {
+        WorkspaceCommand::Rm {
+            workspace,
+            force,
+            discard_ignored,
+            forget_orphan,
+        } => {
             let removed = client
-                .workspace_remove(&WorkspaceRemoveParams { workspace, force })
+                .workspace_remove(&WorkspaceRemoveParams {
+                    workspace: cwd_path::selector(&workspace)?,
+                    force,
+                    discard_ignored,
+                    forget_orphan,
+                })
                 .await?;
             output.success(&removed, &workspace_text::removal_lines(&removed));
         }
@@ -60,7 +75,7 @@ pub async fn execute(
 fn create_params(args: WorkspaceCreateArgs) -> Result<WorkspaceCreateParams, CliError> {
     let path = args.path.as_deref().map(cwd_path::absolute).transpose()?;
     Ok(WorkspaceCreateParams {
-        project: args.project,
+        project: cwd_path::selector(&args.project)?,
         name: args.name,
         branch: args.branch,
         base: args.base,

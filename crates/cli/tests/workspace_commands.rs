@@ -4,7 +4,7 @@ mod harness;
 
 use std::path::{Path, PathBuf};
 
-use harness::{Sandbox, git, git_repo, single_document, stdout_text, with_json};
+use harness::{Sandbox, execute, git, git_repo, single_document, stdout_text, with_json};
 use predicates::str::contains;
 
 /// Adds `<home>/repo` as a git project whose workspaces go under `<home>/ws`.
@@ -268,4 +268,82 @@ fn a_relative_workspace_path_is_taken_from_the_working_directory() {
             .is_some_and(|path| Path::new(path).ends_with("elsewhere")),
         "absolute path: {created}"
     );
+}
+
+#[test]
+fn a_dot_selector_names_the_worktree_the_command_runs_in() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "here"]);
+    let path = PathBuf::from(created["path"].as_str().expect("path"));
+
+    let mut command = sandbox.command("default");
+    command.current_dir(&path);
+    let shown = execute(command.args(["--json", "workspace", "show", "."])).success();
+
+    assert_eq!(single_document(&shown)["result"]["name"], "here");
+}
+
+#[test]
+fn ignored_files_need_discard_ignored_on_the_command_line() {
+    let sandbox = Sandbox::new();
+    let repo = add_repo_project(&sandbox);
+    std::fs::write(
+        repo.join(".gitignore"),
+        "*.env
+",
+    )
+    .expect("write ignore rules");
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-q", "-m", "ignore env files"]);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "ign"]);
+    let path = PathBuf::from(created["path"].as_str().expect("path"));
+    std::fs::write(path.join("secrets.env"), "key").expect("write ignored file");
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "rm", "ign", "--force"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "workspace.ignored_files"
+    );
+    assert!(
+        path.join("secrets.env").is_file(),
+        "a refusal deletes nothing"
+    );
+
+    sandbox.json_ok(
+        "default",
+        &["workspace", "rm", "ign", "--force", "--discard-ignored"],
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn an_orphan_directory_needs_forget_orphan_and_keeps_its_directory() {
+    let sandbox = Sandbox::new();
+    let repo = add_repo_project(&sandbox);
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "lost"]);
+    let path = created["path"].as_str().expect("path").to_owned();
+    git(&repo, &["worktree", "remove", "--force", path.as_str()]);
+    std::fs::create_dir_all(&path).expect("recreate the directory");
+    std::fs::write(Path::new(&path).join("notes.txt"), "keep me").expect("write notes");
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "rm", "lost", "--force"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "workspace.orphan"
+    );
+
+    let removed = sandbox.json_ok("default", &["workspace", "rm", "lost", "--forget-orphan"]);
+    assert_eq!(removed["directory_kept"], true);
+    assert!(Path::new(&path).join("notes.txt").is_file());
 }
