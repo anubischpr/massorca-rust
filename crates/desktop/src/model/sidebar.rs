@@ -1,5 +1,5 @@
-//! The Sidebar's rows in each mode: the Workspaces navigation and project tree, and the Bot
-//! Teams placeholder (D-SH-01, A9, A10, A83 to A85).
+//! The Sidebar's rows in each mode: the Workspaces navigation and project tree. The Bot Teams
+//! rows come from the teams sidebar (D-WS-29); here Bot Teams is only the marker (A9, A10, A83).
 
 use super::navigation::{Mode, Page};
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
@@ -11,8 +11,6 @@ pub enum NavKind {
     Tasks,
     Automations,
     Mobile,
-    ConferenceRoom,
-    Board,
 }
 
 /// A row above or instead of the tree: a link to a page, or a placeholder with none yet.
@@ -60,9 +58,8 @@ pub enum SidebarContent {
         nav: Vec<NavRow>,
         tree: Vec<TreeRow>,
     },
-    BotTeams {
-        rows: Vec<NavRow>,
-    },
+    /// The teams sidebar, which the teams module builds from the Bot Teams state (D-WS-29).
+    BotTeams,
 }
 
 /// The Sidebar's content for a mode, with the open session marked as selected.
@@ -97,22 +94,7 @@ pub fn sidebar_content(snapshot: &ShellSnapshot, mode: Mode) -> SidebarContent {
             ],
             tree: flatten(&snapshot.projects, snapshot.active_session.as_deref()),
         },
-        Mode::BotTeams => SidebarContent::BotTeams {
-            rows: vec![
-                NavRow {
-                    kind: NavKind::ConferenceRoom,
-                    label: "Conference room",
-                    count: None,
-                    page: None,
-                },
-                NavRow {
-                    kind: NavKind::Board,
-                    label: "Board",
-                    count: None,
-                    page: None,
-                },
-            ],
-        },
+        Mode::BotTeams => SidebarContent::BotTeams,
     }
 }
 
@@ -257,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn bot_teams_shows_the_conference_room_and_the_board() {
-        let SidebarContent::BotTeams { rows } = sidebar_content(&sample(), Mode::BotTeams) else {
-            panic!("bot teams content expected");
-        };
-        assert_eq!(labels(&rows), vec!["Conference room", "Board"]);
+    fn bot_teams_lists_no_workspace_rows() {
+        assert_eq!(
+            sidebar_content(&sample(), Mode::BotTeams),
+            SidebarContent::BotTeams
+        );
     }
 }

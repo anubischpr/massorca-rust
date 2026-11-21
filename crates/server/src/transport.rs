@@ -4,17 +4,17 @@ use std::sync::Arc;
 
 use interprocess::local_socket::tokio::Stream;
 use massorca_protocol::{
-    ErrorBody, FrameError, MAX_FRAME_LEN_LOCAL, Message, codes, read_message, write_message,
+    ErrorBody, Frame, FrameError, MAX_FRAME_LEN_LOCAL, Message, codes, read_frame, write_frame,
 };
 use tokio::sync::mpsc;
 
-/// Reads frames until the peer closes or a read fails; the messages go to `inbound`.
-pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Message>) {
+/// Reads frames until the peer closes or a read fails; the frames go to `inbound`.
+pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
     let mut recv: &Stream = &stream;
     loop {
-        match read_message(&mut recv, MAX_FRAME_LEN_LOCAL).await {
-            Ok(Some(message)) => {
-                if inbound.send(message).await.is_err() {
+        match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
+            Ok(Some(frame)) => {
+                if inbound.send(frame).await.is_err() {
                     return;
                 }
             }
@@ -27,14 +27,16 @@ pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Messa
     }
 }
 
-/// Writes queued messages in order until the queue closes or a write fails. A reply too large for one frame is
+/// Writes queued frames in order until the queue closes or a write fails. A reply too large for one frame is
 /// replaced by a `response.too_large` error for its request; nothing of the oversized frame was written.
-pub(crate) async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Message>) {
+pub(crate) async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Frame>) {
     let mut send: &Stream = &stream;
-    while let Some(message) = outbound.recv().await {
-        let written = match write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL).await {
-            Err(FrameError::TooLarge(len)) => match too_large_reply(&message, len) {
-                Some(reply) => write_message(&mut send, &reply, MAX_FRAME_LEN_LOCAL).await,
+    while let Some(frame) = outbound.recv().await {
+        let written = match write_frame(&mut send, &frame, MAX_FRAME_LEN_LOCAL).await {
+            Err(FrameError::TooLarge(len)) => match too_large_reply(&frame, len) {
+                Some(reply) => {
+                    write_frame(&mut send, &Frame::Message(reply), MAX_FRAME_LEN_LOCAL).await
+                }
                 None => Err(FrameError::TooLarge(len)),
             },
             other => other,
@@ -46,9 +48,9 @@ pub(crate) async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiv
     }
 }
 
-/// The error that stands in for a reply that cannot be framed; `None` for any other message.
-fn too_large_reply(message: &Message, len: u32) -> Option<Message> {
-    let Message::Response { id, .. } = message else {
+/// The error that stands in for a reply that cannot be framed; `None` for any other frame.
+fn too_large_reply(frame: &Frame, len: u32) -> Option<Message> {
+    let Frame::Message(Message::Response { id, .. }) = frame else {
         return None;
     };
     let error = ErrorBody::new(

@@ -10,6 +10,7 @@ mod options;
 mod pump;
 mod spawn;
 mod subscription;
+mod terminal_attach;
 mod transport;
 mod typed_calls;
 #[cfg(windows)]
@@ -19,4 +20,5 @@ pub use client::Client;
 pub use error::ClientError;
 pub use handshake::Welcome;
 pub use options::{Autostart, ConnectOptions};
-pub use subscription::Subscription;
+pub use subscription::{StreamItem, Subscription};
+pub use terminal_attach::{AttachUpdate, TerminalAttachment};

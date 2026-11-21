@@ -88,11 +88,63 @@ Per-window UI state lives in `ShellModel`, not in the store: the open usage
 popover, the Status bar items the window hides, and the palette's Recent rows
 (the last five commands and workspaces run). None of it is saved to disk yet.
 
+## Bot Teams
+
+Bot Teams is a mode of the same shell (D-SH-10), not a second app. Its data is
+plain structs in `model::teams` with stable ids: teams, bots, Board tasks,
+projects, routines, web addresses, memory and files. A `TeamsSource` fills it.
+`SampleTeamsSource` holds team Desarrollo from the screen specs and is chosen
+by `--sample`, the way `SampleDataSource` is. Without a service, `UnavailableTeams`
+is used: the pages say that Bot Teams is not connected and nothing changes.
+Every change goes through `TeamsState`, which refuses with a named reason. Until
+the service has Bot Teams, changes land in the sample store only.
+
+- **Navigation.** `Page::Team(TeamPage)` keeps the Sidebar open (screens 3,
+  decision 1). In Bot Teams the Sidebar is the only region, and a Workspaces
+  session is never shown there. The mode switch cancels a card pick.
+- **Views.** `model::teams` builds the Sidebar, Board, card and address view
+  models; `shell::teams` draws them. Forms and confirms are `TeamDialog` and
+  `TeamConfirm`, held by the Shell, which reads a form's fields on submit.
+- **Board.** A picked card is state in `TeamsState`; the Board changes only on
+  the drop. Components `BoardColumn` and `Avatar` live in `massorca-ui`, with
+  gallery stories.
+- **Not built, and what each waits for.** The Conference room and agent-driven
+  routines wait for live agents and sessions. The routine form and the Calendar
+  wait for the scheduling editor and the calendar view. Team files wait for the
+  file editor (D-ED-01). Drag on the Board, a multi-line brief, the Add bot
+  advanced options and skills wait for their own rows.
+
 ## Testing
 
 See 0025: state tests in plain Rust, element tests with GPUI's fake platform,
 layout checks with real text shaping in `HeadlessAppContext`, screenshots on
 Linux only. No automated run opens a visible window.
+
+## Settings, start page and setup
+
+- **Settings** is a full page (`Page::Settings`). Its twelve sections and their
+  rows are data in `model/settings_sections.rs`, and each row names what backs
+  it. Only the workspace folder (`workspaces.default_root`) is backed: the
+  bridge's `config.list` and `config.set` read and write it, and a refusal keeps
+  its service code. Every other row is drawn disabled with "Not available yet"
+  until its layer exists. The folder is read only while the page is open. It
+  applies on Enter or when the field loses focus; "Saved" appears only after the
+  service answers, Escape puts the stored value back, and a refusal keeps the
+  typed text with its reason (`model/settings.rs`).
+- **The workspace start page** (`Canvas::Workspace`) opens from a click on a
+  workspace in the Sidebar. It reads the workspace's record from the store:
+  name, project, path, branch, state and whether its folder is still on disk.
+  Actions that need sessions, terminals or git are drawn disabled with the
+  reason. The project in the heading opens the create form's project menu;
+  choosing a project opens its first workspace, and "No project" returns to the
+  start page with no workspace. The page creates nothing.
+- **Setup** (`Page::Setup`) is the checklist of D-OB-12, opened from Settings,
+  General and account. A step the core cannot satisfy says so instead of
+  claiming a result.
+- Not built yet: search highlighting and the outline after a jump
+  (SettingsRow.md), the Marketplace and vault pages, the first-run wizard, and
+  host rows beyond This PC. Sample data holds no workspace records, so the
+  start page shows "not listed by the service" in `--sample` mode.
 
 ## Browser pane
 

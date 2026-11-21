@@ -64,7 +64,12 @@ pub(super) fn tree_row(
             if let Some(branch) = branch {
                 item = item.secondary(branch.clone());
             }
-            // Right click, or Shift+F10: the row's menu offers to remove the workspace.
+            // A click opens the start page; right click or Shift+F10 offers to remove it.
+            let (open_shell, open_id) = (shell.clone(), workspace_id.clone());
+            let item = item.on_click(move |_, _, cx| {
+                let id = open_id.clone();
+                change(&open_shell, cx, move |shell| shell.model.open_workspace(id));
+            });
             let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
             item.on_context_menu(move |window, cx| {
                 let id = workspace_id.clone();
@@ -129,8 +134,6 @@ fn nav_icon(kind: NavKind) -> IconName {
         NavKind::Tasks => IconName::ListChecks,
         NavKind::Automations => IconName::CalendarClock,
         NavKind::Mobile => IconName::Smartphone,
-        NavKind::ConferenceRoom => IconName::Users,
-        NavKind::Board => IconName::Kanban,
     }
 }
 

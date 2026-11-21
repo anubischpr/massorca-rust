@@ -27,11 +27,13 @@ async fn welcome_offers_the_registered_capabilities() {
     assert_eq!(
         welcome.capabilities,
         [
+            capabilities::BINARY_FRAMES,
             capabilities::CONFIG,
             capabilities::EVENTS,
             capabilities::GIT,
             capabilities::PROJECTS,
             capabilities::SERVICE,
+            capabilities::TERMINALS,
             capabilities::WORKSPACES,
         ]
     );

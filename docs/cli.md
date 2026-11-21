@@ -40,6 +40,15 @@ letters, digits, `-` or `_`.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
+| `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
+| `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
+| `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
+| `terminal attach <TERMINAL>` | Interactive: shows the terminal and types into it. `Ctrl+]` detaches. |
+| `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
+| `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
+| `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -69,6 +78,24 @@ project) at the time the project is added.
   of the worktree until it prunes it.
 - The main worktree of a repository is never removed, and a locked worktree is refused
   with `workspace.locked`.
+
+### Terminals
+
+A terminal belongs to one workspace and runs in the service, so it keeps running after
+the command that started it exits. `terminal list`, `show`, `send` and `screen` each
+connect and disconnect on their own.
+
+- `--cwd` is relative to the workspace root, or absolute. Unlike the paths above, a
+  relative `--cwd` is not taken from the directory the command runs in.
+- `--shell` names the program the terminal runs. Text typed into a shell is `terminal send`.
+- `terminal screen` waits up to 5 seconds for the terminal's screen. It replays the screen
+  in a local emulator, so colours and cursor movement are not printed, only the text.
+- `terminal attach` needs a terminal on stdin and stdout, else it exits 2 before starting
+  anything. It puts the local terminal in raw mode, resizes the terminal to the local size,
+  and restores the local terminal on every exit. It prints the terminal's exit and returns
+  0 when the terminal ends. `--json` is refused, because the output is the terminal's.
+- `terminal kill` and `terminal close` end the processes; stopping the service ends every
+  terminal and nothing is restored on the next start.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the
@@ -104,7 +131,7 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 |---|---|
 | 0 | Success. |
 | 1 | The service answered with an error, or local data could not be used. The code is printed. |
-| 2 | The command line is invalid, including an invalid profile name or log filter. |
+| 2 | The command line is invalid, including an invalid profile name or log filter, or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
 | 4 | The service is not running and could not be reached or started. |
 

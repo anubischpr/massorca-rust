@@ -8,6 +8,7 @@
 use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
 use massorca_desktop::data::SampleDataSource;
 use massorca_desktop::launch_options::WindowLaunch;
+use massorca_desktop::model::teams::SampleTeamsSource;
 use massorca_desktop::service::LaunchOptions;
 use massorca_desktop::shell::{self, Shell};
 use massorca_desktop::store::ClientDataSource;
@@ -66,7 +67,7 @@ fn main() {
                 |window, cx| {
                     cx.new(|cx| match client {
                         Some(source) => Shell::with_client(source, window, cx),
-                        None => Shell::new(&SampleDataSource, window, cx),
+                        None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
                     })
                 },
             );

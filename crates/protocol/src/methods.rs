@@ -8,6 +8,7 @@ pub mod events;
 pub mod git;
 pub mod projects;
 pub mod service;
+pub mod terminals;
 pub mod workspaces;
 
 /// Core never defines methods under this prefix; extensions use it for their own.

@@ -27,14 +27,18 @@ fn encoded_frame_is_big_endian_length_then_kind_then_json() {
 }
 
 #[test]
-fn json_is_the_only_known_frame_kind() {
+fn json_and_stream_bytes_are_the_known_frame_kinds() {
     assert_eq!(
         FrameKind::try_from(0x01_u8).expect("json kind"),
         FrameKind::Json
     );
+    assert_eq!(
+        FrameKind::try_from(0x02_u8).expect("stream bytes kind"),
+        FrameKind::StreamBytes
+    );
     assert!(matches!(
-        FrameKind::try_from(0x02_u8),
-        Err(FrameError::UnknownKind(0x02))
+        FrameKind::try_from(0x03_u8),
+        Err(FrameError::UnknownKind(0x03))
     ));
 }
 

@@ -3,16 +3,16 @@
 use std::sync::Arc;
 
 use interprocess::local_socket::tokio::Stream;
-use massorca_protocol::{MAX_FRAME_LEN_LOCAL, Message, read_message, write_message};
+use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, Message, read_frame, write_message};
 use tokio::sync::mpsc;
 
-/// Reads frames until the service closes the connection or a read fails; the messages go to `inbound`.
-pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Message>) {
+/// Reads frames until the service closes the connection or a read fails; the frames go to `inbound`.
+pub(crate) async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
     let mut recv: &Stream = &stream;
     loop {
-        match read_message(&mut recv, MAX_FRAME_LEN_LOCAL).await {
-            Ok(Some(message)) => {
-                if inbound.send(message).await.is_err() {
+        match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
+            Ok(Some(frame)) => {
+                if inbound.send(frame).await.is_err() {
                     return;
                 }
             }

@@ -3,14 +3,15 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use massorca_protocol::capabilities::BINARY_FRAMES;
 use massorca_protocol::methods::events::Subscribed;
-use massorca_protocol::{ErrorBody, Message, codes};
+use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use serde_json::Value;
 
 use crate::abort_guard::AbortOnDrop;
 use crate::activity::Activity;
 use crate::context::RequestCtx;
-use crate::method::{Handler, StreamSource, encode};
+use crate::method::{Handler, OpenedSource, encode};
 use crate::permission::authorize;
 use crate::session::Session;
 use crate::streams::forward;
@@ -35,6 +36,20 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
             Err(ErrorBody::new(
                 codes::CAPABILITY_NOT_NEGOTIATED,
                 format!("{method} needs {capability}, which this connection was not offered"),
+            )),
+        )
+        .await;
+    }
+    // Older clients close the connection on a frame they cannot read, so they never get a byte stream.
+    if entry.value.sends_bytes && !session.client_capabilities.contains(BINARY_FRAMES) {
+        return reply(
+            &session,
+            id,
+            Err(ErrorBody::new(
+                codes::STREAM_BINARY_FRAMES_REQUIRED,
+                format!(
+                    "{method} sends binary frames, and this client did not offer {BINARY_FRAMES}"
+                ),
             )),
         )
         .await;
@@ -97,11 +112,11 @@ async fn reply(session: &Session, id: u64, result: Result<Value, ErrorBody>) {
         Err(error) => Message::response_err(id, error),
     };
     // A connection that has closed has nobody left to answer.
-    let _ = session.outbound.send(message).await;
+    let _ = session.outbound.send(Frame::Message(message)).await;
 }
 
 /// Replies `Subscribed` and then starts forwarding. The stream is registered before the reply, so a cancel that follows it always finds the stream.
-async fn open_stream(session: &Session, id: u64, source: StreamSource) {
+async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
     let (stream, cancelled) = session.streams.open();
     let subscribed = match encode(&Subscribed { stream }) {
         Ok(value) => value,
@@ -112,17 +127,30 @@ async fn open_stream(session: &Session, id: u64, source: StreamSource) {
     };
     if session
         .outbound
-        .send(Message::response_ok(id, subscribed))
+        .send(Frame::Message(Message::response_ok(id, subscribed)))
         .await
         .is_ok()
     {
-        tokio::spawn(forward(
-            stream,
-            source,
-            session.outbound.clone(),
-            cancelled,
-            session.streams.downgrade(),
-        ));
+        match source {
+            OpenedSource::Events(items) => {
+                tokio::spawn(forward(
+                    stream,
+                    items,
+                    session.outbound.clone(),
+                    cancelled,
+                    session.streams.downgrade(),
+                ));
+            }
+            OpenedSource::Items(items) => {
+                tokio::spawn(forward(
+                    stream,
+                    items,
+                    session.outbound.clone(),
+                    cancelled,
+                    session.streams.downgrade(),
+                ));
+            }
+        }
     } else {
         session.streams.release(stream);
     }

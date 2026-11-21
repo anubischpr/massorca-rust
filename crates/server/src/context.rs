@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use massorca_core_store::Store;
+use massorca_core_terminal::TerminalManager;
 use massorca_core_workspace::Workspaces;
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub registries: Registries,
     /// The projects and workspaces domain. Calls take a handle with the current default root.
     pub workspaces: Arc<Workspaces>,
+    /// The service's terminals (decision 0033); they end with the service.
+    pub terminals: TerminalManager,
     pub server: PeerInfo,
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.

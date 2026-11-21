@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::data::SampleDataSource;
+use crate::model::teams::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 use crate::model::workspace_flow::{ProjectChoice, RemoveStage};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
@@ -46,7 +47,14 @@ fn rig<'a>(
     let (handle, script) = ServiceHandle::scripted();
     let (shell, cx) = cx.add_window_view(|window, cx| {
         let store = cx.new(|cx| ServiceStore::following(rx, cx));
-        Shell::with_store(store, Some(handle), None, window, cx)
+        Shell::with_store(
+            store,
+            Some(handle),
+            None,
+            UnavailableTeams.teams(),
+            window,
+            cx,
+        )
     });
     updates
         .send(StoreUpdate::Connection(connected()))
@@ -433,7 +441,9 @@ fn a_removed_event_drops_the_row_from_the_sidebar(cx: &mut TestAppContext) {
 #[gpui::test]
 fn sample_data_has_no_service_so_create_and_remove_do_nothing(cx: &mut TestAppContext) {
     setup(cx);
-    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(&SampleDataSource, window, cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
     shell.update_in(cx, |shell, window, cx| shell.open_create(window, cx));
     shell.update(cx, |shell, cx| shell.open_remove("w1", cx));
     shell.read_with(cx, |shell, _| {

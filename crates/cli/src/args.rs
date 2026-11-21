@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::terminal::TerminalCommand;
+
 /// Runs and controls the MassOrca service and reads and changes its settings.
 #[derive(Debug, Parser)]
 #[command(name = "massorca", version, arg_required_else_help = true)]
@@ -66,6 +68,11 @@ pub enum Commands {
     Workspace {
         #[command(subcommand)]
         command: WorkspaceCommand,
+    },
+    /// Starts terminals in workspaces and works with them: type, read, attach, resize and stop.
+    Terminal {
+        #[command(subcommand)]
+        command: TerminalCommand,
     },
     /// Reads and changes the git state of a workspace.
     Git {

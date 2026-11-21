@@ -13,6 +13,8 @@ pub const STREAM_NOT_FOUND: &str = "stream.not_found";
 pub const STREAM_OVERFLOW: &str = "stream.overflow";
 /// One stream item is larger than a frame; the stream ends with this error.
 pub const STREAM_ITEM_TOO_LARGE: &str = "stream.item_too_large";
+/// The method sends stream-bytes frames and the client did not negotiate `binary-frames/1`.
+pub const STREAM_BINARY_FRAMES_REQUIRED: &str = "stream.binary_frames_required";
 /// A reply is larger than a frame; only the request that asked for it fails.
 pub const RESPONSE_TOO_LARGE: &str = "response.too_large";
 pub const PATH_NOT_UTF8: &str = "path.not_utf8";
@@ -97,6 +99,14 @@ pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
+pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
+/// Input or resize sent to a terminal whose process has already ended.
+pub const TERMINAL_EXITED: &str = "terminal.exited";
+/// The OS error text travels in the error `message`.
+pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
+pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
+pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
+pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

@@ -85,6 +85,15 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "workspace.list",
             "workspace.rm",
             "workspace.show",
+            "terminal.attach",
+            "terminal.close",
+            "terminal.create",
+            "terminal.kill",
+            "terminal.list",
+            "terminal.resize",
+            "terminal.screen",
+            "terminal.send",
+            "terminal.show",
         ])
     );
     for path in &checked {

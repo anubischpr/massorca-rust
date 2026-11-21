@@ -126,6 +126,104 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": { "workspace": { "type": "string" }, "force": { "type": "boolean" } }
             }),
         ),
+        command(
+            "terminal.create",
+            "Start a terminal in a workspace",
+            "terminal.create",
+            json!({
+                "type": "object",
+                "required": ["workspace"],
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "shell": {
+                        "type": "object",
+                        "required": ["program"],
+                        "properties": { "program": { "type": "string" }, "args": { "type": "array", "items": { "type": "string" } } }
+                    },
+                    "cwd": { "type": "string" },
+                    "cols": { "type": "integer" },
+                    "rows": { "type": "integer" },
+                    "title": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "terminal.list",
+            "List terminals",
+            "terminal.list",
+            json!({ "type": "object", "properties": { "workspace": { "type": "string" } } }),
+        ),
+        command(
+            "terminal.show",
+            "Show a terminal",
+            "terminal.show",
+            selector("terminal"),
+        ),
+        command(
+            "terminal.screen",
+            "Print a terminal's current screen as text",
+            "terminal.attach",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "scrollback": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "terminal.attach",
+            "Attach to a terminal's output",
+            "terminal.attach",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": {
+                    "terminal": { "type": "string" },
+                    "since": { "type": "integer" },
+                    "cols": { "type": "integer" },
+                    "rows": { "type": "integer" }
+                }
+            }),
+        ),
+        command(
+            "terminal.send",
+            "Type into a terminal",
+            "terminal.input",
+            json!({
+                "type": "object",
+                "required": ["terminal", "data"],
+                "properties": { "terminal": { "type": "string" }, "data": { "type": "string" } }
+            }),
+        ),
+        command(
+            "terminal.resize",
+            "Resize a terminal",
+            "terminal.resize",
+            json!({
+                "type": "object",
+                "required": ["terminal", "cols", "rows"],
+                "properties": { "terminal": { "type": "string" }, "cols": { "type": "integer" }, "rows": { "type": "integer" } }
+            }),
+        ),
+        command(
+            "terminal.kill",
+            "Stop a terminal's process",
+            "terminal.kill",
+            json!({
+                "type": "object",
+                "required": ["terminal"],
+                "properties": { "terminal": { "type": "string" }, "force": { "type": "boolean" } }
+            }),
+        ),
+        command(
+            "terminal.close",
+            "Stop a terminal and forget it",
+            "terminal.close",
+            selector("terminal"),
+        ),
     ]
 }
 

@@ -1,4 +1,4 @@
-//! Command output: the only module that writes to stdout and stderr.
+//! Command output: every command writes to stdout and stderr through here, except `terminal attach`, which streams raw terminal bytes.
 //!
 //! Results go to stdout as text, or as one `{"ok":true,"result":...}` document with `--json`.
 //! Errors go to stderr as text, or as one `{"ok":false,"error":...}` document on stdout with `--json`.

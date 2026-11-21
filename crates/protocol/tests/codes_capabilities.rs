@@ -20,6 +20,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::STREAM_NOT_FOUND, "stream.not_found"),
     (codes::STREAM_OVERFLOW, "stream.overflow"),
     (codes::STREAM_ITEM_TOO_LARGE, "stream.item_too_large"),
+    (
+        codes::STREAM_BINARY_FRAMES_REQUIRED,
+        "stream.binary_frames_required",
+    ),
     (codes::RESPONSE_TOO_LARGE, "response.too_large"),
     (codes::PATH_NOT_UTF8, "path.not_utf8"),
     (codes::PATH_NOT_FOUND, "path.not_found"),
@@ -78,6 +82,12 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::CONFIG_UNKNOWN_KEY, "config.unknown_key"),
     (codes::CONFIG_INVALID_VALUE, "config.invalid_value"),
     (codes::STORE_NEWER_SCHEMA, "store.newer_schema"),
+    (codes::TERMINAL_NOT_FOUND, "terminal.not_found"),
+    (codes::TERMINAL_EXITED, "terminal.exited"),
+    (codes::TERMINAL_SPAWN_FAILED, "terminal.spawn_failed"),
+    (codes::TERMINAL_INPUT_TOO_LARGE, "terminal.input_too_large"),
+    (codes::TERMINAL_INVALID_SIZE, "terminal.invalid_size"),
+    (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -102,4 +112,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::GIT, "git/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
+    assert_eq!(capabilities::TERMINALS, "terminals/1");
+    assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
 }
