@@ -11,7 +11,7 @@ use massorca_core_git::Git;
 use massorca_core_store::Store;
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind};
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams, WorkspaceRemoved};
 use tempfile::TempDir;
 
 pub struct Fixture {
@@ -81,6 +81,17 @@ impl Fixture {
         self.workspaces
             .create_workspace(create_params(project, name))
             .expect("create workspace")
+    }
+
+    /// Removes workspace `selector` through both halves, as the handler does.
+    pub fn remove(&self, selector: &str) -> WorkspaceRemoved {
+        let begun = self
+            .workspaces
+            .begin_remove(selector, false)
+            .expect("begin removal");
+        self.workspaces
+            .finish_remove(&begun.id, false)
+            .expect("finish removal")
     }
 
     /// Makes every workspace row insert fail, as a store that rejects the row would.

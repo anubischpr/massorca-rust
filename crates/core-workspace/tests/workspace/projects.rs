@@ -228,6 +228,24 @@ fn removing_a_project_never_deletes_its_files() {
 }
 
 #[test]
+fn a_project_with_workspaces_is_refused_until_they_are_gone() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    fx.create(&project.name, "wip");
+
+    expect_code(
+        fx.workspaces.remove_project(&project.id),
+        codes::PROJECT_HAS_WORKSPACES,
+    );
+
+    fx.remove("wip");
+    fx.workspaces
+        .remove_project(&project.id)
+        .expect("remove project once its workspaces are gone");
+    assert!(fx.repo().join("README.md").exists());
+}
+
+#[test]
 fn removing_an_unknown_project_is_not_found() {
     let fx = Fixture::new();
 
