@@ -363,9 +363,11 @@ impl Render for Shell {
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
-            settings,
-            start,
-            setup_rows,
+            canvas::PageFrames {
+                settings,
+                start,
+                setup_rows,
+            },
             window,
             cx,
         );

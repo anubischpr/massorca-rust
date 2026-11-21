@@ -24,12 +24,17 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Canvas: the Conversation and the inline regions, with an open overlay on top (D-SH-01).
+/// What the full pages and the start page draw from, gathered by the shell for one frame.
+pub(super) struct PageFrames<'a> {
+    pub settings: SettingsFrame<'a>,
+    pub start: Option<StartFrame>,
+    pub setup_rows: Vec<crate::model::setup::SetupRow>,
+}
+
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
-    settings: SettingsFrame<'_>,
-    start: Option<StartFrame>,
-    setup_rows: Vec<crate::model::setup::SetupRow>,
+    pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -48,16 +53,7 @@ pub(super) fn canvas(
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(
-            model,
-            &shell,
-            settings,
-            start,
-            &setup_rows,
-            window,
-            cx,
-            &theme,
-        ))
+        .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -71,23 +67,21 @@ pub(super) fn canvas(
 fn conversation(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
-    settings: SettingsFrame<'_>,
-    start: Option<StartFrame>,
-    setup_rows: &[crate::model::setup::SetupRow],
+    pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
 ) -> AnyElement {
     // The Settings page fills the Canvas, so it is not centred in a box.
     if model.canvas() == Canvas::Page(Page::Settings) {
-        return settings::settings_page(settings, window, cx);
+        return settings::settings_page(pages.settings, window, cx);
     }
     if model.canvas() == Canvas::Page(Page::Setup) {
-        return setup::setup_page(setup_rows, cx);
+        return setup::setup_page(&pages.setup_rows, cx);
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
-        return match start {
+        return match pages.start {
             Some(frame) => start_page::start_page(frame, cx),
             None => placeholder(
                 "Workspace",
