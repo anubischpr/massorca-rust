@@ -424,6 +424,115 @@ fn change_blocks(rows: &[Row], file: &FileDiff) -> Vec<ChangeBlock> {
     blocks
 }
 
+/// The `@@` header of a hunk, as the diff tool prints it.
+pub fn hunk_title(hunk: &Hunk) -> String {
+    let mut title = format!(
+        "@@ -{},{} +{},{} @@",
+        hunk.old_start, hunk.old_len, hunk.new_start, hunk.new_len
+    );
+    if let Some(heading) = &hunk.heading {
+        title.push(' ');
+        title.push_str(heading);
+    }
+    title
+}
+
+impl FileStatus {
+    /// The letter on the file chip (M, A, D, R).
+    pub fn letter(self) -> &'static str {
+        match self {
+            Self::Modified => "M",
+            Self::Added => "A",
+            Self::Deleted => "D",
+            Self::Renamed => "R",
+        }
+    }
+}
+
+/// One row of the split layout: the old side on the left, the new side on the right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitRow {
+    Hunk {
+        hunk: usize,
+    },
+    /// Display-row indexes for each side; `None` leaves that side empty.
+    Pair {
+        left: Option<usize>,
+        right: Option<usize>,
+    },
+    Collapsed {
+        gap: usize,
+        hidden: usize,
+    },
+}
+
+/// One mark on the change ruler, as fractions of the full height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RulerMark {
+    pub top: f32,
+    pub height: f32,
+    pub added: bool,
+    pub removed: bool,
+    pub current: bool,
+}
+
+impl DiffModel {
+    /// One mark per change block over the full height; `current` is outlined.
+    pub fn ruler(&self, current: Option<usize>) -> Vec<RulerMark> {
+        let total = self.rows.len();
+        if total == 0 {
+            return Vec::new();
+        }
+        let total = total as f32;
+        self.changes
+            .iter()
+            .enumerate()
+            .map(|(index, block)| RulerMark {
+                top: block.first as f32 / total,
+                height: (block.last + 1 - block.first) as f32 / total,
+                added: block.added > 0,
+                removed: block.removed > 0,
+                current: current == Some(index),
+            })
+            .collect()
+    }
+
+    /// The rows of the split layout: removed and added lines of one change pair up in order.
+    pub fn split_rows(&self) -> Vec<SplitRow> {
+        let mut out = Vec::new();
+        let (mut removed, mut added) = (Vec::new(), Vec::new());
+        for (index, row) in self.rows.iter().copied().enumerate() {
+            match row_kind(row, &self.file) {
+                Some(LineKind::Removed) => removed.push(index),
+                Some(LineKind::Added) => added.push(index),
+                _ => {
+                    flush_pairs(&mut out, &mut removed, &mut added);
+                    out.push(match row {
+                        Row::Hunk { hunk } => SplitRow::Hunk { hunk },
+                        Row::Collapsed { gap, hidden } => SplitRow::Collapsed { gap, hidden },
+                        Row::Line { .. } | Row::Revealed { .. } => SplitRow::Pair {
+                            left: Some(index),
+                            right: Some(index),
+                        },
+                    });
+                }
+            }
+        }
+        flush_pairs(&mut out, &mut removed, &mut added);
+        out
+    }
+}
+
+fn flush_pairs(out: &mut Vec<SplitRow>, removed: &mut Vec<usize>, added: &mut Vec<usize>) {
+    let rows = removed.len().max(added.len());
+    out.extend((0..rows).map(|k| SplitRow::Pair {
+        left: removed.get(k).copied(),
+        right: added.get(k).copied(),
+    }));
+    removed.clear();
+    added.clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,5 +690,69 @@ mod tests {
         assert!(model.rows().is_empty() && model.changes().is_empty());
         assert_eq!(model.counts(), (0, 0));
         assert_eq!(model.next_change(None), None);
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    /// One hunk: two removed lines and one added line, so the split layout pairs the first.
+    fn pair_file() -> FileDiff {
+        FileDiff {
+            path: "a.txt".into(),
+            status: FileStatus::Modified,
+            hunks: vec![Hunk {
+                heading: Some("fn one()".into()),
+                old_start: 1,
+                old_len: 2,
+                new_start: 1,
+                new_len: 1,
+                hidden_before: Vec::new(),
+                lines: vec![
+                    DiffLine::removed(1, "one"),
+                    DiffLine::removed(2, "two"),
+                    DiffLine::added(1, "uno"),
+                ],
+            }],
+            hidden_after: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn split_pairs_removed_lines_with_added_lines_in_order() {
+        let split = DiffModel::new(pair_file()).split_rows();
+        assert_eq!(
+            split,
+            vec![
+                SplitRow::Hunk { hunk: 0 },
+                SplitRow::Pair {
+                    left: Some(1),
+                    right: Some(3)
+                },
+                SplitRow::Pair {
+                    left: Some(2),
+                    right: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ruler_marks_each_change_block_and_outlines_the_current_one() {
+        let marks = DiffModel::new(pair_file()).ruler(Some(0));
+        assert_eq!(marks.len(), 1);
+        assert!(marks[0].removed && marks[0].added && marks[0].current);
+        assert!((marks[0].top - 0.25).abs() < 1e-6);
+        assert!((marks[0].height - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hunk_titles_print_like_the_diff_tool_and_letters_match_the_chip() {
+        assert_eq!(
+            hunk_title(&pair_file().hunks[0]),
+            "@@ -1,2 +1,1 @@ fn one()"
+        );
+        assert_eq!(FileStatus::Renamed.letter(), "R");
     }
 }
