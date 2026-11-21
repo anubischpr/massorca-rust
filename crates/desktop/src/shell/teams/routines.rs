@@ -113,7 +113,8 @@ fn routine_card(
         let shell = shell.clone();
         let id = routine.id;
         Switch::new(format!("routine-switch-{}", routine.id.0), routine.enabled)
-            .label(if routine.enabled { "On" } else { "Paused" })
+            .label(routine.name.clone())
+            .helper(if routine.enabled { "On" } else { "Paused" })
             .on_change(move |on, _, cx| {
                 let _ = shell.update(cx, |shell, cx| shell.set_routine_enabled(team, id, on, cx));
             })

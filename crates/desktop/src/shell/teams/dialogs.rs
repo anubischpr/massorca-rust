@@ -84,11 +84,12 @@ pub(in crate::shell) enum TeamConfirm {
 
 /// A field whose changes redraw the dialog, so its buttons follow what is typed. Enter submits.
 fn watched_field(
+    label: &'static str,
     placeholder: &'static str,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> (Entity<TextField>, Subscription) {
-    let field = cx.new(|cx| TextField::new(cx).placeholder(placeholder));
+    let field = cx.new(|cx| TextField::new(cx).label(label).placeholder(placeholder));
     let subscription = cx.subscribe_in(
         &field,
         window,
@@ -106,9 +107,9 @@ impl Shell {
         if !self.model.teams().is_connected() {
             return;
         }
-        let (name, name_events) = watched_field("Team name", window, cx);
+        let (name, name_events) = watched_field("Name", "Team name", window, cx);
         let (purpose, purpose_events) =
-            watched_field("What the team is for (optional)", window, cx);
+            watched_field("Purpose", "What the team is for (optional)", window, cx);
         self.team_dialog = Some(TeamDialog::NewTeam(NewTeamDialog {
             name,
             purpose,
@@ -130,8 +131,9 @@ impl Shell {
         if !self.model.teams().is_connected() {
             return;
         }
-        let (name, name_events) = watched_field("Name", window, cx);
-        let (role, role_events) = watched_field("What this bot is responsible for", window, cx);
+        let (name, name_events) = watched_field("Name", "Bot name", window, cx);
+        let (role, role_events) =
+            watched_field("Role", "What this bot is responsible for", window, cx);
         self.team_dialog = Some(TeamDialog::AddBot(AddBotDialog {
             team,
             name,
@@ -242,6 +244,7 @@ impl Shell {
             .unwrap_or_default();
         let field = cx.new(|cx| {
             TextField::new(cx)
+                .label("Brief")
                 .placeholder("What this project is for")
                 .with_text(brief)
         });
