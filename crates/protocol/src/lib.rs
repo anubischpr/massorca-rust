@@ -4,6 +4,9 @@
 
 pub mod capabilities;
 pub mod codes;
+pub mod message;
+
+pub use message::{ErrorBody, Message, PeerInfo, ProtocolRange};
 
 /// Highest protocol version this build speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
