@@ -31,7 +31,9 @@ the negotiated limit (default 8 MiB local, 1 MiB network) close the
 connection rather than being truncated.
 
 **Serialization.** JSON with `serde`. Readers ignore unknown fields; writers
-omit `None` fields. Bulk binary data (terminal output in Phase 2) gets its own
+omit `None` fields. Every enum that crosses the wire decodes an unknown value
+to an `Unknown` fallback; the full list is "Wire compatibility rules" in
+`docs/architecture/core.md`. Bulk binary data (terminal output in Phase 2) gets its own
 frame kind behind a capability rather than base64 inside JSON.
 
 **Messages.** Every JSON message has a `type`:
@@ -39,7 +41,8 @@ frame kind behind a capability rather than base64 inside JSON.
 | type | direction | purpose |
 |---|---|---|
 | `hello` | client to server | first message: protocol range, client name and version, capabilities, optional auth |
-| `welcome` | server to client | chosen protocol version, server version, capabilities, connection id |
+| `welcome` | server to client | chosen protocol version, server version, capabilities, connection id, optional `max_frame_len` (absent means the default limit) |
+| `rejected` | server to client | sent instead of `welcome` when the handshake fails: `error` plus `supported` (the server's protocol range); the server then closes |
 | `request` | client to server | `id` (client-chosen u64), `method`, `params` |
 | `response` | server to client | `id` plus exactly one of `result` or `error` |
 | `event` | server to client | `stream` id plus `data`: one item of a server-pushed stream |
@@ -50,8 +53,13 @@ A stream is opened by an ordinary request whose result contains the stream
 id. Streams die with the connection; clients re-subscribe after reconnecting.
 
 **Versioning and capabilities.** `hello` carries `protocol: {min, max}`
-(integers). The server picks the highest version both support, or answers
-`error` with `protocol.unsupported_version` and closes. Inside one protocol
+(integers). The server picks the highest version both support and answers
+`welcome`. When the ranges do not overlap it answers `rejected` with
+`protocol.unsupported_version`; when `hello` is malformed or missing it answers
+`rejected` with `protocol.handshake`. Either way `supported` carries the
+server's own range so the client can report what to upgrade, and the server
+closes after sending it. A client older than `rejected` decodes it as an
+unknown message and sees the close. Inside one protocol
 version only additive changes are allowed (new optional fields, new methods,
 new capabilities). Features are grouped into named, versioned capabilities
 (`service/1`, `workspaces/1`, `events/1`); `welcome` lists what the server
