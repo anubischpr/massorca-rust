@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment};
+use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment, MAX_ATTACHMENTS};
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
@@ -180,6 +180,8 @@ pub enum TerminalError {
     ShellNotFound(String),
     #[error("too many live terminals")]
     LimitReached,
+    #[error("too many clients attached to the terminal")]
+    TooManyAttachments,
     #[error("the input is larger than {MAX_INPUT_BYTES} bytes")]
     InputTooLarge,
     #[error("cannot start the terminal: {0}")]
@@ -486,39 +488,45 @@ impl TerminalManager {
 
     /// Starts following the terminal's output: from `since` when the ring still holds it,
     /// else from a snapshot. Works on exited terminals: the snapshot, then `Exited`.
+    /// At most `MAX_ATTACHMENTS` follow a terminal at once.
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
         let shared = Arc::new(AttachShared::default());
         {
             let mut core = lock(&terminal.core);
+            let exited = matches!(core.status, Status::Exited(_));
+            if !exited && core.attachments.len() >= MAX_ATTACHMENTS {
+                return Err(TerminalError::TooManyAttachments);
+            }
             let info = terminal.info_locked(&core);
             let resume = since.and_then(|since| Some((since, core.ring.read_from(since)?)));
             let mut queue = lock(&shared.queue);
             match resume {
                 Some((offset, bytes)) => {
-                    queue.items.push_back(AttachItem::Attached {
+                    queue.push_back(AttachItem::Attached {
                         info: info.clone(),
                         mode: AttachMode::Resume,
                         offset,
                     });
                     if !bytes.is_empty() {
-                        queue.items.push_back(AttachItem::Output { offset, bytes });
+                        queue.push_back(AttachItem::Output { offset, bytes });
                     }
                 }
                 None => {
                     let (offset, snapshot) = core.snapshot();
-                    queue.items.push_back(AttachItem::Attached {
+                    queue.push_back(AttachItem::Attached {
                         info: info.clone(),
                         mode: AttachMode::Snapshot,
                         offset,
                     });
-                    queue.items.push_back(snapshot);
+                    queue.push_back(snapshot);
+                    queue.snapshot_at = Some(Instant::now());
                 }
             }
-            if !matches!(core.status, Status::Exited(_)) {
+            if !exited {
                 core.attachments.push(Arc::clone(&shared));
             } else {
-                queue.items.push_back(AttachItem::Exited { info });
+                queue.push_back(AttachItem::Exited { info });
                 queue.ended = true;
             }
         }
@@ -844,10 +852,11 @@ impl Terminal {
         let mut core = lock(&self.core);
         let (_, snapshot) = core.snapshot();
         let mut queue = lock(&shared.queue);
-        queue.items.clear();
+        queue.clear();
         queue.lagging = false;
+        queue.snapshot_at = Some(Instant::now());
         if matches!(core.status, Status::Exited(_)) {
-            queue.items.push_back(AttachItem::Exited {
+            queue.push_back(AttachItem::Exited {
                 info: self.info_locked(&core),
             });
             queue.ended = true;

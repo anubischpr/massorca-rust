@@ -348,6 +348,11 @@ impl Watch {
 
     /// Reads until the visible text contains `needle`.
     pub async fn wait_for_text(&mut self, needle: &str) {
+        self.wait_for_text_sampling(needle, || {}).await;
+    }
+
+    /// `wait_for_text`, calling `sample` before each read.
+    pub async fn wait_for_text_sampling(&mut self, needle: &str, mut sample: impl FnMut()) {
         let deadline = Instant::now() + TIMEOUT;
         // Only text added since the last look can complete the needle.
         let mut searched: usize = 0;
@@ -363,6 +368,7 @@ impl Watch {
                 self.output.len(),
                 self.visible.tail()
             );
+            sample();
             if self
                 .step()
                 .await

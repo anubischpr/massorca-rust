@@ -39,9 +39,13 @@ rendered snapshot on reattach rather than a raw replay.
   attachments before it resizes the PTY, so output drawn at the new size is
   parsed at the new size and queued after its `Resized`.
 - **Attachments never slow the shell.** Each attachment queues at most
-  **256 chunks** (a chunk is one PTY read, up to 64 KiB). When the queue is
-  full the attachment is marked lagging, its queue is dropped, and it gets a
-  new snapshot when it next reads. The PTY reader never blocks on a client.
+  **2 MiB** of payload (the 1 MiB a resume can carry from the ring plus 1 MiB
+  of live output; resume, snapshot and output bytes all count). When the
+  queue is full the attachment is marked lagging, its queue is dropped, and
+  it gets a new snapshot when it next reads, **at most one per 250 ms** for a
+  client that keeps falling behind. The PTY reader never blocks on a client.
+  A terminal accepts at most **16 attachments**; a further attach fails with
+  `terminal.limit_reached`.
 - **Cursor-position queries.** While no client is attached, the service
   answers `ESC [ 6 n` from the model's cursor. ConPTY sends that query when a
   terminal starts and renders nothing until it is answered; an attached
@@ -71,7 +75,11 @@ rendered snapshot on reattach rather than a raw replay.
 ## Consequences
 
 - Memory per terminal is bounded: the model (1000 rows plus the screen), 1 MiB
-  of ring and the attachment queues.
+  of ring and up to 16 attachment queues of 2 MiB each, plus the snapshot an
+  attach starts with.
+- A snapshot is still serialized under the terminal lock, so building one
+  pauses that terminal's reader for its duration; the 250 ms pacing bounds how
+  often a lagging client can cause that.
 - A client offline for more than 1 MiB of output gets a snapshot instead of
   the missed bytes; history older than 1000 rows is gone.
 - Durable history and cold restore can be added later from the same reader

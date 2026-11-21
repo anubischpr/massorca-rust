@@ -59,7 +59,8 @@ the service ends the stream.
 
 **Errors.** `terminal.not_found`, `terminal.exited` (input or resize on an
 exited terminal), `terminal.spawn_failed` (with the OS error in `message`),
-`terminal.input_too_large`, `terminal.invalid_size`, `terminal.limit_reached` (the live-terminal limit of 0033).
+`terminal.input_too_large`, `terminal.invalid_size`, `terminal.limit_reached` (the live-terminal limit of 0033, or the
+attachments-per-terminal limit of 0034).
 
 **Evolution.** Everything is additive inside `terminals/1`: new optional
 params (a phone's smaller scrollback, a startup command, a shell kind), new

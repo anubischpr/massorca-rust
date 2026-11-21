@@ -3,16 +3,16 @@
 
 mod manager_support;
 
+use std::time::Instant;
+
 use manager_support::{
     Managed, SIZE, TIMEOUT, Watch, big_file, marker_command, print_file_then_marker, script_shell,
     spec, visible, wait_until, watch,
 };
+use massorca_core_terminal::attach::{MAX_ATTACHMENTS, QUEUE_BYTES, RESNAPSHOT_INTERVAL};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::ring::RING_CAPACITY;
-use massorca_core_terminal::{AttachItem, AttachMode, TerminalState};
-
-/// The attachment queue limit of 0034.
-const QUEUE_CHUNKS: usize = 256;
+use massorca_core_terminal::{AttachItem, AttachMode, TerminalError, TerminalState};
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -149,19 +149,27 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
     let info = manager.create(spec("ws", dir.path())).expect("create");
     let mut reader = watch(&manager, &info.id, None).await;
     reader.wait_for_output().await;
+    let attached_at = Instant::now();
     let stalled = manager.attach(&info.id, None).expect("attach");
     let mut stalled = Watch::from_attachment(&manager, &info.id, stalled);
-    let items_before = reader.output_items;
-    let file = big_file(dir.path(), RING_CAPACITY * 3 / 2);
+    let start = reader.offset();
+    let file = big_file(dir.path(), QUEUE_BYTES * 2);
     let (command, expected) = print_file_then_marker(&file, "stalled");
 
     manager.input(&info.id, &command).expect("input");
-    reader.wait_for_text(&expected).await;
+    let mut peak = 0;
+    reader
+        .wait_for_text_sampling(&expected, || {
+            peak = peak.max(stalled.attachment.queued_bytes());
+        })
+        .await;
+    let flooded = reader.offset() - start;
     assert!(
-        reader.output_items - items_before > QUEUE_CHUNKS,
-        "only {} chunks: the queue never filled",
-        reader.output_items - items_before
+        flooded > QUEUE_BYTES as u64,
+        "only {flooded} bytes: the queue never filled"
     );
+    assert!(peak > 0, "the stalled client never queued anything");
+    assert!(peak <= QUEUE_BYTES, "{peak} bytes queued");
     let seen = reader.offset();
 
     // The snapshot is taken when the client reads, after everything the reader has seen.
@@ -173,6 +181,8 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
         panic!("a lagging attachment resumes with a snapshot");
     };
     assert!(offset >= seen, "snapshot at {offset}, reader saw {seen}");
+    // The attach's own snapshot counts: the next one waits out the interval.
+    assert!(attached_at.elapsed() >= RESNAPSHOT_INTERVAL);
     assert!(visible(&bytes).contains(&expected));
 
     // Output continues from the snapshot's offset with nothing lost.
@@ -183,6 +193,25 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
     let from = (offset - reader.base) as usize;
     let to = (stalled.offset() - reader.base) as usize;
     assert_eq!(stalled.output[..], reader.output[from..to]);
+}
+
+#[tokio::test]
+async fn an_attach_beyond_the_limit_is_refused_until_one_detaches() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut attachments: Vec<_> = (0..MAX_ATTACHMENTS)
+        .map(|_| manager.attach(&info.id, None).expect("attach"))
+        .collect();
+
+    let refused = manager.attach(&info.id, None);
+
+    assert!(
+        matches!(refused, Err(TerminalError::TooManyAttachments)),
+        "{refused:?}"
+    );
+    attachments.pop();
+    manager.attach(&info.id, None).expect("a freed slot");
 }
 
 #[tokio::test]
