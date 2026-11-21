@@ -10,7 +10,10 @@ mod process;
 mod refs;
 mod repository;
 mod version;
+mod worktree;
+mod worktree_porcelain;
 
 pub use error::GitError;
 pub use git::{DEFAULT_TIMEOUT, Git};
 pub use version::GitVersion;
+pub use worktree::{WorktreeAdd, WorktreeEntry};

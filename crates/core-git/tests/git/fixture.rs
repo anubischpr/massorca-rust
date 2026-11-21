@@ -81,6 +81,11 @@ pub fn commit_on_branch(repo: &Path, branch: &str, file: &str) {
     run_git(repo, &["checkout", "-q", "main"]);
 }
 
+/// The full commit id a revision resolves to.
+pub fn rev(dir: &Path, revision: &str) -> String {
+    run_git(dir, &["rev-parse", revision]).trim().to_owned()
+}
+
 /// The path with symlinks, short Windows names and verbatim prefixes resolved.
 pub fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).expect("canonicalize test path")

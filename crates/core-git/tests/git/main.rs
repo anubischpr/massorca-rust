@@ -4,3 +4,4 @@ mod discovery;
 mod fixture;
 mod refs;
 mod repository;
+mod worktrees;
