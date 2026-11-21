@@ -94,9 +94,23 @@ impl Profile {
 }
 
 /// Creates the profile and logs directories. Extension directories are left to the extension host.
+/// On Unix the profile directory is made private to its owner (0700) even when it already existed, so no other user can reach the socket in it.
 pub fn ensure_dir(profile: &Profile) -> io::Result<()> {
     fs::create_dir_all(profile.dir())?;
+    restrict_dir(profile.dir())?;
     fs::create_dir_all(profile.logs_dir())
+}
+
+#[cfg(unix)]
+fn restrict_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+}
+
+/// Windows directories take their access from the profile's parent; the pipe carries its own descriptor.
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// What the pipe name hashes: the directory in one form, so every spelling of a Windows directory names one pipe.

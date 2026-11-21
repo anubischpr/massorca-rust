@@ -12,6 +12,12 @@ directories.workspace = true
 interprocess.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 

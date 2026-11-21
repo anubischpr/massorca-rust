@@ -43,6 +43,11 @@ retrofitting isolation later means migrating every path.
   as given, case included. The Unix socket path must fit the 104-byte
   `sun_path` limit; the service refuses to start with a clear message when it
   does not.
+- **Permissions (Unix).** The profile directory is `0700` and is set to that
+  on every start, even when it already existed, so the socket inside it is not
+  reachable by other users. The socket file is `0600` once bound (0003). On
+  Windows the directory keeps its inherited access and the pipe carries an
+  owner-only descriptor instead (0003).
 
 ## Alternatives
 
