@@ -1,0 +1,902 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>MassOrca App Flow</title>
+<style>
+:root {
+  --bg: #f5f5f6;
+  --fg: #1b1b1c;
+  --muted: #5d5f67;
+  --line: #d2d3d8;
+  --accent: #2c4bb0;
+  --node: #ffffff;
+  --branch: #fff4df;
+  --warn: #8a5300;
+  --chain: #5d5f67;
+  --lane: #ebebee;
+  --frame: #eeeef2;
+  --canvas: #fbfbfc;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f0f11;
+    --fg: #e9e9ec;
+    --muted: #9ea1aa;
+    --line: #34363d;
+    --accent: #9db4ff;
+    --node: #1b1b1c;
+    --branch: #2a2215;
+    --warn: #f0b35a;
+    --chain: #9ea1aa;
+    --lane: #151517;
+    --frame: #1b1b1c;
+    --canvas: #151517;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f0f11;
+  --fg: #e9e9ec;
+  --muted: #9ea1aa;
+  --line: #34363d;
+  --accent: #9db4ff;
+  --node: #1b1b1c;
+  --branch: #2a2215;
+  --warn: #f0b35a;
+  --chain: #9ea1aa;
+  --lane: #151517;
+  --frame: #1b1b1c;
+  --canvas: #151517;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  margin: 0;
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 780px; margin: 0 auto; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 10px; text-wrap: balance; }
+h2 { font-size: 21px; line-height: 1.3; margin: 44px 0 8px; text-wrap: balance; }
+h3 { font-size: 17px; line-height: 1.3; margin: 0 0 4px; text-wrap: balance; }
+p { margin: 8px 0; max-width: 68ch; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kicker { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.lede { color: var(--muted); }
+.legend { color: var(--muted); font-size: 14px; padding-left: 18px; margin: 12px 0 0; }
+.legend li { margin: 4px 0; }
+figure { margin: 16px 0 0; min-width: 0; }
+figcaption { color: var(--muted); font-size: 13px; margin-top: 8px; max-width: 68ch; }
+svg { display: block; width: 100%; height: auto; max-width: 100%; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.scroll svg { min-width: 640px; }
+.window { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 36px 28px; margin-top: 16px; }
+.journey { min-width: 0; border-top: 1px solid var(--line); padding-top: 14px; }
+.goal { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+dl.tokens { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; margin: 16px 0 0; }
+dl.tokens dt { font-weight: 600; }
+dl.tokens dd { margin: 0; color: var(--muted); }
+table.keys { width: 100%; border-collapse: collapse; font-size: 14px; margin: 12px 0 0; }
+table.keys th, table.keys td { text-align: left; vertical-align: top; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+table.keys th { font-weight: 600; }
+.node { fill: var(--node); stroke: var(--line); stroke-width: 1; }
+.branch { fill: var(--branch); stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.flow { fill: none; stroke: var(--chain); stroke-width: 1.5; }
+.dash { fill: none; stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.arrowhead { fill: var(--chain); }
+.nid { font: 600 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--accent); }
+.nlab { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+.btxt { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+.lane { fill: var(--lane); }
+.lane-label { font: 600 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); letter-spacing: 0.04em; }
+.chip { fill: var(--node); stroke: var(--line); stroke-width: 1; }
+.chip-wide { fill: var(--node); stroke: var(--accent); stroke-width: 1; }
+.ctitle { font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+.cids { font: 10.5px ui-monospace, Consolas, "Cascadia Mono", monospace; fill: var(--muted); }
+.frame-fill { fill: var(--frame); }
+.canvas-fill { fill: var(--canvas); }
+.rule { stroke: var(--line); stroke-width: 1; }
+.lbl-b { font: 600 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+.lbl-m { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+.icon { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.icon-on { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+.ring { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 32 12; }
+.rail-chip { fill: var(--node); stroke: var(--accent); stroke-width: 1; }
+.rail-lbl { font: 600 10px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); text-anchor: middle; }
+.rail-id { font: 9px ui-monospace, Consolas, "Cascadia Mono", monospace; fill: var(--muted); text-anchor: middle; }
+</style>
+
+<main>
+  <p class="kicker">Design pass · validated by the owner 2026-11-12, with later changes in the app-flow.md changelog</p>
+  <h1>MassOrca app flow</h1>
+  <p class="lede">How a person moves through the desktop app and the Android companion, screen by screen. Each box is a screen from the screen inventory. The step tables, gaps and assumptions are in <a href="app-flow.md">app-flow.md</a> (plain text).</p>
+  <ul class="legend">
+    <li>Solid boxes are screens. Arrows show the next step.</li>
+    <li>Dashed boxes are branches: an error, an empty state, an offline host, or a choice the owner has not made yet.</li>
+    <li>G and A numbers match the gaps and assumptions in app-flow.md.</li>
+  </ul>
+  <section id="overview">
+    <h2>All journeys on one map</h2>
+    <p>Desktop journeys fill the top four rows: J13 is in the third row, and J14 stands alone in the fourth. The Android companion is the lane at the bottom, and it pairs with a host through J2.</p>
+    <figure>
+      <div class="scroll">
+<svg viewBox="0 0 862 600" role="img" aria-label="Map of all fourteen journeys. Desktop journeys J1 to J11, J13 and J14 fill four rows, with arrows for the usual order of use. J8, J13 and J14 stand alone. The Android lane holds J12, which pairs through J2.">
+<defs><marker id="arr-ov" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="lane" x="0" y="0" width="862" height="464" rx="10"/>
+<text class="lane-label" x="16" y="24">DESKTOP (GPUI)</text>
+<rect class="lane" x="0" y="480" width="862" height="120" rx="10"/>
+<text class="lane-label" x="16" y="500">ANDROID (REACT NATIVE)</text>
+<rect class="chip" x="16" y="44" width="186" height="84" rx="8"/>
+<text class="ctitle" x="28" y="68">J1 Setup</text>
+<text class="cids" x="28" y="88">D-SH-07 · D-OB-01 · D-AC-04</text>
+<text class="cids" x="28" y="106">D-AC-01 · D-OB-03 · D-OB-12</text>
+<rect class="chip" x="228" y="44" width="186" height="84" rx="8"/>
+<text class="ctitle" x="240" y="68">J2 Add host</text>
+<text class="cids" x="240" y="88">D-WS-01 · D-HO-02 · D-HO-06</text>
+<text class="cids" x="240" y="106">D-HO-07 · D-HO-01</text>
+<rect class="chip" x="440" y="44" width="186" height="84" rx="8"/>
+<text class="ctitle" x="452" y="68">J3 New workspace</text>
+<text class="cids" x="452" y="88">D-WS-09 · D-WS-14 · D-WS-15</text>
+<text class="cids" x="452" y="106">D-WS-20 · D-AG-01</text>
+<rect class="chip" x="652" y="44" width="186" height="84" rx="8"/>
+<text class="ctitle" x="664" y="68">J4 Run an agent</text>
+<text class="cids" x="664" y="88">D-AG-01 · D-AG-03 · X-CH-02</text>
+<text class="cids" x="664" y="106">X-AG-01 · X-CH-03 · D-AG-06</text>
+<rect class="chip" x="16" y="152" width="186" height="84" rx="8"/>
+<text class="ctitle" x="28" y="176">J8 Settings</text>
+<text class="cids" x="28" y="196">D-SH-02 · D-ST-03 · D-ST-04</text>
+<text class="cids" x="28" y="214">X-DLG-01 · D-ST-10</text>
+<rect class="chip" x="228" y="152" width="186" height="84" rx="8"/>
+<text class="ctitle" x="240" y="176">J7 Browser pane</text>
+<text class="cids" x="240" y="196">D-TM-02 · D-BP-01 · D-FD-01</text>
+<text class="cids" x="240" y="214">D-BP-02 · D-BP-06 · D-TM-18</text>
+<rect class="chip" x="440" y="152" width="186" height="84" rx="8"/>
+<text class="ctitle" x="452" y="176">J5 Terminals</text>
+<text class="cids" x="452" y="196">D-TM-01 · D-TM-02 · X-DLG-01</text>
+<text class="cids" x="452" y="214">X-CN-01 · D-TM-13 · D-TM-18</text>
+<rect class="chip" x="652" y="152" width="186" height="84" rx="8"/>
+<text class="ctitle" x="664" y="176">J6 Review and commit</text>
+<text class="cids" x="664" y="196">D-SH-04 · D-DF-01 · D-DF-02</text>
+<text class="cids" x="664" y="214">X-RV-02 · D-DF-04 · X-PR-01</text>
+<rect class="chip" x="16" y="260" width="186" height="84" rx="8"/>
+<text class="ctitle" x="28" y="284">J9 Import sessions</text>
+<text class="cids" x="28" y="304">D-IM-01 · D-IM-02 · D-IM-03</text>
+<text class="cids" x="28" y="322">D-IM-04 · X-IM-05</text>
+<rect class="chip" x="228" y="260" width="186" height="84" rx="8"/>
+<text class="ctitle" x="240" y="284">J10 Install extension</text>
+<text class="cids" x="240" y="304">D-EX-01 · D-EX-02 · D-EX-03</text>
+<text class="cids" x="240" y="322">D-EX-04 · D-SL-01</text>
+<rect class="chip" x="440" y="260" width="186" height="84" rx="8"/>
+<text class="ctitle" x="452" y="284">J11 Build extension</text>
+<text class="cids" x="452" y="304">D-EX-05 · D-ED-02 · D-EX-06</text>
+<text class="cids" x="452" y="322">D-CU-01 · D-EX-03</text>
+<rect class="chip" x="652" y="260" width="186" height="84" rx="8"/>
+<text class="ctitle" x="664" y="284">J13 Bot Teams mode</text>
+<text class="cids" x="664" y="304">D-AG-24 · D-WS-30 · X-DL-01</text>
+<text class="cids" x="664" y="322">D-AG-25 · D-AG-23 · D-WS-24</text>
+<rect class="chip" x="16" y="368" width="186" height="84" rx="8"/>
+<text class="ctitle" x="28" y="392">J14 Agent secrets</text>
+<text class="cids" x="28" y="412">X-CH-07 · X-VT-01 · D-VT-01</text>
+<text class="cids" x="28" y="430">D-VT-02 · X-DLG-01 · D-AG-03</text>
+<rect class="chip chip-wide" x="16" y="514" width="830" height="70" rx="8"/>
+<text class="ctitle" x="28" y="536">J12 Android companion</text>
+<text class="cids" x="28" y="556">M-PA-01 to M-PA-05 pairing · M-HM-02 host card · M-WS-01 workspaces</text>
+<text class="cids" x="28" y="574">M-SE-02 session · X-CH-02 approve · M-TM-01 terminal · X-CN-01 reconnect</text>
+<line class="flow" x1="202" y1="86" x2="228" y2="86" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="414" y1="86" x2="440" y2="86" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="626" y1="86" x2="652" y2="86" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="745" y1="128" x2="745" y2="152" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="533" y1="128" x2="533" y2="152" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="440" y1="194" x2="414" y2="194" marker-end="url(#arr-ov)"/>
+<line class="flow" x1="414" y1="302" x2="440" y2="302" marker-end="url(#arr-ov)"/>
+</svg>
+      </div>
+      <figcaption>Arrows show the order of use. J8, J13 and J14 stand alone: J14 can happen inside any session from J4, so it has no arrow. J9 leads into a session as in J4, and J12 pairs through J2.</figcaption>
+    </figure>
+  </section>
+  <section id="journeys">
+    <h2>Journeys, one diagram each</h2>
+    <p>Each diagram is the main path of its table in app-flow.md. Dashed boxes are the branches that table names.</p>
+    <div class="grid">
+<article class="journey" id="j1"><h3>J1 First launch and setup (desktop)</h3><p class="goal">A working desktop: local service running, agent accounts carried over, a theme chosen, session import optional.</p><figure><svg viewBox="0 0 430 544" role="img" aria-label="J1 main path: D-SH-07 Start, local service then D-OB-01 Wizard: agent accounts then D-AC-04 Find old accounts then D-AC-05 Migration result then D-AC-01 Sign in the rest then D-OB-03 Wizard: theme then D-OB-01 Wizard: notifications then D-OB-12 Setup checklist then D-AG-01 Start page. Dashed boxes are branches.">
+<defs><marker id="arr-J1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-SH-07</text>
+<text class="nlab" x="20" y="45">Start, local service</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-OB-01</text>
+<text class="nlab" x="20" y="105">Wizard: agent accounts</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-AC-04</text>
+<text class="nlab" x="20" y="165">Find old accounts</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-AC-05</text>
+<text class="nlab" x="20" y="225">Migration result</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-AC-01</text>
+<text class="nlab" x="20" y="285">Sign in the rest</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-OB-03</text>
+<text class="nlab" x="20" y="345">Wizard: theme</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-OB-01</text>
+<text class="nlab" x="20" y="405">Wizard: notifications</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">D-OB-12</text>
+<text class="nlab" x="20" y="465">Setup checklist</text>
+<line class="flow" x1="139" y1="474" x2="139" y2="490" marker-end="url(#arr-J1)"/>
+<rect class="node" x="8" y="490" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="508">D-AG-01</text>
+<text class="nlab" x="20" y="525">Start page</text>
+<line class="dash" x1="270" y1="32" x2="282" y2="32"/>
+<rect class="branch" x="282" y="10" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="28">Service fails:</text>
+<text class="btxt" x="292" y="44">no ID (G1)</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">None found:</text>
+<text class="btxt" x="292" y="164">sign in by hand</text>
+</svg><figcaption>Setup is a three-step wizard. Migration and sign-in are branches inside its first step, and session import waits in the checklist.</figcaption></figure></article>
+<article class="journey" id="j2"><h3>J2 Add a remote host and pair it</h3><p class="goal">A server or SSH host appears in the sidebar as a connected host, with its workspaces listed.</p><figure><svg viewBox="0 0 430 364" role="img" aria-label="J2 main path: D-WS-01 Add host then D-HO-02 SSH or server form then D-HO-06 Passphrase, SSH only then D-HO-02 Connection test then D-HO-07 Server state then D-HO-01 Host in sidebar tree. Dashed boxes are branches.">
+<defs><marker id="arr-J2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-WS-01</text>
+<text class="nlab" x="20" y="45">Add host</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J2)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-HO-02</text>
+<text class="nlab" x="20" y="105">SSH or server form</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J2)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-HO-06</text>
+<text class="nlab" x="20" y="165">Passphrase, SSH only</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J2)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-HO-02</text>
+<text class="nlab" x="20" y="225">Connection test</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J2)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-HO-07</text>
+<text class="nlab" x="20" y="285">Server state</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J2)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-HO-01</text>
+<text class="nlab" x="20" y="345">Host in sidebar tree</text>
+<line class="dash" x1="270" y1="212" x2="282" y2="212"/>
+<rect class="branch" x="282" y="190" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="208">Failed:</text>
+<text class="btxt" x="292" y="224">X-DG-01 diagnostics</text>
+<line class="dash" x1="270" y1="272" x2="282" y2="272"/>
+<rect class="branch" x="282" y="250" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="268">Auth failed:</text>
+<text class="btxt" x="292" y="284">pair again</text>
+</svg><figcaption>Adding a host is one dialog and one connection test. A failed test leads to diagnostics.</figcaption></figure></article>
+<article class="journey" id="j3"><h3>J3 Create a workspace</h3><p class="goal">A new workspace exists under a project, optional setup has run, and the start page opens on it.</p><figure><svg viewBox="0 0 430 484" role="img" aria-label="J3 main path: D-WS-01 New workspace then D-WS-09 Add project, if new then D-WS-14 Composer: type, base then D-WS-14 Create then D-WS-15 Creation progress then D-WS-20 Hook trust, if any then D-WS-14 Setup script offer then D-AG-01 Start page. Dashed boxes are branches.">
+<defs><marker id="arr-J3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-WS-01</text>
+<text class="nlab" x="20" y="45">New workspace</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-WS-09</text>
+<text class="nlab" x="20" y="105">Add project, if new</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-WS-14</text>
+<text class="nlab" x="20" y="165">Composer: type, base</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-WS-14</text>
+<text class="nlab" x="20" y="225">Create</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-WS-15</text>
+<text class="nlab" x="20" y="285">Creation progress</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-WS-20</text>
+<text class="nlab" x="20" y="345">Hook trust, if any</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-WS-14</text>
+<text class="nlab" x="20" y="405">Setup script offer</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J3)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">D-AG-01</text>
+<text class="nlab" x="20" y="465">Start page</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">Base ref missing:</text>
+<text class="btxt" x="292" y="164">default branch shown</text>
+<line class="dash" x1="270" y1="272" x2="282" y2="272"/>
+<rect class="branch" x="282" y="250" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="268">Failed:</text>
+<text class="btxt" x="292" y="284">log stays, remove</text>
+</svg><figcaption>Creating a workspace is one composer. Progress replaces the terminal until creation is done.</figcaption></figure></article>
+<article class="journey" id="j4"><h3>J4 Run an agent in a workspace</h3><p class="goal">A session runs in a workspace. The owner watches it, answers approvals, then finishes, continues or resumes it.</p><figure><svg viewBox="0 0 430 544" role="img" aria-label="J4 main path: D-WS-02 Select workspace then D-AG-01 Model picker (X-AG-02), send then D-AG-03 Conversation opens then X-AG-01 Watch status then X-CH-02 Approve or answer then X-CH-03 Queue follow-up then X-AG-01 Run ends: idle then X-DL-01 Child tree; bring back, X-CH-08 then D-AG-06 Resume after restart. Dashed boxes are branches.">
+<defs><marker id="arr-J4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-WS-02</text>
+<text class="nlab" x="20" y="45">Select workspace</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-AG-01</text>
+<text class="nlab" x="20" y="105">Model picker (X-AG-02), send</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-AG-03</text>
+<text class="nlab" x="20" y="165">Conversation opens</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">X-AG-01</text>
+<text class="nlab" x="20" y="225">Watch status</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">X-CH-02</text>
+<text class="nlab" x="20" y="285">Approve or answer</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">X-CH-03</text>
+<text class="nlab" x="20" y="345">Queue follow-up</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">X-AG-01</text>
+<text class="nlab" x="20" y="405">Run ends: idle</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">X-DL-01</text>
+<text class="nlab" x="20" y="465">Child tree; bring back, X-CH-08</text>
+<line class="flow" x1="139" y1="474" x2="139" y2="490" marker-end="url(#arr-J4)"/>
+<rect class="node" x="8" y="490" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="508">D-AG-06</text>
+<text class="nlab" x="20" y="525">Resume after restart</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Signed out:</text>
+<text class="btxt" x="292" y="104">X-AC-01 card</text>
+<line class="dash" x1="270" y1="212" x2="282" y2="212"/>
+<rect class="branch" x="282" y="190" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="208">Host unreachable:</text>
+<text class="btxt" x="292" y="224">no status claimed</text>
+</svg><figcaption>A run is followed through one status model. Approvals stay on the card in the chat, and no status is claimed while the host is unreachable. Child agents show as a tree inside the session, and a finished child can be brought back into the parent worktree. Session summary cards appear only when they hold a record.</figcaption></figure></article>
+<article class="journey" id="j5"><h3>J5 Terminals: open, split, survive</h3><p class="goal">Terminals keep running when the window closes, and they come back in their layout.</p><figure><svg viewBox="0 0 430 484" role="img" aria-label="J5 main path: D-TM-01 Open in Work panel then D-TM-01 Split pane then D-TM-02 Run command then X-DLG-01 Close running pane then D-SH-07 Quit and reopen then D-TM-01 Layout restores then D-TM-02 Running or exited then D-TM-18 Driven by another device. Dashed boxes are branches.">
+<defs><marker id="arr-J5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-TM-01</text>
+<text class="nlab" x="20" y="45">Open in Work panel</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-TM-01</text>
+<text class="nlab" x="20" y="105">Split pane</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-TM-02</text>
+<text class="nlab" x="20" y="165">Run command</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">X-DLG-01</text>
+<text class="nlab" x="20" y="225">Close running pane</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-SH-07</text>
+<text class="nlab" x="20" y="285">Quit and reopen</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-TM-01</text>
+<text class="nlab" x="20" y="345">Layout restores</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-TM-02</text>
+<text class="nlab" x="20" y="405">Running or exited</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J5)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">D-TM-18</text>
+<text class="nlab" x="20" y="465">Driven by another device</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">SSH drops:</text>
+<text class="btxt" x="292" y="164">reconnecting</text>
+<line class="dash" x1="270" y1="212" x2="282" y2="212"/>
+<rect class="branch" x="282" y="190" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="208">Keep running:</text>
+<text class="btxt" x="292" y="224">core keeps it</text>
+</svg><figcaption>Terminals live in the Work panel and in the core, so closing the window does not end them. Closing a running pane asks first.</figcaption></figure></article>
+<article class="journey" id="j6"><h3>J6 Review diffs and source control</h3><p class="goal">The owner reviews agent changes, comments, stages and commits, then checks CI or opens a PR.</p><figure><svg viewBox="0 0 430 424" role="img" aria-label="J6 main path: D-SH-04 Project sidebar: source control then D-DF-01 Diff as Work panel tab then X-RV-02 Review notes then D-ED-07 Resolve conflicts then D-DF-02 Stage and commit then D-DF-04 Checks then X-PR-01 Link or create PR. Dashed boxes are branches.">
+<defs><marker id="arr-J6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-SH-04</text>
+<text class="nlab" x="20" y="45">Project sidebar: source control</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-DF-01</text>
+<text class="nlab" x="20" y="105">Diff as Work panel tab</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">X-RV-02</text>
+<text class="nlab" x="20" y="165">Review notes</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-ED-07</text>
+<text class="nlab" x="20" y="225">Resolve conflicts</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-DF-02</text>
+<text class="nlab" x="20" y="285">Stage and commit</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-DF-04</text>
+<text class="nlab" x="20" y="345">Checks</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J6)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">X-PR-01</text>
+<text class="nlab" x="20" y="405">Link or create PR</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Large diff:</text>
+<text class="btxt" x="292" y="104">asks first</text>
+<line class="dash" x1="270" y1="392" x2="282" y2="392"/>
+<rect class="branch" x="282" y="370" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="388">Not pushed:</text>
+<text class="btxt" x="292" y="404">see G7</text>
+</svg><figcaption>Review starts from Source control in the Project sidebar. A changed file opens its diff as a file tab in the Work panel. Commit and pull request actions sit in the Source control tab.</figcaption></figure></article>
+<article class="journey" id="j7"><h3>J7 Browser pane: dev server preview</h3><p class="goal">A dev server opens in the browser pane. The owner clicks through it and can hand an element to the agent.</p><figure><svg viewBox="0 0 430 424" role="img" aria-label="J7 main path: D-TM-02 Start dev server then D-BP-01 Open in Work panel tab then D-BP-01 Navigate then D-FD-01 Find on page then D-BP-02 Grab element then D-BP-06 Passkey, later then D-TM-18 Driven by another device. Dashed boxes are branches.">
+<defs><marker id="arr-J7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-TM-02</text>
+<text class="nlab" x="20" y="45">Start dev server</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-BP-01</text>
+<text class="nlab" x="20" y="105">Open in Work panel tab</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-BP-01</text>
+<text class="nlab" x="20" y="165">Navigate</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-FD-01</text>
+<text class="nlab" x="20" y="225">Find on page</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-BP-02</text>
+<text class="nlab" x="20" y="285">Grab element</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-BP-06</text>
+<text class="nlab" x="20" y="345">Passkey, later</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J7)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-TM-18</text>
+<text class="nlab" x="20" y="405">Driven by another device</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Error page:</text>
+<text class="btxt" x="292" y="104">shows the reason</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">Bad certificate:</text>
+<text class="btxt" x="292" y="164">warning, no ID (G9)</text>
+</svg><figcaption>The browser tab in the Work panel opens dev servers through the workspace&#x27;s host. Certificate and connection errors fail closed.</figcaption></figure></article>
+<article class="journey" id="j8"><h3>J8 Settings and keybindings</h3><p class="goal">The owner finds a setting, changes it, and reassigns a shortcut without leaving a conflict.</p><figure><svg viewBox="0 0 430 364" role="img" aria-label="J8 main path: D-SH-02 Open settings view then D-CP-04 Search a setting then D-ST-03 Change theme then D-ST-04 Record shortcut then X-DLG-01 Confirm reassignment then D-ST-10 Privacy: telemetry off. Dashed boxes are branches.">
+<defs><marker id="arr-J8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-SH-02</text>
+<text class="nlab" x="20" y="45">Open settings view</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J8)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-CP-04</text>
+<text class="nlab" x="20" y="105">Search a setting</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J8)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-ST-03</text>
+<text class="nlab" x="20" y="165">Change theme</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J8)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-ST-04</text>
+<text class="nlab" x="20" y="225">Record shortcut</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J8)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">X-DLG-01</text>
+<text class="nlab" x="20" y="285">Confirm reassignment</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J8)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-ST-10</text>
+<text class="nlab" x="20" y="345">Privacy: telemetry off</text>
+<line class="dash" x1="270" y1="212" x2="282" y2="212"/>
+<rect class="branch" x="282" y="190" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="208">Conflict: shows</text>
+<text class="btxt" x="292" y="224">the other binding</text>
+</svg><figcaption>Settings is one view with search. A shortcut change shows any conflict before it is saved.</figcaption></figure></article>
+<article class="journey" id="j9"><h3>J9 Import a session from another tool</h3><p class="goal">A session from another agent tool continues in MassOrca.</p><figure><svg viewBox="0 0 430 364" role="img" aria-label="J9 main path: D-IM-01 Detect agent tools then D-IM-04 Set data path then D-IM-02 Select and map then D-IM-03 Import, copy then X-IM-05 Imported marker then D-AG-03 Continue here. Dashed boxes are branches.">
+<defs><marker id="arr-J9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-IM-01</text>
+<text class="nlab" x="20" y="45">Detect agent tools</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J9)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-IM-04</text>
+<text class="nlab" x="20" y="105">Set data path</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J9)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-IM-02</text>
+<text class="nlab" x="20" y="165">Select and map</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J9)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-IM-03</text>
+<text class="nlab" x="20" y="225">Import, copy</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J9)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">X-IM-05</text>
+<text class="nlab" x="20" y="285">Imported marker</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J9)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-AG-03</text>
+<text class="nlab" x="20" y="345">Continue here</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Not found:</text>
+<text class="btxt" x="292" y="104">skip the tool</text>
+<line class="dash" x1="270" y1="332" x2="282" y2="332"/>
+<rect class="branch" x="282" y="310" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="328">Signed out:</text>
+<text class="btxt" x="292" y="344">X-AC-01 card</text>
+</svg><figcaption>Import is read-only and runs on the host that holds the sessions. Continuing a session needs a signed-in agent account.</figcaption></figure></article>
+<article class="journey" id="j10"><h3>J10 Install an extension</h3><p class="goal">The owner installs an extension, grants what it asks for, enables it, and sees its panel appear.</p><figure><svg viewBox="0 0 430 424" role="img" aria-label="J10 main path: D-ST-09 Extensions settings then D-EX-01 Browse sources then D-EX-02 Review permissions then D-EX-02 Install and grant then D-EX-03 Enable and manage then D-EX-04 Configure section then D-SL-01 Panel appears. Dashed boxes are branches.">
+<defs><marker id="arr-J10" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-ST-09</text>
+<text class="nlab" x="20" y="45">Extensions settings</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-EX-01</text>
+<text class="nlab" x="20" y="105">Browse sources</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-EX-02</text>
+<text class="nlab" x="20" y="165">Review permissions</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-EX-02</text>
+<text class="nlab" x="20" y="225">Install and grant</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-EX-03</text>
+<text class="nlab" x="20" y="285">Enable and manage</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-EX-04</text>
+<text class="nlab" x="20" y="345">Configure section</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J10)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-SL-01</text>
+<text class="nlab" x="20" y="405">Panel appears</text>
+<line class="dash" x1="270" y1="212" x2="282" y2="212"/>
+<rect class="branch" x="282" y="190" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="208">Failed:</text>
+<text class="btxt" x="292" y="224">rollback available</text>
+</svg><figcaption>An extension is reviewed before it is installed. Its panel appears as a Project sidebar tab.</figcaption></figure></article>
+<article class="journey" id="j11"><h3>J11 Build my own extension</h3><p class="goal">The owner builds an extension from a template, runs it, iterates on the code, then disables or removes it.</p><figure><svg viewBox="0 0 430 424" role="img" aria-label="J11 main path: D-EX-05 New from template then D-EX-05 Load, read logs then D-ED-02 Edit code then D-EX-05 Reload then D-EX-06 Run in-app app then D-CU-01 Save preset then D-EX-03 Disable or remove. Dashed boxes are branches.">
+<defs><marker id="arr-J11" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-EX-05</text>
+<text class="nlab" x="20" y="45">New from template</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-EX-05</text>
+<text class="nlab" x="20" y="105">Load, read logs</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-ED-02</text>
+<text class="nlab" x="20" y="165">Edit code</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-EX-05</text>
+<text class="nlab" x="20" y="225">Reload</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-EX-06</text>
+<text class="nlab" x="20" y="285">Run in-app app</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-CU-01</text>
+<text class="nlab" x="20" y="345">Save preset</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J11)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-EX-03</text>
+<text class="nlab" x="20" y="405">Disable or remove</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Error:</text>
+<text class="btxt" x="292" y="104">log shows the line</text>
+<line class="dash" x1="270" y1="392" x2="282" y2="392"/>
+<rect class="branch" x="282" y="370" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="388">Sharing:</text>
+<text class="btxt" x="292" y="404">no screen (G12)</text>
+</svg><figcaption>The owner edits code in the normal editor, then reloads the extension. Errors appear in its log.</figcaption></figure></article>
+<article class="journey" id="j12"><h3>J12 Android companion</h3><p class="goal">From a fresh install, the phone pairs, follows a session, approves a request, uses the terminal, and recovers after a disconnect.</p><figure><svg viewBox="0 0 430 604" role="img" aria-label="J12 main path: M-PA-01 Connect hint then M-PA-02 Scan QR or paste then M-PA-04 Confirm desktop then M-PA-05 Setup, undecided only then M-HM-02 Host card then M-WS-01 Workspace list then M-SE-01 New session from the FAB then M-SE-02 Chat, status pill, Sessions then M-CH-07 Summary and Artifacts then X-CH-02 Approve on the card. Dashed boxes are branches.">
+<defs><marker id="arr-J12" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">M-PA-01</text>
+<text class="nlab" x="20" y="45">Connect hint</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">M-PA-02</text>
+<text class="nlab" x="20" y="105">Scan QR or paste</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">M-PA-04</text>
+<text class="nlab" x="20" y="165">Confirm desktop</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">M-PA-05</text>
+<text class="nlab" x="20" y="225">Setup, undecided only</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">M-HM-02</text>
+<text class="nlab" x="20" y="285">Host card</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">M-WS-01</text>
+<text class="nlab" x="20" y="345">Workspace list</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">M-SE-01</text>
+<text class="nlab" x="20" y="405">New session from the FAB</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">M-SE-02</text>
+<text class="nlab" x="20" y="465">Chat, status pill, Sessions</text>
+<line class="flow" x1="139" y1="474" x2="139" y2="490" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="490" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="508">M-CH-07</text>
+<text class="nlab" x="20" y="525">Summary and Artifacts</text>
+<line class="flow" x1="139" y1="534" x2="139" y2="550" marker-end="url(#arr-J12)"/>
+<rect class="node" x="8" y="550" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="568">X-CH-02</text>
+<text class="nlab" x="20" y="585">Approve on the card</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">Camera denied:</text>
+<text class="btxt" x="292" y="104">paste mode</text>
+<line class="dash" x1="270" y1="452" x2="282" y2="452"/>
+<rect class="branch" x="282" y="430" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="448">Host drops:</text>
+<text class="btxt" x="292" y="464">X-CN-01 banner</text>
+</svg><figcaption>The phone pairs once, then follows sessions over the host connection. A lost host shows its last known state. The Home top bar holds the Bot teams toggle and Tasks, and Marketplace sits in Settings.</figcaption></figure></article>
+<article class="journey" id="j13"><h3>J13 Bot Teams: switch mode, talk to a team, track work</h3><p class="goal">The owner switches the rail to Bot Teams, talks to a team in its Conference room, follows the tasks on its Board, schedules routines, and checks them on the calendar.</p><figure><svg viewBox="0 0 430 544" role="img" aria-label="J13 main path: D-SH-10 Mode switch to Bot Teams then D-WS-29 Sidebar lists teams then D-AG-24 Conference room: state need then D-WS-30 Task on team Board then D-AG-24 Ask to schedule then D-AG-25 Routine on Routines page then D-AG-23 Routine on Calendar then D-WS-24 Tasks, both modes then D-SH-10 Back to Workspaces. Dashed boxes are branches.">
+<defs><marker id="arr-J13" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-SH-10</text>
+<text class="nlab" x="20" y="45">Mode switch to Bot Teams</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">D-WS-29</text>
+<text class="nlab" x="20" y="105">Sidebar lists teams</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">D-AG-24</text>
+<text class="nlab" x="20" y="165">Conference room: state need</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">D-WS-30</text>
+<text class="nlab" x="20" y="225">Task on team Board</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">D-AG-24</text>
+<text class="nlab" x="20" y="285">Ask to schedule</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">D-AG-25</text>
+<text class="nlab" x="20" y="345">Routine on Routines page</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-AG-23</text>
+<text class="nlab" x="20" y="405">Routine on Calendar</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">D-WS-24</text>
+<text class="nlab" x="20" y="465">Tasks, both modes</text>
+<line class="flow" x1="139" y1="474" x2="139" y2="490" marker-end="url(#arr-J13)"/>
+<rect class="node" x="8" y="490" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="508">D-SH-10</text>
+<text class="nlab" x="20" y="525">Back to Workspaces</text>
+<line class="dash" x1="270" y1="32" x2="282" y2="32"/>
+<rect class="branch" x="282" y="10" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="28">From another page:</text>
+<text class="btxt" x="292" y="44">first press goes home</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">No teams or bots:</text>
+<text class="btxt" x="292" y="104">set up, D-AG-13</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">Composite need:</text>
+<text class="btxt" x="292" y="164">lead bot, X-DL-01</text>
+<line class="dash" x1="270" y1="452" x2="282" y2="452"/>
+<rect class="branch" x="282" y="430" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="448">No provider:</text>
+<text class="btxt" x="292" y="464">connect first</text>
+</svg><figcaption>Requirements said in the Conference room become tasks on the Board. A request to schedule becomes a routine, the Bot Teams form of an automation. Routines and automations share one calendar, filtered by team chips and Automations.</figcaption></figure></article>
+<article class="journey" id="j14"><h3>J14 Give an agent a secret</h3><p class="goal">The owner gives an agent a credential without pasting it into the chat, from the desktop or the phone. The value is stored on the host and reaches the agent only at run time.</p><figure><svg viewBox="0 0 430 484" role="img" aria-label="J14 main path: D-AG-03 Chat asks, or agent needs one then X-CH-07 Card: pending, Add then X-VT-01 Modal: name and value then X-VT-01 Scope: project, team, global then X-VT-01 Save to the host then X-CH-07 Card: stored, name only then D-AG-03 Agent continues, env var then D-VT-01 Vault: usage by session. Dashed boxes are branches.">
+<defs><marker id="arr-J14" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="arrowhead" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<rect class="node" x="8" y="10" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="28">D-AG-03</text>
+<text class="nlab" x="20" y="45">Chat asks, or agent needs one</text>
+<line class="flow" x1="139" y1="54" x2="139" y2="70" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="70" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="88">X-CH-07</text>
+<text class="nlab" x="20" y="105">Card: pending, Add</text>
+<line class="flow" x1="139" y1="114" x2="139" y2="130" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="130" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="148">X-VT-01</text>
+<text class="nlab" x="20" y="165">Modal: name and value</text>
+<line class="flow" x1="139" y1="174" x2="139" y2="190" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="190" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="208">X-VT-01</text>
+<text class="nlab" x="20" y="225">Scope: project, team, global</text>
+<line class="flow" x1="139" y1="234" x2="139" y2="250" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="250" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="268">X-VT-01</text>
+<text class="nlab" x="20" y="285">Save to the host</text>
+<line class="flow" x1="139" y1="294" x2="139" y2="310" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="310" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="328">X-CH-07</text>
+<text class="nlab" x="20" y="345">Card: stored, name only</text>
+<line class="flow" x1="139" y1="354" x2="139" y2="370" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="370" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="388">D-AG-03</text>
+<text class="nlab" x="20" y="405">Agent continues, env var</text>
+<line class="flow" x1="139" y1="414" x2="139" y2="430" marker-end="url(#arr-J14)"/>
+<rect class="node" x="8" y="430" width="262" height="44" rx="6"/>
+<text class="nid" x="20" y="448">D-VT-01</text>
+<text class="nlab" x="20" y="465">Vault: usage by session</text>
+<line class="dash" x1="270" y1="92" x2="282" y2="92"/>
+<rect class="branch" x="282" y="70" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="88">User declines:</text>
+<text class="btxt" x="292" y="104">agent goes on (A33)</text>
+<line class="dash" x1="270" y1="152" x2="282" y2="152"/>
+<rect class="branch" x="282" y="130" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="148">Invalid name:</text>
+<text class="btxt" x="292" y="164">fix and retry</text>
+<line class="dash" x1="270" y1="272" x2="282" y2="272"/>
+<rect class="branch" x="282" y="250" width="140" height="44" rx="6"/>
+<text class="btxt" x="292" y="268">Host unreachable:</text>
+<text class="btxt" x="292" y="284">nothing saved (A32)</text>
+</svg><figcaption>The chat keeps only a card with the name and a state. The entry modal stores the value on the host, and the agent reads it at run time. Sharing by link (J14b) is in app-flow.md only.</figcaption></figure></article>
+    </div>
+  </section>
+  <section id="layout">
+    <h2>Desktop layout</h2>
+    <p>The Activity rail, the Sidebar and the Title bar read as one Frame, filled with the same frame colour and with no seam between them. The Canvas is inset in that frame, with a rounded top-left corner. Inside it, left to right, sit the Conversation, the Session summary, the Work panel and the Project sidebar. The Status bar runs along the bottom of the Canvas. The rail stays visible when the Sidebar is hidden, and with the Sidebar hidden the Canvas corner sits right next to the rail. Tasks, Calendar, Marketplace, Settings, Automations and the Bot Teams pages open as full pages over the canvas, with the Sidebar hidden; Back returns to the session. The Title bar is a band across the top of the frame, with the sidebar toggle, back and forward, the session title, region toggles and window controls (on the right on Windows and Linux, at the left on macOS). Titlebar tabs stay dropped. From any other page, the mode switch first returns to the current mode's home; a press at home switches the mode. These two points were decided on the owner's behalf (pending-owner-review.md, items 13 and 14).</p>
+    <figure>
+      <div class="window">
+<svg viewBox="0 0 900 380" role="img" aria-label="Desktop window schematic. From left to right: the activity rail, the sidebar, then the canvas. The canvas holds the conversation, the session summary, the work panel and the project sidebar. The activity rail, the sidebar and the title bar form one frame with no seam between them. The canvas has a rounded top-left corner. The status bar runs along the bottom of the canvas.">
+  <rect class="frame-fill" x="0" y="0" width="900" height="380"/>
+  <path class="canvas-fill" d="M200 56 A16 16 0 0 1 216 40 H900 V344 H200 Z"/>
+  <rect class="frame-fill" x="200" y="344" width="700" height="36"/>
+  <line class="rule" x1="200" y1="344" x2="900" y2="344"/>
+  <line class="rule" x1="440" y1="40" x2="440" y2="344"/>
+  <line class="rule" x1="550" y1="40" x2="550" y2="344"/>
+  <line class="rule" x1="740" y1="40" x2="740" y2="344"/>
+  <rect class="rail-chip" x="21" y="6" width="22" height="22" rx="6"/>
+  <rect class="icon-on" x="25" y="10" width="14" height="14" rx="3"/>
+  <rect class="icon" x="25" y="50" width="14" height="14" rx="3"/>
+  <rect class="icon" x="25" y="90" width="14" height="14" rx="3"/>
+  <rect class="icon" x="25" y="130" width="14" height="14" rx="3"/>
+  <circle class="icon" cx="32" cy="267" r="7"/>
+  <circle class="ring" cx="32" cy="307" r="7"/>
+  <circle class="icon" cx="32" cy="347" r="7"/>
+  <text class="rail-lbl" x="32" y="35">Mode</text>
+  <text class="rail-id" x="32" y="46">D-SH-10</text>
+  <text class="rail-lbl" x="32" y="75">Tasks</text>
+  <text class="rail-id" x="32" y="86">D-SH-11</text>
+  <text class="rail-lbl" x="32" y="115">Calendar</text>
+  <text class="rail-id" x="32" y="126">D-SH-12</text>
+  <text class="rail-lbl" x="32" y="155">Market</text>
+  <text class="rail-id" x="32" y="166">D-SH-13</text>
+  <text class="rail-lbl" x="32" y="285">Theme</text>
+  <text class="rail-id" x="32" y="296">D-SH-14</text>
+  <text class="rail-lbl" x="32" y="325">Usage</text>
+  <text class="rail-id" x="32" y="336">D-SH-15</text>
+  <text class="rail-lbl" x="32" y="365">Settings</text>
+  <text class="rail-id" x="32" y="376">D-SH-16</text>
+  <text class="lbl-m" x="76" y="26">Title bar · D-SH-03</text>
+  <text class="lbl-m" x="230" y="26">Sidebar toggle, back, forward, title, region toggles, window controls</text>
+  <text class="lbl-b" x="76" y="78">Sidebar · D-WS-01</text>
+  <text class="lbl-m" x="76" y="96">+ Create · Search</text>
+  <text class="lbl-m" x="76" y="112">Prototypes (count)</text>
+  <text class="lbl-m" x="76" y="128">Tasks</text>
+  <text class="lbl-m" x="76" y="144">Automations</text>
+  <text class="lbl-m" x="76" y="160">MassOrca Mobile</text>
+  <text class="lbl-m" x="76" y="176">Projects and hosts</text>
+  <text class="lbl-m" x="76" y="300">Frame, one surface</text>
+  <text class="lbl-m" x="76" y="316">surface.frame</text>
+  <text class="lbl-b" x="214" y="66">Conversation · D-AG-03</text>
+  <text class="lbl-m" x="214" y="84">Canvas, surface.canvas</text>
+  <rect class="chip" x="214" y="102" width="200" height="20" rx="6"/>
+  <rect class="chip" x="214" y="130" width="150" height="20" rx="6"/>
+  <rect class="chip" x="214" y="158" width="190" height="20" rx="6"/>
+  <rect class="chip" x="214" y="186" width="170" height="20" rx="6"/>
+  <rect class="chip" x="214" y="214" width="200" height="20" rx="6"/>
+  <text class="lbl-m" x="392" y="96">Minimap</text>
+  <rect class="lane" x="424" y="102" width="8" height="132" rx="4"/>
+  <rect class="chip-wide" x="214" y="270" width="212" height="54" rx="8"/>
+  <text class="lbl-m" x="226" y="292">Composer, model picker</text>
+  <text class="lbl-m" x="226" y="310">X-AG-02</text>
+  <text class="lbl-b" x="452" y="66">Session</text>
+  <text class="lbl-b" x="452" y="82">summary</text>
+  <text class="lbl-m" x="452" y="98">D-AG-27</text>
+  <rect class="chip" x="452" y="112" width="86" height="28" rx="6"/>
+  <text class="btxt" x="460" y="130">Environment</text>
+  <rect class="chip" x="452" y="148" width="86" height="28" rx="6"/>
+  <text class="btxt" x="460" y="166">Plan</text>
+  <rect class="chip" x="452" y="184" width="86" height="28" rx="6"/>
+  <text class="btxt" x="460" y="202">Checklist</text>
+  <rect class="chip" x="452" y="220" width="86" height="28" rx="6"/>
+  <text class="btxt" x="460" y="238">Results</text>
+  <rect class="branch" x="452" y="256" width="86" height="44" rx="6"/>
+  <text class="btxt" x="460" y="270">Only cards</text>
+  <text class="btxt" x="460" y="284">with a record</text>
+  <text class="btxt" x="460" y="298">are shown</text>
+  <text class="lbl-b" x="562" y="66">Work panel · D-SH-17</text>
+  <text class="lbl-m" x="562" y="82">Tabs, + adds one</text>
+  <rect class="chip" x="562" y="94" width="168" height="24" rx="6"/>
+  <text class="btxt" x="572" y="110">Terminal · D-TM-01</text>
+  <rect class="chip" x="562" y="124" width="168" height="24" rx="6"/>
+  <text class="btxt" x="572" y="140">Browser · D-BP-01</text>
+  <rect class="chip" x="562" y="154" width="168" height="24" rx="6"/>
+  <text class="btxt" x="572" y="170">Markdown or file · D-ED-01</text>
+  <rect class="chip-wide" x="562" y="184" width="168" height="24" rx="6"/>
+  <text class="btxt" x="572" y="200">Mobile emulator · D-SH-18</text>
+  <text class="lbl-m" x="562" y="232">Empty: four New actions,</text>
+  <text class="lbl-m" x="562" y="246">one per tab type</text>
+  <text class="lbl-b" x="752" y="66">Project sidebar</text>
+  <text class="lbl-m" x="752" y="82">D-SH-04</text>
+  <text class="btxt" x="752" y="106">File explorer D-ED-11</text>
+  <text class="btxt" x="752" y="124">Names or Content search</text>
+  <text class="btxt" x="752" y="142">Sessions list</text>
+  <text class="btxt" x="752" y="160">Source control D-DF-02</text>
+  <text class="btxt" x="752" y="178">Checks D-DF-04</text>
+  <text class="lbl-m" x="752" y="206">Extension tabs D-SL-01</text>
+  <text class="lbl-m" x="214" y="366">Status bar · D-SH-05: agent, memory, terminals, ports, hosts</text>
+</svg>
+      </div>
+      <figcaption>Schematic only. Regions in order, left to right: Activity rail (D-SH-09), Sidebar (D-WS-01), Conversation (D-AG-03), Session summary (D-AG-27), Work panel (D-SH-17), Project sidebar (D-SH-04). The Status bar (D-SH-05) sits at the bottom. Dark values come from the owner's layout requirement. Light values are proposed (A16).</figcaption>
+    </figure>
+    <dl class="tokens">
+      <dt>surface.frame</dt><dd>#1b1b1c dark, #eeeef2 light</dd>
+      <dt>surface.canvas</dt><dd>#151517 dark, #fbfbfc light</dd>
+      <dt>Canvas corner</dt><dd>One radius token, top-left only</dd>
+    </dl>
+  </section>
+  <section id="keyboard">
+    <h2>Keyboard additions from pv96</h2>
+    <p>Four shortcuts come from the unmerged pv96 build. They have not been checked against system or browser defaults, so each one needs a collision check before it ships. The full keyboard table is in app-flow.md.</p>
+    <div class="scroll">
+      <table class="keys">
+        <thead><tr><th>Action</th><th>Windows and Linux</th><th>macOS</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Add a terminal tab in the Work panel</td><td>Ctrl+T</td><td>Cmd+T</td><td>From pv96. A browser pane may use the same key for a new tab.</td></tr>
+          <tr><td>Add a browser tab in the Work panel</td><td>Ctrl+Shift+B</td><td>Cmd+Shift+B</td><td>From pv96. Check browser shortcuts.</td></tr>
+          <tr><td>Close the focused Work panel tab (never the session)</td><td>Ctrl+W</td><td>Cmd+W</td><td>From pv96. Cmd+W is the macOS window-close key, so this fails the rule as written. Decide before use.</td></tr>
+          <tr><td>Open a recorded file in its own tab</td><td>Ctrl+Alt+click</td><td>Cmd+Option+click</td><td>From pv96. Some keyboard layouts use Ctrl+Alt as AltGr.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section id="notes">
+    <h2>Gaps and assumptions</h2>
+    <p>Gaps G1 to G26 are steps the inventory cannot support yet. G19, G20 and G26 are closed, and G8 is partly answered. Assumptions A1 to A39 are the defaults this page uses; A1 to A4, A27, A29 and A36 were accepted by the owner on 2026-11-12, and A38 and A39 are new. Both lists are in app-flow.md.</p>
+  </section>
+</main>
