@@ -2,6 +2,7 @@
 
 pub mod agent_icon;
 pub mod agent_status;
+pub mod avatar;
 pub mod badge;
 pub mod banner;
 pub mod board_column;
