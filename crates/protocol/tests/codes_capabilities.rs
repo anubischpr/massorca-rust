@@ -28,6 +28,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::PROJECT_EXISTS, "project.exists"),
     (codes::PROJECT_NOT_GIT, "project.not_git"),
     (codes::PROJECT_HAS_WORKSPACES, "project.has_workspaces"),
+    (codes::GIT_NOT_A_REPOSITORY, "git.not_a_repository"),
     (codes::WORKSPACE_NOT_FOUND, "workspace.not_found"),
     (codes::WORKSPACE_NAME_TAKEN, "workspace.name_taken"),
     (codes::WORKSPACE_NAME_INVALID, "workspace.name_invalid"),
@@ -65,6 +66,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::SERVICE, "service/1");
     assert_eq!(capabilities::PROJECTS, "projects/1");
     assert_eq!(capabilities::WORKSPACES, "workspaces/1");
+    assert_eq!(capabilities::GIT, "git/1");
     assert_eq!(capabilities::EVENTS, "events/1");
     assert_eq!(capabilities::CONFIG, "config/1");
 }

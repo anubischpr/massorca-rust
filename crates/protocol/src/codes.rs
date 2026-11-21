@@ -38,6 +38,8 @@ pub const BASE_NOT_FOUND: &str = "base.not_found";
 pub const GIT_UNAVAILABLE: &str = "git.unavailable";
 pub const GIT_FAILED: &str = "git.failed";
 pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
+/// A git method named a folder workspace, or a path git does not treat as a repository.
+pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
