@@ -353,7 +353,9 @@ impl Watch {
 
     /// `wait_for_text`, calling `sample` before each read.
     pub async fn wait_for_text_sampling(&mut self, needle: &str, mut sample: impl FnMut()) {
-        let deadline = Instant::now() + TIMEOUT;
+        // Times out only when output stalls, so a slow machine still finishes a flood.
+        let mut deadline = Instant::now() + TIMEOUT;
+        let mut received = self.output.len();
         // Only text added since the last look can complete the needle.
         let mut searched: usize = 0;
         loop {
@@ -362,6 +364,10 @@ impl Watch {
                 return;
             }
             searched = self.visible.text.len();
+            if self.output.len() > received {
+                received = self.output.len();
+                deadline = Instant::now() + TIMEOUT;
+            }
             assert!(
                 Instant::now() < deadline && !self.ended,
                 "timed out waiting for {needle:?} after {} bytes, ending {:?}",
