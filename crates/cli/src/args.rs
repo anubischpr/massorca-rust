@@ -51,6 +51,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Reads and changes settings.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.
@@ -78,4 +83,35 @@ pub struct RunArgs {
     /// Also write log lines to stderr.
     #[arg(long)]
     pub log_stderr: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Shows one setting and whether it still has its default value.
+    Get(ConfigGetArgs),
+    /// Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text.
+    Set(ConfigSetArgs),
+    /// Lists every setting.
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigGetArgs {
+    /// Setting key, for example workspaces.default_root.
+    pub key: String,
+    /// Owner of the setting: core (default) or ext:<id>.
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigSetArgs {
+    /// Setting key, for example workspaces.default_root.
+    pub key: String,
+    /// New value: JSON when it parses, otherwise plain text.
+    #[arg(allow_hyphen_values = true)]
+    pub value: String,
+    /// Owner of the setting: core (default) or ext:<id>.
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
 }

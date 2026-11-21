@@ -9,6 +9,7 @@ use massorca_profile::Profile;
 use tokio::runtime::Builder;
 
 use crate::args::{Cli, Commands, ServiceCommand};
+use crate::config;
 use crate::error::CliError;
 use crate::ext;
 use crate::output::{self, Output};
@@ -55,6 +56,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
                 ServiceCommand::Stop => block_on(control::stop(&profile, output)),
                 ServiceCommand::Restart => block_on(control::restart(&profile, output)),
             }
+        }
+        Commands::Config { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            block_on(config::execute(&profile, autostart, command, output))
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }

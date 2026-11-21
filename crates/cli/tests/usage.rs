@@ -35,3 +35,14 @@ fn invalid_profile_name_exits_2_with_its_code() {
         .code(2)
         .stderr(contains("usage.invalid_profile"));
 }
+
+#[test]
+fn help_exits_0_and_lists_the_command_groups() {
+    massorca()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("service"))
+        .stdout(contains("config"))
+        .stdout(contains("ext"));
+}
