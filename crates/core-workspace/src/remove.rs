@@ -28,6 +28,18 @@ pub struct RemovalWaivers {
     pub forget_orphan: bool,
 }
 
+/// How the checks found a row. Removal acts on this reading, so a later look at git cannot change
+/// what the waivers covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    /// A folder workspace, which has no git state to check.
+    Folder,
+    /// A worktree git recognises, whose changes the waivers cleared.
+    Worktree,
+    /// A directory git does not recognise, kept whole under `forget_orphan`.
+    Orphan,
+}
+
 impl RemovalWaivers {
     /// No waiver: every kind of change refuses removal.
     pub const NONE: Self = Self {
@@ -93,12 +105,12 @@ impl Workspaces {
         waivers: RemovalWaivers,
         git_acted: &mut bool,
     ) -> Result<WorkspaceRemoved, DomainError> {
-        self.check_removable(row, waivers)?;
+        let standing = self.check_removable(row, waivers)?;
         let project = self.project_of(row)?;
         let (branch_deleted, branch_kept_reason, directory_kept) = match row.kind {
             StoreWorkspaceKind::Worktree => {
                 // An orphan is kept whole, so its branch stays with it.
-                let orphan = self.is_orphan(&project, row)?;
+                let orphan = standing == Standing::Orphan;
                 let directory_kept = if orphan {
                     true
                 } else {
@@ -164,14 +176,14 @@ impl Workspaces {
     }
 
     /// The refusals: the main worktree and a locked worktree always, a dirty one unless
-    /// forced. A folder workspace has no git state to check.
+    /// forced. Returns how the row was found, which the removal acts on.
     fn check_removable(
         &self,
         row: &WorkspaceRow,
         waivers: RemovalWaivers,
-    ) -> Result<(), DomainError> {
+    ) -> Result<Standing, DomainError> {
         if row.kind == StoreWorkspaceKind::Folder {
-            return Ok(());
+            return Ok(Standing::Folder);
         }
         let project = self.project_of(row)?;
         let repo = Path::new(&project.path);
@@ -188,7 +200,7 @@ impl Workspaces {
                     ),
                 ));
             }
-            return Ok(());
+            return Ok(Standing::Orphan);
         }
         if entries
             .first()
@@ -236,7 +248,7 @@ impl Workspaces {
                 ));
             }
         }
-        Ok(())
+        Ok(Standing::Worktree)
     }
 
     /// Whether git recognises the row's directory as its worktree: the worktree is registered,
@@ -260,11 +272,6 @@ impl Workspaces {
             Ok(None) | Err(GitError::Failed { .. }) => Ok(false),
             Err(error) => Err(error.into()),
         }
-    }
-
-    /// A directory that exists but that git does not recognise as the row's worktree.
-    fn is_orphan(&self, project: &ProjectRow, row: &WorkspaceRow) -> Result<bool, DomainError> {
-        Ok(Path::new(&row.path).is_dir() && !self.is_recognised(project, row)?)
     }
 
     /// Removes the worktree git registers at the row's path; a registered worktree whose

@@ -583,3 +583,22 @@ fn a_failure_after_git_removed_the_worktree_keeps_the_row_removing_until_a_retry
     assert!(removed.branch_deleted);
     assert_eq!(worktree_count(&fx.repo()), 1);
 }
+
+#[test]
+fn an_orphan_keeps_its_ignored_files_when_forgotten() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    commit_file(&fx.repo(), ".gitignore", "*.env\n", "ignore env files");
+    let lost = fx.create(&project.name, "lost-ignored");
+    fs::write(Path::new(&lost.path).join("secrets.env"), "key").expect("write ignored file");
+    fs::write(
+        Path::new(&lost.path).join(".git"),
+        "gitdir: /no/such/git/dir\n",
+    )
+    .expect("break the .git file");
+
+    let removed = remove_with(&fx, "lost-ignored", forget_orphan());
+
+    assert!(removed.directory_kept);
+    assert!(Path::new(&lost.path).join("secrets.env").is_file());
+}
