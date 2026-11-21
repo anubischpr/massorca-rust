@@ -15,6 +15,7 @@ pub mod diff_view;
 pub mod empty_state;
 pub mod error_state;
 pub mod extension_card;
+pub mod file_tree;
 pub mod icon_button;
 pub mod kbd;
 pub mod list_row;
