@@ -4,6 +4,7 @@
 
 mod composer;
 mod controls;
+mod data;
 mod feedback;
 mod fields;
 mod indicators;
@@ -37,6 +38,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(indicators::stories());
     all.extend(fields::stories());
     all.extend(lists::stories());
+    all.extend(data::stories());
     all.extend(overlays::stories());
     all.extend(feedback::stories());
     all.extend(layout::stories());

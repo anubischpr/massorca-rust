@@ -912,6 +912,7 @@ impl TableView {
                     });
                 div()
                     .id(("table-action-slot", cell_id))
+                    .debug_selector(|| format!("table-action-{cell_id}"))
                     .flex_none()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(button)
@@ -923,6 +924,7 @@ impl TableView {
 
     fn loading_body(height: f32) -> AnyElement {
         div()
+            .debug_selector(|| "table-loading".into())
             .flex()
             .flex_col()
             .flex_1()
@@ -960,6 +962,7 @@ impl TableView {
             state = state.action(button);
         }
         div()
+            .debug_selector(|| "table-empty".into())
             .flex()
             .flex_col()
             .flex_1()
@@ -1315,5 +1318,243 @@ mod tests {
         assert_eq!(cell_move("left"), Some(CellMove::Left));
         assert_eq!(cell_move("end"), Some(CellMove::RowEnd));
         assert_eq!(cell_move("enter"), None);
+    }
+}
+
+#[cfg(test)]
+mod element_tests {
+    use super::*;
+    use crate::components::button::test_support::{focus_and_draw, press_key};
+    use gpui::{Modifiers, Pixels, Point, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Events = Rc<RefCell<Vec<TableEvent>>>;
+
+    fn text(value: &str) -> TableCell {
+        TableCell::Text(value.into())
+    }
+
+    fn action(disabled: bool) -> TableCell {
+        TableCell::Action {
+            icon: IconName::ExternalLink,
+            name: "View log".into(),
+            disabled,
+        }
+    }
+
+    /// Two builds. The second one's action is disabled.
+    fn checks(selectable: bool) -> TableState {
+        let duration = |value: f64, text: &str| TableCell::Numeric {
+            value,
+            text: text.into(),
+        };
+        let state = TableState::new(
+            vec![
+                TableColumn::new("Name").sortable(),
+                TableColumn::new("Duration").numeric().sortable(),
+                TableColumn::new("Log"),
+            ],
+            vec![
+                TableRow::new(
+                    "build",
+                    vec![text("Build"), duration(72.0, "1m 12s"), action(false)],
+                ),
+                TableRow::new(
+                    "lint",
+                    vec![text("Lint"), duration(14.0, "14s"), action(true)],
+                ),
+            ],
+        );
+        if selectable {
+            state.selectable()
+        } else {
+            state
+        }
+    }
+
+    /// A table in a window, with the events it emits recorded and its first frame drawn.
+    fn table(
+        cx: &mut TestAppContext,
+        state: TableState,
+    ) -> (Entity<TableView>, Events, &mut VisualTestContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| TableView::new("checks", "Checks", state, cx));
+        let events: Events = Rc::default();
+        let sink = events.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, event: &TableEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+        draw(cx);
+        (view, events, cx)
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+
+    fn centre(cx: &mut VisualTestContext, selector: &'static str) -> Point<Pixels> {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .center()
+    }
+
+    fn selected(view: &Entity<TableView>, cx: &VisualTestContext) -> Option<SharedString> {
+        view.read_with(cx, |table, _| table.state().selected().cloned())
+    }
+
+    #[gpui::test]
+    fn a_click_on_a_sortable_header_sorts_by_that_column(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let header = centre(cx, "table-header-1");
+        cx.simulate_click(header, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |table, _| table.state().sort().map(|sort| sort.column)),
+            Some(1)
+        );
+        assert_eq!(
+            *events.borrow(),
+            vec![TableEvent::Sorted(Some(TableSort {
+                column: 1,
+                direction: SortDirection::Ascending,
+            }))]
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_on_a_plain_header_does_nothing(cx: &mut TestAppContext) {
+        let (_view, events, cx) = table(cx, checks(false));
+        let header = centre(cx, "table-header-2");
+        cx.simulate_click(header, Modifiers::none());
+        assert!(events.borrow().is_empty(), "the log column does not sort");
+    }
+
+    #[gpui::test]
+    fn arrows_move_the_cursor_and_enter_opens_the_row_under_it(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let focus = view.read_with(cx, |table, _| table.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "down");
+        press_key(cx, "end");
+        assert_eq!(
+            view.read_with(cx, |table, _| table.state().cursor()),
+            Cursor { row: 1, column: 2 }
+        );
+        press_key(cx, "home");
+        press_key(cx, "enter");
+        assert_eq!(*events.borrow(), vec![TableEvent::Opened("build".into())]);
+    }
+
+    #[gpui::test]
+    fn enter_on_a_sortable_header_sorts_from_the_keyboard(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let focus = view.read_with(cx, |table, _| table.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "right");
+        press_key(cx, "enter");
+        assert_eq!(
+            view.read_with(cx, |table, _| table.state().sort().map(|sort| sort.column)),
+            Some(1)
+        );
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [TableEvent::Sorted(_)]
+        ));
+    }
+
+    #[gpui::test]
+    fn space_toggles_the_checkbox_of_the_row_under_the_cursor(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(true));
+        let focus = view.read_with(cx, |table, _| table.focus_handle());
+        focus_and_draw(cx, &focus);
+        press_key(cx, "down");
+        press_key(cx, "space");
+        assert!(view.read_with(cx, |table, _| table.state().is_checked(&"build".into())));
+        assert_eq!(
+            *events.borrow(),
+            vec![TableEvent::Checked {
+                row: "build".into(),
+                checked: true,
+            }]
+        );
+    }
+
+    #[gpui::test]
+    fn a_row_click_selects_it_and_moves_the_cursor_there(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let row = centre(cx, "table-row-1");
+        cx.simulate_click(row, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(selected(&view, cx), Some("lint".into()));
+        assert_eq!(view.read_with(cx, |table, _| table.state().cursor().row), 2);
+        assert_eq!(*events.borrow(), vec![TableEvent::Selected("lint".into())]);
+    }
+
+    #[gpui::test]
+    fn an_action_button_reports_its_row_and_leaves_the_selection_alone(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let button = centre(cx, "table-action-2");
+        cx.simulate_click(button, Modifiers::none());
+        assert_eq!(
+            *events.borrow(),
+            vec![TableEvent::Action {
+                row: "build".into(),
+                column: 2,
+            }]
+        );
+        assert_eq!(selected(&view, cx), None);
+    }
+
+    #[gpui::test]
+    fn a_disabled_action_ignores_the_click_and_does_not_select_its_row(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        let button = centre(cx, "table-action-5");
+        cx.simulate_click(button, Modifiers::none());
+        assert!(events.borrow().is_empty());
+        assert_eq!(selected(&view, cx), None);
+    }
+
+    #[gpui::test]
+    fn loading_hides_the_rows_and_keeps_the_headers(cx: &mut TestAppContext) {
+        let (view, _events, cx) = table(cx, checks(false));
+        view.update(cx, |table, cx| table.set_status(TableStatus::Loading, cx));
+        draw(cx);
+        assert!(cx.debug_bounds("table-row-0").is_none());
+        assert!(cx.debug_bounds("table-loading").is_some());
+        assert!(cx.debug_bounds("table-header-0").is_some());
+    }
+
+    #[gpui::test]
+    fn the_empty_state_hides_the_rows_and_draws_its_panel(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        view.update(cx, |table, cx| {
+            table.set_status(
+                TableStatus::Empty {
+                    title: "No check runs for this branch.".into(),
+                    explanation: None,
+                    action: Some("Refresh".into()),
+                },
+                cx,
+            );
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("table-row-0").is_none());
+        assert!(cx.debug_bounds("table-empty").is_some());
+        assert!(events.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn retry_in_the_error_state_reports_retry(cx: &mut TestAppContext) {
+        let (view, events, cx) = table(cx, checks(false));
+        view.update(cx, |table, cx| table.set_status(TableStatus::Error, cx));
+        draw(cx);
+        let retry = centre(cx, "error-retry");
+        cx.simulate_click(retry, Modifiers::none());
+        assert_eq!(*events.borrow(), vec![TableEvent::Retry]);
     }
 }
