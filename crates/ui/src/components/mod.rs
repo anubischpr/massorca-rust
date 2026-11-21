@@ -18,6 +18,7 @@ pub mod kbd;
 pub mod list_row;
 pub mod menu;
 pub mod notification_card;
+pub mod plan_view;
 pub mod popover;
 pub mod progress;
 pub mod project_sidebar_tabs;
