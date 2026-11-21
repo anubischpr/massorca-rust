@@ -1,6 +1,7 @@
 //! Gallery stories for the feedback group.
 
 use super::{Story, variant};
+use crate::components::banner::{Banner, BannerVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardPadding, CardVariant};
 use crate::components::empty_state::{EmptyState, EmptyStateVariant};
@@ -29,7 +30,95 @@ pub fn stories() -> Vec<Story> {
             spec: "ErrorState.md",
             render: error_state_story,
         },
+        Story {
+            name: "Banner",
+            spec: "Banner.md",
+            render: banner_story,
+        },
     ]
+}
+
+fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(variant(
+            "Info: a note about the content, dismissible",
+            Banner::new(
+                "banner-info",
+                BannerVariant::Info,
+                "This diff is large (12,431 lines). Show it anyway?",
+            )
+            .action(Button::new("banner-info-show", "Show diff"))
+            .on_dismiss(|_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Success: restored, dismissible",
+            Banner::new(
+                "banner-success",
+                BannerVariant::Success,
+                "Reconnected to VPS",
+            )
+            .on_dismiss(|_, _| {}),
+            cx,
+        ))
+        .child(variant(
+            "Warning: sign-in needed, one action",
+            Banner::new(
+                "banner-warning",
+                BannerVariant::Warning,
+                "VPS needs you to sign in",
+            )
+            .action(Button::new("banner-warning-sign-in", "Sign in")),
+            cx,
+        ))
+        .child(variant(
+            "Danger: a failure with a Details disclosure and two actions",
+            Banner::new(
+                "banner-danger",
+                BannerVariant::Danger,
+                "Setup script failed.",
+            )
+            .detail("Exit code 1. Open the log for the full output.")
+            .action(Button::new("banner-danger-log", "Open log"))
+            .action(Button::new("banner-danger-retry", "Retry")),
+            cx,
+        ))
+        .child(variant(
+            "Connecting: a spinner in place of the glyph",
+            Banner::new(
+                "banner-connecting",
+                BannerVariant::Info,
+                "Connecting to VPS",
+            )
+            .loading(true),
+            cx,
+        ))
+        .child(variant(
+            "Unreachable: the last known state, never worded as stopped",
+            Banner::new(
+                "banner-unreachable",
+                BannerVariant::Unreachable,
+                "VPS can't be reached. Showing the last known state from 5 min ago.",
+            )
+            .detail("Work that was running there may still be running.")
+            .action(Button::new("banner-unreachable-retry", "Retry")),
+            cx,
+        ))
+        .child(variant(
+            "Edge to edge, with a +2 more count for hidden notices",
+            Banner::new(
+                "banner-more",
+                BannerVariant::Warning,
+                "Two more notices are waiting.",
+            )
+            .edge_to_edge(true)
+            .more(2, |_, _| {}),
+            cx,
+        ))
+        .into_any_element()
 }
 
 fn error_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
