@@ -79,16 +79,16 @@ fn fail(status: i32, stderr: &str) -> RemoteOutput {
     }
 }
 
-/// A healthy x86_64 host whose service answers at once.
+/// A healthy x86_64 host whose service answers at once, in the `massorca --json` envelope.
 fn healthy(command: &str) -> RemoteOutput {
     if command == "uname -sm" {
         ok("Linux x86_64\n")
     } else if command.contains("pair offer") {
         ok(&format!(
-            r#"{{"offer":"{OFFER}","expires_at":"2026-11-21T10:00:00Z"}}"#
+            r#"{{"ok":true,"result":{{"offer":"{OFFER}","expires_at_ms":1}}}}"#
         ))
     } else if command.contains("service status") {
-        ok(r#"{"version":"0.9.0-test"}"#)
+        ok(r#"{"ok":true,"result":{"version":"0.9.0-test"}}"#)
     } else {
         ok("")
     }
