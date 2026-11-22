@@ -5,12 +5,14 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use massorca_protocol::methods::agents::AccountState;
 
 use crate::kind::CheckDecl;
+use crate::process_tree;
 
 /// How long an account check may run before it is stopped; a check that does not finish has state `unknown`.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -100,6 +102,17 @@ fn pattern_matches(pattern: Option<&str>, output: &str) -> bool {
         .is_some_and(|regex| regex.is_match(output))
 }
 
+/// The most characters an account's identity or label may hold (decision 0059).
+pub const MAX_TEXT_CHARS: usize = 256;
+
+/// Whether a captured identity may be stored: not empty, at most [`MAX_TEXT_CHARS`] characters, and no control
+/// character. A capture that fails this stores no identity at all; the check's state still stands.
+fn valid_identity(identity: &str) -> bool {
+    !identity.is_empty()
+        && identity.chars().count() <= MAX_TEXT_CHARS
+        && !identity.chars().any(char::is_control)
+}
+
 fn capture(pattern: Option<&str>, output: &str) -> Option<String> {
     let regex = regex::Regex::new(pattern?).ok()?;
     let captures = regex.captures(output)?;
@@ -107,7 +120,7 @@ fn capture(pattern: Option<&str>, output: &str) -> Option<String> {
         .get(1)
         .or_else(|| captures.get(0))
         .map(|found| found.as_str().trim().to_owned())
-        .filter(|identity| !identity.is_empty())
+        .filter(|identity| valid_identity(identity))
 }
 
 /// What a run of a kind's program produced: its exit code (`None` when it did not finish) and its output, which is
@@ -117,8 +130,13 @@ pub(crate) struct RunOutput {
     pub(crate) output: String,
 }
 
+/// How long output is waited for after the program's tree is stopped. A stopped tree closes its pipes, so this bounds
+/// only a pipe something outside the tree still holds.
+const OUTPUT_GRACE: Duration = Duration::from_secs(1);
+
 /// Runs `program` with `args`, the account's home variable set and the stripped names removed, for at most
-/// [`CHECK_TIMEOUT`]. A program that cannot start, or is still running at the deadline, has no exit code.
+/// [`CHECK_TIMEOUT`]. A program that cannot start, or is still running at the deadline, has no exit code. Its whole
+/// process tree is stopped before this returns, so nothing it started keeps the output open (decision 0059).
 pub(crate) fn run_program(
     program: &Path,
     args: &[String],
@@ -136,7 +154,7 @@ pub(crate) fn run_program(
     for name in strip_env {
         command.env_remove(name);
     }
-    let Ok(mut child) = command.spawn() else {
+    let Ok((mut child, mut tree)) = process_tree::spawn(&mut command) else {
         return RunOutput {
             exit: None,
             output: String::new(),
@@ -145,21 +163,31 @@ pub(crate) fn run_program(
     let stdout = read_limited(child.stdout.take());
     let stderr = read_limited(child.stderr.take());
     let exit = wait_with_deadline(&mut child);
-    let mut output = stdout.join().unwrap_or_default();
-    output.push_str(&stderr.join().unwrap_or_default());
+    tree.stop();
+    let mut output = collect(stdout);
+    output.push_str(&collect(stderr));
     RunOutput { exit, output }
 }
 
-fn read_limited<R: Read + Send + 'static>(stream: Option<R>) -> thread::JoinHandle<String> {
+/// Reads a stream to its end, or to the output limit, on a thread of its own. The text arrives on the channel once read.
+fn read_limited<R: Read + Send + 'static>(stream: Option<R>) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut bytes = Vec::new();
         if let Some(stream) = stream {
             let _ = stream.take(CHECK_OUTPUT_LIMIT).read_to_end(&mut bytes);
         }
-        String::from_utf8_lossy(&bytes).into_owned()
-    })
+        let _ = sender.send(String::from_utf8_lossy(&bytes).into_owned());
+    });
+    receiver
 }
 
+/// The text of a stream, or nothing when it did not end within [`OUTPUT_GRACE`].
+fn collect(stream: mpsc::Receiver<String>) -> String {
+    stream.recv_timeout(OUTPUT_GRACE).unwrap_or_default()
+}
+
+/// The program's exit code, when it exits before the deadline; at the deadline it is killed and has none.
 fn wait_with_deadline(child: &mut Child) -> Option<i32> {
     let started = Instant::now();
     loop {
@@ -255,6 +283,23 @@ mod tests {
             Some("fake@example.com"),
         );
         assert_eq!(same.state, AccountState::SignedIn);
+    }
+
+    #[test]
+    fn an_identity_over_256_characters_or_with_a_control_character_is_not_stored() {
+        let pattern = Some(r"who (\S+)");
+        let long = format!("who {}", "a".repeat(257));
+        assert_eq!(capture(pattern, &long), None, "over the limit");
+        let at_limit = format!("who {}", "a".repeat(256));
+        assert_eq!(
+            capture(pattern, &at_limit).map(|id| id.chars().count()),
+            Some(256)
+        );
+        assert_eq!(
+            capture(pattern, "who bad\u{7}name"),
+            None,
+            "a control character"
+        );
     }
 
     #[test]

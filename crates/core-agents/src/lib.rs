@@ -11,6 +11,7 @@ pub mod event;
 pub mod kind;
 pub mod launch;
 pub mod paths;
+mod process_tree;
 pub mod prompt;
 pub mod resolve;
 pub mod sessions;
