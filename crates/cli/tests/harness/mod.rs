@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::assert::Assert;
 use massorca_cli::service::parent_watch::PARENT_PID_ENV;
+use massorca_profile::Profile;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -54,6 +55,8 @@ pub fn massorca_in(home: &Path) -> Command {
     }
     // Services this command starts stop once this test process is gone, even when its sandbox never drops.
     command.env(PARENT_PID_ENV, std::process::id().to_string());
+    // Each start logs its phases (service start phases), so a slow start in CI says where its time went.
+    command.env("MASSORCA_START_TIMING", "1");
     command
 }
 
@@ -165,6 +168,19 @@ impl Sandbox {
         self.env
             .borrow_mut()
             .push((name.to_owned(), value.to_owned()));
+    }
+
+    /// Creates the root of `profile` private to its owner, as a service start does. Call it before a test writes into the
+    /// profile: a folder made with `create_dir_all` takes the home's inherited access, and every later start then repairs
+    /// the root, which the start pays for (ADR 0073).
+    pub fn prepare_profile(&self, profile: &str) {
+        let resolved = Profile::resolve_with(
+            Some(self.home().to_path_buf()),
+            Some(profile.to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+        massorca_profile::create_root(&resolved).expect("the profile root");
     }
 
     /// `massorca --profile <profile>` on this home.
