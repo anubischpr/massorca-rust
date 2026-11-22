@@ -845,6 +845,25 @@ fn a_late_refusal_does_not_touch_a_newer_dialog(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_the_window_clears_the_typed_value_before_the_window_goes(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-f5c2";
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, VALUE);
+    let field = value_of_dialog(&rig, cx);
+    assert!(cx.simulate_close(), "the window allows its close");
+    assert!(
+        field.read_with(cx, |field, _| field.text().is_empty()),
+        "the window's close clears the value before the window goes"
+    );
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the dialog goes with its window"
+    );
+}
+
+#[gpui::test]
 fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
     click(cx, "settings-nav-Extensions");

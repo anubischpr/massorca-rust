@@ -478,7 +478,7 @@ impl fmt::Debug for TextField {
 }
 
 impl Drop for TextField {
-    /// A masked value is overwritten as its field goes, so it outlives the dialog in no buffer.
+    /// Backstop for owners that clear a masked value on close: whatever is left is overwritten as the field goes.
     fn drop(&mut self) {
         if self.masked {
             self.buffer.wipe();

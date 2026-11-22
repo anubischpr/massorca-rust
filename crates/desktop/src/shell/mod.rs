@@ -197,6 +197,12 @@ impl Shell {
         let width = f32::from(window.viewport_size().width);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
+        // A closing window clears a secret the dialog still holds, before the window goes.
+        let weak = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = weak.update(cx, |shell, cx| shell.close_secret_dialog(window, cx));
+            true
+        });
         let snapshot = store.read(cx).snapshot(Instant::now());
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
