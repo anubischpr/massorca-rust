@@ -595,6 +595,18 @@ impl TextField {
         self.after_edit(changed, window, cx);
     }
 
+    /// Inserts clipboard text at the caret, as Paste does: line breaks become spaces.
+    pub fn insert_pasted(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = single_line(text);
+        self.edit(window, cx, |buffer| buffer.insert(&text));
+    }
+
+    /// Empties the field without moving focus. An owner calls it once the text has been sent.
+    pub fn clear_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let changed = self.buffer.set_text("");
+        self.after_edit(changed, window, cx);
+    }
+
     pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
         self.error = error;
         cx.notify();
@@ -709,8 +721,7 @@ impl TextField {
 
     fn paste_text(&mut self, _: &PasteText, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = single_line(&text);
-            self.edit(window, cx, |buffer| buffer.insert(&text));
+            self.insert_pasted(&text, window, cx);
         }
     }
 
@@ -2059,6 +2070,53 @@ mod tests {
             cx.debug_bounds(SHOW_SELECTOR).is_none(),
             "no Show button unless the field is revealable"
         );
+    }
+
+    #[gpui::test]
+    fn insert_pasted_puts_the_clipboard_text_at_the_caret_on_one_line(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("ab"));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.insert_pasted("x\ny", window, cx)
+        });
+        assert_eq!(text_of(&field, cx), "abx y");
+    }
+
+    #[gpui::test]
+    fn insert_pasted_into_a_masked_field_paints_one_bullet_per_character(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked());
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.insert_pasted("ab\ncd", window, cx)
+        });
+        redraw(cx);
+        assert_eq!(text_of(&field, cx), "ab cd");
+        assert_eq!(painted_text(&field, cx), "•••••");
+    }
+
+    #[gpui::test]
+    fn clear_text_empties_the_field_and_reports_one_change(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm"));
+        let events = record_events(&field, cx);
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        assert_eq!(text_of(&field, cx), "");
+        assert_eq!(
+            *events.borrow(),
+            vec![TextFieldEvent::Changed],
+            "only the first clear changes the text"
+        );
+    }
+
+    #[gpui::test]
+    fn clear_text_empties_a_masked_field(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        redraw(cx);
+        assert!(text_of(&field, cx).is_empty(), "the masked text is cleared");
+        assert!(painted_text(&field, cx).is_empty(), "nothing is painted");
     }
 }
 
