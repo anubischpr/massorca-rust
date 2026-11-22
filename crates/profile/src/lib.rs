@@ -5,6 +5,8 @@ mod error;
 mod profile;
 mod root_access;
 #[cfg(unix)]
+mod unix_profile_root;
+#[cfg(unix)]
 mod unix_user;
 #[cfg(windows)]
 mod windows_endpoint_access;
