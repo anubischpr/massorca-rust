@@ -325,6 +325,10 @@ mod tests {
             (core_codes::TAMPERED, codes::EXTENSION_TAMPERED),
             (core_codes::BUSY, codes::EXTENSION_BUSY),
             (
+                core_codes::VENDOR_COMMAND_REFUSED,
+                codes::EXTENSION_VENDOR_COMMAND_REFUSED,
+            ),
+            (
                 core_codes::RESERVED_PUBLISHER,
                 codes::EXTENSION_RESERVED_PUBLISHER,
             ),

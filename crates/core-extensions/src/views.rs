@@ -269,21 +269,14 @@ impl KindView {
                 .collect()
         };
         let credentials = &value["credentials"];
-        let mut env: Vec<String> = value["env"]
-            .as_object()
+        // Only the keys core-agents accepts: `credentials.strip_env` names the variables a run removes.
+        let mut env: Vec<String> = credentials["strip_env"]
+            .as_array()
             .into_iter()
-            .flat_map(|object| object.keys().cloned())
+            .flatten()
+            .filter_map(|name| name.as_str().map(str::to_owned))
             .collect();
-        env.extend(
-            credentials["strip_env"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|name| name.as_str().map(str::to_owned)),
-        );
-        env.extend(credentials["home_env"].as_str().map(str::to_owned));
         env.sort();
-        env.dedup();
         Self {
             id: id.to_owned(),
             readable: true,

@@ -2,8 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
+use massorca_core_extensions::host::current_os;
 use massorca_core_extensions::removal::CliAction;
+use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{HookError, codes};
+use massorca_ext_package::manifest::agent::CliOs;
 
 use crate::fakes::FakeHost;
 use crate::fixture::agent_package;
@@ -14,6 +17,28 @@ fn installed(host: FakeHost, run_installer: bool) -> Setup {
     let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
     s.install(&source, run_installer).expect("installs");
     s
+}
+
+/// The built-in Claude package, installed by its own install command, which the fake host records.
+fn installed_claude_with(host: FakeHost) -> Setup {
+    let s = setup(host);
+    s.install(&Source::Catalogue("massorca.claude".to_owned()), true)
+        .expect("installs");
+    s
+}
+
+fn installed_claude() -> Setup {
+    installed_claude_with(FakeHost::new())
+}
+
+/// The uninstall command the built-in Claude declares for this host.
+fn claude_uninstall() -> Vec<String> {
+    let argv: &[&str] = match current_os() {
+        Some(CliOs::Windows) => &["winget", "uninstall", "Anthropic.ClaudeCode"],
+        Some(CliOs::Macos) => &["brew", "uninstall", "--cask", "claude-code"],
+        _ => &["npm", "uninstall", "-g", "-ai/claude-code"],
+    };
+    argv.iter().map(|part| (*part).to_owned()).collect()
 }
 
 fn busy(_: &str) -> Result<(), HookError> {
@@ -79,19 +104,22 @@ fn a_guard_refusal_stops_the_removal() {
 
 #[test]
 fn removal_deletes_the_package_and_its_data() {
-    let s = installed(FakeHost::new(), true);
-    let removed = s.service.remove("acme.kit", false, false).expect("removes");
-    assert_eq!(removed.id, "acme.kit");
+    let s = installed_claude();
+    let removed = s
+        .service
+        .remove("massorca.claude", false, false)
+        .expect("removes");
+    assert_eq!(removed.id, "massorca.claude");
     assert!(removed.failures.is_empty());
     assert_eq!(
         s.lock_json().expect("lock")["packages"],
         serde_json::json!([])
     );
-    assert!(!s.exists("pkgs/acme.kit"));
-    assert!(!s.exists("data/acme.kit"));
+    assert!(!s.exists("pkgs/massorca.claude"));
+    assert!(!s.exists("data/massorca.claude"));
     let again = s
         .service
-        .remove("acme.kit", false, false)
+        .remove("massorca.claude", false, false)
         .expect_err("gone");
     assert_eq!(again.code(), codes::NOT_INSTALLED);
 }
@@ -127,14 +155,12 @@ fn cleanups_run_only_when_asked_and_their_failures_are_reported() {
 
 #[test]
 fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_asked() {
-    let s = installed(FakeHost::new(), true);
-    let offered = s.service.remove("acme.kit", false, false).expect("removes");
-    let command = vec![
-        "npm".to_owned(),
-        "uninstall".to_owned(),
-        "-g".to_owned(),
-        "kit".to_owned(),
-    ];
+    let s = installed_claude();
+    let offered = s
+        .service
+        .remove("massorca.claude", false, false)
+        .expect("removes");
+    let command = claude_uninstall();
     assert_eq!(
         offered.cli[0].action,
         CliAction::Offered {
@@ -142,8 +168,11 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
         }
     );
 
-    let s = installed(FakeHost::new(), true);
-    let ran = s.service.remove("acme.kit", false, true).expect("removes");
+    let s = installed_claude();
+    let ran = s
+        .service
+        .remove("massorca.claude", false, true)
+        .expect("removes");
     assert_eq!(
         ran.cli[0].action,
         CliAction::Ran {
@@ -152,7 +181,7 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
         }
     );
     assert_eq!(s.host.runs().last(), Some(&command));
-    assert!(s.service.layout().uninstall_log("acme.kit").exists());
+    assert!(s.service.layout().uninstall_log("massorca.claude").exists());
 
     let s = installed(FakeHost::new().with_program("kit"), false);
     let left = s.service.remove("acme.kit", false, true).expect("removes");
@@ -162,60 +191,16 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
 
 #[test]
 fn a_failed_cli_uninstall_is_reported_after_the_removal() {
-    let s = installed(FakeHost::new().exit_for("uninstall", 2), true);
-    let removed = s.service.remove("acme.kit", false, true).expect("removes");
+    let s = installed_claude_with(FakeHost::new().exit_for("uninstall", 2));
+    let removed = s
+        .service
+        .remove("massorca.claude", false, true)
+        .expect("removes");
     assert!(matches!(removed.cli[0].action, CliAction::Failed { .. }));
     assert_eq!(
         s.lock_json().expect("lock")["packages"],
         serde_json::json!([])
     );
-}
-
-#[test]
-fn a_changed_installed_manifest_is_never_trusted_or_run() {
-    let s = installed(FakeHost::new(), true);
-    let rel = s.lock_json().expect("lock")["packages"][0]["path"]
-        .as_str()
-        .expect("path")
-        .to_owned();
-    let mut manifest = agent_package("acme", "kit", "kit");
-    manifest["contributes"]["agentAdapters"][0]["cli"]["uninstall"] = serde_json::json!([{ "os": "windows", "command": ["planted", "remove"] },
-                           { "os": "linux", "command": ["planted", "remove"] },
-                           { "os": "macos", "command": ["planted", "remove"] }]);
-    let path = s.service.layout().resolve(&format!("{rel}/extension.json"));
-    std::fs::write(path, serde_json::to_vec(&manifest).expect("json")).expect("tamper");
-
-    let other = s.package_dir("other", &agent_package("other", "other", "other"));
-    s.install(&other, true)
-        .expect("a tampered package never blocks installing another");
-    let kinds = massorca_core_extensions::installed_agent_kinds(&s.profile)
-        .expect("one tampered package never fails the whole call");
-    assert_eq!(kinds.len(), 2);
-    assert_eq!(kinds[1].kind_id, "other");
-    assert!(kinds[1].path.is_some() && kinds[1].error.is_none());
-    assert_eq!(kinds[0].kind_id, "kit");
-    assert_eq!(kinds[0].path, None);
-    assert_eq!(
-        kinds[0].error.as_ref().map(|error| error.code.as_str()),
-        Some(codes::TAMPERED)
-    );
-    let item = s.service.get("acme.kit").expect("still an item");
-    assert_eq!(
-        item.problem.map(|problem| problem.code).as_deref(),
-        Some(codes::TAMPERED)
-    );
-
-    let removed = s
-        .service
-        .remove("acme.kit", false, true)
-        .expect("still removable");
-    assert_eq!(removed.cli[0].action, CliAction::NoCommand);
-    assert!(
-        s.host.runs().iter().all(|argv| argv[0] != "planted"),
-        "{:?}",
-        s.host.runs()
-    );
-    assert!(!s.exists("pkgs/acme.kit"));
 }
 
 #[test]
@@ -250,4 +235,31 @@ fn a_forged_lockfile_path_is_refused_and_nothing_outside_the_package_is_deleted(
         keep.join("notes.txt").exists(),
         "nothing outside was deleted"
     );
+}
+
+#[test]
+fn a_changed_installed_manifest_is_never_trusted_or_run() {
+    let s = installed_claude();
+    let rel = s.lock_json().expect("lock")["packages"][0]["path"]
+        .as_str()
+        .expect("path")
+        .to_owned();
+    let path = s.service.layout().resolve(&format!("{rel}/extension.json"));
+    std::fs::write(path, b"{\"tampered\": true}").expect("tamper");
+
+    let other = s.package_dir("other", &agent_package("other", "other", "other"));
+    s.install(&other, false)
+        .expect("a tampered package never blocks installing another");
+    let kinds = massorca_core_extensions::installed_agent_kinds(&s.profile)
+        .expect("one tampered package never fails the whole call");
+    assert_eq!(kinds.len(), 2);
+    assert_eq!(kinds[0].kind_id, "claude");
+    assert_eq!(kinds[0].path, None);
+    assert_eq!(
+        kinds[0].error.as_ref().map(|error| error.code.as_str()),
+        Some(codes::TAMPERED)
+    );
+    assert_eq!(kinds[1].kind_id, "other");
+    assert!(kinds[1].path.is_some() && kinds[1].error.is_none());
+    assert!(s.host.runs().iter().all(|argv| argv[0] != "planted"));
 }

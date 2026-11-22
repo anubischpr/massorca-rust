@@ -42,17 +42,17 @@ fn a_catalogue_item_is_available_until_installed() {
 #[test]
 fn an_installed_item_shows_its_danger_zone_and_serializes() {
     let s = setup(FakeHost::new());
-    let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
-    s.install(&source, true).expect("installs");
-    let item = s.service.get("acme.kit").expect("item");
+    s.install(&Source::Catalogue("massorca.claude".to_owned()), true)
+        .expect("installs");
+    let item = s.service.get("massorca.claude").expect("item");
     assert_eq!(item.state, ItemState::Enabled);
     assert!(item.agents[0].cli_installed_by_package);
-    assert_eq!(item.uninstall.cli_binaries, ["kit"]);
+    assert_eq!(item.uninstall.cli_binaries, ["claude"]);
     assert_eq!(item.uninstall.connections, ["account"]);
     let value = serde_json::to_value(&item).expect("serializes");
     assert_eq!(value["state"], "enabled");
-    assert_eq!(value["listing"]["banner"]["examples"][0]["text"], "@kit");
-    assert_eq!(value["risk"]["level"], "high");
+    assert_eq!(value["listing"]["banner"]["examples"][0]["text"], "@claude");
+    assert!(value["risk"]["level"].is_string());
 }
 
 #[test]

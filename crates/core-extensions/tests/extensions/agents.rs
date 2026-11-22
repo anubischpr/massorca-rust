@@ -15,10 +15,9 @@ fn an_empty_profile_has_no_installed_kinds() {
 
 #[test]
 fn installed_kinds_list_enabled_and_disabled_packages_in_lockfile_order() {
-    let s = setup(FakeHost::new().with_program("codex"));
+    let s = setup(FakeHost::new().with_program("codex").with_program("kit"));
     let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
-    s.install(&kit, true)
-        .expect("kit installs with its installer");
+    s.install(&kit, false).expect("kit installs");
     s.install(&Source::Catalogue("massorca.codex".to_owned()), false)
         .expect("codex installs");
     s.service.set_enabled("acme.kit", false).expect("disables");
@@ -38,7 +37,7 @@ fn installed_kinds_list_enabled_and_disabled_packages_in_lockfile_order() {
     assert_eq!(
         summary,
         vec![
-            ("acme.kit", "kit", false, true),
+            ("acme.kit", "kit", false, false),
             ("massorca.codex", "codex", true, false)
         ]
     );

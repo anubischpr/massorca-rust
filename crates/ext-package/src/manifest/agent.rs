@@ -26,6 +26,11 @@ pub const RESERVED_PUBLISHER: &str = "massorca";
 pub const VENDOR_PROGRAMS: [&str; 5] = ["winget", "brew", "npm", "powershell", "bash"];
 
 /// Whether a vendor command's argv starts with an allowlisted program.
+/// Whether a cli block declares a vendor command: an install, an uninstall or a verify. Only a built-in may (0062, V1).
+pub fn declares_vendor_commands(cli: &AgentCli) -> bool {
+    cli.verify.is_some() || !cli.install.is_empty() || !cli.uninstall.is_empty()
+}
+
 pub fn is_vendor_program(argv: &[String]) -> bool {
     argv.first()
         .is_some_and(|program| VENDOR_PROGRAMS.contains(&program.as_str()))

@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use massorca_ext_package::archive::{self, ArchiveLimits};
-use massorca_ext_package::manifest::agent::reserves_identity;
+use massorca_ext_package::manifest::agent::{declares_vendor_commands, reserves_identity};
 use massorca_ext_package::manifest::{self, Manifest, check_files_present};
 use massorca_ext_package::package_path;
 use sha2::{Digest, Sha256};
@@ -105,6 +105,19 @@ pub fn load(source: &Source, pinned: Option<&str>) -> Result<LoadedPackage, Erro
         && reserves_identity(&manifest.id, &manifest.publisher)
     {
         return Err(Error::ReservedIdentity {
+            id: manifest.id.clone(),
+            reference: lock_source.reference.clone(),
+        });
+    }
+    if !matches!(source, Source::Catalogue(_))
+        && manifest
+            .contributes
+            .agent_adapters
+            .iter()
+            .any(|adapter| adapter.cli.as_ref().is_some_and(declares_vendor_commands))
+    {
+        // A vendor command is run on the host; only the built-in catalogue may name one (0062, V1).
+        return Err(Error::VendorCommandRefused {
             id: manifest.id.clone(),
             reference: lock_source.reference.clone(),
         });

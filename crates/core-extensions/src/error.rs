@@ -24,6 +24,7 @@ pub mod codes {
     pub const TAMPERED: &str = "extension.tampered";
     pub const RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
     pub const BUSY: &str = "extension.busy";
+    pub const VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -53,6 +54,10 @@ pub enum Error {
     NotFound(String),
     #[error("extension {0} is not installed")]
     NotInstalled(String),
+    #[error(
+        "{id} from {reference} declares a vendor command; only the built-in catalogue may run one"
+    )]
+    VendorCommandRefused { id: String, reference: String },
     #[error("extension {0} is busy: its install or removal is still running")]
     Busy(String),
     #[error("extension {0} is already installed")]
@@ -108,6 +113,7 @@ impl Error {
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
             Self::Busy(_) => codes::BUSY,
+            Self::VendorCommandRefused { .. } => codes::VENDOR_COMMAND_REFUSED,
             Self::KindConflict { .. } => codes::KIND_CONFLICT,
             Self::HashRequired => codes::HASH_REQUIRED,
             Self::ConsentRequired => codes::CONSENT_REQUIRED,

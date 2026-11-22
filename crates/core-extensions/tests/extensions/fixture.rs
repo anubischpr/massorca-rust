@@ -9,9 +9,8 @@ use serde_json::{Value, json};
 use zip::write::SimpleFileOptions;
 
 /// An agent package `<publisher>.kit` contributing the agent `agent`, whose CLI `binary` has an installer and an
-/// uninstaller on every OS.
+/// declares no vendor command: only a built-in may (0062, V1), so this package only registers.
 pub fn agent_package(publisher: &str, agent: &str, binary: &str) -> Value {
-    let step = |os: &str, verb: &str| json!({ "os": os, "command": ["npm", verb, "-g", binary] });
     json!({
         "id": format!("{publisher}.kit"), "name": "Kit", "version": "1.2.0", "publisher": publisher,
         "description": "A coding agent.", "api": "1.0", "requires": { "massorca": ">=0.1.0" },
@@ -23,9 +22,7 @@ pub fn agent_package(publisher: &str, agent: &str, binary: &str) -> Value {
         "contributes": { "agentAdapters": [{
             "id": agent, "kind": format!("agents/{agent}.json"),
             "cli": {
-                "binary": binary, "verify": [binary, "--version"], "source": "https://vendor.example/install",
-                "install": [step("windows", "install"), step("linux", "install"), step("macos", "install")],
-                "uninstall": [step("windows", "uninstall"), step("linux", "uninstall"), step("macos", "uninstall")]
+                "binary": binary, "source": "https://vendor.example/install"
             }
         }] },
         "listing": {

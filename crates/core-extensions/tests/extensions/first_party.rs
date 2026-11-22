@@ -32,7 +32,7 @@ fn antigravity_installer_exit_zero_with_a_failing_verify_registers_nothing() {
 #[test]
 fn codex_installer_exit_zero_with_no_binary_fails_because_nothing_verifies_it() {
     // Codex documents no verify command, so the binary resolving is the only check.
-    let s = setup(FakeHost::new());
+    let s = setup(FakeHost::new().without_binary());
     let source = Source::Catalogue("massorca.codex".to_owned());
 
     let error = s
