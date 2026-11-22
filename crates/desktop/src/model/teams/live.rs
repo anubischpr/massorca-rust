@@ -119,6 +119,8 @@ pub fn kind_of_agent(agent: Agent) -> &'static str {
         Agent::Gemini => "gemini",
         Agent::OpenCode => "opencode",
         Agent::Cursor => "cursor",
+        // No mark, so no kind to create a bot with; the Add bot form never offers it.
+        Agent::Unknown => "unknown",
     }
 }
 

@@ -35,6 +35,7 @@ fn agent_name(agent: Agent) -> &'static str {
         Agent::GentleShell => "Gentle Shell",
         Agent::OpenCode => "OpenCode",
         Agent::Cursor => "Cursor",
+        Agent::Unknown => "Agent",
     }
 }
 

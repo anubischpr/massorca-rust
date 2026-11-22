@@ -74,6 +74,7 @@ impl SettingsSection {
             Self::Sources => {
                 Some("Connecting a provider needs your grant on the provider's own page.")
             }
+            Self::Vault => Some("Values never go into a chat, a prompt or a log."),
             _ => None,
         }
     }
@@ -131,6 +132,8 @@ pub enum RowBody {
     ThisPc,
     /// A link to the setup checklist.
     SetupChecklist,
+    /// The secret vault's key and count, read through the service (decision 0071).
+    SecretVault,
     Planned(Planned),
 }
 
@@ -481,9 +484,9 @@ const EXTENSIONS: &[RowSpec] = &[RowSpec {
 }];
 
 const VAULT: &[RowSpec] = &[RowSpec {
-    label: "Secrets",
-    helper: "Values never go into a chat, a prompt or a log.",
-    body: RowBody::Planned(Planned::Action("Add secret")),
+    label: "Vault status",
+    helper: "Names and times only. Values are never shown.",
+    body: RowBody::SecretVault,
 }];
 
 const PRIVACY: &[RowSpec] = &[
