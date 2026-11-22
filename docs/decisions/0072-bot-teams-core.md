@@ -105,10 +105,13 @@ The capability is `teams/1`.
   `team.rm`. Removing a team that has a running task is refused unless `force`
   is given. Removing a team removes its bots, projects and tasks, and leaves
   agent sessions to the agents domain.
-- **Bots:** `team.bot_add`, `team.bot_update` and `team.bot_rm`. A bot that owns
-  open tasks is refused unless `unassign` is given.
-- **Projects:** `team.project_add`, `team.project_update` and
-  `team.project_rm`.
+- **Bots:** `team.bot_list`, `team.bot_add`, `team.bot_update` and
+  `team.bot_rm`. A bot that owns open tasks is refused unless `unassign` is
+  given.
+- **Projects:** `team.project_list`, `team.project_add`,
+  `team.project_update` and `team.project_rm`.
+- The two list methods take `{ team }` and return one team's bots or projects
+  in the order they were added.
 - **Tasks:** `task.create`, `task.list` (filter by team, project, bot or
   column), `task.show`, `task.update` (title, body, bot, project), `task.start`,
   `task.done`, `task.reopen` and `task.rm`.
@@ -126,9 +129,9 @@ The capability is `teams/1`.
 ```
 massorca team create <name> [--purpose ...] [--character ...]
 massorca team list | show <team> | rm <team> [--force]
-massorca team bot add <team> <name> --agent <kind> --job ... [--lead]
+massorca team bot list <team> | add <team> <name> --agent <kind> --job ... [--lead]
 massorca team bot rm <team> <bot> [--unassign]
-massorca team project add <team> <name> [--goal ...]
+massorca team project list <team> | add <team> <name> [--goal ...]
 massorca team board <team> [--project <project>]
 massorca task create <team> <title> [--bot <bot>] [--project <project>] [--body ...]
 massorca task list [--team ...] [--column ...] | show <task>

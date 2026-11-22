@@ -24,6 +24,7 @@ pub struct Subscription {
     items: mpsc::Receiver<Item>,
     outbound: mpsc::Sender<Message>,
     finished: bool,
+    lost: bool,
 }
 
 impl Subscription {
@@ -37,6 +38,7 @@ impl Subscription {
             items,
             outbound,
             finished: false,
+            lost: false,
         }
     }
 
@@ -45,17 +47,28 @@ impl Subscription {
         self.stream
     }
 
-    /// The next item, events and bytes alike: `Some(Ok(item))`, `Some(Err(error))` when the service ended the stream with an error, and `None` once the stream is over, including after the connection is lost.
+    /// The next item, events and bytes alike: `Some(Ok(item))`, `Some(Err(error))` when the service ended the stream with an error, and `None` once the stream is over, including after the connection is lost (see `connection_lost`).
     pub async fn next_item(&mut self) -> Option<Result<StreamItem, ErrorBody>> {
-        let item = self.items.recv().await;
-        if !matches!(item, Some(Ok(_))) {
-            self.finished = true;
-        }
+        let item = match self.items.recv().await {
+            Some(Item::Next(item)) => return Some(Ok(item)),
+            Some(Item::Failed(error)) => Some(Err(error)),
+            Some(Item::Lost) => {
+                self.lost = true;
+                None
+            }
+            None => None,
+        };
+        self.finished = true;
         // The service does not know this subscriber gave up, so the stream is cancelled here.
         if matches!(&item, Some(Err(error)) if error.code == codes::STREAM_OVERFLOW) {
             self.send_cancel();
         }
         item
+    }
+
+    /// Whether the stream ended because the connection did, rather than because the service ended it.
+    pub fn connection_lost(&self) -> bool {
+        self.lost
     }
 
     /// The next event. Bytes items are skipped; read them with `next_item`. Otherwise as `next_item`.

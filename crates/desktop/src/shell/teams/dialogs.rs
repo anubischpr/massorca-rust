@@ -3,10 +3,9 @@
 //! with the reason, and nothing changes until the state accepts the change.
 
 use super::super::Shell;
-use crate::model::shell::Agent;
+use crate::model::agent_kinds::{KindChoice, bot_kind_choices, sample_bot_kind_choices};
 use crate::model::teams::{
     HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamError, TeamId, TeamPage, check_name,
-    kind_of_agent,
 };
 use crate::service::ServiceHandle;
 use gpui::{
@@ -22,22 +21,8 @@ use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::tokens::{SPACE_1, SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
-/// The agents an Add bot form offers, in the order of its choice (D-AG-33).
-pub(super) const BOT_AGENTS: [Agent; 3] = [Agent::Claude, Agent::Codex, Agent::Gemini];
-
-/// The name a bot's agent is called in the form.
-fn agent_name(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Claude => "Claude",
-        Agent::Codex => "Codex",
-        Agent::Gemini => "Gemini",
-        Agent::Antigravity => "Antigravity",
-        Agent::GentleShell => "Gentle Shell",
-        Agent::OpenCode => "OpenCode",
-        Agent::Cursor => "Cursor",
-        Agent::Unknown => "Agent",
-    }
-}
+/// Why an Add bot form cannot be sent when the service lists no kind a bot can run on.
+const NO_AGENT_KIND: &str = "No agent kind is installed on this service.";
 
 #[derive(Debug)]
 pub(in crate::shell) struct NewTeamDialog {
@@ -56,6 +41,8 @@ pub(in crate::shell) struct AddBotDialog {
     team: TeamId,
     name: Entity<TextField>,
     role: Entity<TextField>,
+    /// The kinds the form offers, in the order the service lists them (`agent.kinds`).
+    kinds: Vec<KindChoice>,
     agent: usize,
     agent_select: Entity<SelectView>,
     host_select: Entity<SelectView>,
@@ -176,10 +163,15 @@ impl Shell {
         let (name, name_events) = watched_field("Name", "Bot name", window, cx);
         let (role, role_events) =
             watched_field("Role", "What this bot is responsible for", window, cx);
+        // A connected service offers the kinds it lists as installed; sample data offers the four built-ins.
+        let kinds = match &self.service {
+            Some(_) => bot_kind_choices(&self.store.read(cx).state().agent_kinds),
+            None => sample_bot_kind_choices(),
+        };
         let agent_select = cx.new(|cx| {
-            SelectView::new(BOT_AGENTS.map(agent_name), cx)
+            SelectView::new(kinds.iter().map(|kind| kind.name.clone()), cx)
                 .label("Agent")
-                .selected(Some(0))
+                .selected((!kinds.is_empty()).then_some(0))
                 .layer(OverlayLayer::Dialog)
         });
         let agent_events = cx.subscribe_in(
@@ -207,6 +199,7 @@ impl Shell {
             team,
             name,
             role,
+            kinds,
             agent: 0,
             agent_select,
             host_select,
@@ -232,7 +225,7 @@ impl Shell {
 
     pub(super) fn set_add_bot_agent(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(TeamDialog::AddBot(dialog)) = &mut self.team_dialog {
-            dialog.agent = index.min(BOT_AGENTS.len() - 1);
+            dialog.agent = index.min(dialog.kinds.len().saturating_sub(1));
         }
         cx.notify();
     }
@@ -288,7 +281,11 @@ impl Shell {
                     NewBot {
                         name: dialog.name.read(cx).text().to_owned(),
                         role: dialog.role.read(cx).text().to_owned(),
-                        agent: BOT_AGENTS[dialog.agent],
+                        kind: dialog
+                            .kinds
+                            .get(dialog.agent)
+                            .map(|kind| kind.id.clone())
+                            .unwrap_or_default(),
                     },
                 );
                 match result {
@@ -348,7 +345,7 @@ impl Shell {
         cx.notify();
         let name = dialog.name.read(cx).text().to_owned();
         let job = dialog.role.read(cx).text().trim().to_owned();
-        let kind = kind_of_agent(BOT_AGENTS[dialog.agent]);
+        let kind = dialog.kinds.get(dialog.agent).map(|kind| kind.id.clone());
         let team = self.team_key(dialog.team, cx);
         let form = TeamDialog::AddBot(dialog);
         let name = match check_name(&name) {
@@ -359,11 +356,15 @@ impl Shell {
             let missing = TeamError::Missing.message();
             return self.finish_team_dialog(form, Some(missing.into()), cx);
         };
+        // The bot's kind is the service's id for the kind the form chose, never one the desktop made up.
+        let Some(kind) = kind else {
+            return self.finish_team_dialog(form, Some(NO_AGENT_KIND.into()), cx);
+        };
         let params = BotAddParams {
             team,
             name,
             job,
-            kind: kind.to_owned(),
+            kind,
             model: None,
             effort: None,
             lead: false,

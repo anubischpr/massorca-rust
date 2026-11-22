@@ -38,12 +38,12 @@ pub enum TeamCommand {
     },
     /// Changes a team: its name, purpose, shape or workspaces flag. Only the options given change.
     Update(TeamUpdateArgs),
-    /// Adds and removes a team's bots.
+    /// Lists, adds, changes and removes a team's bots.
     Bot {
         #[command(subcommand)]
         command: BotCommand,
     },
-    /// Adds a team's projects.
+    /// Lists, adds, changes and removes a team's projects.
     Project {
         #[command(subcommand)]
         command: TeamProjectCommand,
@@ -96,6 +96,11 @@ impl From<CharacterArg> for TeamCharacter {
 
 #[derive(Debug, Subcommand)]
 pub enum BotCommand {
+    /// Lists a team's bots, in the order they were added.
+    List {
+        /// Team id or name.
+        team: String,
+    },
     /// Changes a bot. Only the options given change; an empty model or effort clears it.
     Update(BotUpdateArgs),
     /// Adds a bot to a team. Its agent kind and job are required.
@@ -131,6 +136,11 @@ pub struct BotAddArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TeamProjectCommand {
+    /// Lists a team's projects, in the order they were added.
+    List {
+        /// Team id or name.
+        team: String,
+    },
     /// Changes a team's project. Only the options given change.
     Update(TeamProjectUpdateArgs),
     /// Removes a project. Its tasks stay on the Board without it.
@@ -273,6 +283,15 @@ pub async fn execute(
 
 async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result<(), CliError> {
     match command {
+        BotCommand::List { team } => {
+            let list = client.team_bot_list(&TeamRef { team }).await?;
+            let lines = if list.bots.is_empty() {
+                vec!["no bots".to_owned()]
+            } else {
+                text::bot_table(&list.bots)
+            };
+            output.success(&list, &lines);
+        }
         BotCommand::Add(args) => {
             let bot = client
                 .team_bot_add(&BotAddParams {
@@ -326,6 +345,15 @@ async fn run_project(
     output: Output,
 ) -> Result<(), CliError> {
     match command {
+        TeamProjectCommand::List { team } => {
+            let list = client.team_project_list(&TeamRef { team }).await?;
+            let lines = if list.projects.is_empty() {
+                vec!["no projects".to_owned()]
+            } else {
+                text::project_table(&list.projects)
+            };
+            output.success(&list, &lines);
+        }
         TeamProjectCommand::Update(args) => {
             let project = client
                 .team_project_update(&TeamProjectUpdateParams {

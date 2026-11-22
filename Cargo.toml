@@ -21,6 +21,7 @@ massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }
 massorca-core-agents = { path = "crates/core-agents" }
 massorca-ext-package = { path = "crates/ext-package" }
+massorca-core-extensions = { path = "crates/core-extensions" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
 massorca-net = { path = "crates/net" }

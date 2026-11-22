@@ -54,6 +54,12 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "team.bot.list",
+            "List a team's bots",
+            "team.bot_list",
+            selector("team"),
+        ),
+        command(
             "team.bot.add",
             "Add a bot to a team",
             "team.bot_add",
@@ -103,6 +109,12 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "unassign": { "type": "boolean" }
                 }
             }),
+        ),
+        command(
+            "team.project.list",
+            "List a team's projects",
+            "team.project_list",
+            selector("team"),
         ),
         command(
             "team.project.add",

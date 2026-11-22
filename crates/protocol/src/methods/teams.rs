@@ -17,12 +17,16 @@ pub const SHOW: &str = "team.show";
 pub const UPDATE: &str = "team.update";
 /// Params: [`TeamRemoveParams`]. Result: [`Team`], the removed team. Refused while a task runs unless `force`.
 pub const REMOVE: &str = "team.rm";
+/// Params: [`TeamRef`]. Result: [`BotList`], in creation order.
+pub const BOT_LIST: &str = "team.bot_list";
 /// Params: [`BotAddParams`]. Result: [`Bot`].
 pub const BOT_ADD: &str = "team.bot_add";
 /// Params: [`BotUpdateParams`]. Result: [`Bot`].
 pub const BOT_UPDATE: &str = "team.bot_update";
 /// Params: [`BotRemoveParams`]. Result: [`Bot`], the removed bot. Refused while it owns open tasks unless `unassign`.
 pub const BOT_REMOVE: &str = "team.bot_rm";
+/// Params: [`TeamRef`]. Result: [`TeamProjectList`], in creation order.
+pub const PROJECT_LIST: &str = "team.project_list";
 /// Params: [`TeamProjectAddParams`]. Result: [`TeamProject`].
 pub const PROJECT_ADD: &str = "team.project_add";
 /// Params: [`TeamProjectUpdateParams`]. Result: [`TeamProject`].
@@ -120,6 +124,18 @@ pub struct TeamRemoveParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamList {
     pub teams: Vec<Team>,
+}
+
+/// Result of `team.bot_list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotList {
+    pub bots: Vec<Bot>,
+}
+
+/// Result of `team.project_list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamProjectList {
+    pub projects: Vec<TeamProject>,
 }
 
 /// A bot of a team. At most one bot per team is the lead.

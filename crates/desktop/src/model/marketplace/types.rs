@@ -88,6 +88,8 @@ impl ItemState {
 pub enum HostState {
     Connected,
     Unreachable,
+    /// Any other state a host's last check left, by its word (such as "Checking" or "Sign-in needed").
+    Other(&'static str),
 }
 
 impl HostState {
@@ -95,6 +97,7 @@ impl HostState {
         match self {
             HostState::Connected => "Connected",
             HostState::Unreachable => "Unreachable",
+            HostState::Other(word) => word,
         }
     }
 }
