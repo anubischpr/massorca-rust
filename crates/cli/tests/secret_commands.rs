@@ -196,10 +196,10 @@ fn set_traced(sandbox: &Sandbox, scope: &str) -> Assert {
     let mut stdin = tempfile::tempfile().expect("a temporary stdin");
     std::io::Write::write_all(&mut stdin, input.as_bytes()).expect("stdin is written");
     std::io::Seek::seek(&mut stdin, std::io::SeekFrom::Start(0)).expect("stdin rewinds");
-    let output = harness::capture_with_stdin(
+    let output = harness::capture_with(
         &mut command,
-        harness::COMMAND_TIMEOUT,
         std::process::Stdio::from(stdin),
+        harness::COMMAND_TIMEOUT,
     )
     .expect("secret set finishes");
     Assert::new(output)

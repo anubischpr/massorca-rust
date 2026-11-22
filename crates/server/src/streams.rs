@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use massorca_protocol::{
-    ErrorBody, Frame, MAX_FRAME_LEN_LOCAL, Message, codes, fits_frame, fits_stream_bytes,
-};
+use massorca_protocol::{ErrorBody, Frame, Message, codes, fits};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::method::StreamItem;
@@ -75,6 +73,7 @@ pub(crate) async fn forward<T>(
     outbound: mpsc::Sender<Frame>,
     mut cancelled: oneshot::Receiver<()>,
     table: WeakStreamTable,
+    max_frame_len: u32,
 ) where
     T: Into<StreamItem> + Send + 'static,
 {
@@ -101,7 +100,7 @@ pub(crate) async fn forward<T>(
             StreamItem::Bytes(payload) => Frame::StreamBytes { stream, payload },
         };
         // An item that cannot be framed ends its stream; the client would otherwise see the connection drop.
-        if !fits_item(&frame) {
+        if !fits(&frame, max_frame_len) {
             table.release(stream);
             let error = ErrorBody::new(
                 codes::STREAM_ITEM_TOO_LARGE,
@@ -123,14 +122,6 @@ pub(crate) async fn forward<T>(
         if sent.is_err() {
             return;
         }
-    }
-}
-
-/// Whether one stream item's frame fits the local frame limit.
-fn fits_item(frame: &Frame) -> bool {
-    match frame {
-        Frame::Message(message) => fits_frame(message, MAX_FRAME_LEN_LOCAL),
-        Frame::StreamBytes { payload, .. } => fits_stream_bytes(payload, MAX_FRAME_LEN_LOCAL),
     }
 }
 

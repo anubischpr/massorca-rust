@@ -2,6 +2,7 @@
 
 mod agents;
 mod config;
+mod devices;
 mod events;
 mod git;
 mod projects;
@@ -34,6 +35,7 @@ pub(crate) fn register_core(
     handles.extend(events::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
+    handles.extend(devices::register(registries)?);
     handles.extend(workspaces::register(registries)?);
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);

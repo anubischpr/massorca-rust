@@ -33,6 +33,14 @@ const PHASE1_METHODS: [&str; 14] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
+const DEVICE_METHODS: [&str; 5] = [
+    "device.list",
+    "device.revoke",
+    "device.whoami",
+    "pairing.create",
+    "network.status",
+];
+
 const TERMINAL_METHODS: [&str; 8] = [
     "terminal.create",
     "terminal.list",
@@ -45,13 +53,15 @@ const TERMINAL_METHODS: [&str; 8] = [
 ];
 
 /// The agent methods this build registers (capability `agents/1`).
-const AGENT_METHODS: [&str; 6] = [
+const AGENT_METHODS: [&str; 8] = [
     "agent.kinds",
     "agent.start",
     "agent.list",
     "agent.show",
     "agent.stop",
     "agent.forget",
+    "agent.hook",
+    "agent.watch",
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
@@ -227,6 +237,7 @@ async fn every_core_method_has_a_command_descriptor() {
     for method in PHASE1_METHODS
         .iter()
         .chain(&TERMINAL_METHODS)
+        .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
     {
         assert!(

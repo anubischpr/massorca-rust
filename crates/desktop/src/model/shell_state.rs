@@ -11,6 +11,7 @@ use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
 use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
+use super::work_panel::TerminalSelection;
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -38,6 +39,8 @@ pub struct ShellModel {
     recent: RecentActions,
     /// The workspace the Sidebar opened; its start page shows while no session is open.
     selected_workspace: Option<String>,
+    /// The terminal each workspace's Work panel shows selected.
+    terminal_selection: TerminalSelection,
 }
 
 impl ShellModel {
@@ -54,6 +57,7 @@ impl ShellModel {
             status_items: StatusItemVisibility::default(),
             recent: RecentActions::default(),
             selected_workspace: None,
+            terminal_selection: TerminalSelection::default(),
         }
     }
 
@@ -153,6 +157,11 @@ impl ShellModel {
             .filter(|region| self.region_visible(*region))
     }
 
+    /// Whether a region is recorded as the open overlay, on screen or not.
+    pub fn has_overlay(&self) -> bool {
+        self.regions.overlay().is_some()
+    }
+
     pub fn close_overlay(&mut self) {
         self.regions.close_overlay();
     }
@@ -213,6 +222,12 @@ impl ShellModel {
         }
     }
 
+    /// Closes the open session, so a selected workspace shows its start page again.
+    pub fn close_session(&mut self) {
+        self.snapshot.session_title = None;
+        self.snapshot.active_session = None;
+    }
+
     /// The Canvas content for the current page, mode and open session. A selected workspace shows
     /// its start page on the Workspaces home until a session opens.
     pub fn canvas(&self) -> Canvas {
@@ -244,6 +259,24 @@ impl ShellModel {
     pub fn select_workspace(&mut self, id: Option<String>) {
         self.selected_workspace = id;
         self.navigation.open(Page::Home);
+    }
+
+    /// Makes the Work panel visible, inline or as the overlay the window width asks for.
+    pub fn show_region(&mut self, region: Region) {
+        self.regions.show(region, self.window_width);
+    }
+
+    /// The terminal each workspace's Work panel has selected.
+    pub fn terminal_selection(&self) -> &TerminalSelection {
+        &self.terminal_selection
+    }
+
+    pub fn select_terminal(&mut self, workspace: &str, terminal: &str) {
+        self.terminal_selection.select(workspace, terminal);
+    }
+
+    pub fn forget_terminal(&mut self, terminal: &str) {
+        self.terminal_selection.forget(terminal);
     }
 
     /// The zones F6 cycles through now: the frame's parts, and the regions on screen.

@@ -19,6 +19,7 @@ mod git_status;
 mod git_watch;
 mod handshake;
 mod lifecycle;
+mod network;
 mod projects;
 mod registries;
 mod secrets;

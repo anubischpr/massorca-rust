@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -83,6 +84,21 @@ CREATE INDEX agent_sessions_by_parent ON agent_sessions(parent_id);
 "#,
         foreign_keys_off: false,
     },
+    Migration {
+        // Paired network devices (decision 0041). Only the hash of a device's public key is kept.
+        sql: r#"
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_pin TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER,
+    revoked_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
     // Secret vault (decision 0071): ciphertext only; names and scopes in clear.
     Migration {
         sql: r#"
@@ -122,13 +138,25 @@ CREATE TABLE secret_requests (
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.
-/// Each step runs under the write lock and re-reads `user_version` there, so concurrent openers migrate a file once.
+/// The whole upgrade of a file runs under an OS lock, and each step re-reads `user_version` under the write lock, so
+/// concurrent openers migrate a file once and back it up once.
 pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+    // An up-to-date or newer database is answered without the migration lock, so it is never written to.
+    let found = user_version(connection)?;
+    if found > supported {
+        return Err(StoreError::NewerSchema { found, supported });
+    }
+    if found == supported {
+        return Ok(());
+    }
+    // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
+    // would back up the half-migrated file again.
+    let _upgrade = file.map(upgrade_lock).transpose()?;
     let mut backed_up = false;
     loop {
         // Read without the lock first, so an up-to-date database is never written to.
@@ -199,6 +227,19 @@ fn run_step(
     transaction.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish.
+fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".migrating");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(name))?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 fn user_version(connection: &Connection) -> rusqlite::Result<i64> {

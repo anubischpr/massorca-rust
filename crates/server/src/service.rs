@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
-use massorca_core_agents::{Agents, AgentsConfig};
+use massorca_core_agents::{Agents, AgentsConfig, Change, Listener as ChangeListener};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -19,7 +19,9 @@ use massorca_profile::owner_only_security_descriptor;
 use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
+use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
 use massorca_protocol::methods::service::ServiceInfo;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
@@ -30,6 +32,7 @@ use crate::error::ServiceError;
 use crate::event_bus::EventBus;
 use crate::features;
 use crate::instance_lock;
+use crate::network::{self, NetworkConfig};
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
 
@@ -68,12 +71,28 @@ pub struct Service;
 impl Service {
     /// Takes the profile lock, opens the store, binds the endpoint and starts serving. Fails with `AlreadyRunning` while another service holds the lock.
     pub async fn start(config: ServiceConfig) -> Result<RunningService, ServiceError> {
-        Self::start_with(config, VaultOptions::from_env()).await
+        Self::start_with_network(config, NetworkConfig::default()).await
     }
 
     /// [`Service::start`] with explicit vault options instead of the environment's.
     pub async fn start_with(
         config: ServiceConfig,
+        vault_options: VaultOptions,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_inner(config, NetworkConfig::default(), vault_options).await
+    }
+
+    /// As `start`, and also listens on the network as `network` says (decision 0045).
+    pub async fn start_with_network(
+        config: ServiceConfig,
+        network: NetworkConfig,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_inner(config, network, VaultOptions::from_env()).await
+    }
+
+    async fn start_inner(
+        config: ServiceConfig,
+        network: NetworkConfig,
         vault_options: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
         let ServiceConfig {
@@ -88,6 +107,7 @@ impl Service {
         let store = open_store(profile.store_path()).await?;
         let listener = bind_endpoint_when_released(&profile).await?;
 
+        let (network_state, acceptor) = network::prepare(&profile, &network, &server_name)?;
         let registries = Registries::default();
         let registrations = features::register_core(&registries)?;
         let (shutdown, signal) = shutdown::channel();
@@ -119,16 +139,21 @@ impl Service {
             profile.dir().join("vault"),
             vault_options.force_file,
         ));
+        let events = EventBus::new();
+        let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
+        agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
-            events: EventBus::new(),
+            events,
+            agent_changes,
             shutdown: shutdown.clone(),
             registries,
             workspaces,
             vault,
             terminals: terminals.clone(),
             agents,
+            network: network_state,
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
@@ -144,9 +169,18 @@ impl Service {
             terminals_signal.wait().await;
             let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
         });
+        let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
-            accept_loop::run(listener, accept_state, signal, lock, registrations).await;
+            accept_loop::run(
+                listener,
+                listeners,
+                accept_state,
+                signal,
+                lock,
+                registrations,
+            )
+            .await;
             let _ = terminals_stop.await;
         });
         Ok(RunningService {
@@ -155,6 +189,24 @@ impl Service {
             task: Some(task),
         })
     }
+}
+
+/// Agent changes a watcher may fall behind by before it is given a fresh snapshot.
+const AGENT_CHANGES_CAPACITY: usize = 1024;
+
+/// Announces each agent status change on the event bus (`agent.changed`) and to the watchers, without blocking.
+fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> ChangeListener {
+    Box::new(move |change: Change| {
+        let id = match &change {
+            Change::Updated(session) => session.id.clone(),
+            Change::Forgotten(id) => id.clone(),
+        };
+        events.publish(ChangeEvent {
+            topic: TOPIC_AGENT_CHANGED.to_owned(),
+            id,
+        });
+        let _ = changes.send(change);
+    })
 }
 
 async fn open_store(path: PathBuf) -> Result<Store, ServiceError> {

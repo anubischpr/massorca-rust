@@ -5,13 +5,15 @@ use std::time::Duration;
 
 use massorca_core_store::new_id;
 use massorca_protocol::{
-    ErrorBody, Frame, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION,
-    ProtocolRange, codes, negotiate,
+    ErrorBody, Frame, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, ProtocolRange, codes,
+    negotiate,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::connection::Origin;
 use crate::context::AppState;
+use crate::network;
 use crate::permission::Principal;
 
 /// How long a client may take to send its first frame.
@@ -39,6 +41,8 @@ pub(crate) async fn accept(
     inbound: &mut mpsc::Receiver<Frame>,
     outbound: &mpsc::Sender<Frame>,
     state: &AppState,
+    max_frame_len: u32,
+    origin: &Origin,
 ) -> Option<Negotiated> {
     let first = match timeout(HELLO_TIMEOUT, inbound.recv()).await {
         Ok(Some(first)) => first,
@@ -56,6 +60,7 @@ pub(crate) async fn accept(
     let Frame::Message(Message::Hello {
         protocol,
         capabilities: offered,
+        auth,
         ..
     }) = first
     else {
@@ -74,6 +79,20 @@ pub(crate) async fn accept(
         }
     };
 
+    let principal = match origin {
+        Origin::Local => Principal::Owner,
+        Origin::Network { client_pin, peer } => {
+            match network::authenticate(state, *client_pin, *peer, auth.as_ref()).await {
+                Ok(principal) => principal,
+                Err(error) => {
+                    tracing::info!(%peer, code = %error.code, "a network connection was refused");
+                    refuse(outbound, error).await;
+                    return None;
+                }
+            }
+        }
+    };
+
     let capabilities = state.registries.capabilities.names();
     let connection_id = new_id();
     let welcome = Message::Welcome {
@@ -81,14 +100,14 @@ pub(crate) async fn accept(
         server: state.server.clone(),
         capabilities: capabilities.clone(),
         connection_id: connection_id.clone(),
-        max_frame_len: Some(MAX_FRAME_LEN_LOCAL),
+        max_frame_len: Some(max_frame_len),
     };
     outbound.send(Frame::Message(welcome)).await.ok()?;
     Some(Negotiated {
         connection_id,
         capabilities: capabilities.into_iter().collect(),
         client_capabilities: offered.into_iter().collect(),
-        principal: Principal::Owner,
+        principal,
     })
 }
 

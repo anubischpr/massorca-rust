@@ -3,7 +3,6 @@
 
 use clap::{Args, Subcommand};
 use massorca_client::Client;
-use massorca_profile::Profile;
 use massorca_protocol::methods::secrets::{
     SecretDecline, SecretEntry, SecretLink, SecretListParams, SecretName, SecretRemove,
     SecretRequest, SecretRequestParams, SecretRequestsParams, SecretSet,
@@ -13,6 +12,7 @@ use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
 use crate::secret_input;
+use crate::target::Target;
 
 #[derive(Debug, Subcommand)]
 pub enum SecretCommand {
@@ -107,9 +107,9 @@ pub struct DeclineArgs {
     pub request: String,
 }
 
-/// Runs one `secret` subcommand against the service of `profile`.
+/// Runs one `secret` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: SecretCommand,
     output: Output,
@@ -117,10 +117,10 @@ pub async fn execute(
     if let SecretCommand::Set(args) = command {
         // Read before connecting, so an empty value never reaches or starts the service.
         let value = secret_input::read_value(&args.target.scope, &args.target.name)?;
-        let client = connect(profile, autostart).await?;
+        let client = connect(target, autostart).await?;
         return set(&client, args, value, output).await;
     }
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     run(&client, command, output).await
 }
 

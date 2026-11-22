@@ -17,9 +17,14 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME", env = "MASSORCA_PROFILE")]
     pub profile: Option<String>,
 
+    // No env attribute: `Profile` reads MASSORCA_HOME itself, so `service unit` never takes it.
     /// Directory that holds the profiles. Defaults to the platform data directory.
-    #[arg(long, global = true, value_name = "DIR", env = "MASSORCA_HOME")]
+    #[arg(long, global = true, value_name = "DIR")]
     pub home: Option<PathBuf>,
+
+    /// Host to address: a paired host name, or local (the default).
+    #[arg(long, global = true, value_name = "NAME", env = "MASSORCA_HOST")]
+    pub host: Option<String>,
 
     /// Print one JSON document on stdout instead of text.
     #[arg(long, global = true)]
@@ -75,6 +80,26 @@ pub enum Commands {
         #[command(subcommand)]
         command: TerminalCommand,
     },
+    /// Makes pairing offers for other computers, and pairs this computer with a server.
+    Pair {
+        #[command(subcommand)]
+        command: PairCommand,
+    },
+    /// Lists, revokes and identifies the devices paired with the service.
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
+    /// Shows the network state of the service, and this computer's Tailscale state.
+    Server {
+        #[command(subcommand)]
+        command: ServerCommand,
+    },
+    /// Lists, checks, removes and discovers the hosts this client paired with, and installs new ones over SSH.
+    Host {
+        #[command(subcommand)]
+        command: HostCommand,
+    },
     /// Runs coding agents in workspaces and lists the agent kinds.
     Agent {
         #[command(subcommand)]
@@ -110,6 +135,8 @@ pub enum ServiceCommand {
     Stop,
     /// Stops the service, then starts it again.
     Restart,
+    /// Prints the systemd user unit that runs the service on a Linux server.
+    Unit(UnitArgs),
 }
 
 #[derive(Debug, Args)]
@@ -117,6 +144,27 @@ pub struct RunArgs {
     /// Also write log lines to stderr.
     #[arg(long)]
     pub log_stderr: bool,
+    /// Address for network clients, repeatable: tailscale[:PORT], localhost:PORT or IP:PORT. Also MASSORCA_LISTEN.
+    #[arg(
+        long = "listen",
+        value_name = "ADDR",
+        env = "MASSORCA_LISTEN",
+        value_delimiter = ','
+    )]
+    pub listen: Vec<String>,
+    /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
+    #[arg(long)]
+    pub allow_all_interfaces: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct UnitArgs {
+    /// Listen address the unit passes to `service run`, repeatable. Defaults to tailscale.
+    #[arg(long = "listen", value_name = "ADDR")]
+    pub listen: Vec<String>,
+    /// Binary the unit runs. Defaults to %h/.massorca/bin/massorca.
+    #[arg(long, value_name = "PATH")]
+    pub exe: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -241,4 +289,111 @@ pub struct ConfigSetArgs {
     /// Owner of the setting: core (default) or ext:<id>.
     #[arg(long, value_name = "OWNER")]
     pub owner: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PairCommand {
+    /// Makes a pairing offer on the service. Only its owner or a device-admin can, and it works once.
+    Offer(PairOfferArgs),
+    /// Pairs this computer with the server of an offer, and stores the server as a host.
+    Accept(PairAcceptArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PairOfferArgs {
+    /// The new device may also manage hosts and devices (host-admin and device-admin).
+    #[arg(long)]
+    pub admin: bool,
+    /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
+    #[arg(long, value_name = "SECS")]
+    pub ttl: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub struct PairAcceptArgs {
+    /// The offer string, or - to read it from stdin, which keeps it out of shell history.
+    pub offer: String,
+    /// Host name to store the server as. Defaults to the server's name in the offer.
+    #[arg(long, value_name = "HOST")]
+    pub name: Option<String>,
+    /// Name this computer has on the server. Defaults to this computer's host name.
+    #[arg(long, value_name = "NAME")]
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceCommand {
+    /// Lists the paired devices, their scopes and state. Needs device-admin.
+    List,
+    /// Revokes a device: its connections close at once and it is refused afterwards.
+    Revoke {
+        /// Device id, or its name when that is unique.
+        device: String,
+    },
+    /// Shows the device this command runs as.
+    Whoami,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerCommand {
+    /// Shows the listeners, server pin, devices and pending offers; on this computer also Tailscale.
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HostCommand {
+    /// Lists the hosts this client paired with. Makes no connection.
+    List,
+    /// Shows one host: addresses, pin, device and scopes.
+    Show {
+        /// Host name.
+        name: String,
+    },
+    /// Forgets a host. Unless --keep-device, first revokes this device on the server when it answers.
+    Remove(HostRemoveArgs),
+    /// Connects to one host, or to every host, and reports whether it answers.
+    Status {
+        /// Host name. Without it, every host is checked.
+        name: Option<String>,
+    },
+    /// Lists the online Tailscale peers, and which of them run massorca.
+    Discover,
+    /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
+    AddSsh(HostAddSshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HostRemoveArgs {
+    /// Host name.
+    pub name: String,
+    /// Forget the host without revoking this device on the server.
+    #[arg(long)]
+    pub keep_device: bool,
+    /// Also stops and removes the service over SSH. Needs --ssh.
+    #[arg(long, requires = "ssh")]
+    pub uninstall: bool,
+    /// SSH destination of the host to uninstall, as ssh takes it: [user@]host.
+    #[arg(long, value_name = "TARGET", requires = "uninstall")]
+    pub ssh: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct HostAddSshArgs {
+    /// SSH destination, as ssh takes it: [user@]host.
+    pub target: String,
+    /// Linux massorca binary to install: an ELF file for x86_64 or aarch64.
+    #[arg(long, value_name = "PATH")]
+    pub binary: PathBuf,
+    /// Host name to store the server as. Defaults to the server's name in the pairing offer.
+    #[arg(long, value_name = "HOST")]
+    pub name: Option<String>,
+    /// Listen address for the service, repeatable. Defaults to tailscale.
+    #[arg(long = "listen", value_name = "ADDR")]
+    pub listen: Vec<String>,
+    /// Extra option for ssh, repeatable: --ssh-arg -p --ssh-arg 2222.
+    #[arg(long = "ssh-arg", value_name = "ARG", allow_hyphen_values = true)]
+    pub ssh_arg: Vec<String>,
+    /// Name this computer has on the server. Defaults to this computer's host name.
+    #[arg(long, value_name = "NAME")]
+    pub device_name: Option<String>,
 }

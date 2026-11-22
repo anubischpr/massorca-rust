@@ -105,6 +105,20 @@ pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
+/// A network connection without a client certificate or `hello.auth` (decision 0041).
+pub const AUTH_REQUIRED: &str = "auth.required";
+/// The client certificate belongs to no paired device.
+pub const AUTH_UNKNOWN_DEVICE: &str = "auth.unknown_device";
+pub const AUTH_DEVICE_REVOKED: &str = "auth.device_revoked";
+/// A wrong, unknown or already used pairing secret.
+pub const PAIRING_INVALID: &str = "pairing.invalid";
+pub const PAIRING_EXPIRED: &str = "pairing.expired";
+/// Too many failed pairing attempts from this address, or overall; retry after the window.
+pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
+/// The service has no network listener, so an offer would name no address.
+pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
+pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";
