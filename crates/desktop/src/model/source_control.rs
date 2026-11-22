@@ -2,6 +2,8 @@
 //! four groups (conflicted, staged, changed, untracked) and the history. Free of GPUI, so the rules
 //! test without a window.
 
+use std::collections::BTreeSet;
+
 use massorca_protocol::codes;
 use massorca_protocol::methods::git::ChangeKind;
 use massorca_protocol::methods::git::log::{Commit, GitLog};
@@ -47,6 +49,19 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// The distinct files the groups list, for the Source control tab's count.
+    pub fn changed_paths(&self) -> u32 {
+        let paths: BTreeSet<&str> = self
+            .conflicted
+            .iter()
+            .chain(&self.staged)
+            .chain(&self.changes)
+            .chain(&self.untracked)
+            .map(|row| row.path.as_str())
+            .collect();
+        u32::try_from(paths.len()).unwrap_or(u32::MAX)
+    }
+
     /// Nothing is changed, staged, conflicted or untracked ("Nothing to commit.").
     pub fn is_clean(&self) -> bool {
         self.conflicted.is_empty()

@@ -3,12 +3,14 @@
 mod actions;
 mod canvas;
 mod palette;
+mod project_sidebar;
 mod rail;
 mod service_banner;
 mod settings;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
+mod source_control;
 mod start_page;
 mod status_bar;
 mod teams;
@@ -22,6 +24,7 @@ use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -40,6 +43,7 @@ use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use source_control::SourceControl;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -87,6 +91,8 @@ pub struct Shell {
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
     dialogs: WorkspaceDialogs,
+    /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
+    source_control: SourceControl,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
@@ -177,6 +183,16 @@ impl Shell {
                 }
             },
         );
+        let commit_field = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Message")
+                .placeholder("Commit message")
+        });
+        let commit_changes = cx.subscribe(&commit_field, |shell, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                shell.read_commit_message(cx);
+            }
+        });
         Self {
             model,
             focus,
@@ -198,6 +214,7 @@ impl Shell {
             _bridge: bridge,
             _store_changes: store_changes,
             dialogs: WorkspaceDialogs::default(),
+            source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
         }
@@ -337,6 +354,7 @@ impl Render for Shell {
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        self.sync_source_control(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
         let settings = settings::SettingsFrame {
             model: &self.settings,
@@ -360,6 +378,10 @@ impl Render for Shell {
                 page,
                 shell: shell.clone(),
             });
+        let project = self
+            .model
+            .region_visible(Region::ProjectSidebar)
+            .then(|| project_sidebar::project_body(self, &shell, cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -367,6 +389,7 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                project,
             },
             window,
             cx,
