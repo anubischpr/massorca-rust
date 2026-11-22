@@ -4,6 +4,7 @@
 use std::time::Instant;
 
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
@@ -21,6 +22,11 @@ pub enum StoreUpdate {
     ProjectGone(String),
     WorkspaceChanged(Workspace),
     WorkspaceGone(String),
+    /// Every terminal the service lists, after a connect. Replaces what was held.
+    TerminalsResync(Vec<Terminal>),
+    /// A terminal the service created, killed or reported; keyed by its id.
+    TerminalChanged(Terminal),
+    TerminalGone(String),
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
@@ -29,6 +35,8 @@ pub struct StoreState {
     pub connection: ConnectionState,
     pub projects: Vec<Project>,
     pub workspaces: Vec<Workspace>,
+    /// Terminals of every workspace, oldest first (decision 0033).
+    pub terminals: Vec<Terminal>,
     /// True once the first full list arrived, so an empty tree can tell "none" from "not yet".
     pub loaded: bool,
     /// When the link last stopped being connected, while it is not.
@@ -41,6 +49,7 @@ impl Default for StoreState {
             connection: ConnectionState::Connecting,
             projects: Vec::new(),
             workspaces: Vec::new(),
+            terminals: Vec::new(),
             loaded: false,
             down_since: None,
         }
@@ -79,6 +88,15 @@ impl StoreState {
                 self.workspaces.sort_by(workspace_order);
             }
             StoreUpdate::WorkspaceGone(id) => self.workspaces.retain(|w| w.id != id),
+            StoreUpdate::TerminalsResync(mut terminals) => {
+                terminals.sort_by(terminal_order);
+                self.terminals = terminals;
+            }
+            StoreUpdate::TerminalChanged(terminal) => {
+                replace_by(&mut self.terminals, terminal, |t| t.id.clone());
+                self.terminals.sort_by(terminal_order);
+            }
+            StoreUpdate::TerminalGone(id) => self.terminals.retain(|t| t.id != id),
         }
     }
 
@@ -105,6 +123,12 @@ fn project_order(a: &Project, b: &Project) -> std::cmp::Ordering {
 }
 
 /// Workspaces by creation time, then name, so a new one lands last and rows do not jump.
+fn terminal_order(a: &Terminal, b: &Terminal) -> std::cmp::Ordering {
+    a.created_at_ms
+        .cmp(&b.created_at_ms)
+        .then_with(|| a.id.cmp(&b.id))
+}
+
 fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
     a.created_at_ms
         .cmp(&b.created_at_ms)

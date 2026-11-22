@@ -53,7 +53,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             waiting: 0,
             running: 0,
             memory: "-".to_owned(),
-            terminals: 0,
+            terminals: super::terminals::running_count(state),
             ports: 0,
             hosts_total: 1,
             hosts_unreachable: u32::from(!state.connection.is_connected()),
@@ -62,7 +62,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         active_session: None,
         prototypes: 0,
         service_status: Some(service_status(&state.connection, now)),
-        service_notice: service_notice(state, now),
+        service_notice: service_notice(state),
     }
 }
 
@@ -100,14 +100,15 @@ pub fn service_status(connection: &ConnectionState, now: Instant) -> ServiceStat
         },
         ConnectionState::Unreachable { reason } => ServiceStatus {
             tone: ServiceTone::Unreachable,
-            text: "Service unreachable".to_owned(),
+            text: "Service not running".to_owned(),
             tooltip: reason.clone(),
         },
     }
 }
 
-/// The banner above the Canvas. None while connected.
-pub fn service_notice(state: &StoreState, now: Instant) -> Option<ServiceNotice> {
+/// The notice about the service link: a banner while it connects, the page when it is down.
+/// None while connected.
+pub fn service_notice(state: &StoreState) -> Option<ServiceNotice> {
     match &state.connection {
         ConnectionState::Connected { .. } => None,
         ConnectionState::Connecting => Some(ServiceNotice {
@@ -116,10 +117,10 @@ pub fn service_notice(state: &StoreState, now: Instant) -> Option<ServiceNotice>
             detail: None,
             retry: false,
         }),
-        ConnectionState::Reconnecting { attempt, retry_at } => Some(ServiceNotice {
+        ConnectionState::Reconnecting { attempt, .. } => Some(ServiceNotice {
             tone: ServiceTone::Warning,
             message: format!("Reconnecting to the MassOrca service, attempt {attempt}"),
-            detail: Some(format!("Next try {}.", retry_in(*retry_at, now))),
+            detail: None,
             retry: true,
         }),
         ConnectionState::Unreachable { reason } => Some(ServiceNotice {
@@ -272,14 +273,13 @@ mod tests {
 
     #[test]
     fn connecting_shows_a_busy_notice_without_retry() {
-        let now = Instant::now();
-        let notice = service_notice(&StoreState::default(), now).expect("a notice");
+        let notice = service_notice(&StoreState::default()).expect("a notice");
         assert_eq!(notice.tone, ServiceTone::Busy);
         assert!(!notice.retry);
     }
 
     #[test]
-    fn reconnecting_counts_the_attempt_and_the_seconds_to_the_next_try() {
+    fn reconnecting_counts_the_attempt_and_offers_only_retry_now() {
         let now = Instant::now();
         let mut state = loaded(now);
         state.apply(
@@ -289,17 +289,18 @@ mod tests {
             }),
             now,
         );
-        let notice = service_notice(&state, now).expect("a notice");
+        let notice = service_notice(&state).expect("a notice");
         assert_eq!(
             notice.message,
             "Reconnecting to the MassOrca service, attempt 3"
         );
-        assert_eq!(notice.detail.as_deref(), Some("Next try in 3 s."));
+        assert_eq!(notice.detail, None, "the banner has no Details action");
         assert!(notice.retry);
         let status = service_status(&state.connection, now);
         assert_eq!(status.text, "Reconnecting, attempt 3");
-        let later = service_notice(&state, now + Duration::from_secs(5)).expect("a notice");
-        assert_eq!(later.detail.as_deref(), Some("Next try now."));
+        assert_eq!(status.tooltip, "Next try in 3 s");
+        let later = service_status(&state.connection, now + Duration::from_secs(5));
+        assert_eq!(later.tooltip, "Next try now");
     }
 
     #[test]
@@ -312,7 +313,7 @@ mod tests {
             }),
             now,
         );
-        let notice = service_notice(&state, now).expect("a notice");
+        let notice = service_notice(&state).expect("a notice");
         assert_eq!(notice.tone, ServiceTone::Unreachable);
         assert_eq!(
             notice.detail.as_deref(),
@@ -321,7 +322,7 @@ mod tests {
         assert!(notice.retry);
         assert_eq!(
             service_status(&state.connection, now).text,
-            "Service unreachable"
+            "Service not running"
         );
         let snapshot = service_snapshot(&state, now);
         assert_eq!(snapshot.status.hosts_text(), "1 of 1 hosts unreachable");

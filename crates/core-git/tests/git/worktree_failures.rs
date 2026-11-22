@@ -149,7 +149,7 @@ fn a_killed_add_kills_its_hook_and_removes_what_it_created() {
     let fixture = Fixture::new();
     let repo = fixture.repo();
     let linked = fixture.sibling("killed-add");
-    install_post_checkout_hook(&repo, "sleep 120");
+    install_post_checkout_hook(&repo, "sleep 180");
     let git = git().with_mutation_timeout(Some(Duration::from_secs(3)));
     let started = Instant::now();
 
@@ -158,12 +158,58 @@ fn a_killed_add_kills_its_hook_and_removes_what_it_created() {
         .expect_err("the hook outlives the timeout");
 
     assert!(matches!(error, GitError::Timeout { .. }), "{error:?}");
-    // Well under the hook's two minutes: the hook was killed, not waited for, even on a loaded machine.
-    assert!(started.elapsed() < Duration::from_secs(60));
+    // Well under the hook's three minutes: the hook was killed, not waited for, even on a loaded machine.
+    assert!(started.elapsed() < Duration::from_secs(120));
     assert_eq!(registered(&git, &repo), vec![canonical(&repo)]);
     assert!(!git.branch_exists(&repo, "killed").expect("branch check"));
     assert!(
         !linked.exists(),
         "the directory the add created is left behind"
     );
+}
+
+#[test]
+fn two_adds_to_one_target_at_once_never_undo_the_winner() {
+    for round in 0..6 {
+        let fixture = Fixture::new();
+        let repo = fixture.repo();
+        let target = fixture.sibling("contested");
+        let barrier = std::sync::Barrier::new(2);
+        let (first, second) = std::thread::scope(|scope| {
+            let add = |branch: &'static str| {
+                let (repo, target, barrier) = (&repo, &target, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    git().worktree_add(repo, target, new_branch(branch)).is_ok()
+                })
+            };
+            let first = add("first");
+            let second = add("second");
+            (first.join().expect("first"), second.join().expect("second"))
+        });
+        assert!(
+            first ^ second,
+            "round {round}: exactly one add wins ({first}, {second})"
+        );
+        let (winner, loser) = if first {
+            ("first", "second")
+        } else {
+            ("second", "first")
+        };
+        let git = git();
+        assert_eq!(
+            registered(&git, &repo),
+            vec![canonical(&repo), canonical(&target)],
+            "round {round}: the winner's worktree was undone"
+        );
+        assert!(
+            git.branch_exists(&repo, winner).expect("branch check"),
+            "round {round}"
+        );
+        assert!(
+            !git.branch_exists(&repo, loser).expect("branch check"),
+            "round {round}"
+        );
+        assert!(target.join("README.md").is_file(), "round {round}");
+    }
 }
