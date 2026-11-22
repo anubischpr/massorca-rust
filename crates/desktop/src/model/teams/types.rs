@@ -1,6 +1,7 @@
 //! The plain data of Bot Teams: teams and what each one holds, as the pages show it (screens 4).
 
 use crate::model::shell::{Agent, HostReach};
+use massorca_protocol::methods::teams::TeamCharacter;
 
 macro_rules! ids {
     ($($(#[$doc:meta])* $name:ident),* $(,)?) => {
@@ -281,6 +282,8 @@ pub struct HostChoice {
 pub struct Team {
     pub id: TeamId,
     pub name: String,
+    /// The team's shape and eyes, drawn beside its name (A57, A59).
+    pub character: TeamCharacter,
     pub purpose: String,
     pub host: String,
     pub reach: HostReach,
