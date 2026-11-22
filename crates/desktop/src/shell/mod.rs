@@ -1,6 +1,7 @@
 //! The desktop shell: the window frame, its regions, and the command palette (D-SH-01).
 
 mod actions;
+mod bring_back;
 mod canvas;
 mod debug_focus;
 mod diff_page;
@@ -62,6 +63,8 @@ use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
+#[cfg(test)]
+mod bring_back_tests;
 #[cfg(test)]
 mod debug_focus_tests;
 #[cfg(test)]
@@ -144,6 +147,8 @@ pub struct Shell {
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The bring-back confirm on screen, if any (decision 0055).
+    bring_back: Option<bring_back::BringBackConfirm>,
 }
 
 impl Shell {
@@ -297,6 +302,7 @@ impl Shell {
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
+            bring_back: None,
         }
     }
 
@@ -628,6 +634,7 @@ impl Render for Shell {
             settings_remove_dialog::remove_dialog_view(dialog, &shell, connected, cx)
         });
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
+        let bring_back_dialog = bring_back::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -697,6 +704,7 @@ impl Render for Shell {
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
+            .when_some(bring_back_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }

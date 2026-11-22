@@ -11,10 +11,12 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscription};
 use massorca_profile::Profile;
+use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED,
-    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
+    TOPIC_SECRET_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -28,6 +30,7 @@ use massorca_protocol::{PeerInfo, codes};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
+use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
@@ -69,6 +72,10 @@ pub(crate) enum Command {
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    BringBack {
+        params: AgentBringBackParams,
+        reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -405,6 +412,8 @@ impl Link {
         });
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
+        let sessions = agents::list_sessions(client).await?;
+        self.emit(StoreUpdate::AgentsResync(sessions));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -499,6 +508,15 @@ impl Link {
                 }),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
+            TOPIC_AGENT_CHANGED => client
+                .agent_show(&id)
+                .await
+                .map(StoreUpdate::AgentChanged)
+                .or_else(|error| {
+                    gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
+                        StoreUpdate::AgentGone(id.clone())
+                    })
+                }),
             _ => return Outcome::Continue,
         };
         match refetched {
@@ -578,6 +596,9 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::BringBack { params, reply } => {
+            agents::spawn_bring_back(&client, params, reply, updates);
+        }
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_) | Command::Secret(_) | Command::RetryNow | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -614,6 +635,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::SetConfig { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::BringBack { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
