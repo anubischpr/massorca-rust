@@ -105,6 +105,12 @@ pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
+/// CLI only: the service refused a profile directory that holds entries another user owns; `data.paths` lists up to ten.
+pub const PROFILE_FOREIGN_ENTRIES: &str = "profile.foreign_entries";
+/// CLI only: other users could change the profile directory or entries in it; `data.paths` lists up to ten.
+pub const PROFILE_WRITABLE_BY_OTHERS: &str = "profile.writable_by_others";
+/// CLI only: a folder from the home down to the profile is a link, another user's, or changeable by others; `data.path`.
+pub const PROFILE_UNSAFE_LOCATION: &str = "profile.unsafe_location";
 /// A network connection without a client certificate or `hello.auth` (decision 0041).
 pub const AUTH_REQUIRED: &str = "auth.required";
 /// The client certificate belongs to no paired device.
@@ -147,6 +153,8 @@ pub const SECRET_UNREADABLE: &str = "secret.unreadable";
 pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
 /// Too many pending or recent requests from one requester; see decision 0071 for the limits.
 pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
+/// Names stored before case clashes were refused would reach one process together; the data names each one.
+pub const SECRET_NAME_CLASH: &str = "secret.name_clash";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";

@@ -16,7 +16,7 @@ uuid.workspace = true
 vt100.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 
 # A job object per terminal ends its whole process tree (decision 0031).
 [target.'cfg(windows)'.dependencies]

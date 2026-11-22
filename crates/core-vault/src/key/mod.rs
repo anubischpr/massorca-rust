@@ -116,6 +116,8 @@ pub enum LockReason {
     KeyWithoutProtection,
     /// The key opens but is not the one that sealed this vault: its key check does not open.
     KeyMismatch,
+    /// The vault path is a link, a junction or not a directory; nothing is read or written through it.
+    UnsafeDirectory,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -143,6 +145,7 @@ impl KeyStore {
         vault_dir: &Path,
         force_file: bool,
     ) -> Result<(Protection, MasterKey), KeyError> {
+        file::secure_existing(vault_dir, &[KEY_FILE, PROTECTION_FILE, ID_FILE])?;
         match file::read_small(&vault_dir.join(PROTECTION_FILE)) {
             Ok(word) => {
                 let protection = std::str::from_utf8(&word)
@@ -162,6 +165,9 @@ impl KeyStore {
     /// # Errors
     /// `Io` when a file exists and cannot be removed.
     pub fn reset(vault_dir: &Path) -> Result<(), KeyError> {
+        if !file::check_dir(vault_dir)? {
+            return Ok(());
+        }
         reset(vault_dir)
     }
 }

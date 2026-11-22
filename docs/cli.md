@@ -78,6 +78,9 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--read-only]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. Prints the child. |
+| `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
+| `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
 | `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
 | `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
@@ -207,6 +210,36 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   existing 0056 home is named `default`, state `migrated`, and is moved, not copied.
   A kind has accounts only when its declaration sets `accounts.login`; the four built-in
   kinds do not, until their real login commands are verified.
+- `agent delegate --prompt TEXT` starts a child session of the `--from` session (decision
+  0055). Inside an agent run `--from` defaults to the run's own session, and the run's
+  `MASSORCA_AGENT_TOKEN` always goes with the call, whatever session `--from` names; a token
+  that is not the parent run's fails with `agent.hook_refused`, so a child cannot delegate as
+  its parent. The kind is the parent's unless `--kind` names another. A writing
+  child gets a new workspace in the parent's project, named `--name` or `<parent
+  workspace>-<n>` with the first free `n`, on a branch of that name based on the parent
+  workspace's branch; it starts from that branch's last commit, so uncommitted changes in the
+  parent are not carried over, and the result's `note` says so. A parent in a folder workspace
+  fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
+  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  cannot delegate: `agent.depth_exceeded`.
+- `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
+  and the root's children, oldest first, with their execution and activity. `--json` prints
+  `{ root, children }` with each session's result text.
+- `agent bring-back CHILD` needs a child whose run has exited, or whose last turn is `done`;
+  otherwise it fails with `agent.busy`. Inside an agent run the run's token goes with the call
+  and must be the child's parent's, so a child cannot bring itself back (`agent.hook_refused`). When the child has a workspace of its own, its branch
+  is merged into the parent's worktree with `git merge --no-ff --no-edit`, unless
+  `--no-merge`: the parent must not be `working` (`agent.parent_busy`), no other session may
+  write in its workspace (`agent.workspace_busy`), and its worktree must be clean with no
+  rebase or merge stopped in it (`agent.parent_dirty`). While the merge runs, a start in that
+  workspace and any prompt to its sessions, even with `--force`, fail with `agent.busy`. A merge that stops on conflicts is aborted, the parent is
+  left as it was, and the call fails with `agent.merge_conflict`, the conflicting paths in
+  the error's `data.paths`. Unless `--no-prompt`, a live parent run then gets one prompt, by
+  the `agent prompt` rules without `--force`, naming the child, the merge commit and the
+  child's result on one line. A prompt the parent cannot take does not fail the call: the
+  result says `prompt delivered: no` with a note. The child is marked brought back; a second
+  bring-back fails with `agent.already_brought_back`. The child's workspace is kept, and
+  nothing is ever pushed.
 - `agent credentials import KIND --from DIR` copies only the files the kind declares
   (`credentials.files`) into `<profile>/agents/homes/<KIND>/`; from then on every run of the
   kind in the profile gets the kind's home variable pointing there (decision 0056). Every

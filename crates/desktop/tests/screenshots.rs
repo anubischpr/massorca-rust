@@ -24,7 +24,7 @@ use massorca_desktop::store::ClientDataSource;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::{Appearance, Assets, Theme};
 use service::{LocalService, add_project_and_workspace, block_on, profile, repo};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -449,16 +449,35 @@ fn service_screenshots() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> anyhow::Result<TempHome> {
+    let temp = TempDir::new()?;
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path)?;
+    Ok(TempHome { _temp: temp, path })
+}
+
 /// A temporary home served by a running service, with the project "demo" and its workspace
 /// "fix-login", a worktree of a repository with one commit.
 struct Demo {
-    home: TempDir,
+    home: TempHome,
     service: LocalService,
     workspace: Workspace,
 }
 
 fn start_demo() -> anyhow::Result<Demo> {
-    let home = TempDir::new()?;
+    let home = temp_home()?;
     let repo_dir = home.path().join("demo");
     repo(&repo_dir)?;
     let service = LocalService::start(profile(home.path())?)?;

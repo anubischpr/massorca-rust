@@ -13,7 +13,10 @@ fn scope(text: &str) -> Scope {
 }
 
 fn is_mismatch(error: &VaultError) -> bool {
-    matches!(error, VaultError::Locked(LockReason::KeyMismatch))
+    matches!(
+        error,
+        VaultError::Locked(LockReason::KeyMismatch) | VaultError::KeyMismatch { .. }
+    )
 }
 
 fn plant_key(vault_dir: &std::path::Path) {
@@ -143,4 +146,49 @@ fn reset_key_is_refused_while_a_secret_exists_and_frees_an_empty_vault() {
     assert!(!vault.status().expect("status").locked);
     let check: Option<SecretKeyCheck> = store.secret_key_check().expect("check");
     assert!(check.is_some());
+}
+
+#[test]
+fn a_legacy_vault_names_the_rows_its_key_does_not_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::open_in_memory().expect("store");
+    let vault_dir = dir.path().join("vault");
+    let first = Vault::new(store.clone(), vault_dir.clone(), true);
+    for name in ["GOOD", "DAMAGED"] {
+        first
+            .set(&scope("project:p"), name, &value("legacy-value-41"), false)
+            .expect("set");
+    }
+    store
+        .delete_secret_key_check()
+        .expect("as before the check");
+    let row = store
+        .find_secret("project:p", "DAMAGED")
+        .expect("row")
+        .expect("row");
+    let mut ciphertext = row.ciphertext.clone();
+    ciphertext[0] ^= 0xff;
+    store
+        .update_secret_value(&row.id, &row.nonce, &ciphertext, row.rotated_at)
+        .expect("damage one row");
+
+    let vault = Vault::new(store.clone(), vault_dir, true);
+    assert!(vault.status().expect("status").locked);
+    let error = vault
+        .set(&scope("global"), "NEW", &value("x"), false)
+        .unwrap_err();
+    match &error {
+        VaultError::KeyMismatch { unreadable } => {
+            let named: Vec<(&str, &str)> = unreadable
+                .iter()
+                .map(|entry| (entry.scope.as_str(), entry.name.as_str()))
+                .collect();
+            assert_eq!(named, [("project:p", "DAMAGED")]);
+        }
+        other => panic!("expected KeyMismatch, got {other:?}"),
+    }
+    let message = error.to_string();
+    assert!(message.contains("DAMAGED in project:p"), "{message}");
+    assert!(!message.contains("legacy-value-41"));
+    assert_eq!(store.secret_key_check().expect("check"), None);
 }

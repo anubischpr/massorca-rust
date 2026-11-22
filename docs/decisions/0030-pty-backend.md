@@ -23,7 +23,12 @@ the better. Research checked crate sources and platform documentation on
     `EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT` only. A
     pseudoconsole has no hosting window, also under a detached parent.
   - Unix: the child calls `setsid()`, takes the pty as controlling terminal
-    and closes every inherited descriptor above 2.
+    and closes every inherited descriptor above 2. That also closes the pipe
+    std uses to report a failed `execve`, so the child aborts and the spawn
+    looks successful. Before spawning we check that the program is an
+    executable regular file and that the interpreter on its `#!` line is too;
+    other exec failures (a binary for another architecture, for one) still
+    end as a SIGABRT exit.
 - **Blocking IO on dedicated threads.** One reader thread per terminal reads
   the master and feeds the screen (0034); one waiter thread blocks in
   `wait`. tokio's `AsyncFd` would need `unsafe` for a borrowed pty fd and does

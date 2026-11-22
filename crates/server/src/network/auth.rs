@@ -11,10 +11,17 @@ use massorca_protocol::pairing::AuthRequest;
 use massorca_protocol::{Auth, ErrorBody, codes};
 
 use crate::context::AppState;
+use crate::network::live::{LiveGuard, revoked_error};
 use crate::permission::{Principal, Scopes};
 use crate::store_blocking;
 
 const MAX_DEVICE_NAME: usize = 64;
+
+/// Who a network connection is, and its place in the live list so revoking the device closes it.
+pub(crate) struct Authenticated {
+    pub(crate) principal: Principal,
+    pub(crate) live: LiveGuard,
+}
 
 /// Decides the principal of a network connection from its client certificate and `hello.auth`.
 pub(crate) async fn authenticate(
@@ -22,26 +29,50 @@ pub(crate) async fn authenticate(
     client_pin: Pin,
     peer: SocketAddr,
     auth: Option<&Auth>,
-) -> Result<Principal, ErrorBody> {
-    match AuthRequest::from_auth(auth) {
-        Some(AuthRequest::Device {}) => known_device(state, client_pin).await,
+) -> Result<Authenticated, ErrorBody> {
+    let (id, scopes) = match AuthRequest::from_auth(auth) {
+        Some(AuthRequest::Device {}) => known_device(state, client_pin).await?,
         Some(AuthRequest::Pair { secret, name }) => {
             let name = device_name(&name)?;
-            let scopes =
+            let reservation =
                 state
                     .network
                     .pairing
                     .redeem(secret.expose(), peer.ip(), Instant::now())?;
-            pair(state, client_pin, name, scopes).await
+            let scopes = reservation.scopes();
+            let id = pair(state, client_pin, name, scopes).await?;
+            // Spent only once the device is stored; a failed insert leaves the offer usable.
+            reservation.commit();
+            (id, scopes)
         }
-        Some(AuthRequest::Unknown) | None => Err(ErrorBody::new(
-            codes::AUTH_REQUIRED,
-            "a network connection must authenticate as a paired device or pair with an offer",
-        )),
-    }
+        Some(AuthRequest::Unknown) | None => {
+            return Err(ErrorBody::new(
+                codes::AUTH_REQUIRED,
+                "a network connection must authenticate as a paired device or pair with an offer",
+            ));
+        }
+    };
+    let live = state
+        .network
+        .live
+        .admit(&id, || still_revoked(state, id.clone()))
+        .await?;
+    Ok(Authenticated {
+        principal: Principal::Device {
+            id: Arc::from(id),
+            scopes,
+        },
+        live,
+    })
 }
 
-async fn known_device(state: &AppState, client_pin: Pin) -> Result<Principal, ErrorBody> {
+/// Whether the device's row now says revoked (or is gone), read after the connection registered.
+async fn still_revoked(state: &AppState, id: String) -> Result<bool, ErrorBody> {
+    let row = store_blocking::run(state, move |store| store.get_device(&id)).await?;
+    Ok(row.is_none_or(|row| row.revoked_at.is_some()))
+}
+
+async fn known_device(state: &AppState, client_pin: Pin) -> Result<(String, Scopes), ErrorBody> {
     let key_pin = client_pin.to_string();
     let row =
         store_blocking::run(state, move |store| store.find_device_by_key_pin(&key_pin)).await?;
@@ -52,10 +83,7 @@ async fn known_device(state: &AppState, client_pin: Pin) -> Result<Principal, Er
         ));
     };
     if row.revoked_at.is_some() {
-        return Err(ErrorBody::new(
-            codes::AUTH_DEVICE_REVOKED,
-            "this device's access was revoked; pair it again to reconnect",
-        ));
+        return Err(revoked_error());
     }
     let id = row.id.clone();
     // A failed last-seen write must not lock the device out.
@@ -64,18 +92,16 @@ async fn known_device(state: &AppState, client_pin: Pin) -> Result<Principal, Er
     {
         tracing::warn!(error = %error.message, "recording a device's last connection failed");
     }
-    Ok(Principal::Device {
-        id: Arc::from(row.id),
-        scopes: Scopes::from_names(&row.scopes),
-    })
+    Ok((row.id, Scopes::from_names(&row.scopes)))
 }
 
+/// Stores a newly paired device and returns its id.
 async fn pair(
     state: &AppState,
     client_pin: Pin,
     name: String,
     scopes: Scopes,
-) -> Result<Principal, ErrorBody> {
+) -> Result<String, ErrorBody> {
     let now = now_ms();
     let row = DeviceRow {
         id: new_id(),
@@ -100,10 +126,7 @@ async fn pair(
         ));
     }
     tracing::info!(device = %id, "a device paired");
-    Ok(Principal::Device {
-        id: Arc::from(id),
-        scopes,
-    })
+    Ok(id)
 }
 
 /// A device name the server lists: 1 to 64 characters, no control characters, trimmed.

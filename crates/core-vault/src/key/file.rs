@@ -6,6 +6,8 @@ use std::path::Path;
 
 use zeroize::Zeroizing;
 
+use super::{KeyError, LockReason};
+
 /// Vault files are a key, a wrapped key or one word; anything longer is not ours.
 const MAX_FILE_BYTES: usize = 4096;
 
@@ -29,6 +31,45 @@ pub(super) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     }
     #[cfg(not(any(unix, windows)))]
     fs::create_dir_all(dir)
+}
+
+/// Whether the vault directory exists. A link, a junction or anything but a directory at its path is refused, so
+/// nothing is read from or written through it.
+pub(super) fn check_dir(dir: &Path) -> Result<bool, KeyError> {
+    let meta = match fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_dir() {
+        return Err(KeyError::Locked(LockReason::UnsafeDirectory));
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    meta.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &fs::Metadata) -> bool {
+    false
+}
+
+/// Refuses a vault path that is a link, and on Windows gives an existing vault directory and `files` in it an
+/// owner-only DACL. Returns whether the directory exists.
+pub(super) fn secure_existing(dir: &Path, files: &[&str]) -> Result<bool, KeyError> {
+    let exists = check_dir(dir)?;
+    #[cfg(windows)]
+    if exists {
+        super::owner_only::tighten(dir, files)?;
+    }
+    #[cfg(not(windows))]
+    let _ = files;
+    Ok(exists)
 }
 
 pub(super) fn exists_no_follow(path: &Path) -> io::Result<bool> {

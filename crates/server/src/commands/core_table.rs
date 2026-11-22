@@ -367,6 +367,43 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.delegate",
+            "Start a child session for a parent session",
+            "agent.delegate",
+            json!({
+                "type": "object",
+                "required": ["parent", "prompt"],
+                "properties": {
+                    "parent": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "name": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.tree",
+            "Show an agent session's delegation tree",
+            "agent.tree",
+            selector("session"),
+        ),
+        command(
+            "agent.bring-back",
+            "Merge a finished child session back into its parent",
+            "agent.bring_back",
+            json!({
+                "type": "object",
+                "required": ["child"],
+                "properties": {
+                    "child": { "type": "string" },
+                    "merge": { "type": "boolean" },
+                    "prompt": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.attach",
             "Attach to an agent session's terminal",
             "agent.show",
