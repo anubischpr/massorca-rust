@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 
-use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
+use crate::root_access::{Findings, FolderPlan, RootAccess, RootAccessError, profiles_dir};
 use crate::unix_user::current_uid;
 
 const ROOT_UID: u32 = 0;
@@ -38,6 +38,7 @@ fn secure_root_with(
     if let Some(parent) = home.parent() {
         fs::create_dir_all(parent)?;
     }
+    check_link_home(home, uid, owner)?;
     // The home may itself be a link the user chose; `profiles` and the root may not.
     let profiles = profiles_dir(home, dir);
     if !create_private_dir(home)? {
@@ -69,6 +70,7 @@ fn secure_root_with(
     }
     let repaired = mode & 0o777 != 0o700;
     if repaired {
+        // Before the scan, as on Windows; a refusal by the scan leaves the root `0700`, which trusts nothing.
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
     scan_entries(dir, uid, owner)?.into_result()?;
@@ -77,6 +79,71 @@ fn secure_root_with(
     } else {
         RootAccess::Private
     })
+}
+
+/// A home that is itself a symlink is replaceable by whoever can write its parent, so the parent must be as safe as an
+/// ancestor.
+fn check_link_home(home: &Path, uid: u32, owner: Owner) -> Result<(), RootAccessError> {
+    let is_link =
+        fs::symlink_metadata(home).is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let Some(parent) = home.parent().filter(|_| is_link) else {
+        return Ok(());
+    };
+    match check_ancestor(parent, &fs::metadata(parent)?, uid, owner) {
+        Err(RootAccessError::UnsafeLocation { .. }) => Err(RootAccessError::UnsafeLocation {
+            path: home.to_path_buf(),
+        }),
+        other => other,
+    }
+}
+
+/// What `profile secure` changes: the mode of each existing folder of the home, `profiles` and the root that is not
+/// `0700`. A folder another user owns, or a symlinked `profiles` or root, cannot be made private here.
+pub(crate) fn plan_secure(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, RootAccessError> {
+    let uid = current_uid();
+    check_link_home(home, uid, &|_, metadata| metadata.uid())?;
+    let mut plans = Vec::new();
+    for (path, follow) in [(home, true), (profiles_dir(home, dir), false), (dir, false)] {
+        let metadata = match if follow {
+            fs::metadata(path)
+        } else {
+            fs::symlink_metadata(path)
+        } {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(RootAccessError::UnsafeLocation {
+                path: path.to_path_buf(),
+            });
+        }
+        if metadata.uid() != uid {
+            return Err(RootAccessError::UnsafeLocation {
+                path: path.to_path_buf(),
+            });
+        }
+        let mode = metadata.mode() & 0o7777;
+        plans.push(FolderPlan {
+            path: path.to_path_buf(),
+            remove: if mode == 0o700 {
+                Vec::new()
+            } else {
+                vec![format!("mode {mode:04o}")]
+            },
+            keep: vec!["mode 0700".to_owned()],
+        });
+    }
+    Ok(plans)
+}
+
+pub(crate) fn apply_secure(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    for folder in plan_secure(home, dir)? {
+        if folder.changes() {
+            fs::set_permissions(&folder.path, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
 }
 
 /// A folder between the home and the root must be a real folder owned by the user or root, and not writable by group
@@ -161,6 +228,43 @@ mod tests {
 
     fn chmod(path: &Path, mode: u32) {
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+
+    #[test]
+    fn profile_secure_plans_then_makes_a_shared_home_0700() {
+        let (_temp, home, root) = layout();
+        fs::create_dir_all(&root).expect("an old profile");
+        chmod(&home, 0o777);
+        assert!(matches!(
+            secure_root(&home, &root),
+            Err(RootAccessError::UnsafeLocation { .. })
+        ));
+
+        let plan = super::plan_secure(&home, &root).expect("a plan");
+        assert_eq!(plan[0].remove, vec!["mode 0777".to_owned()]);
+        assert_eq!(mode(&home), 0o777, "planning changes nothing");
+
+        super::apply_secure(&home, &root).expect("applied");
+        assert_eq!(mode(&home), 0o700);
+        secure_root(&home, &root).expect("a start accepts it");
+    }
+
+    #[test]
+    fn a_symlinked_home_in_a_shared_parent_is_refused() {
+        let (temp, home, root) = layout();
+        let real = temp.path().join("real-home");
+        fs::create_dir(&real).expect("a home");
+        chmod(&real, 0o700);
+        std::os::unix::fs::symlink(&real, &home).expect("a link home");
+        chmod(temp.path(), 0o777);
+
+        let refused = secure_root(&home, &root);
+
+        chmod(temp.path(), 0o700);
+        assert!(
+            matches!(&refused, Err(RootAccessError::UnsafeLocation { path }) if path == &home),
+            "{refused:?}"
+        );
     }
 
     #[test]

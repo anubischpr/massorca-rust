@@ -18,6 +18,8 @@ const FULL_ACCESS: u32 = 0x001F_01FF;
 /// One access control entry, with its trustee parsed into a SID. A field that cannot be read is `None`.
 #[derive(Debug)]
 pub(crate) struct Ace {
+    /// The entry as SDDL wrote it, for showing the user.
+    text: String,
     allow: bool,
     flags: String,
     mask: Option<u32>,
@@ -56,6 +58,11 @@ impl Descriptor {
         }
     }
 
+    /// The entries as SDDL wrote them, such as `(A;OICIID;FA;;;BA)`.
+    pub(crate) fn entry_texts(&self) -> Vec<String> {
+        self.aces.iter().map(|ace| ace.text.clone()).collect()
+    }
+
     /// Whether the DACL lets anyone outside `trusted` change the object. Inherit-only entries do not apply to the
     /// object and are skipped; an entry whose rights or trustee cannot be read counts as a write.
     pub(crate) fn grants_write_to_others(&self, trusted: &Trusted) -> bool {
@@ -90,6 +97,7 @@ fn parse_ace(body: &str) -> Ace {
     let fields: Vec<&str> = body.split(';').collect();
     let field = |index: usize| fields.get(index).copied().unwrap_or("");
     Ace {
+        text: format!("({body})"),
         allow: matches!(field(0), "A" | "XA" | "OA" | "ZA"),
         flags: field(1).to_owned(),
         mask: parse_rights(field(2)),
@@ -246,6 +254,8 @@ mod tests {
             "(A;;WDWO;;;WD)",
             "(A;;ZZ;;;WD)",
             "(A;;FA;;;not-a-sid)",
+            "(A;OICIID;FA;;;S-1-15-3-3557520199-3666692283-3112367039-3524159787-2791857073-3163583606-3692855932)",
+            "(A;OICIID;FA;;;S-1-15-2-1)",
         ] {
             let sddl = format!("O:LAD:AI(A;OICI;FA;;;LA){ace}");
             assert!(

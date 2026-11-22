@@ -30,13 +30,13 @@ pub enum RootAccessError {
     ForeignEntries { paths: Vec<PathBuf> },
     /// Other users could change the root or entries below it, so files the user owns may have been rewritten.
     #[error(
-        "the profile directory was writable by other users, so its content may have been changed: {}; review it, then recreate the profile or remove the other users' access yourself, and start again",
+        "the profile directory was writable by other users, so its content may have been changed: {}; other programs on this computer could change these files. Review them, then run `massorca profile secure` to make the home private",
         list_paths(paths)
     )]
     WritableByOthers { paths: Vec<PathBuf> },
     /// A folder from the home down to the root is a link, belongs to another user, or other users can change it.
     #[error(
-        "the profile location is unsafe: {} is a link, belongs to another user, or other users can change it; set MASSORCA_HOME to a folder only you can write to",
+        "the profile location is unsafe: {} is a link, belongs to another user, or other users can change it; other programs on this computer could change these files. Run `massorca profile secure` to make the home private, or set MASSORCA_HOME to a folder only you can write to",
         path.display()
     )]
     UnsafeLocation { path: PathBuf },
@@ -67,6 +67,45 @@ pub fn create_home(home: &Path) -> io::Result<bool> {
         std::fs::create_dir_all(parent)?;
     }
     platform_create_private_dir(home)
+}
+
+/// Creates `dir` private to its owner in one step, inside a folder that must exist; false when `dir` already existed,
+/// which is then left as it is. For folders of the profile, such as `hosts`, that must never exist with wider access.
+pub fn create_private_dir(dir: &Path) -> io::Result<bool> {
+    platform_create_private_dir(dir)
+}
+
+/// What `profile secure` changes in one folder of the profile's location.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderPlan {
+    pub path: PathBuf,
+    /// The access entries it removes; empty when the folder is already private. Windows shows DACL entries as SDDL,
+    /// Unix the permission mode.
+    pub remove: Vec<String>,
+    /// What is left afterwards: full access for the user alone.
+    pub keep: Vec<String>,
+}
+
+impl FolderPlan {
+    pub fn changes(&self) -> bool {
+        !self.remove.is_empty()
+    }
+}
+
+/// What `profile secure` would change in the home, `profiles` and the profile root, without changing anything.
+/// Refuses a location it cannot make safe: a link, or a folder another user owns.
+pub fn plan_secure(profile: &Profile) -> Result<Vec<FolderPlan>, RootAccessError> {
+    platform_plan_secure(profile.home(), profile.dir())
+}
+
+/// Makes the home, `profiles` and the root private to the user (owner-only, nothing inherited from above, passed on
+/// to everything below), then checks the root as a start does, reading every entry. The owner asks for this
+/// explicitly; a start never does it on its own.
+pub fn apply_secure(profile: &Profile) -> Result<RootAccess, RootAccessError> {
+    platform_apply_secure(profile.home(), profile.dir())?;
+    #[cfg(windows)]
+    crate::scan_cache::ScanCache::clear(profile.dir());
+    secure_root(profile)
 }
 
 /// The `profiles` folder between the home and the root.
@@ -120,6 +159,16 @@ fn platform_secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAcces
 }
 
 #[cfg(windows)]
+fn platform_plan_secure(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, RootAccessError> {
+    crate::windows_profile_secure::plan(home, dir)
+}
+
+#[cfg(windows)]
+fn platform_apply_secure(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    crate::windows_profile_secure::apply(home, dir)
+}
+
+#[cfg(windows)]
 pub(crate) fn platform_create_private_dir(dir: &Path) -> io::Result<bool> {
     crate::windows_profile_root::create_private_dir(dir)
 }
@@ -127,6 +176,16 @@ pub(crate) fn platform_create_private_dir(dir: &Path) -> io::Result<bool> {
 #[cfg(unix)]
 fn platform_secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAccessError> {
     crate::unix_profile_root::secure_root(home, dir)
+}
+
+#[cfg(unix)]
+fn platform_plan_secure(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, RootAccessError> {
+    crate::unix_profile_root::plan_secure(home, dir)
+}
+
+#[cfg(unix)]
+fn platform_apply_secure(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    crate::unix_profile_root::apply_secure(home, dir)
 }
 
 #[cfg(unix)]
@@ -143,6 +202,16 @@ fn platform_secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAcces
     } else {
         RootAccess::Private
     })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_plan_secure(_home: &Path, _dir: &Path) -> Result<Vec<FolderPlan>, RootAccessError> {
+    Ok(Vec::new())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_apply_secure(_home: &Path, _dir: &Path) -> Result<(), RootAccessError> {
+    Ok(())
 }
 
 #[cfg(not(any(unix, windows)))]

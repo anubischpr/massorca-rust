@@ -17,6 +17,8 @@ mod windows_endpoint_access;
 #[cfg(windows)]
 mod windows_profile_root;
 #[cfg(windows)]
+mod windows_profile_secure;
+#[cfg(windows)]
 mod windows_sddl;
 #[cfg(windows)]
 mod windows_trust;
@@ -27,7 +29,8 @@ pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use profile::{Profile, ensure_dir};
 pub use root_access::{
-    MAX_LISTED_ENTRIES, RootAccess, RootAccessError, create_home, create_root, secure_root,
+    FolderPlan, MAX_LISTED_ENTRIES, RootAccess, RootAccessError, apply_secure, create_home,
+    create_private_dir, create_root, plan_secure, secure_root,
 };
 #[cfg(unix)]
 pub use unix_user::current_uid;
