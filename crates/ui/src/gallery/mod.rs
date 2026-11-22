@@ -10,6 +10,7 @@ mod fields;
 mod indicators;
 mod layout;
 mod lists;
+mod marketplace;
 mod overlays;
 mod panels;
 mod session;
@@ -51,6 +52,7 @@ pub fn stories() -> Vec<Story> {
     all.extend(terminal::stories());
     all.extend(teams::stories());
     all.extend(settings::stories());
+    all.extend(marketplace::stories());
     all
 }
 

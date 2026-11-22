@@ -19,6 +19,7 @@ massorca-core-terminal = { path = "crates/core-terminal" }
 massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }
 massorca-core-agents = { path = "crates/core-agents" }
+massorca-ext-package = { path = "crates/ext-package" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
 massorca-net = { path = "crates/net" }
@@ -50,6 +51,10 @@ rustls = { version = "0.23.46", default-features = false, features = ["logging",
 rustix = { version = "1.1.6", features = ["process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_path_to_error = "0.1.20"
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+sha2 = "0.11.1"
+semver = { version = "1.0.28", features = ["serde"] }
 subtle = "2.6.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }

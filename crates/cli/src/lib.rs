@@ -22,6 +22,8 @@ pub mod project;
 pub mod server_status;
 pub mod service;
 pub mod target;
+pub mod task;
+pub mod team;
 pub mod terminal;
 pub mod terminal_attach;
 pub mod time_text;

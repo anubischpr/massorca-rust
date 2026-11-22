@@ -15,13 +15,14 @@ use tokio::time::timeout;
 use super::common::{SERVER_VERSION, connect, echo, remote_code, start, stop, temp_home};
 
 /// Every method of the Phase 1 surface.
-const PHASE1_METHODS: [&str; 14] = [
+const PHASE1_METHODS: [&str; 15] = [
     service::INFO,
     service::SHUTDOWN,
     events::SUBSCRIBE,
     config::GET,
     config::SET,
     config::LIST,
+    config::RESET,
     projects::ADD,
     projects::LIST,
     projects::SHOW,
@@ -67,15 +68,39 @@ const AGENT_METHODS: [&str; 11] = [
     "agent.bring_back",
 ];
 
+/// The Bot Teams methods this build registers (capability `teams/1`).
+const TEAM_METHODS: [&str; 19] = [
+    "team.create",
+    "team.list",
+    "team.show",
+    "team.update",
+    "team.rm",
+    "team.bot_add",
+    "team.bot_update",
+    "team.bot_rm",
+    "team.project_add",
+    "team.project_update",
+    "team.project_rm",
+    "team.board",
+    "task.create",
+    "task.list",
+    "task.show",
+    "task.update",
+    "task.done",
+    "task.reopen",
+    "task.rm",
+];
+
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 15] = [
+const CLI_COMMAND_IDS: [&str; 16] = [
     "service.info",
     "service.status",
     "service.stop",
     "service.restart",
-    "config.get",
-    "config.set",
-    "config.list",
+    "settings.get",
+    "settings.set",
+    "settings.list",
+    "settings.reset",
     "project.add",
     "project.list",
     "project.show",
@@ -233,6 +258,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(&TERMINAL_METHODS)
         .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
+        .chain(&TEAM_METHODS)
     {
         assert!(
             commands.iter().any(|command| command.method == *method),

@@ -56,6 +56,11 @@ impl Client {
         self.call(config::LIST, &()).await
     }
 
+    /// `config.reset`: removes the stored value, so the default applies again.
+    pub async fn config_reset(&self, params: &ConfigKey) -> Result<ConfigValue, ClientError> {
+        self.call(config::RESET, params).await
+    }
+
     /// `project.add`: registers a repository or a folder.
     pub async fn project_add(&self, params: &ProjectAddParams) -> Result<Project, ClientError> {
         self.call(projects::ADD, params).await
