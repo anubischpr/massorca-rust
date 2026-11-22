@@ -49,6 +49,13 @@ letters, digits, `-` or `_`.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `agent kinds` | Lists the agent kinds: id, name, owner and the resolved program, or `no` / `invalid`. Problems follow the table. |
+| `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
+| `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
+| `agent status [SESSION]` | Shows one session's execution and activity, or every session's. |
+| `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
+| `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -96,6 +103,30 @@ connect and disconnect on their own.
   0 when the terminal ends. `--json` is refused, because the output is the terminal's.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
+
+### Agents
+
+Agents run as programs in service-owned terminals (`docs/architecture/agents.md`).
+
+- `agent kinds` lists the built-in kinds (owner `core`: `claude`, `codex`, `antigravity`,
+  `gentle-shell`) and the profile's own declarations in `<profile>/agents/kinds/*.json`
+  (owner `user`). The files are read again on every call. A kind is installed when one of
+  its programs resolves: an absolute path that is a file, or a bare name on the service's
+  `PATH` (on Windows also with the `PATHEXT` extensions). A file that does not parse, breaks
+  a rule, or reuses a built-in id is listed with its problems and never started.
+  `--json` prints the `agent.kinds` result.
+- `agent start` runs the kind's program directly in a new terminal of the workspace (no
+  shell in between), with the first prompt as the kind declares. A workspace holds one live
+  session that is not `--read-only`; a second writing start fails with
+  `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
+  Arguments after `--` go to the agent after its own.
+- `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
+  service; a prefix shared by several sessions fails with `selector.ambiguous`.
+- Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what
+  the agent reports, or `no status`. Stopping or restarting the service ends every run, and
+  the sessions are listed as `exited` with reason `service stopped`.
+- `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
+  and names the terminal whose last screen `terminal screen` can print.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

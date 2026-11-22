@@ -110,7 +110,7 @@ pub fn spawn(spec: &SpawnSpec) -> Result<Spawned, PtyError> {
     let (reader, writer) = match streams {
         Ok(streams) => streams,
         Err(error) => {
-            tree.kill();
+            tree.kill(None);
             return Err(PtyError::Open(error.to_string()));
         }
     };
@@ -224,10 +224,16 @@ impl PtyMaster {
         }
     }
 
-    /// The process group that holds the terminal's foreground (Unix only).
-    #[cfg(unix)]
+    /// The process group that holds the terminal's foreground (Unix; `None` on Windows).
     pub fn foreground_process_group(&self) -> Option<i32> {
-        lock(&self.master).as_ref()?.process_group_leader()
+        #[cfg(unix)]
+        {
+            lock(&self.master).as_ref()?.process_group_leader()
+        }
+        #[cfg(windows)]
+        {
+            None
+        }
     }
 }
 

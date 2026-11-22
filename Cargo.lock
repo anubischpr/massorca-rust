@@ -3299,6 +3299,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-core-agents"
+version = "0.1.0"
+dependencies = [
+ "massorca-core-store",
+ "massorca-core-terminal",
+ "massorca-core-workspace",
+ "massorca-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
@@ -3325,6 +3340,7 @@ dependencies = [
 name = "massorca-core-terminal"
 version = "0.1.0"
 dependencies = [
+ "alacritty_terminal",
  "portable-pty",
  "rustix",
  "tempfile",
@@ -3408,6 +3424,7 @@ dependencies = [
  "dunce",
  "interprocess",
  "massorca-client",
+ "massorca-core-agents",
  "massorca-core-git",
  "massorca-core-store",
  "massorca-core-terminal",

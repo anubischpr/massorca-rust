@@ -1,0 +1,24 @@
+[package]
+name = "massorca-core-agents"
+description = "Coding agents in workspaces: kind declarations and their loader, program resolution, launch plans and sessions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+massorca-core-store.workspace = true
+massorca-core-terminal.workspace = true
+massorca-core-workspace.workspace = true
+massorca-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
