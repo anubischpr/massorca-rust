@@ -89,15 +89,14 @@ async fn ready_to_offer(
     })
     .await;
     for _ in 0..200 {
-        if let Ok(status) = handle.network_status().await {
-            if !status.listeners.is_empty()
-                && status
-                    .listeners
-                    .iter()
-                    .all(|listener| listener.state == "listening")
-            {
-                return;
-            }
+        if let Ok(status) = handle.network_status().await
+            && !status.listeners.is_empty()
+            && status
+                .listeners
+                .iter()
+                .all(|listener| listener.state == "listening")
+        {
+            return;
         }
         sleep(Duration::from_millis(20)).await;
     }
