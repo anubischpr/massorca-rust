@@ -37,11 +37,13 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
     Subscription, WeakEntity, Window, div, prelude::*,
 };
+use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
-use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
+use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use std::collections::HashMap;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -92,6 +94,8 @@ pub struct Shell {
     _store_changes: Subscription,
     /// Keeps the debug focus's query log alive; only a debug launch sets it.
     _debug_input: Option<Subscription>,
+    /// Each workspace's start page composer, kept so its draft survives redraws.
+    start_composers: HashMap<String, Entity<Composer>>,
     dialogs: WorkspaceDialogs,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
@@ -204,6 +208,7 @@ impl Shell {
             _bridge: bridge,
             _store_changes: store_changes,
             _debug_input: None,
+            start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
             team_confirm: None,
@@ -321,7 +326,8 @@ impl Shell {
 
 /// Registers the key bindings of the shell and of the widgets it uses.
 pub fn bind_keys(cx: &mut App) {
-    text_field::bind_keys(cx);
+    // The composer binds its text area and the text fields it holds: Enter, Backspace, arrows.
+    massorca_ui::components::composer::bind_keys(cx);
     actions::bind_keys(cx);
 }
 
@@ -355,6 +361,18 @@ impl Render for Shell {
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        // The start page's composer is created before the frames below borrow the Shell's fields.
+        let start = self.model.selected_workspace().and_then(|id| {
+            crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
+        });
+        let start = start.map(|page| {
+            let composer = self.start_composer(&page.id, cx);
+            start_page::StartFrame {
+                page,
+                composer,
+                shell: shell.clone(),
+            }
+        });
         let connection = self.store.read(cx).state().connection.clone();
         let settings = settings::SettingsFrame {
             model: &self.settings,
@@ -368,16 +386,6 @@ impl Render for Shell {
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
         );
-        let start = self
-            .model
-            .selected_workspace()
-            .and_then(|id| {
-                crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
-            })
-            .map(|page| start_page::StartFrame {
-                page,
-                shell: shell.clone(),
-            });
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,

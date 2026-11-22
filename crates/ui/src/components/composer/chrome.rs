@@ -4,8 +4,9 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, ClickEvent, Context, ExternalPaths, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, AppContext, ClickEvent, Context, ExternalPaths, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
 
 use super::policy::{PrimaryAction, primary_action, truncate_name, visible_attachments};
@@ -13,6 +14,7 @@ use super::{Attachment, Composer, ComposerEvent, KEY_CONTEXT, OpenModelPicker};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::IconButton;
 use crate::components::menu::{MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay};
+use crate::components::tooltip::{Tooltip, tooltip_view};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
@@ -33,6 +35,22 @@ impl Composer {
     /// Whether the microphone button is offered.
     pub fn voice(mut self, voice: bool) -> Self {
         self.voice = voice;
+        self
+    }
+
+    /// A control shown first in the bottom row, before attach; `build` runs on each render.
+    pub fn leading_control(
+        mut self,
+        build: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        self.leading = Some(Box::new(build));
+        self
+    }
+
+    /// Why sending is not possible yet: the primary button stays disabled with this as its
+    /// tooltip, Enter does not send, and the draft stays in the composer.
+    pub fn send_unavailable(mut self, reason: impl Into<SharedString>) -> Self {
+        self.send_unavailable = Some(reason.into());
         self
     }
 
@@ -264,6 +282,12 @@ impl Composer {
             .rounded(px(RADIUS_FULL))
             .bg(fill)
             .text_color(ink)
+            .when_some(
+                self.send_unavailable
+                    .clone()
+                    .filter(|_| action == PrimaryAction::Disabled),
+                |button, reason| button.tooltip(tooltip_view(Tooltip::new(reason))),
+            )
             .when(action == PrimaryAction::Stop, |button| {
                 button.border_1().border_color(p.border.strong)
             })
@@ -452,11 +476,13 @@ impl Render for Composer {
                 attach_entity.update(cx, |this, cx| this.open_attach_menu(window, cx));
             });
         let attach = self.attach_trigger.track(div().child(attach));
+        let leading = self.leading.as_ref().map(|build| build(window, cx));
         let mut bottom = div()
             .flex()
             .items_center()
             .gap(px(SPACE_2))
             .h(px(SIZE_CONTROL_DEFAULT))
+            .when_some(leading, |row, leading| row.child(leading))
             .child(attach)
             .child(self.access_chip(cx))
             .child(div().flex_1())
