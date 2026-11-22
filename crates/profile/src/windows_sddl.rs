@@ -63,6 +63,15 @@ impl Descriptor {
         self.aces.iter().map(|ace| ace.text.clone()).collect()
     }
 
+    /// The SID of the only entry, when the DACL holds exactly one inherited allow entry; `None` otherwise.
+    #[cfg(test)]
+    pub(crate) fn sole_inherited_allow(&self) -> Option<&Sid> {
+        match self.aces.as_slice() {
+            [ace] if ace.allow && ace.flags.contains("ID") => ace.sid.as_ref(),
+            _ => None,
+        }
+    }
+
     /// Whether the DACL lets anyone outside `trusted` change the object. Inherit-only entries do not apply to the
     /// object and are skipped; an entry whose rights or trustee cannot be read counts as a write.
     pub(crate) fn grants_write_to_others(&self, trusted: &Trusted) -> bool {

@@ -9,7 +9,7 @@ use super::{Disk, Links, RealDisk, read_sddl, secure_root, secure_root_with, set
 use crate::root_access::{MAX_LISTED_ENTRIES, RootAccess, RootAccessError};
 use crate::windows_dir_access::Sid;
 use crate::windows_sddl::Descriptor;
-use crate::windows_trust::{Trusted, current_user};
+use crate::windows_trust::{Trusted, current_user, token_owner};
 
 /// A user SID no account on the test machine has.
 const STRANGER: &str = "S-1-5-21-1-2-3-4242";
@@ -45,8 +45,10 @@ impl Layout {
         secure_root(&self.home, &self.root)
     }
 
+    /// As `user`, with this process's real default owner, as a start would run: on an elevated administrator token
+    /// that owner is Administrators, and what the test itself creates is owned by it.
     fn secure_as(&self, user: Sid, disk: &dyn Disk) -> Result<RootAccess, RootAccessError> {
-        self.secure_for_token(user.clone(), user, disk)
+        self.secure_for_token(user, token_owner().expect("the default owner"), disk)
     }
 
     /// As a token with this user and default owner.
@@ -169,12 +171,13 @@ fn a_folder_created_later_inherits_only_the_owner_entry() {
     let child = layout.root.join("agents").join("kinds");
     fs::create_dir_all(&child).expect("a child folder");
 
+    // Compared as a SID: SDDL writes the built-in Administrator as `LA`, not as its `S-1-5-21-...-500` string.
     let sddl = sddl_of(&child);
-    assert!(
-        sddl.ends_with(&format!("(A;OICIID;FA;;;{})", user_string())),
+    assert_eq!(
+        descriptor_of(&child).sole_inherited_allow(),
+        Some(&user()),
         "{sddl}"
     );
-    assert_eq!(sddl.matches('(').count(), 1, "{sddl}");
 }
 
 #[test]
@@ -451,6 +454,44 @@ fn entries_an_elevated_token_created_are_owned_by_administrators_and_accepted() 
     );
 }
 
+/// Makes the next start run a full scan, as a day-old cache would.
+fn age_cache(root: &Path) {
+    let cache = root.join(crate::scan_cache::CACHE_FILE);
+    let text = fs::read_to_string(&cache).expect("the cache");
+    let (header, rest) = text.split_once('\n').expect("a header");
+    let (version, _) = header.split_once('\t').expect("version and time");
+    fs::write(&cache, format!("{version}\t0\n{rest}")).expect("a day-old cache");
+}
+
+#[test]
+fn an_elevated_token_accepts_the_root_folders_and_cache_it_created_owned_by_administrators() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let kinds = layout.root.join("agents").join("kinds");
+    fs::create_dir_all(&kinds).expect("folders");
+    fs::write(kinds.join("tool.json"), b"{}").expect("a file");
+    layout.secure().expect("scanned, which writes the cache");
+    age_cache(&layout.root);
+    let disk = TestDisk {
+        administrators_own: vec![
+            layout.root.clone(),
+            layout.root.join("agents"),
+            kinds.clone(),
+            kinds.join("tool.json"),
+            layout.root.join(crate::scan_cache::CACHE_FILE),
+        ],
+        ..TestDisk::default()
+    };
+    let administrators = Sid::parse("BA").expect("Administrators");
+
+    assert_eq!(
+        layout
+            .secure_for_token(user(), administrators, &disk)
+            .expect("an elevated start"),
+        RootAccess::Private
+    );
+}
+
 #[test]
 fn entries_owned_by_administrators_are_foreign_to_a_token_that_does_not_default_to_them() {
     let layout = Layout::new();
@@ -571,11 +612,7 @@ fn a_changed_access_list_on_an_existing_deep_entry_is_caught_by_the_next_full_sc
     if super::folder_times_are_reliable(&layout.root) {
         assert_eq!(layout.secure().expect("cached scan"), RootAccess::Private);
     }
-    let cache = layout.root.join(crate::scan_cache::CACHE_FILE);
-    let text = fs::read_to_string(&cache).expect("the cache");
-    let (header, rest) = text.split_once('\n').expect("a header");
-    let (version, _) = header.split_once('\t').expect("version and time");
-    fs::write(&cache, format!("{version}\t0\n{rest}")).expect("a day-old cache");
+    age_cache(&layout.root);
 
     let (kind, paths) = refused_paths(layout.secure());
 
