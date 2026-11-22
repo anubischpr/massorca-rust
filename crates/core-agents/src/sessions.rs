@@ -302,6 +302,16 @@ impl Agents {
         }
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
+        // The run is registered before its program starts, and the status lock is held until its row exists, so the
+        // run's first hook report waits for both instead of being refused.
+        let mut live = lock(&self.inner.status);
+        live.insert(
+            session_id.clone(),
+            LiveRun {
+                token,
+                rules: HookRules::of(&decl),
+            },
+        );
         let started = write_files(&plan.files)
             .map_err(AgentError::from)
             .and_then(|()| {
@@ -327,7 +337,10 @@ impl Agents {
                 };
                 Ok(self.inner.config.terminals.create(spec)?)
             });
-        let terminal = started.inspect_err(|_| remove_dir(&run_dir))?;
+        let terminal = started.inspect_err(|_| {
+            live.remove(&session_id);
+            remove_dir(&run_dir);
+        })?;
 
         let row = AgentSessionRow {
             id: session_id.clone(),
@@ -346,18 +359,11 @@ impl Agents {
             brought_back_at: None,
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
+            live.remove(&session_id);
             let _ = self.inner.config.terminals.close(&terminal.id);
             remove_dir(&run_dir);
             return Err(error.into());
         }
-        let mut live = lock(&self.inner.status);
-        live.insert(
-            session_id,
-            LiveRun {
-                token,
-                rules: HookRules::of(&decl),
-            },
-        );
         let session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         Ok(session)
@@ -414,21 +420,24 @@ impl Agents {
         Ok(())
     }
 
-    /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports.
-    pub fn sweep(&self) -> Result<(), AgentError> {
+    /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
+    /// session is checked on its own: one that fails is logged, by its id and error code only, and the sweep goes on.
+    pub fn sweep(&self) {
         let mut live = lock(&self.inner.status);
         let ids: Vec<String> = live.keys().cloned().collect();
         for id in ids {
-            match self.store().get_agent_session(&id)? {
-                Some(row) => {
-                    self.view_with(&mut live, row)?;
-                }
-                None => {
+            let checked = match self.store().get_agent_session(&id) {
+                Ok(Some(row)) => self.view_with(&mut live, row).map(drop),
+                Ok(None) => {
                     live.remove(&id);
+                    Ok(())
                 }
+                Err(error) => Err(AgentError::from(error)),
+            };
+            if let Err(error) = checked {
+                tracing::warn!(session = %id, code = error.code, "the exit sweep could not check a session");
             }
         }
-        Ok(())
     }
 
     /// Sessions newest first, optionally only those of one workspace (a selector).
@@ -482,8 +491,9 @@ impl Agents {
 
     /// Deletes the record of a session whose run has ended, with its terminal and generated files.
     pub fn forget(&self, selector: &str) -> Result<AgentSession, AgentError> {
-        let row = self.resolve(selector)?;
+        let id = self.resolve(selector)?.id;
         let mut live = lock(&self.inner.status);
+        let row = self.reload(&id)?;
         let session = self.view_with(&mut live, row)?;
         if session.execution.state != TerminalState::Exited {
             return Err(AgentError::new(
@@ -584,8 +594,11 @@ impl Agents {
         })
     }
 
+    /// The record of a row read before the status lock: the row is read again under the lock, so a change applied
+    /// in between is neither lost nor overwritten.
     fn view(&self, row: AgentSessionRow) -> Result<AgentSession, AgentError> {
         let mut live = lock(&self.inner.status);
+        let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
         self.view_with(&mut live, row)
     }
 
@@ -630,14 +643,20 @@ impl Agents {
     ) -> Result<Execution, AgentError> {
         let changed = self.store().set_agent_session_exit(&row.id, &exit)?;
         live.remove(&row.id);
-        if changed && let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
-            self.store().set_agent_session_status(
-                &row.id,
-                Some(&activity),
-                row.result.as_deref(),
-                None,
-            )?;
-            row.activity = Some(activity);
+        if changed {
+            // The exit rule reads the activity and result as they are now, under the status lock.
+            if let Some(fresh) = self.store().get_agent_session(&row.id)? {
+                *row = fresh;
+            }
+            if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+                self.store().set_agent_session_status(
+                    &row.id,
+                    Some(&activity),
+                    row.result.as_deref(),
+                    None,
+                )?;
+                row.activity = Some(activity);
+            }
         }
         let execution = exited(&exit);
         row.exit = Some(exit);
@@ -689,7 +708,7 @@ fn sweep_loop(service: &Weak<Inner>) {
         };
         let agents = Agents { inner };
         if !lock(&agents.inner.status).is_empty() {
-            let _ = agents.sweep();
+            agents.sweep();
         }
     }
 }
@@ -772,4 +791,123 @@ fn activity_of(stored: &StoredActivity) -> Option<Activity> {
         value["outcome"] = json!(outcome);
     }
     serde_json::from_value(value).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_core_git::Git;
+    use massorca_core_store::{
+        ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState,
+    };
+    use massorca_core_terminal::ManagerConfig;
+    use massorca_core_terminal::shell::EnvSnapshot;
+
+    use super::*;
+
+    /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
+    fn service() -> (Agents, String, tempfile::TempDir) {
+        let profile = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let project = ProjectRow {
+            id: new_id(),
+            kind: ProjectKind::Folder,
+            path: "/work/app".to_owned(),
+            path_key: "/work/app".to_owned(),
+            name: "app".to_owned(),
+            workspaces_root: "/work/app-workspaces".to_owned(),
+            added_at: now_ms(),
+        };
+        store.insert_project(&project).unwrap();
+        let workspace = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id.clone(),
+            kind: WorkspaceKind::Folder,
+            name: "main".to_owned(),
+            path: "/work/app".to_owned(),
+            path_key: "/work/app".to_owned(),
+            branch: None,
+            base_ref: None,
+            created_branch: false,
+            state: WorkspaceState::Ready,
+            request_id: None,
+            created_at: now_ms(),
+        };
+        store.insert_workspace(&workspace).unwrap();
+        let agents = Agents::new(AgentsConfig {
+            store: store.clone(),
+            terminals: TerminalManager::new(ManagerConfig::new(EnvSnapshot::current(), "test")),
+            workspaces: Arc::new(Workspaces::new(
+                store,
+                Git::with_binary("git"),
+                profile.path().join("workspaces"),
+            )),
+            profile_dir: profile.path().to_path_buf(),
+            massorca_bin: PathBuf::from("massorca"),
+        });
+        (agents, workspace.id, profile)
+    }
+
+    fn activity(state: &str, outcome: Option<&str>) -> StoredActivity {
+        StoredActivity {
+            state: state.to_owned(),
+            outcome: outcome.map(str::to_owned),
+            source: "hook".to_owned(),
+            at: 5,
+        }
+    }
+
+    /// A row read before a `done` report landed must not turn that report into an interrupted turn when the exit is
+    /// applied: the exit rule reads the row as it is under the status lock.
+    #[test]
+    fn an_exit_applied_through_a_stale_row_keeps_the_done_report_and_its_result() {
+        let (agents, workspace_id, _profile) = service();
+        let stale = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            // A terminal the manager does not know: viewing the row applies the run's end.
+            terminal_id: Some(new_id()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: Some(activity("working", None)),
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&stale).unwrap();
+        agents
+            .store()
+            .set_agent_session_status(
+                &stale.id,
+                Some(&activity("done", Some("success"))),
+                Some("the answer"),
+                None,
+            )
+            .unwrap();
+
+        let session = agents.view(stale.clone()).unwrap();
+
+        assert_eq!(session.execution.state, TerminalState::Exited);
+        let shown = session.activity.expect("activity");
+        assert_eq!(
+            shown.state,
+            massorca_protocol::methods::agents::ActivityState::Done
+        );
+        assert_eq!(
+            shown.outcome,
+            Some(massorca_protocol::methods::agents::Outcome::Success)
+        );
+        assert_eq!(session.result.as_deref(), Some("the answer"));
+        let stored = agents
+            .store()
+            .get_agent_session(&stale.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.activity, Some(activity("done", Some("success"))));
+        assert_eq!(stored.result.as_deref(), Some("the answer"));
+    }
 }

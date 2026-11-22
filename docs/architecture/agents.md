@@ -145,6 +145,11 @@ source, time, result and a learned `agent_ref` in one update) and then announced
 that order, to the service, which publishes `agent.changed` on the event bus and an item
 to every `agent.watch` stream. The live runs and their hook tokens are held in memory
 only; the activity itself is read from the row, so a restart shows the last known value.
+A row read before the lock is read again under it, so an exit never turns a `done`
+report that landed in between into `interrupted`. `agent.start` registers the run and
+holds the lock from before its program starts until its row exists, so the run's first
+report waits instead of being refused. The exit sweep checks each live run on its own and
+logs one that fails, by session id and error code, without stopping.
 
 - `agent.hook` checks the token of the session's live run, then maps the event through
   the kind's `status.events`. A `done` report takes `result_field` from a JSON payload

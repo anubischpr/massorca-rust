@@ -342,3 +342,37 @@ fn a_session_with_no_reports_shows_no_status() {
     assert!(listed.contains("no status"), "{listed}");
     assert!(listed.contains("live"), "{listed}");
 }
+
+#[test]
+fn a_done_report_with_a_result_survives_the_run_exiting() {
+    let sandbox = sandbox_with_workspace(None);
+    let (session, terminal) = start(&sandbox, "finish up", &[]);
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: finish up");
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "exit"])
+        .success();
+    let exited = until(&sandbox, &session, "exited");
+    assert_eq!(activity(&exited), ("done", Some("success"), "hook"));
+    assert_eq!(exited["result"], "done: finish up");
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"][0]["id"], session.as_str());
+    assert_eq!(
+        activity(&listed["sessions"][0]),
+        ("done", Some("success"), "hook")
+    );
+    assert_eq!(listed["sessions"][0]["result"], "done: finish up");
+}
+
+#[test]
+fn the_first_report_of_a_run_is_never_refused() {
+    let sandbox = sandbox_with_workspace(None);
+    let started = sandbox.json_ok(
+        "default",
+        &["agent", "start", "fake", "--workspace", "main"],
+    );
+    let session = started["id"].as_str().expect("session id");
+    let idle = until(&sandbox, session, "idle");
+    assert_eq!(activity(&idle), ("idle", None, "hook"));
+}
