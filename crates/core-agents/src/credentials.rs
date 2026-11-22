@@ -1,0 +1,556 @@
+//! Credential homes, one per profile and kind (decision 0056): import.
+//!
+//! Import copies only the files the kind declares, only regular files, at most [`MAX_FILE_BYTES`] each. The new home
+//! is built in a temporary sibling directory and renamed into place, so a failed import leaves an existing home as it
+//! was and never leaves a half-made one. File contents are never logged or returned: names and sizes only.
+//!
+//! Every declared file is required. The declaration has no optional flag, so a declared name that is missing, a link,
+//! a directory or anything but a regular file fails the import with `agent.credentials_invalid`, naming each one and
+//! why; nothing is copied then.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+
+use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{CredentialsImported, ImportedFile};
+use serde_json::{Value, json};
+
+use crate::catalog::Catalog;
+use crate::kind::KindDecl;
+use crate::paths;
+use crate::sessions::AgentError;
+
+/// Largest credential file import copies.
+pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Serialises imports and removals in this process, so two never swap the same home at once.
+static GATE: Mutex<()> = Mutex::new(());
+
+/// Purposes of the temporary siblings of a home: a new home being built, and an old one being replaced. Their names
+/// start with a dot and kind ids never do, so a sibling never names a home.
+const STAGING: &str = "import";
+const REPLACED: &str = "old";
+
+/// Copies the kind's declared files from `from` into `<profile>/agents/homes/<kind>/`.
+///
+/// Every declared file is read in full, at most [`MAX_FILE_BYTES`] each, before anything is written; then a new home
+/// is written and renamed into place. An existing home is replaced only with `replace`.
+pub fn import(
+    profile_dir: &Path,
+    kind: &str,
+    from: &Path,
+    replace: bool,
+) -> Result<CredentialsImported, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let names = decl
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.files.clone())
+        .filter(|files| !files.is_empty())
+        .ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_CREDENTIALS_UNSUPPORTED,
+                format!("agent kind {kind} declares no credential files to import"),
+            )
+        })?;
+    if !from.is_absolute() {
+        return Err(invalid(format!(
+            "the source {} is not an absolute path",
+            from.display()
+        )));
+    }
+    if !from.is_dir() {
+        return Err(invalid(format!(
+            "the source {} is not a directory",
+            from.display()
+        )));
+    }
+
+    let _gate = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let home = home_of(profile_dir, &decl.id)?;
+    if home_state(&home)? == HomeState::Directory && !replace {
+        return Err(exists(&decl.id));
+    }
+
+    let mut contents = Vec::with_capacity(names.len());
+    let mut problems = Vec::new();
+    for name in &names {
+        match read_source(&from.join(name)) {
+            Ok(bytes) => contents.push((name.as_str(), bytes)),
+            Err(reason) => problems.push(json!({ "name": name, "reason": reason })),
+        }
+    }
+    if !problems.is_empty() {
+        return Err(refused_files(&decl.id, problems));
+    }
+
+    let homes = homes_dir(profile_dir)?;
+    clear_leftovers(&homes, &decl.id);
+    let staging = homes.join(sibling_name(&decl.id, STAGING));
+    let placed = write_home(&staging, &contents)
+        .and_then(|()| put_in_place(&staging, &home, &decl.id, replace));
+    if let Err(error) = placed {
+        if fs::symlink_metadata(&staging).is_ok() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        return Err(error);
+    }
+    let files: Vec<ImportedFile> = contents
+        .iter()
+        .map(|(name, bytes)| ImportedFile {
+            name: (*name).to_owned(),
+            bytes: bytes.len() as u64,
+        })
+        .collect();
+    tracing::info!(
+        kind = %decl.id,
+        files = ?files.iter().map(|file| (&file.name, file.bytes)).collect::<Vec<_>>(),
+        "imported agent credentials"
+    );
+    Ok(CredentialsImported {
+        kind: decl.id.clone(),
+        home: home.display().to_string(),
+        files,
+    })
+}
+
+/// The kind's declaration, when it is known and valid.
+fn declared(profile_dir: &Path, kind: &str) -> Result<KindDecl, AgentError> {
+    let catalog = Catalog::load(profile_dir);
+    let entry = catalog.find(kind).ok_or_else(|| not_found(kind))?;
+    entry.valid().cloned().ok_or_else(|| {
+        AgentError::new(
+            codes::AGENT_CREDENTIALS_UNSUPPORTED,
+            format!(
+                "agent kind {kind} is invalid, so it has no usable credentials: {}",
+                entry.problems.join("; ")
+            ),
+        )
+    })
+}
+
+/// The home of a valid kind id; any other id is an unknown kind.
+fn home_of(profile_dir: &Path, kind: &str) -> Result<PathBuf, AgentError> {
+    paths::valid_home(profile_dir, kind).ok_or_else(|| not_found(kind))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeState {
+    Missing,
+    Directory,
+}
+
+/// What is at the home path, without following a link there. A link or anything but a directory is refused.
+fn home_state(home: &Path) -> Result<HomeState, AgentError> {
+    match fs::symlink_metadata(home) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HomeState::Missing),
+        Err(error) => Err(internal("read the credential home", &error)),
+        Ok(meta) if is_link(&meta) => Err(invalid(format!(
+            "the credential home {} is a link; it is never followed, remove it by hand",
+            home.display()
+        ))),
+        Ok(meta) if meta.is_dir() => Ok(HomeState::Directory),
+        Ok(_) => Err(invalid(format!(
+            "the credential home {} is not a directory; remove it by hand",
+            home.display()
+        ))),
+    }
+}
+
+/// `<profile>/agents/homes`, created when missing; neither it nor `agents` may be a link.
+fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
+    let agents = paths::agents_dir(profile_dir);
+    let homes = agents.join("homes");
+    for dir in [&agents, &homes] {
+        match create_private_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(internal("create the credential homes directory", &error)),
+        }
+        let meta = fs::symlink_metadata(dir)
+            .map_err(|error| internal("read the credential homes directory", &error))?;
+        if is_link(&meta) || !meta.is_dir() {
+            return Err(invalid(format!(
+                "{} is not a plain directory; credential homes are never written through a link",
+                dir.display()
+            )));
+        }
+    }
+    Ok(homes)
+}
+
+fn sibling_name(kind: &str, purpose: &str) -> String {
+    format!(".{kind}.{purpose}-{}", uuid::Uuid::new_v4().simple())
+}
+
+/// Deletes temporary siblings an interrupted import of `kind` left behind; they may hold credential copies.
+fn clear_leftovers(homes: &Path, kind: &str) {
+    let Ok(entries) = fs::read_dir(homes) else {
+        return;
+    };
+    let prefixes = [
+        format!(".{kind}.{STAGING}-"),
+        format!(".{kind}.{REPLACED}-"),
+    ];
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix.as_str()))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let plain_dir =
+            fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir() && !is_link(&meta));
+        if plain_dir && fs::remove_dir_all(&path).is_err() {
+            tracing::warn!(
+                kind,
+                leftover = name,
+                "a leftover credential directory could not be deleted"
+            );
+        }
+    }
+}
+
+/// Reads one declared source file: a regular file, opened without following a link, at most [`MAX_FILE_BYTES`] as
+/// read from the open handle. The error is the reason given to the person, never anything of the content.
+fn read_source(path: &Path) -> Result<Vec<u8>, &'static str> {
+    let before = match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err("missing"),
+        Err(_) => return Err("unreadable"),
+        Ok(meta) => meta,
+    };
+    not_regular(&before)?;
+    let file = open_no_follow(path).map_err(|_| "unreadable")?;
+    let after = file.metadata().map_err(|_| "unreadable")?;
+    not_regular(&after)?;
+    if !same_file(&before, &after) {
+        return Err("replaced while it was read");
+    }
+    if after.len() > MAX_FILE_BYTES {
+        return Err(TOO_LARGE);
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "unreadable")?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(TOO_LARGE);
+    }
+    Ok(bytes)
+}
+
+const TOO_LARGE: &str = "larger than 1 MiB";
+
+/// Why an entry is not a regular file, if it is not.
+fn not_regular(meta: &fs::Metadata) -> Result<(), &'static str> {
+    if is_link(meta) {
+        Err("a link")
+    } else if meta.is_dir() {
+        Err("a directory")
+    } else if !meta.is_file() {
+        Err("not a regular file")
+    } else {
+        Ok(())
+    }
+}
+
+/// A symbolic link, or on Windows any reparse point (junctions included).
+fn is_link(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    meta.file_type().is_symlink()
+}
+
+/// Opens for reading without following a final link: `O_NOFOLLOW` on Unix (with `O_NONBLOCK`, so a FIFO swapped in
+/// never blocks the open), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, which opens a reparse point itself.
+fn open_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+/// Whether two metadata reads are of one file: device and inode on Unix. Elsewhere the handle's own check (no
+/// reparse point, a regular file) stands for it.
+#[cfg(unix)]
+fn same_file(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    before.dev() == after.dev() && before.ino() == after.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
+    true
+}
+
+/// Creates `dir` and writes each file new in it. Creating fails when anything is at a path, so no link is followed.
+fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError> {
+    create_private_dir(dir).map_err(|error| internal("create the new credential home", &error))?;
+    for (name, bytes) in contents {
+        write_private_file(&dir.join(name), bytes)
+            .map_err(|error| internal("write a credential file", &error))?;
+    }
+    Ok(())
+}
+
+/// A new directory, `0700` on Unix; on Windows it inherits the profile directory's access (0004).
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new().mode(0o700).create(dir)?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    fs::DirBuilder::new().create(dir)
+}
+
+/// A new file (`create_new` never opens through a link), `0600` on Unix, written and flushed to disk.
+fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Renames the finished `staging` directory to `home`. An existing home is refused without `replace`; with it, the
+/// old home is moved aside, put back when the swap fails, and deleted after it succeeds.
+fn put_in_place(staging: &Path, home: &Path, kind: &str, replace: bool) -> Result<(), AgentError> {
+    match home_state(home)? {
+        HomeState::Missing => fs::rename(staging, home)
+            .map_err(|error| internal("move the new credential home into place", &error)),
+        HomeState::Directory if !replace => Err(exists(kind)),
+        HomeState::Directory => {
+            let aside = home.with_file_name(sibling_name(kind, REPLACED));
+            fs::rename(home, &aside)
+                .map_err(|error| internal("move the old credential home aside", &error))?;
+            if let Err(error) = fs::rename(staging, home) {
+                if fs::rename(&aside, home).is_err() {
+                    tracing::error!(kind, "the old credential home could not be put back");
+                }
+                return Err(internal("move the new credential home into place", &error));
+            }
+            if fs::remove_dir_all(&aside).is_err() {
+                tracing::warn!(
+                    kind,
+                    "the replaced credential home could not be deleted; the next import retries"
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn not_found(kind: &str) -> AgentError {
+    AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {kind}"))
+}
+
+fn exists(kind: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_CREDENTIALS_EXIST,
+        format!("agent kind {kind} already has a credential home; import with replace to swap it"),
+    )
+}
+
+fn invalid(message: String) -> AgentError {
+    AgentError::new(codes::AGENT_CREDENTIALS_INVALID, message)
+}
+
+/// The declared files that cannot be imported, each with its reason; names only.
+fn refused_files(kind: &str, problems: Vec<Value>) -> AgentError {
+    let listed = problems
+        .iter()
+        .map(|problem| {
+            format!(
+                "{} ({})",
+                problem["name"].as_str().unwrap_or_default(),
+                problem["reason"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut error = invalid(format!(
+        "nothing was imported for agent kind {kind}; every declared file must be a regular file: {listed}"
+    ));
+    error.data = Some(json!({ "files": problems }));
+    error
+}
+
+/// An IO failure: what was being done and the error. The error's text may name a path, never anything read.
+fn internal(doing: &str, error: &io::Error) -> AgentError {
+    AgentError::new(codes::INTERNAL, format!("cannot {doing}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use massorca_protocol::codes;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::paths;
+
+    const FAKE_TOKEN: &str = r#"{"fake":true}"#;
+
+    /// A profile declaring kind `fake` with `files`, and an empty source directory.
+    struct Fixture {
+        profile: TempDir,
+        source: TempDir,
+    }
+
+    impl Fixture {
+        fn new(files: &[&str]) -> Self {
+            let fixture = Self {
+                profile: tempfile::tempdir().unwrap(),
+                source: tempfile::tempdir().unwrap(),
+            };
+            fixture.declare(json!({ "home_env": "FAKE_AGENT_HOME", "files": files }));
+            fixture
+        }
+
+        fn declare(&self, credentials: serde_json::Value) {
+            let kinds = paths::kinds_dir(self.profile.path());
+            fs::create_dir_all(&kinds).unwrap();
+            let kind = json!({
+                "id": "fake", "name": "Fake", "program": ["fake-agent"], "credentials": credentials
+            });
+            fs::write(kinds.join("fake.json"), kind.to_string()).unwrap();
+        }
+
+        fn source_file(&self, name: &str, content: &[u8]) {
+            fs::write(self.source.path().join(name), content).unwrap();
+        }
+
+        fn import(&self, replace: bool) -> Result<CredentialsImported, AgentError> {
+            import(self.profile.path(), "fake", self.source.path(), replace)
+        }
+
+        fn home(&self) -> PathBuf {
+            paths::home_dir(self.profile.path(), "fake")
+        }
+
+        /// Every entry of the homes directory, by name.
+        fn homes_entries(&self) -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(self.home().parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    #[test]
+    fn import_copies_only_the_declared_files() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.source_file("history.jsonl", b"not declared");
+        let imported = fixture.import(false).unwrap();
+        assert_eq!(imported.kind, "fake");
+        assert_eq!(imported.home, fixture.home().display().to_string());
+        assert_eq!(imported.files.len(), 1);
+        assert_eq!(imported.files[0].name, "token.json");
+        assert_eq!(imported.files[0].bytes, FAKE_TOKEN.len() as u64);
+        assert_eq!(
+            fs::read_to_string(fixture.home().join("token.json")).unwrap(),
+            FAKE_TOKEN
+        );
+        assert!(!fixture.home().join("history.jsonl").exists());
+        assert_eq!(
+            fixture.homes_entries(),
+            ["fake"],
+            "no staging directory is left"
+        );
+    }
+
+    #[test]
+    fn a_second_import_needs_replace_and_replace_swaps_the_whole_home() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.import(false).unwrap();
+        fs::write(fixture.home().join("stray"), b"left by the agent").unwrap();
+
+        let refused = fixture.import(false).unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_CREDENTIALS_EXIST);
+        assert!(
+            fixture.home().join("stray").exists(),
+            "refusal changes nothing"
+        );
+
+        fixture.source_file("token.json", br#"{"fake":2}"#);
+        fixture.import(true).unwrap();
+        assert_eq!(
+            fs::read_to_string(fixture.home().join("token.json")).unwrap(),
+            r#"{"fake":2}"#
+        );
+        assert!(
+            !fixture.home().join("stray").exists(),
+            "the old home is gone"
+        );
+        assert_eq!(fixture.homes_entries(), ["fake"]);
+    }
+
+    #[test]
+    fn a_failed_replace_leaves_the_existing_home_untouched() {
+        let fixture = Fixture::new(&["token.json", "config.toml"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.source_file("config.toml", b"fake = true\n");
+        fixture.import(false).unwrap();
+
+        fs::remove_file(fixture.source.path().join("config.toml")).unwrap();
+        fixture.source_file("token.json", br#"{"fake":2}"#);
+        let error = fixture.import(true).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(error.message.contains("config.toml"), "{}", error.message);
+        assert_eq!(
+            fs::read_to_string(fixture.home().join("token.json")).unwrap(),
+            FAKE_TOKEN
+        );
+        assert!(fixture.home().join("config.toml").exists());
+        assert_eq!(fixture.homes_entries(), ["fake"]);
+    }
+
+    #[test]
+    fn a_missing_first_import_leaves_no_home() {
+        let fixture = Fixture::new(&["token.json"]);
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert_eq!(error.data.unwrap()["files"][0]["reason"], "missing");
+        assert!(!fixture.home().exists());
+    }
+}

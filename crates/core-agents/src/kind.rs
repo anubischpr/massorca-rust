@@ -492,6 +492,24 @@ mod tests {
             });
         });
         assert_eq!(problems.len(), 3, "{problems:?}");
+        for name in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            "C:\\token",
+            "C:token",
+            "\\\\host\\share",
+            "nul\0",
+        ] {
+            let problems = problems_of(|value| {
+                value["credentials"] =
+                    serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": [name] });
+            });
+            assert_eq!(problems.len(), 1, "{name:?}: {problems:?}");
+        }
         let fine = problems_of(|value| {
             value["credentials"] =
                 serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] });
