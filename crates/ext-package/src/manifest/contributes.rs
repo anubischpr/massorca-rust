@@ -92,3 +92,22 @@ pub(crate) fn handler_check(name: &str, pointer: &str, main: bool, problems: &mu
         problems.add(pointer, "needs a main in the package");
     }
 }
+
+/// Whether the package declares any contribution beyond the theme kinds.
+pub(crate) fn has_non_theme_contributions(contributes: &Contributes) -> bool {
+    !(contributes.commands.is_empty()
+        && contributes.keybindings.is_empty()
+        && contributes.importers.is_empty()
+        && contributes.locales.is_empty()
+        && contributes.skills.is_empty()
+        && contributes.recipes.is_empty()
+        && contributes.agent_rules.is_empty()
+        && contributes.settings.is_empty()
+        && contributes.views.is_empty()
+        && contributes.events.is_empty()
+        && contributes.tools.is_empty()
+        && contributes.item_sources.is_empty()
+        && contributes.jobs.is_empty()
+        && contributes.agent_adapters.is_empty()
+        && contributes.mcp_servers.is_empty())
+}

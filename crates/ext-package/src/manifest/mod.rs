@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod contributes;
 pub mod data;
+pub mod listing;
 pub mod logic;
 mod references;
 pub mod settings;
@@ -24,6 +25,7 @@ use crate::ids;
 use crate::package_path;
 use crate::permission::{self, Permission};
 use contributes::Contributes;
+use listing::Listing;
 
 /// The manifest file name at the root of every package.
 pub const MANIFEST_FILE: &str = "extension.json";
@@ -49,6 +51,8 @@ pub struct Manifest {
     pub permissions: Vec<Permission>,
     #[serde(default)]
     pub contributes: Contributes,
+    #[serde(default)]
+    pub listing: Option<Listing>,
     #[serde(default)]
     pub readme: Option<String>,
 }
@@ -127,6 +131,7 @@ pub fn validate(manifest: &Manifest) -> Vec<Problem> {
     validate_surfaces_modes_views(manifest, &mut problems);
     problems.extend(permission::validate(&manifest.permissions, "/permissions"));
     contributes::validate(manifest, &mut problems);
+    listing::validate(manifest, &mut problems);
     problems.into_vec()
 }
 

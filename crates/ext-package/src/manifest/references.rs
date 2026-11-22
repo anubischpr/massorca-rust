@@ -15,6 +15,13 @@ pub(crate) fn referenced(manifest: &Manifest) -> Vec<(String, String)> {
     if let Some(readme) = &manifest.readme {
         out.push(("/readme".to_owned(), readme.clone()));
     }
+    if let Some(logo) = manifest
+        .listing
+        .as_ref()
+        .and_then(|listing| listing.logo.as_ref())
+    {
+        out.push(("/listing/logo".to_owned(), logo.clone()));
+    }
     for (index, theme) in contributes.themes.iter().enumerate() {
         let here = format!("/contributes/themes/{index}");
         out.push((at(&here, "document"), theme.document.clone()));
