@@ -9,6 +9,7 @@ use crate::model::sidebar::{NavKind, NavRow, TreeRow};
 use gpui::{FocusHandle, SharedString, WeakEntity};
 use massorca_ui::IconName;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
+use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
 use massorca_ui::components::sidebar_row::{
     HostConnection, SidebarRow, WorkspaceKind, child_session_indent,
@@ -80,23 +81,45 @@ pub(super) fn tree_row(
             })
         }
         TreeRow::Session {
+            id: session_id,
             title,
             agent,
             state,
             depth,
             selected,
             place,
-        } => session_row(
-            id,
-            title,
-            *agent,
-            *state,
-            *depth,
-            *selected,
-            place.as_deref(),
-        ),
+            can_bring_back,
+        } => {
+            let row = session_row(
+                id,
+                title,
+                *agent,
+                *state,
+                *depth,
+                *selected,
+                place.as_deref(),
+            );
+            if *can_bring_back {
+                row.hover_action(bring_back_action(session_id, shell))
+            } else {
+                row
+            }
+        }
     };
     item.focus_handle(focus.clone()).tab_stop(true)
+}
+
+/// The row action that opens the bring-back confirm for a finished child. It shows on hover or focus.
+fn bring_back_action(session: &str, shell: &WeakEntity<Shell>) -> IconButton {
+    let (shell, session) = (shell.clone(), session.to_owned());
+    IconButton::new(
+        SharedString::from(format!("bring-back-{session}")),
+        IconName::GitBranch,
+        "Bring back",
+    )
+    .on_click(move |_, cx| {
+        let _ = shell.update(cx, |shell, cx| shell.ask_bring_back(&session, cx));
+    })
 }
 
 /// A host row. An unreachable host dims only itself and shows how long ago it was reached (A10).

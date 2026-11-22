@@ -54,12 +54,17 @@ fn session_row(
     children: &HashMap<&str, Vec<&AgentSession>>,
     state: &StoreState,
 ) -> SessionRow {
+    let status = session_state(session);
     SessionRow {
         id: session.id.clone(),
         title: title_of(session),
         agent: agent_of_kind(&session.kind),
-        state: session_state(session),
+        state: status,
         place: parent.map(|parent| place_of(session, parent, state)),
+        // Only a finished child under a parent it can merge into, and only until it is brought back.
+        can_bring_back: parent.is_some()
+            && session.brought_back_at_ms.is_none()
+            && matches!(status, AgentState::Done | AgentState::Error),
         children: children
             .get(session.id.as_str())
             .into_iter()
@@ -124,6 +129,48 @@ fn done_state(outcome: Option<Outcome>) -> AgentState {
     } else {
         AgentState::Done
     }
+}
+
+/// The confirm before a bring-back, in the words of the bring-back card (X-CH-08).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BringBackPrompt {
+    /// The child session to bring back.
+    pub child: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// The confirm for bringing `child` back, or None when the store does not hold it under a parent it holds.
+pub fn bring_back_prompt(state: &StoreState, child: &str) -> Option<BringBackPrompt> {
+    let session = state.agents.iter().find(|session| session.id == child)?;
+    let parent_id = session.parent_id.as_deref()?;
+    let parent = state
+        .agents
+        .iter()
+        .find(|session| session.id == parent_id)?;
+    let title = match &session.title {
+        Some(title) => format!("Bring back {title}?"),
+        None => "Bring back this session?".to_owned(),
+    };
+    let body = if session.workspace_id == parent.workspace_id {
+        "It ran in this worktree, so there is nothing to merge. Nothing is pushed.".to_owned()
+    } else {
+        let into = state.workspace(&parent.workspace_id).map_or_else(
+            || "the parent workspace".to_owned(),
+            |workspace| {
+                workspace
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| workspace.name.clone())
+            },
+        );
+        format!("Merges into {into} without fast-forward. Nothing is pushed.")
+    };
+    Some(BringBackPrompt {
+        child: child.to_owned(),
+        title,
+        body,
+    })
 }
 
 /// What a refused bring-back says, in plain words. A code this build does not know keeps the service's text.
@@ -387,6 +434,93 @@ mod tests {
             .map(|row| row.id.as_str())
             .collect();
         assert_eq!(ids, vec!["root"], "a loop has no top session to hang from");
+    }
+
+    /// Whether the child `child` (under `p` in `w1`, or as given) offers a bring-back.
+    fn offers_bring_back(child: AgentSession) -> bool {
+        let state = store_with(vec![agent("p", "w1", 5), child]);
+        sessions_by_workspace(&state)["w1"][0].children[0].can_bring_back
+    }
+
+    #[test]
+    fn a_finished_child_can_be_brought_back_until_it_has_been() {
+        let child = |activity: Option<Activity>, brought_back_at_ms: Option<i64>| {
+            let mut child = child_of("p", "c", "w2", 20);
+            child.activity = activity;
+            child.brought_back_at_ms = brought_back_at_ms;
+            child
+        };
+        let done = Some(reporting(ActivityState::Done, Some(Outcome::Success)));
+        let failed = Some(reporting(ActivityState::Done, Some(Outcome::Failure)));
+        assert!(offers_bring_back(child(done.clone(), None)), "finished");
+        assert!(
+            offers_bring_back(child(failed, None)),
+            "failed turns can be merged too"
+        );
+        assert!(
+            !offers_bring_back(child(Some(reporting(ActivityState::Working, None)), None)),
+            "still working: not finished yet"
+        );
+        assert!(
+            !offers_bring_back(child(done, Some(30))),
+            "already brought back"
+        );
+    }
+
+    #[test]
+    fn a_top_session_or_a_child_whose_parent_is_gone_is_never_offered_a_bring_back() {
+        let mut top = agent("p", "w1", 5);
+        top.activity = Some(reporting(ActivityState::Done, Some(Outcome::Success)));
+        let state = store_with(vec![top]);
+        assert!(
+            !sessions_by_workspace(&state)["w1"][0].can_bring_back,
+            "a top session has no parent to merge into"
+        );
+        let mut orphan = child_of("gone", "c", "w2", 20);
+        orphan.activity = Some(reporting(ActivityState::Done, Some(Outcome::Success)));
+        let state = store_with(vec![orphan]);
+        assert!(
+            !sessions_by_workspace(&state)["w2"][0].can_bring_back,
+            "its parent is gone"
+        );
+    }
+
+    #[test]
+    fn the_bring_back_confirm_names_the_branch_it_merges_into() {
+        let mut child = child_of("p", "c", "w2", 20);
+        child.title = Some("Feed endpoints".into());
+        let state = store_with(vec![agent("p", "w1", 5), child]);
+        let prompt = bring_back_prompt(&state, "c").expect("a child under a held parent");
+        assert_eq!(prompt.child, "c");
+        assert_eq!(prompt.title, "Bring back Feed endpoints?");
+        assert_eq!(
+            prompt.body,
+            "Merges into feat/one without fast-forward. Nothing is pushed."
+        );
+    }
+
+    #[test]
+    fn a_child_in_its_parents_worktree_says_there_is_nothing_to_merge() {
+        let state = store_with(vec![agent("p", "w1", 5), child_of("p", "c", "w1", 20)]);
+        let prompt = bring_back_prompt(&state, "c").expect("a child under a held parent");
+        assert_eq!(prompt.title, "Bring back this session?");
+        assert_eq!(
+            prompt.body,
+            "It ran in this worktree, so there is nothing to merge. Nothing is pushed."
+        );
+    }
+
+    #[test]
+    fn there_is_no_bring_back_confirm_without_a_parent_in_the_store() {
+        let state = store_with(vec![agent("p", "w1", 5), child_of("p", "c", "w2", 20)]);
+        assert_eq!(bring_back_prompt(&state, "missing"), None);
+        assert_eq!(
+            bring_back_prompt(&state, "p"),
+            None,
+            "a top session has nothing to merge into"
+        );
+        let orphans = store_with(vec![child_of("gone", "o", "w2", 20)]);
+        assert_eq!(bring_back_prompt(&orphans, "o"), None);
     }
 
     #[test]
