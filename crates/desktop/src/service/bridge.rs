@@ -13,8 +13,8 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscripti
 use massorca_profile::Profile;
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -31,6 +31,7 @@ use tokio::time::sleep;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
+use super::teams::{self, Sequence};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -242,6 +243,7 @@ impl ServiceBridge {
             connection: connection_tx,
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
+            team_reads: Arc::new(Sequence::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -293,6 +295,8 @@ struct Link {
     watching: BTreeSet<String>,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
+    /// Numbers the Bot Teams reads across the connections of this bridge.
+    team_reads: Arc<Sequence>,
 }
 
 impl Link {
@@ -398,6 +402,8 @@ impl Link {
             projects,
             workspaces,
         });
+        let teams = teams::read(client, &self.team_reads).await?;
+        self.emit(StoreUpdate::Teams(teams));
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
         Ok(events)
@@ -483,6 +489,10 @@ impl Link {
                         StoreUpdate::ProjectGone(id.clone())
                     })
                 }),
+            // A team or task change re-reads every team: the events carry only an id, and the read is cheap.
+            TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
+                .await
+                .map(StoreUpdate::Teams),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             _ => return Outcome::Continue,
