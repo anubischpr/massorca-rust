@@ -4,6 +4,7 @@
 mod board;
 mod bot;
 mod selectors;
+mod task;
 mod task_state;
 mod team;
 mod team_project;
@@ -27,6 +28,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(team::register(registries)?);
     handles.extend(bot::register(registries)?);
     handles.extend(team_project::register(registries)?);
+    handles.extend(task::register(registries)?);
     handles.extend(board::register(registries)?);
     Ok(handles)
 }

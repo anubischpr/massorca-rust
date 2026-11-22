@@ -1,6 +1,6 @@
 //! Resolves the selectors of Bot Teams calls: an id first, then an exact name within the scope the call names.
 
-use massorca_core_store::{BotRow, Store, TeamProjectRow, TeamRow};
+use massorca_core_store::{BotRow, Store, TaskRow, TeamProjectRow, TeamRow};
 use massorca_protocol::{ErrorBody, codes};
 
 use super::store_error;
@@ -32,6 +32,14 @@ pub(crate) fn bot(store: &Store, team: &TeamRow, selector: &str) -> Result<BotRo
                 format!("team {} has no bot {selector:?}", team.name),
             )
         })
+}
+
+/// The task `selector` names: its id.
+pub(crate) fn task(store: &Store, selector: &str) -> Result<TaskRow, ErrorBody> {
+    store
+        .get_task(selector)
+        .map_err(store_error)?
+        .ok_or_else(|| ErrorBody::new(codes::TASK_NOT_FOUND, format!("no task {selector:?}")))
 }
 
 /// The project `selector` names within `team`: its id, then its exact name.

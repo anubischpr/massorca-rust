@@ -158,5 +158,66 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 "properties": { "team": { "type": "string" }, "project": { "type": "string" } }
             }),
         ),
+        command(
+            "task.create",
+            "Create a task on a team's Board",
+            "task.create",
+            json!({
+                "type": "object",
+                "required": ["team", "title"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "project": { "type": "string" },
+                    "origin": { "enum": ["room", "cli"] }
+                }
+            }),
+        ),
+        command(
+            "task.list",
+            "List tasks, filtered by team, project, bot or column",
+            "task.list",
+            json!({
+                "type": "object",
+                "properties": {
+                    "team": { "type": "string" },
+                    "project": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "column": { "enum": ["open", "running", "waiting", "done"] }
+                }
+            }),
+        ),
+        command("task.show", "Show a task", "task.show", selector("task")),
+        command(
+            "task.update",
+            "Change a task",
+            "task.update",
+            json!({
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": { "type": "string" },
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "task.done",
+            "Mark a task done by hand",
+            "task.done",
+            selector("task"),
+        ),
+        command(
+            "task.reopen",
+            "Reopen a task: clear its outcome and error",
+            "task.reopen",
+            selector("task"),
+        ),
+        command("task.rm", "Remove a task", "task.rm", selector("task")),
     ]
 }
