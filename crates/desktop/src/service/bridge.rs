@@ -19,13 +19,15 @@ use massorca_protocol::methods::devices::{
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
-    TOPIC_WORKSPACE_REMOVING,
+    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
+    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::tasks::Task;
+use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
@@ -36,9 +38,12 @@ use tokio::time::sleep;
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::git::{self, Freshness, Watches};
+use massorca_core_remote::bootstrap::RemoteMachine;
+
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
+use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -69,6 +74,8 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
+    /// A Bot Teams write, answered on its oneshot.
+    Team(TeamCommand),
     Secret(SecretCommand),
     SetConfig {
         params: ConfigSet,
@@ -111,6 +118,12 @@ pub(crate) enum Command {
     AddSshHost {
         host: SshHost,
         reply: oneshot::Sender<Result<SshAdded, SshFailed>>,
+    },
+    /// Checks an SSH host's machine, installing nothing. Needs no connection to this computer's service.
+    ProbeSshHost {
+        target: String,
+        ssh_args: Vec<String>,
+        reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
     },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
@@ -215,6 +228,30 @@ impl ServiceHandle {
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
+    /// `team.create`. The teams change through the read that follows the answer, not from the answer.
+    pub async fn create_team(&self, params: TeamCreateParams) -> Result<Team, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::CreateTeam { params, reply }))
+            .await
+    }
+
+    /// `team.bot_add`. The bot is listed once the service's answer is folded in.
+    pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
+            .await
+    }
+
+    /// `task.done`. The card moves to Done when the read that follows the answer lands.
+    pub async fn finish_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskDone { task, reply }))
+            .await
+    }
+
+    /// `task.reopen`. The card moves back to Open when the read that follows the answer lands.
+    pub async fn reopen_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskReopen { task, reply }))
+            .await
+    }
+
     /// `workspace.remove`. Pass the flags of the waivers the user confirmed.
     pub async fn remove_workspace(
         &self,
@@ -304,6 +341,7 @@ impl ServiceBridge {
             connection: connection_tx,
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
+            team_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
         };
         thread::Builder::new()
@@ -356,6 +394,8 @@ struct Link {
     watching: BTreeSet<String>,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
+    /// Numbers the Bot Teams reads across the connections of this bridge.
+    team_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
     secrets_order: Arc<SecretsFreshness>,
 }
@@ -407,7 +447,10 @@ impl Link {
     /// Hands back every other command.
     fn host_call(&self, command: Command) -> Option<Command> {
         match command {
-            Command::RefreshHosts | Command::AddSshHost { .. } | Command::AcceptOffer { .. } => {
+            Command::RefreshHosts
+            | Command::AddSshHost { .. }
+            | Command::ProbeSshHost { .. }
+            | Command::AcceptOffer { .. } => {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
@@ -483,10 +526,15 @@ impl Link {
             projects,
             workspaces,
         });
+        let teams = teams::read(client, &self.team_reads).await?;
+        self.emit(StoreUpdate::Teams(teams));
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
         let sessions = agents::list_sessions(client).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
+        // The protocol has no event for a change in the kinds, so they are read again on each connect.
+        let kinds = agents::list_kinds(client).await?;
+        self.emit(StoreUpdate::AgentKindsResync(kinds));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -521,8 +569,16 @@ impl Link {
                             Some(Command::Terminal(command)) => {
                                 terminals::spawn_call(client, &writes, &self.updates, command);
                             }
+                            Some(Command::Team(command)) => {
+                                teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                            }
                             Some(Command::Secret(command)) => {
-                                secrets::spawn_call(client, command, &self.updates, &self.secrets_order);
+                                secrets::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.secrets_order,
+                                );
                             }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
@@ -582,6 +638,10 @@ impl Link {
                         StoreUpdate::ProjectGone(id.clone())
                     })
                 }),
+            // A team or task change re-reads every team: the events carry only an id, and the read is cheap.
+            TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
+                .await
+                .map(StoreUpdate::Teams),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             TOPIC_AGENT_CHANGED => client
@@ -726,7 +786,11 @@ fn spawn_call(
             agents::spawn_bring_back(&client, params, reply, updates);
         }
         // Routed by the session, which owns the terminal writes and store updates.
-        Command::Terminal(_) | Command::Secret(_) | Command::RetryNow | Command::Stop => {}
+        Command::Terminal(_)
+        | Command::Team(_)
+        | Command::Secret(_)
+        | Command::RetryNow
+        | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -763,6 +827,7 @@ fn refuse_while_down(command: Command) {
         Command::SetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::Team(command) => teams::refuse(command, refusal),
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }

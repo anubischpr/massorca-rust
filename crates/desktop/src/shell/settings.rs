@@ -22,6 +22,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 
 use super::Shell;
+use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_vault::VaultPage;
@@ -53,6 +54,8 @@ pub(super) struct SettingsFrame<'a> {
     pub search: &'a Entity<SearchField>,
     /// The state of This PC's service, for the Hosts section.
     pub connection: ConnectionState,
+    /// Each paired remote host by name, with the state its last check left (D-HO-07).
+    pub hosts: Vec<(String, HostState)>,
     pub shell: WeakEntity<Shell>,
     pub folder: &'a FolderSetting,
     pub folder_field: &'a Entity<TextField>,
@@ -241,9 +244,30 @@ fn group(
         group = group.description(note);
     }
     for (index, spec) in listed {
+        if spec.body == RowBody::PairedHosts {
+            let theme = *cx.theme();
+            for (name, state) in &frame.hosts {
+                group = group.row(host_row(name, state, &theme));
+            }
+            continue;
+        }
         group = group.row(row(section, *index, spec, frame, cx));
     }
     group.into_any_element()
+}
+
+/// One paired host: its name, the line its state leaves under it, and the state word as the control.
+fn host_row(name: &str, state: &HostState, theme: &Theme) -> AnyElement {
+    let selector = format!("settings-host-{name}");
+    let row = SettingsRow::new(SharedString::from(selector.clone()), name.to_owned());
+    let row = match &state.detail {
+        Some(detail) => row.helper(detail.clone()),
+        None => row,
+    };
+    div()
+        .debug_selector(move || selector.clone())
+        .child(row.control(value_box(state.word, theme)))
+        .into_any_element()
 }
 
 /// The installed agents, each with a button to its Marketplace page. Settings lists what is
@@ -310,7 +334,27 @@ fn row(
             (row, Some(control))
         }
         RowBody::ThisPc => (row, Some(value_box(host_word(&frame.connection), &theme))),
-        RowBody::SetupChecklist => (row, Some(setup_link(id.clone(), frame))),
+        // group() draws one row per paired host in place of this marker.
+        RowBody::PairedHosts => (row, None),
+        RowBody::SetupChecklist => (
+            row,
+            Some(page_link(
+                id.clone(),
+                Page::Setup,
+                "settings-setup-open",
+                frame,
+            )),
+        ),
+        RowBody::AddHost => (row, Some(add_host_button(id.clone(), frame))),
+        RowBody::PairingLink => (
+            row,
+            Some(page_link(
+                id.clone(),
+                Page::Pairing,
+                "settings-pairing-open",
+                frame,
+            )),
+        ),
         RowBody::SecretVault => secret_status_row(row, frame, &theme),
     };
     match control {
@@ -319,20 +363,39 @@ fn row(
     }
 }
 
-/// Opens the setup checklist, a full page (D-OB-12).
-fn setup_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+/// The "Add host" button of its row: it opens the dialog on this page (D-HO-02).
+fn add_host_button(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+    let shell = frame.shell.clone();
+    let button = Button::new(id, "Add host")
+        .variant(ButtonVariant::Secondary)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_add_host(cx));
+        });
+    div()
+        .debug_selector(|| "settings-add-host".to_owned())
+        .child(button)
+        .into_any_element()
+}
+
+/// A row that opens a full page (the setup checklist, D-OB-12, or Pairing, D-PR-01) with an "Open" button.
+fn page_link(
+    id: SharedString,
+    page: Page,
+    selector: &'static str,
+    frame: &SettingsFrame<'_>,
+) -> AnyElement {
     let shell = frame.shell.clone();
     let button = Button::new(id, "Open")
         .variant(ButtonVariant::Ghost)
         .trailing_icon(IconName::ChevronRight)
         .on_click(move |_, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                shell.model.open_page(Page::Setup);
+                shell.model.open_page(page);
                 cx.notify();
             });
         });
     div()
-        .debug_selector(|| "settings-setup-open".to_owned())
+        .debug_selector(move || selector.to_owned())
         .child(button)
         .into_any_element()
 }
@@ -404,6 +467,22 @@ fn folder_status(folder: &FolderSetting) -> Option<RowStatus> {
 const SAVED_FOR: Duration = Duration::from_secs(2);
 
 impl Shell {
+    /// Asks for the paired hosts each time the Settings page is shown, and again after the service
+    /// reconnects. The answer reaches the rows through the store, not through this call.
+    pub(super) fn refresh_settings_hosts(&mut self) {
+        if self.model.navigation().page != Page::Settings {
+            self.settings_hosts_asked = false;
+            return;
+        }
+        if self.settings_hosts_asked {
+            return;
+        }
+        if let Some(service) = &self.service {
+            self.settings_hosts_asked = true;
+            service.refresh_hosts();
+        }
+    }
+
     /// Reads the workspace folder once the service is connected and the value is not known yet.
     pub(super) fn refresh_folder(&mut self, cx: &mut Context<Self>) {
         // The value is read when the page is on screen, not on every connection.
