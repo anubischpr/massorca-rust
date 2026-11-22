@@ -144,7 +144,7 @@ fn row(entry: &SecretEntry, projects: &[Project]) -> SecretRow {
 }
 
 /// The name a scope shows: its project's name, the team's id, or Global.
-fn scope_title(scope: &str, projects: &[Project]) -> String {
+pub fn scope_title(scope: &str, projects: &[Project]) -> String {
     if scope == "global" {
         return "Global".to_owned();
     }
