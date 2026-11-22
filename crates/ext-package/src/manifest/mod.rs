@@ -3,6 +3,7 @@
 //! A JSON shape error (wrong type, unknown field, unknown permission kind) stops at the first one, with its path.
 //! Every semantic rule is checked in one pass and reported together.
 
+pub mod agent;
 pub mod contributes;
 pub mod data;
 pub mod logic;
@@ -195,6 +196,17 @@ pub(crate) fn check_path(path: &str, pointer: &str, problems: &mut Problems) {
             format!("{reason}: `{path}` is not a package-relative path"),
         );
     }
+}
+
+/// `https://` followed by a host, with no user information, whitespace or control characters.
+pub(crate) fn is_https_url(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    !authority.is_empty()
+        && !authority.contains('@')
+        && text.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 fn shape_error(error: serde_path_to_error::Error<serde_json::Error>) -> Error {

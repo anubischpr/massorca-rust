@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use serde::Deserialize;
 
 use super::Manifest;
+use super::agent::{AgentAdapter, McpServer};
 use super::data::{Command, DocumentFile, Keybinding, Skill, ThemeFile};
 use super::logic::{Event, Importer, ItemSource, Job, Tool};
 use super::settings::Setting;
@@ -32,6 +33,8 @@ pub struct Contributes {
     pub tools: Vec<Tool>,
     pub item_sources: Vec<ItemSource>,
     pub jobs: Vec<Job>,
+    pub agent_adapters: Vec<AgentAdapter>,
+    pub mcp_servers: Vec<McpServer>,
 }
 
 /// Checks every contribution kind against the manifest.
@@ -40,6 +43,7 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
     super::settings::validate(manifest, problems);
     super::views::validate(manifest, problems);
     super::logic::validate(manifest, problems);
+    super::agent::validate(manifest, problems);
 }
 
 /// Checks one list of contributions: each id follows `rule` and is unique within the kind, then `check` runs on it.

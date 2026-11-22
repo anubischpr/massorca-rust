@@ -45,6 +45,10 @@ pub(crate) fn referenced(manifest: &Manifest) -> Vec<(String, String)> {
         let here = format!("/contributes/tools/{index}");
         out.push((at(&here, "input"), tool.input.clone()));
     }
+    for (index, adapter) in contributes.agent_adapters.iter().enumerate() {
+        let here = format!("/contributes/agentAdapters/{index}");
+        out.push((at(&here, "kind"), adapter.kind.clone()));
+    }
     out
 }
 
