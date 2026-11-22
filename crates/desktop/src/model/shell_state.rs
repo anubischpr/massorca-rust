@@ -153,6 +153,11 @@ impl ShellModel {
             .filter(|region| self.region_visible(*region))
     }
 
+    /// Whether a region is recorded as the open overlay, on screen or not.
+    pub fn has_overlay(&self) -> bool {
+        self.regions.overlay().is_some()
+    }
+
     pub fn close_overlay(&mut self) {
         self.regions.close_overlay();
     }

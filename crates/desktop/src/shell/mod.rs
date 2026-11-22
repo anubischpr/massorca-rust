@@ -499,7 +499,8 @@ impl Render for Shell {
             .text_body()
             .track_focus(&self.focus)
             // Escape closes the palette first, then an overlay region. The palette's own
-            // Escape binding loses to this one, so the palette is handled here.
+            // Escape binding loses to this one, so the palette is handled here. With nothing
+            // of the shell open it propagates, so a focused Search field clears.
             .on_action(cx.listener(|shell, _: &CloseOverlay, window, cx| {
                 if shell.model.palette().is_some() {
                     shell.close_palette(window, cx);
@@ -508,9 +509,11 @@ impl Render for Shell {
                     cx.notify();
                 } else if shell.settings.folder.dirty() {
                     shell.revert_folder(window, cx);
-                } else {
+                } else if shell.model.has_overlay() {
                     shell.model.close_overlay();
                     cx.notify();
+                } else {
+                    cx.propagate();
                 }
             }))
             .on_action(cx.listener(|shell, _: &CycleRegionForward, window, cx| {
