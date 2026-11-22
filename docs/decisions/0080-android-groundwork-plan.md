@@ -1,6 +1,6 @@
 # 0080: Android groundwork plan (milestone M5)
 
-Status: proposed, 2026-11-22. A plan for review before any Android code is written.
+Status: accepted, 2026-11-22, with the owner's decisions recorded under "Decisions taken". A plan for review before any Android code is written.
 
 ## Why this note is a decision record
 
@@ -198,7 +198,22 @@ A1 to A6 need no React Native and no phone. A12 waits for the device.
 - The phone permission question in `docs/inventory/open-questions.md` (item 10, the phone allowlist) stays with the
   server: the phone pairs with the scopes the offer grants, as any device.
 
-## Open questions for the owner
+## Decisions taken
+
+The five open questions were decided on 2026-11-22, under the owner's rule for autonomous work.
+
+1. **React Native with UniFFI**, as agreed in `docs/PLAN.md`. Native Kotlin is not used.
+2. **Device key:** for M5, the key is encrypted with an Android Keystore key and kept in app-private storage. A key
+   that never leaves the Keystore, which needs a custom TLS signer, is a recorded follow-up and not part of M5.
+3. **Terminal:** `xterm.js` in a WebView for M5, because its behaviour is known and it reaches parity fastest. A native
+   grid is built only if measured performance on the owner's phone is not acceptable. The terminal stays behind one
+   component boundary, so the renderer can be swapped without touching the screens around it.
+4. **Emulator flows:** Maestro.
+5. **Scope:** chat and starting sessions are in scope for the product, because the whole inventory is wanted. They come
+   right after the M5 screen set is validated. M5 itself is pairing, Home, the protocol gate, workspaces, agent status,
+   the terminal, the read-only Changes list and the connection log.
+
+## Open questions for the owner (decided above)
 
 1. **React Native or native Kotlin.** The plan follows `docs/PLAN.md` (React Native). Confirm, or choose Kotlin and
    Compose, which would simplify the binding and drop the JavaScript toolchain.
