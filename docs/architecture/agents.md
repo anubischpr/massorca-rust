@@ -318,7 +318,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Pending and removing accounts**: a pending sign-in refuses removal and activation with
   `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
   removing under the gate, so no run starts on it while the sign-out runs.
-- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s. Its whole
+- **Check** (`account_check.rs`): it runs with the home variable set and the account commands' stripped
+  names removed (`credentials.strip_env` and `accounts.strip_env`, decision 0059 amendment 2026-11-22), for at most 10 s. Its whole
   process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
   output is read for at most one second after that, so a child that keeps the pipes open cannot
   hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
@@ -363,7 +364,9 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
   publishes nothing.
 - **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
-  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
+  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`), `logout` (arguments) and `strip_env`
+  (variable names removed from the check, sign-in and sign-out, in addition to `credentials.strip_env`;
+  agent runs keep their environment). They
   go to the resolved program and are never run at declaration time. Patterns are compiled with
   the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
   on the service, as its programs do; they are not a trust boundary for other users. Only `claude`
@@ -414,11 +417,36 @@ signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `
 declared, because neither is documented. Without an `expired_pattern`, an expired login probably
 reads as `needs_sign_in`, not `expired`; this is not verified.
 
-Known gap: `claude auth status` may report signed in from credentials that `strip_env` does not
-remove, such as `ANTHROPIC_PROFILE` or the federation variables, which the Claude docs list in the
-credential precedence. Their profile files sit outside the account home. This is not verified and
-is left for a follow-up decision, because changing `strip_env` would also change how existing
-sessions authenticate.
+`claude` also declares `accounts.strip_env` (decision 0059, amendment 2026-11-22). The check, the
+sign-out and the sign-in terminal judge the account's home only, so these variables are removed from
+their environment in addition to `credentials.strip_env`. The sign-in terminal can only add variables,
+so it sets them to empty. The list is the authentication inputs in Claude's documentation, read
+2026-11-22:
+
+- `code.claude.com/docs/en/authentication`, "Authentication precedence" and "Anthropic profiles and
+  federation credentials": `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, the provider
+  selectors `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`, and
+  `ANTHROPIC_IDENTITY_TOKEN_FILE`, which the page names as a Workload Identity Federation variable.
+  The page sends the WIF variables to the WIF reference, which was not read.
+- `code.claude.com/docs/en/env-vars`, rows whose description says they supply or select an
+  authentication credential: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_WORKSPACE_ID`,
+  `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `ANTHROPIC_AWS_API_KEY`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY` and
+  `CLAUDE_CODE_CLIENT_KEY_PASSPHRASE`.
+
+Excluded: `CLAUDE_CODE_OAUTH_SCOPES` (a scope list, not a credential), `ANTHROPIC_BASE_URL` and the
+endpoint variables (they route requests, they do not authenticate), and the `CLAUDE_CODE_SKIP_*_AUTH`
+switches. The environment-variable reference page was longer than one fetch: the first fetch covered its
+first 100000 characters, and the rest was searched for the variables above, not read in full.
+
+Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
+may still see a set but empty variable; and the list covers the variables named in the documents read,
+not every variable a future Claude release may read.
+
+## Follow-ups
+
+- Agent sessions (runs) keep the vendor credential variables; whether they strip `accounts.strip_env` is open (decision 0059, amendment 2026-11-22).
 
 ## Security
 

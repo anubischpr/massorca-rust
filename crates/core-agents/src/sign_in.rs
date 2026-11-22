@@ -2,7 +2,6 @@
 //! with the home variable set, and the decision when that terminal ends: keep the account with what its check found, or
 //! delete it. The same decision is made at startup for a sign-in an earlier service left open.
 
-use std::collections::BTreeMap;
 use std::thread;
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AccountState, AccountsAdded};
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 
-use crate::account_check::state_name;
+use crate::account_check::{account_strip_names, sign_in_env, state_name};
 use crate::accounts::{DEFAULT_LABEL, ORIGIN_SIGN_IN, valid_label};
 use crate::credentials;
 use crate::sessions::{AgentError, Agents};
@@ -71,12 +70,11 @@ impl Agents {
                 .insert(account.clone(), String::new());
             home
         };
-        let mut env = BTreeMap::new();
-        env.insert(credential_decl.home_env.clone(), home.display().to_string());
-        // The terminal can only add variables (docs/architecture/agents.md), so a stripped one is set to empty.
-        for name in &credential_decl.strip_env {
-            env.entry(name.clone()).or_default();
-        }
+        let env = sign_in_env(
+            &credential_decl.home_env,
+            &home,
+            &account_strip_names(&decl),
+        );
         let spec = CreateSpec {
             workspace_id: SIGN_IN_SCOPE.to_owned(),
             cwd: home,

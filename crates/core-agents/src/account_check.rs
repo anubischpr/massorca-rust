@@ -2,6 +2,7 @@
 //! the conflict with a recorded identity, and the bounded run of the kind's program that produces that output. The
 //! output is matched here and never logged or returned.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use massorca_protocol::methods::agents::AccountState;
 
-use crate::kind::CheckDecl;
+use crate::kind::{CheckDecl, KindDecl};
 use crate::process_tree;
 
 /// How long an account check may run before it is stopped; a check that does not finish has state `unknown`.
@@ -134,6 +135,64 @@ pub(crate) struct RunOutput {
 /// only a pipe something outside the tree still holds.
 const OUTPUT_GRACE: Duration = Duration::from_secs(1);
 
+/// The variables the account commands (check, sign-in, sign-out) remove from their environment: the credentials'
+/// `strip_env`, then the accounts' `strip_env`, each name once. Agent runs keep their environment (decision 0059, amended
+/// 2026-11-22).
+pub(crate) fn account_strip_names(decl: &KindDecl) -> Vec<String> {
+    let credentials = decl
+        .credentials
+        .iter()
+        .flat_map(|credentials| credentials.strip_env.iter());
+    let accounts = decl
+        .accounts
+        .iter()
+        .flat_map(|accounts| accounts.strip_env.iter());
+    let mut names: Vec<String> = Vec::new();
+    for name in credentials.chain(accounts) {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+/// The command of a check or a sign-out: `program` with `args`, the account's home variable set, and `strip` removed
+/// from its environment. A plain process, so the names are removed for real.
+pub(crate) fn account_command(
+    program: &Path,
+    args: &[String],
+    home: &Path,
+    home_env: &str,
+    strip: &[String],
+) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env(home_env, home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for name in strip {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// The environment of the sign-in terminal: the home variable, and each stripped name set to empty, because the terminal
+/// can only add variables (docs/architecture/agents.md).
+pub(crate) fn sign_in_env(
+    home_env: &str,
+    home: &Path,
+    strip: &[String],
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert(home_env.to_owned(), home.display().to_string());
+    for name in strip {
+        env.entry(name.clone()).or_default();
+    }
+    env
+}
+
 /// Runs `program` with `args`, the account's home variable set and the stripped names removed, for at most
 /// [`CHECK_TIMEOUT`]. A program that cannot start, or is still running at the deadline, has no exit code. Its whole
 /// process tree is stopped before this returns, so nothing it started keeps the output open (decision 0059).
@@ -144,16 +203,7 @@ pub(crate) fn run_program(
     home_env: &str,
     strip_env: &[String],
 ) -> RunOutput {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .env(home_env, home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for name in strip_env {
-        command.env_remove(name);
-    }
+    let mut command = account_command(program, args, home, home_env, strip_env);
     let Ok((mut child, mut tree)) = process_tree::spawn(&mut command) else {
         return RunOutput {
             exit: None,
@@ -307,6 +357,58 @@ mod tests {
         assert_eq!(
             capture(Some("fake@[a-z.]+"), "signed in: fake@example.com").as_deref(),
             Some("fake@example.com")
+        );
+    }
+
+    #[test]
+    fn the_three_account_commands_apply_both_strip_lists() {
+        let decl = KindDecl::from_json(
+            r#"{
+                "id": "fake", "name": "Fake", "program": ["fake-agent"],
+                "credentials": { "home_env": "FAKE_HOME", "files": ["token.json"], "strip_env": ["CRED_ONE"] },
+                "accounts": {
+                    "login": ["login"], "check": { "args": ["whoami"] }, "logout": ["logout"],
+                    "strip_env": ["ACCOUNT_ONE", "ACCOUNT_TWO"]
+                }
+            }"#,
+        )
+        .expect("parses");
+        let names = account_strip_names(&decl);
+        assert_eq!(names, ["CRED_ONE", "ACCOUNT_ONE", "ACCOUNT_TWO"]);
+        let home = Path::new("account-home");
+
+        // The check and the sign-out are plain processes: both names are removed from their environment.
+        let command = account_command(
+            Path::new("fake-agent"),
+            &["whoami".to_owned()],
+            home,
+            "FAKE_HOME",
+            &names,
+        );
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for name in &names {
+            assert!(
+                removed.iter().any(|removed| removed == name),
+                "{name} is removed"
+            );
+        }
+
+        // The sign-in terminal can only add variables, so each name is set to empty there.
+        let env = sign_in_env("FAKE_HOME", home, &names);
+        for name in &names {
+            assert_eq!(
+                env.get(name).map(String::as_str),
+                Some(""),
+                "{name} is empty"
+            );
+        }
+        assert_eq!(
+            env.get("FAKE_HOME").map(String::as_str),
+            Some(home.to_string_lossy().as_ref())
         );
     }
 }
