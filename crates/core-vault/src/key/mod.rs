@@ -4,6 +4,8 @@
 mod file;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+mod owner_only;
 #[cfg(any(target_os = "linux", test))]
 mod vault_id;
 #[cfg(windows)]
@@ -186,7 +188,7 @@ fn open_existing(protection: Protection, vault_dir: &Path) -> Result<MasterKey, 
 /// Forgets the key of `vault_dir`: its keyring item, the key, protection and id files. A missing file is fine.
 fn reset(vault_dir: &Path) -> Result<(), KeyError> {
     #[cfg(target_os = "linux")]
-    linux::delete(vault_dir);
+    linux::delete_all(vault_dir);
     for name in [KEY_FILE, PROTECTION_FILE, ID_FILE] {
         match std::fs::remove_file(vault_dir.join(name)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
@@ -210,7 +212,7 @@ fn create(vault_dir: &Path, force_file: bool) -> Result<(Protection, MasterKey),
         return Err(KeyError::Locked(LockReason::KeyWithoutProtection));
     }
     let key = MasterKey::generate()?;
-    let protection = store_new(vault_dir, &key, force_file)?;
+    let (protection, created_item) = store_new(vault_dir, &key, force_file)?;
     let mut word = protection.as_str().to_owned();
     word.push('\n');
     if let Err(error) = file::write_new(&vault_dir.join(PROTECTION_FILE), word.as_bytes()) {
@@ -219,29 +221,39 @@ fn create(vault_dir: &Path, force_file: bool) -> Result<(Protection, MasterKey),
             Protection::File | Protection::Dpapi => {
                 let _ = std::fs::remove_file(&key_path);
             }
+            // Only the item this call created: a racing creator's item is left alone.
             #[cfg(target_os = "linux")]
-            Protection::SecretService => linux::delete(vault_dir),
+            Protection::SecretService => {
+                if let Some(item) = &created_item {
+                    linux::delete_created(vault_dir, item);
+                }
+            }
             #[cfg(not(target_os = "linux"))]
-            Protection::SecretService => {}
+            Protection::SecretService => drop(created_item),
         }
         return Err(error.into());
     }
     Ok((protection, key))
 }
 
-/// Stores a new key with the host's preferred protection and returns which one was used.
-fn store_new(vault_dir: &Path, key: &MasterKey, force_file: bool) -> Result<Protection, KeyError> {
+/// Stores a new key with the host's preferred protection and returns which one was used, with the unique tag of the
+/// keyring item it created, if any.
+fn store_new(
+    vault_dir: &Path,
+    key: &MasterKey,
+    force_file: bool,
+) -> Result<(Protection, Option<String>), KeyError> {
     let key_path = vault_dir.join(KEY_FILE);
     if !force_file {
         #[cfg(windows)]
         {
             let blob = windows::protect(key.bytes())?;
             file::write_new(&key_path, &blob)?;
-            return Ok(Protection::Dpapi);
+            return Ok((Protection::Dpapi, None));
         }
         #[cfg(target_os = "linux")]
         match linux::create(vault_dir, key) {
-            linux::Created::Stored => return Ok(Protection::SecretService),
+            linux::Created::Stored(item) => return Ok((Protection::SecretService, Some(item))),
             linux::Created::AlreadyThere => {
                 return Err(KeyError::Locked(LockReason::KeyWithoutProtection));
             }
@@ -249,5 +261,5 @@ fn store_new(vault_dir: &Path, key: &MasterKey, force_file: bool) -> Result<Prot
         }
     }
     file::write_new(&key_path, key.bytes())?;
-    Ok(Protection::File)
+    Ok((Protection::File, None))
 }

@@ -18,7 +18,14 @@ zeroize.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Security_Cryptography"] }
+interprocess.workspace = true
+massorca-profile.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 oo7.workspace = true

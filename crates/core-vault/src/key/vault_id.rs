@@ -27,11 +27,16 @@ pub(super) fn read_or_create(vault_dir: &Path) -> io::Result<String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         other => return other,
     }
-    let mut bytes = [0u8; ID_BYTES];
-    getrandom::fill(&mut bytes).map_err(|_| io::Error::other("no random source"))?;
-    let id: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let id = random_hex()?;
     file::write_new(&vault_dir.join(ID_FILE), format!("{id}\n").as_bytes())?;
     Ok(id)
+}
+
+/// 16 random bytes in lowercase hex.
+pub(super) fn random_hex() -> io::Result<String> {
+    let mut bytes = [0u8; ID_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| io::Error::other("no random source"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[cfg(test)]

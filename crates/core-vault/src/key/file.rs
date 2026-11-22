@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 /// Vault files are a key, a wrapped key or one word; anything longer is not ours.
 const MAX_FILE_BYTES: usize = 4096;
 
-/// Creates the vault directory; on Unix it is made and kept 0700.
+/// Creates the vault directory; on Unix it is made and kept 0700, on Windows it gets an owner-only, protected DACL.
 pub(super) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -23,7 +23,11 @@ pub(super) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
         }
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        super::owner_only::create_dir(dir)
+    }
+    #[cfg(not(any(unix, windows)))]
     fs::create_dir_all(dir)
 }
 
@@ -35,16 +39,10 @@ pub(super) fn exists_no_follow(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Writes a new file, mode 0600 on Unix; an existing file or link is never overwritten.
+/// Writes a new file, mode 0600 on Unix and an owner-only DACL on Windows; an existing file or link is never
+/// overwritten.
 pub(super) fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = options.open(path)?;
+    let mut file = create_new(path)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     if written.is_err() {
         drop(file);
@@ -52,6 +50,23 @@ pub(super) fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(path);
     }
     written
+}
+
+#[cfg(windows)]
+fn create_new(path: &Path) -> io::Result<File> {
+    super::owner_only::create_new_file(path)
+}
+
+#[cfg(not(windows))]
+fn create_new(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
 }
 
 /// Reads a small vault file into a zeroizing buffer that never reallocates.

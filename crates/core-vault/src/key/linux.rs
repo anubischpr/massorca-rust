@@ -13,10 +13,13 @@ use super::{LockReason, MasterKey, vault_id};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const ID_ATTRIBUTE: &str = "massorca-vault-id";
+/// Unique per created item, so a creator that lost a race removes its own item and never the winner's.
+const ITEM_ATTRIBUTE: &str = "massorca-vault-item";
 const APPLICATION: (&str, &str) = ("application", "massorca");
 
 pub(super) enum Created {
-    Stored,
+    /// Stored, with the item's unique tag.
+    Stored(String),
     /// An item for this vault exists without a protection file; it is left alone.
     AlreadyThere,
     Unavailable,
@@ -56,7 +59,15 @@ pub(super) fn create(vault_dir: &Path, key: &MasterKey) -> Created {
     let Ok(id) = vault_id::read_or_create(vault_dir) else {
         return Created::Unavailable;
     };
+    let Ok(item) = vault_id::random_hex() else {
+        return Created::Unavailable;
+    };
     let attributes = [APPLICATION, (ID_ATTRIBUTE, id.as_str())];
+    let tagged = [
+        APPLICATION,
+        (ID_ATTRIBUTE, id.as_str()),
+        (ITEM_ATTRIBUTE, item.as_str()),
+    ];
     let label = format!("MassOrca vault {id}");
     run(|| async {
         let collection = unlocked_default().await?;
@@ -64,10 +75,10 @@ pub(super) fn create(vault_dir: &Path, key: &MasterKey) -> Created {
             return Some(Created::AlreadyThere);
         }
         collection
-            .create_item(&label, &attributes, Secret::blob(key.bytes()), false, None)
+            .create_item(&label, &tagged, Secret::blob(key.bytes()), false, None)
             .await
             .ok()?;
-        Some(Created::Stored)
+        Some(Created::Stored(item.clone()))
     })
     .unwrap_or(Created::Unavailable)
 }
@@ -96,16 +107,31 @@ pub(super) fn open(vault_dir: &Path) -> Result<MasterKey, LockReason> {
     .unwrap_or(Err(LockReason::ProtectionUnavailable))
 }
 
-/// Removes this vault's item after a creation that could not record its protection.
-pub(super) fn delete(vault_dir: &Path) {
+/// Removes the item one creation stored, after it could not record its protection.
+pub(super) fn delete_created(vault_dir: &Path, item: &str) {
     let Ok(id) = vault_id::read(vault_dir) else {
         return;
     };
-    let attributes = [APPLICATION, (ID_ATTRIBUTE, id.as_str())];
+    delete_matching(vec![
+        APPLICATION,
+        (ID_ATTRIBUTE, id.as_str()),
+        (ITEM_ATTRIBUTE, item),
+    ]);
+}
+
+/// Removes every item of this vault, for a key reset of an empty vault.
+pub(super) fn delete_all(vault_dir: &Path) {
+    let Ok(id) = vault_id::read(vault_dir) else {
+        return;
+    };
+    delete_matching(vec![APPLICATION, (ID_ATTRIBUTE, id.as_str())]);
+}
+
+fn delete_matching(attributes: Vec<(&str, &str)>) {
     let _ = run(|| async {
         let collection = unlocked_default().await?;
-        for item in collection.search_items(&attributes).await.ok()? {
-            item.delete(None).await.ok()?;
+        for found in collection.search_items(&attributes).await.ok()? {
+            found.delete(None).await.ok()?;
         }
         Some(())
     });
