@@ -3,12 +3,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use massorca_core_agents::Agents;
+use massorca_core_agents::{Agents, Change};
 use massorca_core_store::Store;
 use massorca_core_terminal::TerminalManager;
 use massorca_core_workspace::Workspaces;
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
+use tokio::sync::broadcast;
 
 use crate::activity::Activity;
 use crate::capability::CapabilityRegistry;
@@ -42,6 +43,8 @@ pub struct AppState {
     pub terminals: TerminalManager,
     /// Agent sessions and their runs (decision 0051).
     pub agents: Agents,
+    /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
+    pub agent_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
