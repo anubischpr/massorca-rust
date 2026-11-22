@@ -242,7 +242,7 @@ fn actions(frame: &StartFrame) -> AnyElement {
                 .tooltip(GIT_LATER),
         )
         .child(
-            Button::new("start-remove", "Remove workspace…")
+            Button::new("start-remove", "Delete workspace…")
                 .variant(ButtonVariant::Ghost)
                 .leading_icon(IconName::Trash2)
                 .on_click(move |_, cx| {

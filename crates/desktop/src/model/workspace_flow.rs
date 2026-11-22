@@ -9,6 +9,9 @@ use crate::service::Refusal;
 /// The last row of every project menu (A95).
 pub const NO_PROJECT_LABEL: &str = "No project";
 
+/// The confirm button of every destructive delete dialog (D-WS-16).
+pub const DELETE_ACTION: &str = "Delete workspace";
+
 /// What a row of the project menu stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectChoice {
@@ -304,27 +307,27 @@ impl RemoveFlow {
         match &self.stage {
             RemoveStage::Confirm => RemoveCopy {
                 kind: DialogKind::Destructive,
-                title: format!("Remove workspace {name}?"),
+                title: format!("Delete workspace {name}?"),
                 body: "This removes the worktree folder from This PC.".to_owned(),
                 loss: Vec::new(),
-                action: "Remove workspace",
+                action: DELETE_ACTION,
             },
             RemoveStage::Dirty => RemoveCopy {
                 kind: DialogKind::Destructive,
-                title: format!("Discard changes in {name}?"),
+                title: format!("Delete workspace {name}?"),
                 body: "This workspace has changes that are not committed.".to_owned(),
                 loss: vec!["Uncommitted and untracked changes are deleted.".to_owned()],
-                action: "Discard changes and remove",
+                action: DELETE_ACTION,
             },
             RemoveStage::IgnoredFiles => RemoveCopy {
                 kind: DialogKind::Destructive,
-                title: format!("Delete ignored files in {name}?"),
+                title: format!("Delete workspace {name}?"),
                 body: "This workspace holds files that git ignores.".to_owned(),
                 loss: vec![
                     "Ignored files, such as build output and local settings, are deleted."
                         .to_owned(),
                 ],
-                action: "Delete ignored files and remove",
+                action: DELETE_ACTION,
             },
             RemoveStage::Orphan => RemoveCopy {
                 kind: DialogKind::Confirm,
@@ -547,7 +550,7 @@ mod tests {
     #[test]
     fn each_dialog_names_its_loss() {
         let mut flow = flow();
-        assert_eq!(flow.copy().title, "Remove workspace fix-login?");
+        assert_eq!(flow.copy().title, "Delete workspace fix-login?");
         flow.confirm();
         flow.answered(Err(Refusal::Dirty));
         let copy = flow.copy();
@@ -555,6 +558,20 @@ mod tests {
         assert_eq!(copy.loss.len(), 1);
         flow.confirm();
         flow.answered(Err(Refusal::IgnoredFiles));
-        assert_eq!(flow.copy().title, "Delete ignored files in fix-login?");
+        let copy = flow.copy();
+        assert_eq!(copy.title, "Delete workspace fix-login?");
+        assert_eq!(copy.loss.len(), 1);
+    }
+
+    #[test]
+    fn every_destructive_stage_offers_delete_workspace() {
+        let mut flow = flow();
+        assert_eq!(flow.copy().action, "Delete workspace");
+        flow.confirm();
+        flow.answered(Err(Refusal::Dirty));
+        assert_eq!(flow.copy().action, "Delete workspace");
+        flow.confirm();
+        flow.answered(Err(Refusal::IgnoredFiles));
+        assert_eq!(flow.copy().action, "Delete workspace");
     }
 }
