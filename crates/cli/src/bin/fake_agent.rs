@@ -27,6 +27,9 @@ const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
+/// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
+/// extra.
+const PRINT_HOME_ENV: &str = "FAKE_AGENT_PRINT_HOME";
 /// Set to `1`, `login` exits 1 without writing the token (decision 0059).
 const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
 /// What `login` writes into the token file.
@@ -141,7 +144,9 @@ impl Agent {
         } else {
             "credentials missing"
         });
-        say(&format!("home {}", home_name()));
+        if env::var_os(PRINT_HOME_ENV).is_some_and(|value| value == "1") {
+            say(&format!("home {}", home_name()));
+        }
         for name in probed_env() {
             say(&format!("env {name} {}", env_state(&name)));
         }
@@ -301,11 +306,11 @@ fn whoami() -> ExitCode {
     match token {
         Some(text) if !text.contains(EXPIRED_MARK) => {
             let identity = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
-            println!("signed in as {identity}");
+            let _ = writeln!(io::stdout().lock(), "signed in as {identity}");
             ExitCode::SUCCESS
         }
         _ => {
-            println!("expired");
+            let _ = writeln!(io::stdout().lock(), "expired");
             ExitCode::from(1)
         }
     }

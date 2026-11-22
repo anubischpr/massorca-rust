@@ -5,6 +5,7 @@
 mod harness;
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -281,7 +282,8 @@ fn import_reports_imported_failed_or_not_found() {
 fn activate_per_project_changes_which_account_a_started_agent_uses() {
     let sandbox = Sandbox::new();
     declare_fake(&sandbox);
-    let (notes, notes_workspace) = project_with_main(&sandbox, "notes");
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_PRINT_HOME", "1")]);
+    let (_, notes_workspace) = project_with_main(&sandbox, "notes");
     let (docs, docs_workspace) = project_with_main(&sandbox, "docs");
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
     let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
@@ -388,6 +390,7 @@ fn check_reports_expired_and_a_different_identity_as_conflict() {
 fn migration_turns_the_old_home_into_an_active_default_account() {
     let sandbox = Sandbox::new();
     declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_PRINT_HOME", "1")]);
     let legacy = sandbox
         .profile_dir("default")
         .join("agents")
@@ -428,7 +431,10 @@ fn a_started_run_with_a_linked_account_home_is_refused() {
     fs::create_dir_all(&elsewhere).expect("create the other directory");
     fs::remove_dir_all(&home).expect("remove the account home");
     if let Err(error) = make_link(&elsewhere, &home) {
-        eprintln!("skipped: links cannot be made here ({error})");
+        let _ = writeln!(
+            std::io::stderr(),
+            "skipped: links cannot be made here ({error})"
+        );
         return;
     }
 
