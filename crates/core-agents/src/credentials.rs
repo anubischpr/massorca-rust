@@ -254,6 +254,16 @@ fn remove_at(
     name: &str,
 ) -> Result<CredentialsRemoved, AgentError> {
     let _gate = lock_homes();
+    remove_at_locked(profile_dir, chain, home, name)
+}
+
+/// [`remove_at`] for a caller that already holds [`lock_homes`]: the gate is not reentrant.
+fn remove_at_locked(
+    profile_dir: &Path,
+    chain: &[&str],
+    home: &Path,
+    name: &str,
+) -> Result<CredentialsRemoved, AgentError> {
     check_chain(profile_dir, chain)?;
     let removed = match home_state(home)? {
         HomeState::Missing => false,
@@ -270,6 +280,16 @@ fn remove_at(
         kind: name.to_owned(),
         removed,
     })
+}
+
+/// [`remove_account`] for a caller that already holds [`lock_homes`].
+pub(crate) fn remove_account_locked(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<CredentialsRemoved, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    remove_at_locked(profile_dir, &["accounts", kind], &home, account)
 }
 
 /// The account's home when its kind's directory and it exist as plain directories, `None` when it does not exist yet
@@ -310,8 +330,11 @@ pub(crate) fn adopt_legacy_home(
 ) -> Result<(), AgentError> {
     let legacy = home_of(profile_dir, kind)?;
     let target = account_home_of(profile_dir, kind, account)?;
-    let (_homes, _homes_pin) = root_dir(profile_dir, &["homes"])?;
+    // `agents` is pinned once, by the accounts chain; `homes` is pinned on top of it (Windows), so neither can be
+    // swapped for a junction while the home moves.
     let (_root, _root_pin) = root_dir(profile_dir, &["accounts", kind])?;
+    #[cfg(windows)]
+    let _homes_pin = pin(&paths::agents_dir(profile_dir).join("homes"))?;
     if home_state(&legacy)? != HomeState::Directory {
         return Ok(());
     }

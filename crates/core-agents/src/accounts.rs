@@ -109,6 +109,7 @@ impl Agents {
                 reason: Some("the check reports the login is not signed in".to_owned()),
             });
         }
+        self.make_active_if_none(kind, &account);
         let row = self.account_of(kind, &account)?;
         let summary = self.summary(
             &row,
@@ -165,7 +166,7 @@ impl Agents {
         if let Ok((decl, program)) = self.startable_kind(kind) {
             self.sign_out(&decl, &program, kind, account);
         }
-        credentials::remove_account(self.profile_dir(), kind, account)?;
+        credentials::remove_account_locked(self.profile_dir(), kind, account)?;
         self.store().delete_agent_account(account)?;
         drop(gate);
         Ok(AccountsRemoved {
@@ -372,8 +373,8 @@ impl Agents {
         from: &Path,
         label: &str,
     ) -> Result<(String, CredentialsImported), AgentError> {
-        let gate = credentials::lock_homes();
-        self.migrate_legacy(&gate, kind)?;
+        // Not held across the import: `import_account` takes the gate itself (it is not reentrant).
+        self.migrate_now(kind)?;
         let account = new_id();
         let imported = credentials::import_account(self.profile_dir(), kind, &account, from)?;
         self.store().insert_agent_account(&AgentAccountRow {
@@ -384,7 +385,6 @@ impl Agents {
             identity: None,
             state: state_name(AccountState::Unknown).to_owned(),
         })?;
-        drop(gate);
         Ok((account, imported))
     }
 
@@ -460,7 +460,6 @@ impl Agents {
 
     /// Deletes an account that is not kept: its home and its row. A failure is logged, never returned.
     pub(crate) fn discard_account(&self, kind: &str, account: &str) {
-        let gate = credentials::lock_homes();
         if let Err(error) = credentials::remove_account(self.profile_dir(), kind, account) {
             tracing::warn!(
                 kind,
@@ -471,7 +470,6 @@ impl Agents {
         if self.store().delete_agent_account(account).is_err() {
             tracing::warn!(kind, "a discarded account's row could not be deleted");
         }
-        drop(gate);
     }
 
     pub(crate) fn make_active_if_none(&self, kind: &str, account: &str) {
