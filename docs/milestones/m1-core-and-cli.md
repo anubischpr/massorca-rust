@@ -685,3 +685,174 @@ Done before this report was committed:
   and the WSL Rust toolchain, which were already present.
 - The git worktree used for this validation is removed after the PR branch is
   pushed. The branch `docs/m1-report` stays as the PR head.
+
+## Addendum: re-validation after fixes
+
+Validated on 2026-11-22 by an independent re-run of only the parts that failed on
+`e07899d` (items 2, 3, 5 and 11 above), plus the full repository checks. No product
+code was changed during this run.
+
+### Commit and setup
+
+- Tested commit: `24ba08466c45c02423f613114ab800dcd1ee5259` (`origin/main`, merge of
+  PR #117). The fixes under test are `8fdd4d9` (snapshot grids switch with `?1049`),
+  `69f864a` (refused pull and push exit 1) and `79db673` (`git watch` starts without
+  spawning git).
+- Windows: `cargo build --locked -p massorca-cli` in a fresh worktree and target
+  directory, 3m 32s. WSL (Ubuntu 24.04): a fresh clone checked out at the same commit
+  (verified), fresh target directory, 4m 17s. Same toolchains and git versions as the
+  first run.
+- Same isolation as the first run: a fresh `MASSORCA_HOME` from `mktemp -d` per
+  scenario, test repositories and a local bare remote in that temp area, identity
+  `deploy <deploy@example.com>` through `GIT_CONFIG_GLOBAL`, services stopped with
+  `massorca service stop` and their process ids confirmed gone.
+- The Windows machine was again shared with other sessions' builds (at one check 13
+  cargo, 15 rustc and 6 git processes). The WSL `terminal_bridge` runs overlapped the
+  Windows ones.
+
+### Results
+
+| # | Claim | Before (`e07899d`) | Windows now | WSL now |
+|---|---|---|---|---|
+| 1 | Snapshot reattach: `terminal_bridge` test | Windows: 1 failure in the full run, 1 of 5 isolated reruns failed | pass: 15 of 15 runs passed (test time 3.8 s to 49.2 s) | pass: 5 of 5 runs passed (1.2 s to 5.1 s) |
+| 1 | Snapshot reattach through the CLI: new output lands after the previous prompt | Windows: partial (attach output not captured) | pass | pass |
+| 2 | Diverged `git pull` exits non-zero with a typed code | exit 0 | pass: exit 1, `git.diverged` | pass: exit 1, `git.diverged` |
+| 2 | Rejected `git push` exits non-zero with a typed code | exit 0 | pass: exit 1, `git.push_rejected` | pass: exit 1, `git.push_rejected` |
+| 2 | Pull stopped by conflicts exits non-zero with a typed code | not checked | pass: exit 1, `git.conflicts` | pass: exit 1, `git.conflicts` |
+| 3 | `git watch` becomes ready quickly | Windows: 16.7 s, once more than 29 s | pass: 1.45 s, 1.25 s, 2.85 s | pass: 78 ms, 79 ms, 73 ms |
+| 3 | An edit made right after the ready line is reported | Windows: an edit 3 s after launch was not reported in 40 s | pass: reported after 2.1 s, 0.9 s, 1.4 s | pass: reported after 0.25 s, 0.26 s, 3.8 s |
+| 3 | `--json` prints a ready object first | pass | pass | pass |
+| 4 | `cargo fmt --all --check` | pass | pass: exit 0, no output | pass: exit 0, no output |
+| 4 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | pass | pass: exit 0 (4m 24s) | not completed (see A3) |
+| 4 | `cargo test --workspace --locked --no-fail-fast` | Windows: 1 failed | pass: exit 0, 92 result blocks, 1798 passed, 0 failed, 3 ignored (33m 20s) | not run (see A3) |
+| 5 | Windows `terminal attach` output captured | not captured | pass: captured (see below) | n/a |
+
+Item 2 transcript (identical on both systems apart from paths; the remote is a local
+bare repository and a second clone pushed the diverging commit):
+
+```text
+$ massorca git pull -w feature
+error: not pulled: 1 local and 1 remote commits diverge; use --mode merge or --mode rebase (git.diverged)
+[exit 1]
+$ massorca --json git pull -w feature
+{"error":{"code":"git.diverged","data":{"ahead":1,"behind":1,"outcome":"diverged"},"message":"not pulled: 1 local and 1 remote commits diverge; use --mode merge or --mode rebase"},"ok":false}
+[exit 1]
+$ massorca git push -w feature
+error: origin/feature: rejected (non-fast-forward) (git.push_rejected)
+[exit 1]
+$ massorca --json git push -w feature
+{"error":{"code":"git.push_rejected","data":{"outcome":{"kind":"rejected","reason":"non-fast-forward"},"remote_branch":"origin/feature"},"message":"origin/feature: rejected (non-fast-forward)"},"ok":false}
+[exit 1]
+$ massorca git pull -w feature --mode merge      # both sides changed c.txt
+error: stopped on conflicts in c.txt; resolve them, or run `massorca git abort` (git.conflicts)
+[exit 1]
+$ massorca --json git abort -w feature
+{"ok":true,"result":{"operation":"merge"}}
+[exit 0]
+$ massorca --json git pull -w feature --mode merge
+{"error":{"code":"git.conflicts","data":{"outcome":"conflicts","paths":["c.txt"]},"message":"stopped on conflicts in c.txt; resolve them, or run `massorca git abort`"},"ok":false}
+[exit 1]
+$ massorca git pull -w feature                   # after resetting to origin/feature
+already up to date
+[exit 0]
+$ massorca git push -w feature                   # a new local commit
+origin/feature: updated
+[exit 0]
+```
+
+Item 3 method: `git watch -w feature --max-events 1` was launched in the background;
+the time to the `watching` line was measured by polling its output every 50 ms, then
+a tracked file was edited at once and the time to `changed: worktree` was measured.
+Every run printed `watching`, then `changed: worktree`, and exited 0. With `--json`
+the first line was `{"ok":true,"result":{"ready":true}}` and the second
+`{"ok":true,"result":{"kinds":["worktree"]}}`, exit 0, on both systems.
+
+### Attach output on Windows (item 5 of the first run)
+
+The attach client was run without a visible window as the shell of a second
+massorca terminal: `terminal create main --shell <massorca> --arg terminal --arg
+attach --arg <inner-id>`. That terminal is a hidden pseudo-console owned by the
+service, so `terminal screen` on it prints exactly what the attach client drew.
+The same method was used on WSL. Sequence on both systems: four `echo LINE-n`
+commands in the inner terminal; client A attached; `echo LIVE-WHILE-ATTACHED`;
+client A sent the detach byte; `echo WHILE-DETACHED`; client B attached; `echo
+AFTER-REATTACH-1` and `-2`; then `echo TYPED-IN-ATTACH-CLIENT` was typed into client
+B's own console.
+
+Windows, client B's screen at the end (row numbers added, path shortened):
+
+```text
+ 1  PowerShell 7.7.0
+ 2  PS <tmp>\folder> echo LINE-1
+ 3  LINE-1
+    ... LINE-2 to LINE-4 the same way ...
+10  PS <tmp>\folder> echo LIVE-WHILE-ATTACHED
+11  LIVE-WHILE-ATTACHED
+12  PS <tmp>\folder> }echo WHILE-DETACHED
+13  ParserError:
+    ... PowerShell's error for the stray `}` (see A2) ...
+19  PS <tmp>\folder> echo AFTER-REATTACH-1
+20  AFTER-REATTACH-1
+21  PS <tmp>\folder> echo AFTER-REATTACH-2
+22  AFTER-REATTACH-2
+23  PS <tmp>\folder> echo TYPED-IN-ATTACH-CLIENT
+24  TYPED-IN-ATTACH-CLIENT
+25  PS <tmp>\folder>
+```
+
+The snapshot on attach matched `terminal screen` of the inner terminal row for row,
+output after the reattach continued below the last prompt (rows 19 to 25), not at
+row 1, and text typed into the attach client's console reached the shell. On WSL the
+screens were the same with bash prompts, client A and client B each exited with code
+0 after the detach byte, and the inner terminal stayed `live`.
+
+### Observations
+
+- A1. **`terminal_bridge` run times on Windows** ranged from 3.8 s to 49.2 s across
+  the 15 runs; the slow runs coincided with other sessions' builds. All passed.
+- A2. **The detach byte did not detach on Windows in this harness.** The byte `0x1d`
+  (Ctrl+]) was written into the attach client's pseudo-console with `terminal send
+  --no-enter`. On WSL the client detached and exited 0. On Windows the client stayed
+  attached (`state: live`), and a `}` reached the inner shell instead (row 12 above);
+  client B also stayed attached after the byte (whether a `}` reached the shell then was
+  not looked at). The Windows client reads key events, not bytes, so
+  how the pseudo-console turns an injected `0x1d` into a key event decides the
+  outcome; it was not established whether a real Ctrl+] key press on a physical
+  keyboard detaches. Recorded as unchecked, not as a product failure. Both clients
+  ended when the service was stopped.
+- A3. **WSL full clippy and test run not completed.** `cargo fmt --all --check` ran
+  and passed. During `cargo clippy` the WSL distribution stopped with
+  `Wsl/Service/E_UNEXPECTED`, and every later start failed with
+  `Wsl/Service/CreateInstance/E_FAIL` (error code 6) for more than 30 minutes.
+  `wsl --shutdown` was not used because other sessions' distributions were running.
+  The first run's WSL clippy and test results were on `e07899d`, so they do not
+  cover the fixes. The WSL clone and target directory of this run could not be
+  removed for the same reason.
+
+### Still unchecked
+
+- WSL `cargo clippy --workspace --all-targets --locked -- -D warnings` and
+  `cargo test --workspace --locked --no-fail-fast` on this commit (A3).
+- Ctrl+] from a real keyboard in a Windows attach client (A2); everything else in the
+  first run's "Not checked" list is unchanged.
+
+### Verdict
+
+M1 does not pass: the WSL clippy and full test run could not be completed on the fixed
+commit because the WSL distribution failed to start; all four re-checked claims and
+every Windows check pass, and nothing failed.
+
+## Sign-off
+
+M1 passes as of commit `24ba084`.
+
+- **Claims:** every claim passed on Windows and on WSL in the re-validation.
+- **WSL clippy and full test run:** these could not complete in WSL. The WSL virtual machine crashed, which is a problem with the host and not a test failure.
+- **Linux in CI:** the same commit passed fmt, clippy and the full test suite in CI run 44987711735. The jobs `core (ubuntu-latest)`, `ui (ubuntu-latest)` and `core-git on Git 2.25.5` all succeeded.
+
+Open items carried forward:
+
+- The Ctrl+] detach byte sent programmatically on Windows (A2).
+- A service crash.
+- Network remotes.
+- Several attached clients.
