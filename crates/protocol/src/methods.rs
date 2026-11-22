@@ -6,6 +6,7 @@
 pub mod agents;
 pub mod config;
 pub mod events;
+pub mod git;
 pub mod projects;
 pub mod service;
 pub mod terminals;

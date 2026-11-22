@@ -356,7 +356,10 @@ impl RenderOnce for UsageRing {
                     .child(AgentIcon::new(self.agent).size(AgentIconSize::Small)),
             );
         if let Some(value) = value {
-            ring = ring.aria_numeric_value(value);
+            ring = ring
+                .aria_numeric_value(value)
+                .aria_min_numeric_value(0.0)
+                .aria_max_numeric_value(100.0);
         }
         if let Some(dot) = corner_dot(self.reading, dimmed) {
             ring = ring.child(corner_dot_element(dot, &palette));
@@ -605,5 +608,36 @@ mod tests {
         let (left, top) = dot_origin();
         assert_close(left, 21.0);
         assert_close(top, 5.0);
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_usage_ring_is_a_progress_bar_whose_value_is_the_percentage(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                UsageRing::new(AgentKind::Claude, UsageReading::Percent(62.0)).render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.numeric_value(), Some(62.0));
+        assert_eq!(node.min_numeric_value(), Some(0.0));
+        assert_eq!(node.max_numeric_value(), Some(100.0));
+        assert!(node.label().is_some_and(|label| label.contains("62")));
+    }
+
+    #[gpui::test]
+    fn a_ring_that_is_still_loading_reports_no_value(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(UsageRing::new(AgentKind::Claude, UsageReading::Loading).render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.numeric_value(), None);
     }
 }

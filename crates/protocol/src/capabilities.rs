@@ -11,3 +11,4 @@ pub const TERMINALS: &str = "terminals/1";
 pub const BINARY_FRAMES: &str = "binary-frames/1";
 /// Agent methods (`agent.*`) and the agent watch stream (decision 0057).
 pub const AGENTS: &str = "agents/1";
+pub const GIT: &str = "git/1";

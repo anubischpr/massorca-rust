@@ -228,12 +228,10 @@ async fn every_core_method_has_a_command_descriptor() {
         );
     }
     assert!(
-        commands
+        commands.iter().all(|command| methods
             .iter()
-            .all(|command| PHASE1_METHODS.contains(&command.method.as_str())
-                || TERMINAL_METHODS.contains(&command.method.as_str())
-                || AGENT_METHODS.contains(&command.method.as_str())),
-        "every command runs a known core method"
+            .any(|info| info.owner == Owner::Core && info.method == command.method)),
+        "every command runs a registered core method"
     );
     stop(running).await;
 }

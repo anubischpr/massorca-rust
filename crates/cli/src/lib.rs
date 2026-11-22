@@ -12,6 +12,7 @@ pub mod connect;
 pub mod cwd_path;
 pub mod error;
 pub mod ext;
+pub mod git;
 pub mod logging;
 pub mod output;
 pub mod project;

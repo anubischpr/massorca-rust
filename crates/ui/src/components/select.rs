@@ -3,6 +3,7 @@
 //! model takes over; Enter chooses and Escape returns focus to the trigger. Closed and focused,
 //! a letter selects the next option that starts with it.
 
+use crate::a11y;
 use crate::components::menu::{
     MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay, type_ahead,
 };
@@ -13,9 +14,9 @@ use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Window, div, px,
+    AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Render, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use std::fmt;
 
@@ -53,6 +54,7 @@ pub struct SelectView {
     options: Vec<SharedString>,
     selected: Option<usize>,
     placeholder: SharedString,
+    label: Option<SharedString>,
     error: Option<SharedString>,
     disabled: bool,
     empty_text: SharedString,
@@ -85,6 +87,7 @@ impl SelectView {
             options: options.into_iter().map(Into::into).collect(),
             selected: None,
             placeholder: "Choose".into(),
+            label: None,
             error: None,
             disabled: false,
             empty_text: "Nothing to choose from".into(),
@@ -103,6 +106,12 @@ impl SelectView {
     }
 
     /// Shown in the trigger while nothing is chosen, naming the choice.
+    /// The field's name for assistive technology. Without one, the selected value names it.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
         self
@@ -133,6 +142,27 @@ impl SelectView {
 
     pub fn selected_index(&self) -> Option<usize> {
         self.selected
+    }
+
+    /// The trigger as a combobox: named by the label, else by the selected value, and expanded
+    /// while its list is open.
+    fn combobox(&self, trigger: Stateful<Div>) -> a11y::Annotated<Stateful<Div>> {
+        let name = self
+            .label
+            .clone()
+            .or_else(|| self.selected_label().cloned())
+            .unwrap_or_else(|| self.placeholder.clone());
+        let mut trigger = trigger
+            .role(Role::ComboBox)
+            .aria_label(name)
+            .aria_expanded(self.is_open());
+        if let Some(value) = self.selected_label() {
+            trigger = trigger.aria_value(value.clone());
+        }
+        if let Some(error) = self.error.clone() {
+            trigger = trigger.aria_description(error);
+        }
+        a11y::disabled(trigger, self.disabled)
     }
 
     pub fn selected_label(&self) -> Option<&SharedString> {
@@ -169,6 +199,7 @@ impl SelectView {
             .map_or(0.0, |trigger| f32::from(trigger.size.width));
         let menu = cx.new(|cx| {
             MenuView::new(entries, window, cx)
+                .listbox()
                 .with_min_width(width)
                 .with_empty_text(empty)
                 .with_highlight(selected)
@@ -300,7 +331,10 @@ impl Render for SelectView {
                 }));
         }
 
-        let mut host = self.bounds.track(div().relative()).child(trigger);
+        let mut host = self
+            .bounds
+            .track(div().relative())
+            .child(self.combobox(trigger));
         if let Some(error) = self.error.clone() {
             host = host.child(
                 div()
@@ -513,5 +547,57 @@ mod element_tests {
         press_key(cx, "r");
         assert_eq!(select.read_with(cx, |s, _| s.selected_index()), Some(2));
         assert_eq!(*events.borrow(), vec![SelectEvent::Changed(2)]);
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{AppContext, TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn the_trigger_is_a_combobox_named_by_its_selected_value(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            let select = cx.new(|cx| SelectView::new(["Alpha", "Beta"], cx).selected(Some(1)));
+            select.update(cx, |view, _| {
+                reported(view.combobox(div().id("select-trigger")))
+            })
+        })
+        .expect("the trigger is reported");
+        assert_eq!(node.role(), Role::ComboBox);
+        assert_eq!(node.label(), Some("Beta"));
+        assert_eq!(node.value(), Some("Beta"));
+        assert_eq!(node.is_expanded(), Some(false));
+    }
+
+    #[gpui::test]
+    fn a_label_names_the_combobox_before_its_value(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            let select = cx.new(|cx| {
+                SelectView::new(["Alpha", "Beta"], cx)
+                    .label("Environment")
+                    .selected(Some(1))
+            });
+            select.update(cx, |view, _| {
+                reported(view.combobox(div().id("select-trigger")))
+            })
+        })
+        .expect("the trigger is reported");
+        assert_eq!(node.label(), Some("Environment"));
+        assert_eq!(node.value(), Some("Beta"));
+    }
+
+    #[gpui::test]
+    fn an_open_combobox_is_expanded(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let select = cx.new(|cx| SelectView::new(["Alpha", "Beta"], cx));
+            select.update(cx, |view, cx| {
+                view.open(window, cx);
+                reported(view.combobox(div().id("select-trigger")))
+            })
+        })
+        .expect("the trigger is reported");
+        assert_eq!(node.is_expanded(), Some(true));
     }
 }

@@ -3,6 +3,7 @@
 //!
 //! Its accessible name is its tooltip text, so the constructor requires one.
 
+use crate::a11y;
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{
     ButtonSize, ClickHandler, HOVER_GROUP, StatePreview, glyph, loading_slot,
@@ -13,8 +14,8 @@ use crate::theme::{ActiveTheme, Theme, box_shadows};
 use crate::tokens::{Color, RADIUS_MD, SPACE_HALF};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    App, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
+    SharedString, StatefulInteractiveElement, Styled, Toggled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -272,8 +273,11 @@ impl RenderOnce for IconButton {
             window.request_animation_frame();
         }
 
+        let name = self.name.clone();
         let mut root = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_label(name)
             .track_focus(&focus)
             .focus_ring(&theme)
             .group(HOVER_GROUP)
@@ -299,12 +303,19 @@ impl RenderOnce for IconButton {
             root = root.on_click(move |_, window, cx| on_click(window, cx));
         }
 
+        if let Some(pressed) = self.toggled {
+            root = root.aria_toggled(Toggled::from(pressed));
+        }
+        if let Some(reason) = self.reason.clone().filter(|_| self.disabled) {
+            root = root.aria_description(reason);
+        }
+
         let root = if self.loading {
             root.child(loading_slot(Some(self.icon), icon_size, rest.icon))
         } else {
             root.child(glyph(self.icon, icon_size, rest.icon, hover_icon))
         };
-        match self.status {
+        let root = match self.status {
             Some(tone) => root.child(
                 div()
                     .absolute()
@@ -313,7 +324,8 @@ impl RenderOnce for IconButton {
                     .child(Badge::dot().tone(tone)),
             ),
             None => root,
-        }
+        };
+        a11y::disabled(a11y::busy(root, self.loading), self.disabled)
     }
 }
 
@@ -514,5 +526,64 @@ mod tests {
             press_key(cx, "space");
             assert_eq!(clicks.get(), 0, "disabled={disabled} loading={loading}");
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{
+        TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn an_icon_button_is_a_button_named_by_its_tooltip_text(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(IconButton::new("settings", IconName::Settings, "Settings").render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.label(), Some("Settings"));
+        assert_eq!(node.toggled(), None);
+    }
+
+    #[gpui::test]
+    fn a_toggle_reports_its_pressed_state(cx: &mut TestAppContext) {
+        let pressed = root(cx, |window, cx| {
+            reported(
+                IconButton::new("sidebar", IconName::PanelLeft, "Sidebar")
+                    .toggle(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(pressed.toggled(), Some(Toggled::True));
+
+        let released = root(cx, |window, cx| {
+            reported(
+                IconButton::new("sidebar", IconName::PanelLeft, "Sidebar")
+                    .toggle(false)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(released.toggled(), Some(Toggled::False));
+    }
+
+    #[gpui::test]
+    fn a_disabled_icon_button_gives_its_reason_as_the_description(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                IconButton::new("host", IconName::Server, "Host")
+                    .disabled(true)
+                    .disabled_reason("Host unreachable")
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
+        assert_eq!(node.description(), Some("Host unreachable"));
     }
 }
