@@ -90,6 +90,10 @@ impl Problems {
         });
     }
 
+    pub(crate) fn extend(&mut self, problems: Vec<Problem>) {
+        self.0.extend(problems);
+    }
+
     pub(crate) fn into_vec(self) -> Vec<Problem> {
         self.0
     }

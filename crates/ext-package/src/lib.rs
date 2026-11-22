@@ -4,7 +4,9 @@
 
 mod error;
 pub mod ids;
+pub mod manifest;
 pub mod package_path;
 pub mod permission;
 
 pub use error::{Error, Problem, codes};
+pub use manifest::{Manifest, load, parse, validate};
