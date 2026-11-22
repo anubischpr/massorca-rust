@@ -6,14 +6,17 @@ use super::Shell;
 use crate::model::project_add::{ADD_PROJECT_LABEL, AddProjectForm, NO_PROJECTS_LABEL};
 use crate::model::status_items::{StatusItem, visibility_menu_items};
 use crate::model::workspace_flow::{
-    CreateForm, ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, project_menu_rows,
+    CreateForm, ProjectChoice, ProjectIcon, RemoveFlow, RemoveStage, WorkspaceMenuEntry,
+    WorkspaceMenuId, chosen_workspace_item, project_menu_rows, workspace_menu,
 };
 use crate::service::Refusal;
-use gpui::{AppContext, Context, Entity, Focusable, Pixels, Point, Subscription, Window};
+use gpui::{
+    AppContext, ClipboardItem, Context, Entity, Focusable, Pixels, Point, Subscription, Window,
+};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::IconName;
-use massorca_ui::components::menu::{MenuEntry, MenuEvent, MenuItem, MenuView};
+use massorca_ui::components::menu::{MenuChoice, MenuEntry, MenuEvent, MenuItem, MenuView};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 
@@ -80,7 +83,11 @@ pub(super) enum ProjectMenuChoice {
 pub(super) enum MenuTarget {
     /// One entry per menu row, with `None` for captions and separators.
     Projects(Vec<Option<ProjectMenuChoice>>),
-    Workspace(String),
+    /// A workspace's menu: its rows, and the workspace they act on.
+    Workspace {
+        id: String,
+        rows: Vec<WorkspaceMenuEntry>,
+    },
     /// One entry per menu row, with `None` for the heading.
     StatusItems(Vec<Option<StatusItem>>),
     /// The start page's project menu: the rows of the project menu, chosen to open a start page.
@@ -109,6 +116,47 @@ pub(super) fn icon_of(icon: ProjectIcon) -> IconName {
     match icon {
         ProjectIcon::Folder => IconName::Folder,
         ProjectIcon::FolderStruck => IconName::FolderX,
+    }
+}
+
+/// The rows as the ui menu draws them: an off row shows its reason, a submenu lists its items and
+/// Delete is destructive (D-WS-02).
+fn menu_entries(rows: &[WorkspaceMenuEntry]) -> Vec<MenuEntry> {
+    rows.iter()
+        .map(|row| match row {
+            WorkspaceMenuEntry::Item { id, label, off } => item_entry(*id, label, *off),
+            WorkspaceMenuEntry::Submenu { id, label, items } => MenuItem::new(*label)
+                .icon(menu_icon(*id))
+                .submenu(menu_entries(items))
+                .into(),
+            WorkspaceMenuEntry::Divider => MenuEntry::Separator,
+        })
+        .collect()
+}
+
+fn item_entry(id: WorkspaceMenuId, label: &'static str, off: Option<&'static str>) -> MenuEntry {
+    let mut item = MenuItem::new(label).icon(menu_icon(id));
+    if let Some(reason) = off {
+        item = item.disabled(reason);
+    }
+    if id == WorkspaceMenuId::Delete {
+        item = item.destructive();
+    }
+    item.into()
+}
+
+fn menu_icon(id: WorkspaceMenuId) -> IconName {
+    match id {
+        WorkspaceMenuId::NewSession => IconName::MessageSquare,
+        WorkspaceMenuId::OpenIn => IconName::ExternalLink,
+        WorkspaceMenuId::OpenFileManager => IconName::Folder,
+        WorkspaceMenuId::OpenTerminal => IconName::SquareTerminal,
+        WorkspaceMenuId::OpenEditor | WorkspaceMenuId::Developer => IconName::Code,
+        WorkspaceMenuId::Rename | WorkspaceMenuId::EditWorkspace => IconName::Pencil,
+        WorkspaceMenuId::SourceControl | WorkspaceMenuId::CopyBranch => IconName::GitBranch,
+        WorkspaceMenuId::CopyPath => IconName::Copy,
+        WorkspaceMenuId::RevealInWorkPanel => IconName::PanelRight,
+        WorkspaceMenuId::Delete => IconName::Trash2,
     }
 }
 
@@ -238,7 +286,7 @@ impl Shell {
         );
     }
 
-    /// The context menu of a workspace row.
+    /// The context menu of a workspace row (D-WS-02), built from the workspace's record.
     pub(super) fn open_workspace_menu(
         &mut self,
         id: String,
@@ -248,20 +296,57 @@ impl Shell {
         if self.service.is_none() {
             return;
         }
-        let entries = vec![
-            MenuItem::new("Remove workspace...")
-                .icon(IconName::Trash2)
-                .destructive()
-                .into(),
-        ];
+        let Some(rows) = self
+            .store
+            .read(cx)
+            .state()
+            .workspace(&id)
+            .map(workspace_menu)
+        else {
+            return;
+        };
         self.open_menu(
-            entries,
-            MenuTarget::Workspace(id),
+            menu_entries(&rows),
+            MenuTarget::Workspace { id, rows },
             OverlayLayer::Page,
             window.mouse_position(),
             window,
             cx,
         );
+    }
+
+    /// Runs a chosen workspace row. Rows that are off never reach here.
+    fn run_workspace_action(&mut self, id: &str, action: WorkspaceMenuId, cx: &mut Context<Self>) {
+        match action {
+            WorkspaceMenuId::Delete => self.open_remove(id, cx),
+            WorkspaceMenuId::CopyPath | WorkspaceMenuId::CopyBranch => {
+                let text = self
+                    .store
+                    .read(cx)
+                    .state()
+                    .workspace(id)
+                    .and_then(|workspace| {
+                        if action == WorkspaceMenuId::CopyBranch {
+                            workspace.branch.clone()
+                        } else {
+                            Some(workspace.path.clone())
+                        }
+                    });
+                if let Some(text) = text {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            WorkspaceMenuId::NewSession
+            | WorkspaceMenuId::OpenIn
+            | WorkspaceMenuId::OpenFileManager
+            | WorkspaceMenuId::OpenTerminal
+            | WorkspaceMenuId::OpenEditor
+            | WorkspaceMenuId::Rename
+            | WorkspaceMenuId::EditWorkspace
+            | WorkspaceMenuId::SourceControl
+            | WorkspaceMenuId::Developer
+            | WorkspaceMenuId::RevealInWorkPanel => {}
+        }
     }
 
     /// "Add a project…": a dialog for the path of a folder or repository (A38). Needs a service.
@@ -403,7 +488,7 @@ impl Shell {
             cx.subscribe_in(&menu, window, |shell, _, event: &MenuEvent, window, cx| {
                 let menu = shell.dialogs.menu.take();
                 if let (MenuEvent::Chosen(choice), Some(menu)) = (event, menu) {
-                    shell.menu_chosen(menu.target, choice.row, window, cx);
+                    shell.menu_chosen(menu.target, *choice, window, cx);
                 }
                 cx.notify();
             });
@@ -419,10 +504,11 @@ impl Shell {
     fn menu_chosen(
         &mut self,
         target: MenuTarget,
-        row: usize,
+        choice: MenuChoice,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let row = choice.row;
         match target {
             MenuTarget::Projects(choices) => match choices.get(row).cloned().flatten() {
                 Some(ProjectMenuChoice::Project(choice)) => {
@@ -440,7 +526,11 @@ impl Shell {
                     self.model.toggle_status_item(item);
                 }
             }
-            MenuTarget::Workspace(id) => self.open_remove(&id, cx),
+            MenuTarget::Workspace { id, rows } => {
+                if let Some(action) = chosen_workspace_item(&rows, row, choice.child) {
+                    self.run_workspace_action(&id, action, cx);
+                }
+            }
             MenuTarget::StartProject(choices) => match choices.get(row).cloned().flatten() {
                 Some(ProjectMenuChoice::Project(choice)) => self.open_start_project(choice, cx),
                 Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
