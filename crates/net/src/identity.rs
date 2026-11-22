@@ -82,11 +82,19 @@ impl TlsIdentity {
     /// Writes both files through a `.tmp` sibling and a rename. On Unix the key is 0600 and new parent directories
     /// 0700; on Windows the per-user profile directory's ACL protects them.
     pub fn save(&self, key_path: &Path, cert_path: &Path) -> Result<(), NetError> {
-        let key_pair = KeyPair::try_from(&self.key).map_err(certificate_error)?;
-        let cert_pem = pem_encode("CERTIFICATE", &self.cert);
-        write_atomically(key_path, key_pair.serialize_pem().as_bytes(), true)?;
+        let (key_pem, cert_pem) = self.to_pem()?;
+        write_atomically(key_path, key_pem.as_bytes(), true)?;
         write_atomically(cert_path, cert_pem.as_bytes(), false)?;
         Ok(())
+    }
+
+    /// The private key and the certificate as PEM text, for a caller that writes the files itself.
+    pub fn to_pem(&self) -> Result<(String, String), NetError> {
+        let key_pair = KeyPair::try_from(&self.key).map_err(certificate_error)?;
+        Ok((
+            key_pair.serialize_pem(),
+            pem_encode("CERTIFICATE", &self.cert),
+        ))
     }
 
     pub fn pin(&self) -> Pin {

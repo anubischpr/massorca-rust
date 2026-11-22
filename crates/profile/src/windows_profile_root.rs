@@ -188,6 +188,32 @@ fn folder_times_are_reliable(dir: &Path) -> bool {
     read != 0 && String::from_utf16_lossy(&name[..len]) == "NTFS"
 }
 
+/// The read-only part of a start's location check: nothing is created or repaired, and the content is not scanned.
+pub(crate) fn check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    let trusted = Trusted::current()?;
+    check_link_home(home, &trusted, &RealDisk)?;
+    for (ancestor, links) in [
+        (home, Links::Follow),
+        (profiles_dir(home, dir), Links::Open),
+    ] {
+        if fs::symlink_metadata(ancestor).is_ok() {
+            check_ancestor(ancestor, links, &trusted, &RealDisk)?;
+        }
+    }
+    if fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether the DACL of the folder `path` lets anyone but the accepted owners and Administrators change it.
+pub(crate) fn writable_by_others(path: &Path) -> Result<bool, RootAccessError> {
+    let descriptor = Descriptor::parse(&read_sddl(path, Links::Open)?);
+    Ok(descriptor.grants_write_to_others(&Trusted::current()?))
+}
+
 /// A home that is itself a link is checked through its target, but the link lives in its parent: whoever can change
 /// that parent can point the home elsewhere later. So the parent must be as safe as an ancestor.
 pub(crate) fn check_link_home(
