@@ -518,6 +518,19 @@ fn the_vault_scope_filter_keeps_one_kind_of_scope_on_the_page(cx: &mut TestAppCo
     );
 }
 
+#[gpui::test]
+fn the_add_dialog_closes_from_its_close_button_and_stores_nothing(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    click(cx, "button:settings-vault-add");
+    click(cx, "dialog-close");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the close button closes Add secret"
+    );
+}
+
 /// Opens Add and types `name` into the name field.
 fn open_add_named(rig: &mut Rig, cx: &mut VisualTestContext, name: &str) {
     rig.shell.update(cx, |shell, cx| shell.open_add_secret(cx));

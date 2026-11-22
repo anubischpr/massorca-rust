@@ -12,13 +12,13 @@ use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogWidth};
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::{SPACE_2, SPACE_3, TYPE_BODY_SM};
+use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 use super::Shell;
 use super::settings::value_box;
 use crate::model::secret_form::{
-    FormMode, FormStatus, SecretForm, refusal_sentence, scope_choices,
+    FormMode, FormStatus, SecretForm, refusal_sentence, scope_caption, scope_choices, scope_segment,
 };
 use crate::model::secret_vault::scope_title;
 use crate::service::Refusal;
@@ -90,6 +90,7 @@ impl Shell {
         let name_field = cx.new(|cx| {
             TextField::new(cx)
                 .label("Variable name")
+                .helper("Letters, digits and underscores. Cannot start with a digit.")
                 .placeholder("OPENAI_API_KEY")
                 .mono()
         });
@@ -126,14 +127,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Chooses the scope an add stores to, by its segment.
-    pub(super) fn choose_secret_scope(&mut self, index: usize, cx: &mut Context<Self>) {
-        let scope = self
-            .vault_dialog
-            .as_ref()
-            .and_then(|dialog| dialog.scopes.get(index))
-            .map(|(scope, _)| scope.clone());
-        if let (Some(dialog), Some(scope)) = (self.vault_dialog.as_mut(), scope) {
+    /// Chooses the scope an add stores to, by the segment the scope control chose.
+    pub(super) fn choose_secret_scope(&mut self, scope: String, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.vault_dialog.as_mut() {
             dialog.form.scope = scope;
         }
         cx.notify();
@@ -270,10 +266,12 @@ pub(super) fn secret_dialog(
         )
         .child(name_field(dialog, &theme))
         .child(scope_field(dialog, shell, &theme))
+        .children(add_link(dialog))
         .child(value_field(dialog, shell, has_value, saving, &theme));
     let (save, dismiss) = (shell.clone(), shell.clone());
     let mut view = Dialog::new("settings-vault-dialog", title)
         .open(true)
+        .closable()
         .width(DialogWidth::Medium)
         .child(body)
         .action(action)
@@ -303,22 +301,47 @@ fn name_field(dialog: &VaultDialog, theme: &Theme) -> AnyElement {
 fn scope_field(dialog: &VaultDialog, shell: &WeakEntity<Shell>, theme: &Theme) -> AnyElement {
     match dialog.form.mode {
         FormMode::Add => {
-            let segments: Vec<Segment> = dialog
+            let project = dialog
                 .scopes
                 .iter()
-                .map(|(_, title)| Segment::text(title.clone()))
-                .collect();
-            let selected = dialog
-                .scopes
-                .iter()
-                .position(|(scope, _)| *scope == dialog.form.scope)
-                .unwrap_or(0);
+                .find(|(scope, _)| scope.starts_with("project:"));
+            let project_title =
+                project.map_or_else(|| "Project".to_owned(), |(_, title)| title.clone());
+            let project_scope = project.map(|(scope, _)| scope.clone());
+            let project_name = project_title
+                .strip_prefix("Project ")
+                .unwrap_or(&project_title)
+                .to_owned();
+            let caption = scope_caption(&dialog.form.scope, &project_name);
+            let segments = vec![
+                Segment::text(project_title).disabled(project_scope.is_none()),
+                Segment::text("Team").disabled(true),
+                Segment::text("Global"),
+            ];
             let shell = shell.clone();
-            SegmentedControl::new("settings-vault-scope", "Scope", segments)
-                .selected(selected)
+            let control = SegmentedControl::new("settings-vault-scope", "Scope", segments)
+                .selected(scope_segment(&dialog.form.scope))
                 .on_change(move |index, _, cx| {
-                    let _ = shell.update(cx, |shell, cx| shell.choose_secret_scope(index, cx));
-                })
+                    let scope = match index {
+                        0 => project_scope.clone(),
+                        2 => Some("global".to_owned()),
+                        _ => None,
+                    };
+                    if let Some(scope) = scope {
+                        let _ = shell.update(cx, |shell, cx| shell.choose_secret_scope(scope, cx));
+                    }
+                });
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_1))
+                .child(control)
+                .child(
+                    div()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(theme.palette.text.secondary)
+                        .child(caption),
+                )
                 .into_any_element()
         }
         FormMode::Rotate => value_box(
@@ -330,6 +353,16 @@ fn scope_field(dialog: &VaultDialog, shell: &WeakEntity<Shell>, theme: &Theme) -
             theme,
         ),
     }
+}
+
+/// "Link an existing secret instead", under the scope of an add. Linking is not built yet, so the control is off.
+fn add_link(dialog: &VaultDialog) -> Option<AnyElement> {
+    (dialog.form.mode == FormMode::Add).then(|| {
+        Button::new("settings-vault-link", "Link an existing secret instead")
+            .variant(ButtonVariant::Ghost)
+            .disabled(true)
+            .into_any_element()
+    })
 }
 
 /// The value: the masked field the user types into, with Paste beside it. The field paints bullets, and its Show
