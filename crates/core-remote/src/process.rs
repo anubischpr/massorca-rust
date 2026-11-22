@@ -168,10 +168,7 @@ fn has_execute_bit(_metadata: &Metadata) -> bool {
 
 #[cfg(windows)]
 fn hide_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    // CREATE_NO_WINDOW: a console program runs without opening a window.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    massorca_process::creation_flags(command, 0);
 }
 
 #[cfg(not(windows))]
@@ -184,7 +181,7 @@ mod tests {
 
     #[cfg(unix)]
     fn shell(script: &str) -> Command {
-        let mut command = Command::new("/bin/sh");
+        let mut command = massorca_process::command("/bin/sh");
         command.args(["-c", script]);
         command
     }
@@ -226,7 +223,7 @@ mod tests {
     #[test]
     fn a_child_still_running_at_the_deadline_is_stopped() {
         let started = Instant::now();
-        let mut command = Command::new("ping");
+        let mut command = massorca_process::command("ping");
         command.args(["-n", "30", "127.0.0.1"]);
         let result = run_captured(command, None, Duration::from_millis(200));
         assert!(matches!(result, Err(CaptureError::TimedOut)), "{result:?}");
@@ -236,7 +233,7 @@ mod tests {
     #[test]
     fn a_missing_program_is_a_spawn_error() {
         let result = run_captured(
-            Command::new("massorca-no-such-program"),
+            massorca_process::command("massorca-no-such-program"),
             None,
             Duration::from_secs(5),
         );

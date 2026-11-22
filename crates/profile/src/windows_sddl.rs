@@ -72,6 +72,17 @@ impl Descriptor {
         }
     }
 
+    /// Whether an entry the object holds itself, not one it inherited, gives anyone outside the accepted owners and
+    /// Administrators any access.
+    pub(crate) fn grants_explicitly_to_others(&self, trusted: &Trusted) -> bool {
+        self.unrestricted
+            || self.aces.iter().any(|ace| {
+                ace.allow
+                    && !ace.flags.contains("ID")
+                    && !ace.sid.as_ref().is_some_and(|sid| trusted.may_write(sid))
+            })
+    }
+
     /// Whether the DACL gives anyone outside the accepted owners and Administrators any access to the object at all.
     pub(crate) fn grants_any_to_others(&self, trusted: &Trusted) -> bool {
         self.unrestricted
