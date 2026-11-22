@@ -76,6 +76,7 @@ const HOST_NOT_FOUND: &str = "host.not_found";
 const HOST_EXISTS: &str = "host.exists";
 const HOST_INVALID_NAME: &str = "host.invalid_name";
 const HOST_IDENTITY_MISMATCH: &str = "host.identity_mismatch";
+const HOST_UNREADABLE: &str = "host.unreadable";
 
 impl From<&ClientError> for Refusal {
     fn from(error: &ClientError) -> Self {
@@ -104,6 +105,7 @@ impl From<&ClientError> for Refusal {
             ClientError::HostNotFound(_) => host_failure(HOST_NOT_FOUND, error),
             ClientError::HostExists(_) => host_failure(HOST_EXISTS, error),
             ClientError::InvalidHostName(_) => host_failure(HOST_INVALID_NAME, error),
+            ClientError::HostUnreadable { .. } => host_failure(HOST_UNREADABLE, error),
             ClientError::Protocol(_) | ClientError::Io(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
