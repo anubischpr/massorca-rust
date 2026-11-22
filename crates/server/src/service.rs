@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
-use massorca_core_agents::{Agents, AgentsConfig, Change, Listener as ChangeListener};
+use massorca_core_agents::{
+    Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
+    ProviderError,
+};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -26,6 +29,7 @@ use massorca_protocol::methods::service::ServiceInfo;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
+use zeroize::Zeroizing;
 
 use crate::accept_loop;
 use crate::activity::Activity;
@@ -130,12 +134,18 @@ impl Service {
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
+        let vault = Arc::new(Vault::new(
+            store.clone(),
+            profile.dir().join("vault"),
+            vault_options.force_file,
+        ));
         let agents = Agents::new(AgentsConfig {
             store: store.clone(),
             terminals: terminals.clone(),
             workspaces: Arc::clone(&workspaces),
             profile_dir: profile.dir().to_path_buf(),
             massorca_bin: std::env::current_exe()?,
+            env_provider: Some(vault_env_provider(Arc::clone(&vault))),
         });
         // No run survives the previous service (0051); nothing has started one yet in this service.
         let marker = agents.clone();
@@ -143,11 +153,6 @@ impl Service {
             .await
             .map_err(io::Error::other)?
             .map_err(|error| io::Error::other(error.to_string()))?;
-        let vault = Arc::new(Vault::new(
-            store.clone(),
-            profile.dir().join("vault"),
-            vault_options.force_file,
-        ));
         // Credential homes and account rows are put in order before requests are served (decision 0059).
         let sweeper = agents.clone();
         tokio::task::spawn_blocking(move || sweeper.startup_sweep())
@@ -318,4 +323,20 @@ fn bind_endpoint(profile: &Profile) -> Result<Listener, ServiceError> {
         .create_tokio()?;
     restrict_socket(profile)?;
     Ok(listener)
+}
+
+/// Each agent run's variables from the vault (decision 0071): the global secrets and the project's own and linked ones.
+/// The one place a value leaves the vault, copied into a zeroizing string at the last moment.
+fn vault_env_provider(vault: Arc<Vault>) -> EnvProvider {
+    EnvProvider::new(move |project_id| {
+        let variables = vault
+            .environment_for(project_id)
+            .map_err(|error| ProviderError(error.to_string()))?;
+        Ok(ProvidedEnv::new(
+            variables
+                .into_iter()
+                .map(|(name, value)| (name, Zeroizing::new(value.expose().to_owned())))
+                .collect(),
+        ))
+    })
 }

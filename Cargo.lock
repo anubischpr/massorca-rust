@@ -3589,6 +3589,7 @@ dependencies = [
  "tracing",
  "uuid",
  "win32job",
+ "zeroize",
 ]
 
 [[package]]
@@ -3789,6 +3790,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

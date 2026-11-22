@@ -38,6 +38,7 @@ use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::paths;
 use crate::prompt;
+use crate::provided_env::{EnvProvider, ProvidedEnv};
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
@@ -158,6 +159,7 @@ impl From<LaunchError> for AgentError {
             | LaunchError::PromptHasNul
             | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
+            LaunchError::ReservedName(_) => codes::AGENT_SECRETS_UNAVAILABLE,
         };
         Self::new(code, error.to_string())
     }
@@ -173,6 +175,8 @@ pub struct AgentsConfig {
     pub profile_dir: PathBuf,
     /// The `massorca` executable that runs the service; agents and their hooks call it.
     pub massorca_bin: PathBuf,
+    /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
+    pub env_provider: Option<EnvProvider>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -329,6 +333,19 @@ impl Agents {
         AgentKinds { kinds }
     }
 
+    /// The vault's variables for a run in `project_id`; none without a provider.
+    fn provided_env(&self, project_id: &str) -> Result<ProvidedEnv, AgentError> {
+        let Some(provider) = &self.inner.config.env_provider else {
+            return Ok(ProvidedEnv::default());
+        };
+        provider.provide(project_id).map_err(|error| {
+            AgentError::new(
+                codes::AGENT_SECRETS_UNAVAILABLE,
+                format!("the run's secrets are unavailable: {error}"),
+            )
+        })
+    }
+
     /// Starts a session: its first run in a new terminal in the workspace root (0051).
     pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
         self.start_session(params, None)
@@ -383,6 +400,8 @@ impl Agents {
             return Err(error);
         }
 
+        // Before the homes gate and the status lock: the provider reads the vault.
+        let provided = self.provided_env(&workspace.project_id)?;
         let session_id = new_id();
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
@@ -402,6 +421,7 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             caller_args: &params.args,
+            provided_env: &provided,
             caller_env: &params.env,
         })?;
 
@@ -513,6 +533,8 @@ impl Agents {
             return Err(error);
         }
 
+        // Before the homes gate and the status lock, as in `start`.
+        let provided = self.provided_env(&workspace.project_id)?;
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
@@ -532,6 +554,7 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             caller_args: &[],
+            provided_env: &provided,
             caller_env: &no_env,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
@@ -1279,6 +1302,7 @@ mod tests {
             )),
             profile_dir: profile.path().to_path_buf(),
             massorca_bin: PathBuf::from("massorca"),
+            env_provider: None,
         });
         (agents, workspace.id, profile)
     }
