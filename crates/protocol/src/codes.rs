@@ -129,6 +129,7 @@ pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
 pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
+pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
