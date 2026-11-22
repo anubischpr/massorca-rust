@@ -3267,6 +3267,7 @@ dependencies = [
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-workspace",
+ "massorca-profile",
  "massorca-protocol",
  "serde",
  "serde_json",
