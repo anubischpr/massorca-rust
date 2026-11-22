@@ -40,6 +40,9 @@ pub struct KindDecl {
     pub status: StatusDecl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<CredentialsDecl>,
+    /// Sign-in, check and sign-out of the kind's accounts (decision 0059); absent means the kind has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<AccountsDecl>,
 }
 
 fn default_icon() -> String {
@@ -153,7 +156,49 @@ pub struct CredentialsDecl {
     pub strip_env: Vec<String>,
 }
 
+/// How a kind signs an account in, checks it and signs it out (decision 0059). Every list is an argument list, passed
+/// to the kind's resolved program with the account's home variable set. Nothing here is run at declaration time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountsDecl {
+    /// The sign-in arguments. Empty means the kind has no sign-in, and `agent.accounts.add` refuses it.
+    #[serde(default)]
+    pub login: Vec<String>,
+    /// How to tell whether an account is signed in. Absent means its state is `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<CheckDecl>,
+    /// The sign-out arguments, run before an account's home is deleted. Absent means none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logout: Option<Vec<String>>,
+}
+
+/// The check of an account: its arguments and how its exit code and output decide the state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckDecl {
+    pub args: Vec<String>,
+    /// The exit code that means signed in.
+    #[serde(default)]
+    pub signed_in_exit: i32,
+    /// A regular expression over the check's output; a match means `expired`, whatever the exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_pattern: Option<String>,
+    /// A regular expression over the output when signed in; its first group (or the whole match) is the identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_pattern: Option<String>,
+}
+
 impl KindDecl {
+    /// Whether the kind can sign an account in: it declares a login, and the home variable that points the login at the
+    /// account's home.
+    pub fn accounts_supported(&self) -> bool {
+        self.credentials.is_some()
+            && self
+                .accounts
+                .as_ref()
+                .is_some_and(|accounts| !accounts.login.is_empty())
+    }
+
     /// Parses one declaration. The error text names the field serde rejected.
     pub fn from_json(text: &str) -> Result<Self, String> {
         serde_json::from_str(text).map_err(|error| format!("not a valid kind declaration: {error}"))
@@ -227,6 +272,9 @@ impl KindDecl {
         if let Some(credentials) = &self.credentials {
             credentials_problems(credentials, &mut problems);
         }
+        if let Some(accounts) = &self.accounts {
+            accounts_problems(self.credentials.as_ref(), accounts, &mut problems);
+        }
         problems
     }
 
@@ -268,6 +316,33 @@ impl KindDecl {
             .is_some_and(str::is_empty)
         {
             problems.push("status.result_field must not be empty".to_owned());
+        }
+    }
+}
+
+fn accounts_problems(
+    credentials: Option<&CredentialsDecl>,
+    accounts: &AccountsDecl,
+    problems: &mut Vec<String>,
+) {
+    if credentials.is_none() {
+        problems.push("accounts needs credentials (the home variable the login uses)".to_owned());
+    }
+    no_placeholder("accounts.login", &accounts.login, problems);
+    if let Some(logout) = &accounts.logout {
+        no_placeholder("accounts.logout", logout, problems);
+    }
+    if let Some(check) = &accounts.check {
+        no_placeholder("accounts.check.args", &check.args, problems);
+        for (field, pattern) in [
+            ("expired_pattern", &check.expired_pattern),
+            ("identity_pattern", &check.identity_pattern),
+        ] {
+            if let Some(pattern) = pattern
+                && let Err(error) = regex::Regex::new(pattern)
+            {
+                problems.push(format!("accounts.check.{field} does not compile: {error}"));
+            }
         }
     }
 }
@@ -581,5 +656,73 @@ mod tests {
                 serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] });
         });
         assert!(fine.is_empty(), "{fine:?}");
+    }
+
+    fn with_accounts(accounts: serde_json::Value) -> Vec<String> {
+        problems_of(|value| {
+            value["credentials"] =
+                serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] });
+            value["accounts"] = accounts.clone();
+        })
+    }
+
+    #[test]
+    fn an_accounts_block_with_login_check_and_logout_is_valid() {
+        let problems = with_accounts(serde_json::json!({
+            "login": ["login"],
+            "check": {
+                "args": ["whoami"],
+                "expired_pattern": "expired",
+                "identity_pattern": "signed in as (\\S+)"
+            },
+            "logout": ["logout"]
+        }));
+        assert!(problems.is_empty(), "{problems:?}");
+        let kind = parse(serde_json::json!({
+            "id": "fake", "name": "Fake", "program": ["fake-agent"],
+            "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
+            "accounts": { "login": ["login"], "check": { "args": ["whoami"] } }
+        }));
+        let check = kind.accounts.as_ref().unwrap().check.as_ref().unwrap();
+        assert_eq!(check.signed_in_exit, 0, "the default exit is 0");
+        assert!(kind.accounts_supported());
+    }
+
+    #[test]
+    fn accounts_need_a_credential_home_to_point_the_login_at() {
+        let problems = problems_of(|value| {
+            value["accounts"] = serde_json::json!({ "login": ["login"] });
+        });
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("accounts needs credentials")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_does_not_compile_is_refused_by_name() {
+        let problems = with_accounts(serde_json::json!({
+            "login": ["login"],
+            "check": { "args": ["whoami"], "expired_pattern": "(" }
+        }));
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("accounts.check.expired_pattern")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_kind_without_a_login_has_no_sign_in() {
+        let kind = parse(serde_json::json!({
+            "id": "fake", "name": "Fake", "program": ["fake-agent"],
+            "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
+            "accounts": { "check": { "args": ["whoami"] } }
+        }));
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+        assert!(!kind.accounts_supported());
     }
 }

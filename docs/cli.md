@@ -84,6 +84,12 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
 | `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
 | `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
+| `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
+| `agent accounts add <KIND> [--label L] [--no-attach]` | Signs a new account in: runs the kind's login in a service-owned terminal, prints the account and the terminal, then attaches to it unless `--no-attach`. Refused with `--json` unless `--no-attach`. |
+| `agent accounts import <KIND> --from <DIR> [--label L]` | Copies the kind's declared login files from `DIR` into a new account, then checks it. Prints `imported`, `failed` (with the reason) or `not_found`. Names and sizes only. |
+| `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
+| `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
+| `agent accounts check <KIND> [<ACCOUNT>]` | Runs the kind's check on an account, or on the active one, and prints its state. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -197,6 +203,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent accounts` (decision 0059) keeps several credential homes per kind, one of them
+  active. A run uses the project's choice, else the active account, else the agent's usual
+  home. `agent credentials` (0056) still works and acts on the active account; it is
+  deprecated in favour of `agent accounts`. The first account of a kind made from an
+  existing 0056 home is named `default`, state `migrated`, and is moved, not copied.
+  A kind has accounts only when its declaration sets `accounts.login`; the four built-in
+  kinds do not, until their real login commands are verified.
 - `agent delegate --prompt TEXT` starts a child session of the `--from` session (decision
   0055). Inside an agent run `--from` defaults to the run's own session, and the run's
   `MASSORCA_AGENT_TOKEN` always goes with the call, whatever session `--from` names; a token

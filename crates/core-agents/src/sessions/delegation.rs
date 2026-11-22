@@ -719,6 +719,7 @@ then report"
                     submit: "\r".to_owned(),
                 },
                 pending: None,
+                account: None,
                 typed_since_report: false,
             },
         );

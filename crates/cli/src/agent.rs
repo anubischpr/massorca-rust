@@ -12,6 +12,7 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
+use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
@@ -71,6 +72,11 @@ pub enum AgentCommand {
     Credentials {
         #[command(subcommand)]
         command: CredentialsCommand,
+    },
+    /// A kind's accounts: sign in, import, activate for the kind or a project, check and remove (decision 0059).
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
     },
 }
 
@@ -311,6 +317,9 @@ pub async fn execute(
                 &forgotten,
                 &[format!("forgot agent session {}", forgotten.id)],
             );
+        }
+        AgentCommand::Accounts { command } => {
+            agent_accounts::execute(&client, command, output, json).await?;
         }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();

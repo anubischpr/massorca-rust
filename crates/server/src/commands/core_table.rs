@@ -435,6 +435,79 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.credentials.remove",
             selector("kind"),
         ),
+        command(
+            "agent.accounts.list",
+            "List an agent kind's accounts and their states",
+            "agent.accounts.list",
+            selector("kind"),
+        ),
+        command(
+            "agent.accounts.add",
+            "Sign a new account of an agent kind in",
+            "agent.accounts.add",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.import",
+            "Import an agent kind's login files into a new account",
+            "agent.accounts.import",
+            json!({
+                "type": "object",
+                "required": ["kind", "from"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "from": { "type": "string" },
+                    "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.activate",
+            "Make an agent account the active one, or a project's choice",
+            "agent.accounts.activate",
+            json!({
+                "type": "object",
+                "required": ["kind", "account"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.remove",
+            "Delete an agent account",
+            "agent.accounts.remove",
+            json!({
+                "type": "object",
+                "required": ["kind", "account"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.check",
+            "Check an agent account's sign-in now",
+            "agent.accounts.check",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
     ]
 }
 
