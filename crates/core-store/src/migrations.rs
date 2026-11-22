@@ -266,6 +266,23 @@ END;
 "#,
         foreign_keys_off: false,
     },
+    // Team memory (decision 0072): lines a team or one of its bots keeps for later tasks. A bot-less line is the team's
+    // scope. A team's or a bot's removal removes its lines.
+    Migration {
+        sql: r#"
+CREATE TABLE team_memory (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('task','person')),
+    task_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
