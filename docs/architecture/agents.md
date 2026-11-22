@@ -206,7 +206,10 @@ On Windows `agents` and `homes` are created the same way, and restricted when th
 exist. Homes imported before this fix keep their old access until they are imported again
 with `--replace`. On Windows import holds `agents`, `homes` and the new home open without
 delete sharing, from before their access changes until the swap is done, so none of them can
-be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. With
+be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. Each pinned directory
+must be owned by the current user, or the import is refused with `agent.credentials_invalid`;
+the directories it creates name the user as owner even from an elevated process, and ones an
+elevated process made earlier (owned by Administrators) are refused and must be moved by hand. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
 swap fails (the error names where it is when that fails too), and deleted after it succeeds.
 Half-built `.import-` leftovers of an interrupted import are deleted by the next import of

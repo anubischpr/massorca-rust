@@ -296,16 +296,25 @@ fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
 /// Pins `dir`, refusing a reparse point or anything but a directory with `agent.credentials_invalid`.
 #[cfg(windows)]
 fn pin(dir: &Path) -> Result<massorca_profile::PinnedDir, AgentError> {
-    massorca_profile::PinnedDir::open(dir).map_err(|error| {
-        if error.kind() == io::ErrorKind::InvalidInput {
-            invalid(format!(
-                "{} is not a plain directory; credential homes are never written through a link",
-                dir.display()
-            ))
-        } else {
-            internal("hold the credential homes directory", &error)
-        }
-    })
+    massorca_profile::PinnedDir::open(dir).map_err(|error| pin_refusal(dir, &error))
+}
+
+/// Why `dir` could not be pinned: a link or not a directory, or owned by another user (whose owner rights would let
+/// them rewrite its access), both refused with `agent.credentials_invalid`; anything else is internal.
+#[cfg(windows)]
+fn pin_refusal(dir: &Path, error: &io::Error) -> AgentError {
+    match error.kind() {
+        io::ErrorKind::InvalidInput => invalid(format!(
+            "{} is not a plain directory; credential homes are never written through a link",
+            dir.display()
+        )),
+        io::ErrorKind::PermissionDenied => invalid(format!(
+            "{} is owned by another user ({error}); credential homes are only written into directories this user \
+             owns, so move it away by hand",
+            dir.display()
+        )),
+        _ => internal("hold the credential homes directory", error),
+    }
 }
 
 /// The new home being built: created owner-only, and on Windows pinned from creation until it is moved into place
@@ -1189,6 +1198,32 @@ mod tests {
             fs::read_to_string(fixture.home().join("token.json")).unwrap(),
             FAKE_TOKEN
         );
+    }
+
+    /// A pinned directory owned by someone else (refused by the pin with `PermissionDenied`) refuses the import.
+    /// Ownership by another principal cannot be set up here without admin rights, so the mapping is tested directly.
+    #[cfg(windows)]
+    #[test]
+    fn a_directory_owned_by_someone_else_refuses_the_import() {
+        let dir = Path::new("C:/profiles/default/agents/homes");
+        let refused = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "owned by S-1-5-21-9-9-9-1005",
+        );
+        let error = pin_refusal(dir, &refused);
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(
+            error.message.contains("owned by another user"),
+            "{}",
+            error.message
+        );
+        let link = io::Error::new(io::ErrorKind::InvalidInput, "a reparse point");
+        assert_eq!(
+            pin_refusal(dir, &link).code,
+            codes::AGENT_CREDENTIALS_INVALID
+        );
+        let other = io::Error::other("busy");
+        assert_eq!(pin_refusal(dir, &other).code, codes::INTERNAL);
     }
 
     /// A junction needs no privilege on Windows, so this always runs there.
