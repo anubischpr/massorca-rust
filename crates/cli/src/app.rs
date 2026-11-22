@@ -91,7 +91,7 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
     let autostart = globals.autostart;
     match command {
         Commands::Service { command } => service_command(&globals, command, output),
-        Commands::Config { command } => {
+        Commands::Settings { command } => {
             let target = globals.target()?;
             block_on(config::execute(&target, autostart, command, output))
         }

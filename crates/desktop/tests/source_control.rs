@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
 use massorca_desktop::service::{
@@ -130,21 +130,94 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
     (project.id, workspace)
 }
 
-/// Folds the bridge's updates into a store state until `done` holds.
-async fn until(
+/// The updates a bounded wait folded, so a wait that runs out can say what it saw.
+#[derive(Default)]
+struct Trace {
+    seen: Vec<String>,
+    /// Watch items folded so far: the ready item, then one per change the watch reported.
+    watch_items: usize,
+}
+
+impl Trace {
+    fn fold(&mut self, state: &mut StoreState, update: StoreUpdate) {
+        if matches!(update, StoreUpdate::Git(GitUpdate::Watch { .. })) {
+            self.watch_items += 1;
+        }
+        let line: String = format!("{update:?}").chars().take(160).collect();
+        self.seen.push(line);
+        state.apply(update, Instant::now());
+    }
+
+    fn report(&self) -> String {
+        let tail: Vec<&str> = self
+            .seen
+            .iter()
+            .rev()
+            .take(12)
+            .rev()
+            .map(String::as_str)
+            .collect();
+        format!(
+            "updates folded: {}, watch items: {}\nlast updates:\n  {}",
+            self.seen.len(),
+            self.watch_items,
+            tail.join("\n  ")
+        )
+    }
+}
+
+/// The store as the panel reads it for `workspace`, in one line.
+fn describe(state: &StoreState, workspace: &str) -> String {
+    let git = state.git(workspace);
+    let status = match git.and_then(|git| git.status.as_ref()) {
+        None => "no status yet".to_owned(),
+        Some(Err(refusal)) => format!("status refused: {}", refusal.message()),
+        Some(Ok(status)) => {
+            let paths: Vec<String> = status
+                .entries
+                .iter()
+                .map(|entry| {
+                    let untracked = if entry.untracked { " (untracked)" } else { "" };
+                    format!("{}{untracked}", entry.path)
+                })
+                .collect();
+            format!("status entries {paths:?}")
+        }
+    };
+    let degraded = git.and_then(|git| git.degraded.clone());
+    format!(
+        "connected: {}; {status}; degraded: {degraded:?}",
+        state.connection.is_connected()
+    )
+}
+
+/// Folds the bridge's updates until `done` holds. A wait that runs out fails with the time it took, the
+/// last store state and the updates it folded, never with a bare timeout.
+async fn fold_until(
     updates: &mut UnboundedReceiver<StoreUpdate>,
     state: &mut StoreState,
+    trace: &mut Trace,
+    workspace: &str,
     what: &str,
-    done: impl Fn(&StoreState) -> bool,
+    done: impl Fn(&StoreState, &Trace) -> bool,
 ) {
-    let folded = timeout(WAIT, async {
-        while !done(state) {
-            let update = updates.recv().await.expect("the bridge is alive");
-            state.apply(update, std::time::Instant::now());
+    let started = Instant::now();
+    while !done(state, trace) {
+        let remaining = WAIT.saturating_sub(started.elapsed());
+        let context = || {
+            format!(
+                "after {:.1?} waiting for {what}\nlast store: {}\n{}",
+                started.elapsed(),
+                describe(state, workspace),
+                trace.report()
+            )
+        };
+        match timeout(remaining, updates.recv()).await {
+            Ok(Some(update)) => trace.fold(state, update),
+            Ok(None) => panic!("the bridge closed {}", context()),
+            Err(_) => panic!("timed out {}", context()),
         }
-    })
-    .await;
-    assert!(folded.is_ok(), "timed out waiting for {what}");
+    }
 }
 
 /// The workspace's status when the store holds a readable one.
@@ -165,6 +238,7 @@ struct Session {
     handle: ServiceHandle,
     updates: UnboundedReceiver<StoreUpdate>,
     state: StoreState,
+    trace: Trace,
     workspace: Workspace,
 }
 
@@ -179,10 +253,16 @@ impl Session {
         let handle = bridge.handle();
         let mut updates = bridge.take_updates().expect("the updates are there");
         let mut state = StoreState::default();
+        let mut trace = Trace::default();
         let listed = workspace.id.clone();
-        until(&mut updates, &mut state, "the workspace", |s| {
-            s.connection.is_connected() && s.loaded && s.workspace(&listed).is_some()
-        })
+        fold_until(
+            &mut updates,
+            &mut state,
+            &mut trace,
+            &listed,
+            "the workspace",
+            |s, _| s.connection.is_connected() && s.loaded && s.workspace(&listed).is_some(),
+        )
         .await;
         assert!(state.project(&project_id).is_some());
         let worktree = PathBuf::from(&workspace.path);
@@ -193,6 +273,7 @@ impl Session {
                 handle,
                 updates,
                 state,
+                trace,
                 workspace,
             },
             worktree,
@@ -201,6 +282,47 @@ impl Session {
 
     fn id(&self) -> &str {
         &self.workspace.id
+    }
+
+    /// Folds the bridge's updates until `done` holds.
+    async fn until(&mut self, what: &str, done: impl Fn(&StoreState) -> bool) {
+        fold_until(
+            &mut self.updates,
+            &mut self.state,
+            &mut self.trace,
+            &self.workspace.id,
+            what,
+            |state, _| done(state),
+        )
+        .await;
+    }
+
+    /// Folds the bridge's updates until the watch has delivered `items` items in all, the first being its
+    /// ready item.
+    async fn until_watch(&mut self, what: &str, items: usize) {
+        fold_until(
+            &mut self.updates,
+            &mut self.state,
+            &mut self.trace,
+            &self.workspace.id,
+            what,
+            |_, trace| trace.watch_items >= items,
+        )
+        .await;
+    }
+
+    /// Folds the bridge's updates for `window` and returns how many watch items arrived in it.
+    async fn during(&mut self, window: Duration) -> usize {
+        let before = self.trace.watch_items;
+        let (updates, state, trace) = (&mut self.updates, &mut self.state, &mut self.trace);
+        let _ = timeout(window, async {
+            loop {
+                let update = updates.recv().await.expect("the bridge is alive");
+                trace.fold(state, update);
+            }
+        })
+        .await;
+        self.trace.watch_items - before
     }
 
     async fn stop(self) {
@@ -227,14 +349,15 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
 
     // The watch reads the status, which lists the edit as an unstaged change with its line counts.
     let id = session.id().to_owned();
-    until(&mut session.updates, &mut session.state, "the edit", |s| {
-        status(s, &id).is_some_and(|st| {
-            st.entries
-                .iter()
-                .any(|e| e.path == "README.md" && e.unstaged.is_some())
+    session
+        .until("the edit", |s| {
+            status(s, &id).is_some_and(|st| {
+                st.entries
+                    .iter()
+                    .any(|e| e.path == "README.md" && e.unstaged.is_some())
+            })
         })
-    })
-    .await;
+        .await;
     let st = status(&session.state, &id).expect("the status is there");
     let readme = st
         .entries
@@ -250,16 +373,12 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
             binary: false
         })
     );
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the history",
-        |s| {
+    session
+        .until("the history", |s| {
             s.git(&id)
                 .is_some_and(|g| matches!(&g.log, Some(Ok(log)) if !log.commits.is_empty()))
-        },
-    )
-    .await;
+        })
+        .await;
 
     // The diff of the file, with the patch text the view draws.
     let diff = session
@@ -286,19 +405,15 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         })
         .await
         .expect("the file is staged");
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the staged file",
-        |s| {
+    session
+        .until("the staged file", |s| {
             status(s, &id).is_some_and(|st| {
                 st.entries
                     .iter()
                     .any(|e| e.path == "README.md" && e.staged == Some(ChangeKind::Modified))
             })
-        },
-    )
-    .await;
+        })
+        .await;
 
     // With nothing staged, a commit is refused under its own code.
     session
@@ -311,7 +426,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
         })
         .await
         .expect("the staged file is committed");
-    until(&mut session.updates, &mut session.state, "the new commit", |s| {
+    session.until("the new commit", |s| {
         s.git(&id).is_some_and(|g| {
             matches!(&g.log, Some(Ok(log)) if log.commits.first().is_some_and(|c| c.subject == "update the readme"))
         }) && status(s, &id).is_some_and(|st| st.entries.is_empty())
@@ -337,30 +452,25 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
     let home = tempfile::tempdir().expect("a temporary home");
     let (mut session, worktree) = Session::start(&home).await;
     session.handle.git_watch(session.id());
+    // The watch's ready item comes first and is sent once its OS watcher is armed (core #117), so an edit
+    // made after it cannot fall between the subscription and the watcher.
+    session.until_watch("the watch to be ready", 1).await;
     let id = session.id().to_owned();
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the first status",
-        |s| status(s, &id).is_some(),
-    )
-    .await;
+    session
+        .until("the first status", |s| status(s, &id).is_some())
+        .await;
 
     // A file written outside the desktop (by an editor or an agent) arrives through the watch.
     std::fs::write(worktree.join("notes.txt"), "draft\n").expect("an untracked file");
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the untracked file",
-        |s| {
+    session
+        .until("the untracked file", |s| {
             status(s, &id).is_some_and(|st| {
                 st.entries
                     .iter()
                     .any(|e| e.path == "notes.txt" && e.untracked)
             })
-        },
-    )
-    .await;
+        })
+        .await;
 
     // Discarding it is refused, and the refusal names the file, until the waiver is sent.
     let refused = session
@@ -401,66 +511,13 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
         .expect("the waiver deletes the file");
     assert_eq!(discarded.deleted, vec!["notes.txt".to_owned()]);
     assert!(!worktree.join("notes.txt").exists());
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the clean status",
-        |s| status(s, &id).is_some_and(|st| st.entries.is_empty()),
-    )
-    .await;
+    session
+        .until("the clean status", |s| {
+            status(s, &id).is_some_and(|st| st.entries.is_empty())
+        })
+        .await;
 
     session.stop().await;
-}
-
-/// Folds the bridge's updates into `state` until `done` holds, and counts the watch updates on the way.
-async fn until_counting_watch(
-    updates: &mut UnboundedReceiver<StoreUpdate>,
-    state: &mut StoreState,
-    what: &str,
-    done: impl Fn(&StoreState, usize) -> bool,
-) -> usize {
-    async fn fold(
-        updates: &mut UnboundedReceiver<StoreUpdate>,
-        state: &mut StoreState,
-        watch: &mut usize,
-        done: &impl Fn(&StoreState, usize) -> bool,
-    ) {
-        while !done(state, *watch) {
-            let update = updates.recv().await.expect("the bridge is alive");
-            if matches!(update, StoreUpdate::Git(GitUpdate::Watch { .. })) {
-                *watch += 1;
-            }
-            state.apply(update, std::time::Instant::now());
-        }
-    }
-    let mut watch = 0;
-    let folded = timeout(WAIT, fold(updates, state, &mut watch, &done)).await;
-    assert!(folded.is_ok(), "timed out waiting for {what}");
-    watch
-}
-
-/// Folds the bridge's updates into `state` for `window`, and counts the watch updates among them.
-async fn watch_updates_during(
-    updates: &mut UnboundedReceiver<StoreUpdate>,
-    state: &mut StoreState,
-    window: Duration,
-) -> usize {
-    async fn fold(
-        updates: &mut UnboundedReceiver<StoreUpdate>,
-        state: &mut StoreState,
-        watch: &mut usize,
-    ) {
-        loop {
-            let update = updates.recv().await.expect("the bridge is alive");
-            if matches!(update, StoreUpdate::Git(GitUpdate::Watch { .. })) {
-                *watch += 1;
-            }
-            state.apply(update, std::time::Instant::now());
-        }
-    }
-    let mut watch = 0;
-    let _ = timeout(window, fold(updates, state, &mut watch)).await;
-    watch
 }
 
 #[tokio::test]
@@ -469,65 +526,49 @@ async fn a_reconnect_re_establishes_the_watch_with_one_subscription_per_workspac
     let (mut session, worktree) = Session::start(&home).await;
     let id = session.id().to_owned();
     session.handle.git_watch(&id);
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the first status",
-        |s| status(s, &id).is_some(),
-    )
-    .await;
+    session
+        .until("the first status", |s| status(s, &id).is_some())
+        .await;
 
     // The link drops and comes back. The watch the panel asked for starts again on the new connection.
     let service = session.service.take().expect("the service runs");
     stop_service(service).await;
-    until(
-        &mut session.updates,
-        &mut session.state,
-        "the lost link",
-        |s| matches!(s.connection, ConnectionState::Reconnecting { .. }),
-    )
-    .await;
+    session
+        .until("the lost link", |s| {
+            matches!(s.connection, ConnectionState::Reconnecting { .. })
+        })
+        .await;
     session.service = Some(start_service(home.path()).await);
 
     // One subscription answers after the reconnection: its first item, and nothing from a second one.
-    let ready = until_counting_watch(
-        &mut session.updates,
-        &mut session.state,
-        "the watch after the reconnection",
-        |s, watch| s.connection.is_connected() && watch >= 1,
-    )
-    .await;
+    let from = session.trace.watch_items;
+    session
+        .until_watch("the watch after the reconnection", from + 1)
+        .await;
+    let ready = session.trace.watch_items - from;
     assert_eq!(ready, 1, "one subscription sends its first item");
-    let quiet = watch_updates_during(
-        &mut session.updates,
-        &mut session.state,
-        Duration::from_millis(600),
-    )
-    .await;
+    let quiet = session.during(Duration::from_millis(600)).await;
     assert_eq!(quiet, 0, "no second subscription sends a first item");
 
     // A change made outside the desktop reaches the store, and one subscription reports it once.
     std::fs::write(worktree.join("notes.txt"), "draft\n").expect("an untracked file");
-    let mut changes = until_counting_watch(
-        &mut session.updates,
-        &mut session.state,
-        "the change after the reconnection",
-        |s, _| {
+    let from = session.trace.watch_items;
+    session
+        .until("the change after the reconnection", |s| {
             status(s, &id).is_some_and(|st| {
                 st.entries
                     .iter()
                     .any(|e| e.path == "notes.txt" && e.untracked)
             })
-        },
-    )
-    .await;
-    changes += watch_updates_during(
-        &mut session.updates,
-        &mut session.state,
-        Duration::from_millis(600),
-    )
-    .await;
-    assert_eq!(changes, 1, "one subscription reports the change once");
+        })
+        .await;
+    let seen_at_once = session.trace.watch_items - from;
+    let after = session.during(Duration::from_millis(600)).await;
+    assert_eq!(
+        seen_at_once + after,
+        1,
+        "one subscription reports the change once"
+    );
 
     session.stop().await;
 }

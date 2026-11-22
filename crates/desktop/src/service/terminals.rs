@@ -241,6 +241,32 @@ pub(super) async fn list_terminals(client: &Client) -> Result<Vec<Terminal>, Cli
     }
 }
 
+/// Whether an attach's client answers the terminal's queries (decision 0036). Only a client that
+/// declares it may hold a query; for any other client the service answers them itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachRole {
+    /// A surface that feeds its output to an emulator and sends the replies back as input (0034).
+    AnswersQueries,
+    /// A client that only reads the output; it declares nothing, so the service answers.
+    ReadsOutput,
+}
+
+impl AttachRole {
+    /// The params of `terminal.attach` for this role, resuming from `since` when one is given.
+    pub fn attach_params(self, terminal: &str, since: Option<u64>) -> TerminalAttachParams {
+        TerminalAttachParams {
+            terminal: terminal.to_owned(),
+            since,
+            cols: None,
+            rows: None,
+            answers_queries: match self {
+                Self::AnswersQueries => Some(true),
+                Self::ReadsOutput => None,
+            },
+        }
+    }
+}
+
 /// The feed events one attach update stands for: a snapshot is its header, then its bytes (0034).
 /// Every attached view feeds its emulator through this, so the desktop and its tests agree.
 pub fn feed_events(update: &AttachUpdate) -> Vec<FeedEvent<'_>> {
@@ -345,5 +371,71 @@ impl ServiceHandle {
             })
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::service::Script;
+
+    #[test]
+    fn an_answering_attach_declares_it_and_a_reading_one_declares_nothing() {
+        let answers = AttachRole::AnswersQueries.attach_params("t1", Some(7));
+        assert_eq!(answers.terminal, "t1");
+        assert_eq!(answers.since, Some(7));
+        assert_eq!(answers.answers_queries, Some(true));
+        let reads = AttachRole::ReadsOutput.attach_params("t1", None);
+        assert_eq!(
+            reads.answers_queries, None,
+            "the declaration is omitted, not false"
+        );
+    }
+
+    /// The declaration an attach sends, read from the call the scripted service receives.
+    async fn declared_by(
+        handle: ServiceHandle,
+        script: &mut Script,
+        role: AttachRole,
+    ) -> Option<bool> {
+        let attach =
+            tokio::spawn(
+                async move { handle.attach_terminal(role.attach_params("t1", None)).await },
+            );
+        let (params, reply) = timeout(Duration::from_secs(5), async {
+            loop {
+                match script.next() {
+                    Some(Command::Terminal(TerminalCommand::Attach { params, reply })) => {
+                        return (params, reply);
+                    }
+                    Some(_) => {}
+                    None => tokio::task::yield_now().await,
+                }
+            }
+        })
+        .await
+        .expect("the attach reaches the service");
+        reply
+            .send(Err(Refusal::unavailable("answered by the test")))
+            .expect("the attach waits for its answer");
+        let _outcome = attach.await.expect("the attach task ends");
+        params.answers_queries
+    }
+
+    #[tokio::test]
+    async fn the_declaration_reaches_the_service_for_each_role() {
+        let (handle, mut script) = ServiceHandle::scripted();
+        let answers = declared_by(handle.clone(), &mut script, AttachRole::AnswersQueries);
+        assert_eq!(
+            answers.await,
+            Some(true),
+            "the pane declares that it answers"
+        );
+        let reads = declared_by(handle, &mut script, AttachRole::ReadsOutput);
+        assert_eq!(reads.await, None, "a reader declares nothing");
     }
 }
