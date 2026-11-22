@@ -41,6 +41,8 @@ main.wasm | main.js   optional logic: a component, or JS source for the bundled 
 icon.svg, README.md
 ```
 
+Implemented in `crates/ext-package` (`massorca-ext-package`, decision 0061). The sketch below predates the `listing` object, which replaces `icon` with `listing.logo`.
+
 Manifest sketch:
 
 ```json
@@ -131,7 +133,7 @@ against the extension's grants before it does anything.
 | `settings` | `get(key)`, `watch(key)` on the extension's own declared settings | always |
 | `workspaces` | `list`, `get`, `files.read`, `files.write`, `files.list` inside a workspace | `workspaces:read` / `files:read` / `files:write` (scoped) |
 | `http` | `fetch(request, auth?: secret-name)`; the host injects the secret | `net` (hosts), `secrets` (names) |
-| `process` | `spawn(command, args, cwd, env)` with streamed stdio | `process` (command patterns) |
+| `process` | `spawn(command, args, cwd, env)` with streamed stdio | `process` (`programs` patterns) |
 | `terminals` | `list`, `read`, `write`, `open` in a workspace | `terminals:read` / `terminals:write` |
 | `agents` | `list`, `status`, `send-message`, `start` | `agents:read` / `agents:control` |
 | `sessions` | read conversation history of agent sessions | `sessions:read` |
@@ -235,8 +237,10 @@ Closed vocabulary. Scopes narrow a kind. A permission without a scope means
 | `agents:read` | none | Low |
 | `sessions:read` | none | Medium |
 | `agents:control` | none | High |
-| `process` | `commands`: program plus argument patterns | High |
+| `process` | `programs`: program plus argument patterns | High |
 | any process contribution (`mcpServers`, adapter binaries) | the declared command | High, with the copy "runs a program on this computer with your rights" |
+
+The `process` scope field is `programs`, a program plus argument patterns such as `git status *`; it replaces the earlier "command patterns" wording (decision 0061).
 
 Some contribution kinds carry risk even though they run no code. They count
 toward the computed risk like permissions:
