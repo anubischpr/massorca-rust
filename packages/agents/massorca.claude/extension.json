@@ -20,10 +20,16 @@
         "binary": "claude",
         "verify": ["claude", "--version"],
         "source": "https://code.claude.com/docs/en/setup",
+        "sourceChecked": "2026-11-22",
         "install": [
-          { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"] },
-          { "os": "linux", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] },
-          { "os": "macos", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] }
+          { "os": "windows", "command": ["winget", "install", "Anthropic.ClaudeCode"] },
+          { "os": "linux", "command": ["npm", "install", "-g", "@anthropic-ai/claude-code@latest"] },
+          { "os": "macos", "command": ["brew", "install", "--cask", "claude-code"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["winget", "uninstall", "Anthropic.ClaudeCode"] },
+          { "os": "linux", "command": ["npm", "uninstall", "-g", "@anthropic-ai/claude-code"] },
+          { "os": "macos", "command": ["brew", "uninstall", "--cask", "claude-code"] }
         ]
       }
     }]

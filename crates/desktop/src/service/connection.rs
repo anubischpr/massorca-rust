@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+pub use massorca_client::Backoff;
 use massorca_client::ClientError;
 
 /// The first pause after a failed attempt. It doubles up to [`BACKOFF_MAX`].
@@ -34,29 +35,9 @@ impl ConnectionState {
     }
 }
 
-/// Pauses between attempts: 250 ms, doubling up to 5 s. A success or "Retry now" starts it over.
-#[derive(Debug, Default)]
-pub struct Backoff {
-    failures: u32,
-}
-
-impl Backoff {
-    pub fn reset(&mut self) {
-        self.failures = 0;
-    }
-
-    /// Counts one more failure and returns the pause before the next attempt.
-    pub fn next_delay(&mut self) -> Duration {
-        self.failures = self.failures.saturating_add(1);
-        let doublings = (self.failures - 1).min(16);
-        BACKOFF_START
-            .saturating_mul(1u32 << doublings)
-            .min(BACKOFF_MAX)
-    }
-
-    pub fn failures(&self) -> u32 {
-        self.failures
-    }
+/// The desktop's pauses between attempts: 250 ms, doubling up to 5 s. A success or "Retry now" starts it over.
+pub fn backoff() -> Backoff {
+    Backoff::new(BACKOFF_START, BACKOFF_MAX)
 }
 
 /// The state after a connected link dropped, and the pause before the first retry.
@@ -118,14 +99,14 @@ mod tests {
 
     #[test]
     fn backoff_starts_at_250_ms_doubles_and_stops_at_5_s() {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         let delays: Vec<u128> = (0..7).map(|_| backoff.next_delay().as_millis()).collect();
         assert_eq!(delays, vec![250, 500, 1000, 2000, 4000, 5000, 5000]);
     }
 
     #[test]
     fn retry_now_starts_the_backoff_over() {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         backoff.next_delay();
         backoff.next_delay();
         backoff.reset();
@@ -134,7 +115,7 @@ mod tests {
 
     #[test]
     fn backoff_never_overflows() {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         for _ in 0..100 {
             assert!(backoff.next_delay() <= BACKOFF_MAX);
         }
@@ -142,7 +123,7 @@ mod tests {
 
     #[test]
     fn a_failed_first_attempt_is_unreachable_with_a_reason() {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         let (state, delay) =
             after_failed_attempt(false, &unavailable(), &mut backoff, Instant::now());
         assert_eq!(
@@ -156,7 +137,7 @@ mod tests {
 
     #[test]
     fn a_lost_link_counts_reconnect_attempts_with_a_retry_time() {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         let now = Instant::now();
         let (state, delay) = after_loss(&mut backoff, now);
         assert_eq!(

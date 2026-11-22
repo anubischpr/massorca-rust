@@ -166,13 +166,15 @@ fn has_execute_bit(_metadata: &Metadata) -> bool {
     true
 }
 
+/// Stops a console program from opening a window on Windows. Does nothing elsewhere.
 #[cfg(windows)]
 fn hide_window(command: &mut Command) {
     massorca_process::creation_flags(command, 0);
 }
 
+/// Stops a console program from opening a window on Windows. Does nothing elsewhere.
 #[cfg(not(windows))]
-fn hide_window(_command: &mut Command) {}
+pub fn hide_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

@@ -64,6 +64,7 @@ fn bot(id: BotId, name: &str, role: &str, agent: Agent) -> Bot {
         name: name.into(),
         role: role.into(),
         agent: Some(agent),
+        kind_unavailable: None,
     }
 }
 
