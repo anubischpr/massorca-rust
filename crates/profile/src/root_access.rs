@@ -34,6 +34,12 @@ pub enum RootAccessError {
         list_paths(paths)
     )]
     WritableByOthers { paths: Vec<PathBuf> },
+    /// Other users could read a folder that holds secrets, such as a device key. Up to `MAX_LISTED_ENTRIES` paths.
+    #[error(
+        "other programs on this computer could read these files, which hold secrets: {}; remove the folder or restrict it to yourself, then try again",
+        list_paths(paths)
+    )]
+    ReadableByOthers { paths: Vec<PathBuf> },
     /// A folder from the home down to the root is a link, belongs to another user, or other users can change it.
     #[error(
         "the profile location is unsafe: {} is a link, belongs to another user, or other users can change it; other programs on this computer could change these files. Run `massorca profile secure` to make the home private, or set MASSORCA_HOME to a folder only you can write to",

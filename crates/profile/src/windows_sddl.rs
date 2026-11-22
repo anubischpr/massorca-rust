@@ -72,6 +72,16 @@ impl Descriptor {
         }
     }
 
+    /// Whether the DACL gives anyone outside the accepted owners and Administrators any access to the object at all.
+    pub(crate) fn grants_any_to_others(&self, trusted: &Trusted) -> bool {
+        self.unrestricted
+            || self.aces.iter().any(|ace| {
+                ace.allow
+                    && ace.applies_to_object()
+                    && !ace.sid.as_ref().is_some_and(|sid| trusted.may_write(sid))
+            })
+    }
+
     /// Whether the DACL lets anyone outside `trusted` change the object. Inherit-only entries do not apply to the
     /// object and are skipped; an entry whose rights or trustee cannot be read counts as a write.
     pub(crate) fn grants_write_to_others(&self, trusted: &Trusted) -> bool {

@@ -82,19 +82,11 @@ pub(crate) fn make_dir(parent: &File, name: &str) -> io::Result<()> {
     }
 }
 
-/// Writes `contents` to a new file `name` in `parent`, mode `0600`: a stale file of that name is removed first, and the
-/// file is created with `O_EXCL | O_NOFOLLOW`, so it is never reached through a link.
+/// Writes `contents` to a new file `name` in `parent`, mode `0600`, created with `O_EXCL | O_NOFOLLOW`: it fails when
+/// anything is there, so it is never reached through a link.
 pub(crate) fn write_new(parent: &File, name: &str, contents: &[u8]) -> io::Result<()> {
     let c_name = c_name(Path::new(name))?;
-    // SAFETY: `parent` is an open folder and `c_name` a NUL-terminated name, both alive through the call. unlinkat
-    // removes a link itself, never its target.
-    if unsafe { libc::unlinkat(parent.as_raw_fd(), c_name.as_ptr(), 0) } != 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ENOENT) {
-            return Err(error);
-        }
-    }
-    // SAFETY: as above; the mode is passed as the variadic third argument, and -1 is checked before the descriptor
+    // SAFETY: `parent` is an open folder and `c_name` a NUL-terminated name, both alive through the call; the mode is passed as the variadic third argument, and -1 is checked before the descriptor
     // is owned by a File.
     let fd = unsafe {
         libc::openat(
@@ -111,6 +103,17 @@ pub(crate) fn write_new(parent: &File, name: &str, contents: &[u8]) -> io::Resul
     let mut file = unsafe { File::from_raw_fd(fd) };
     file.write_all(contents)?;
     file.sync_all()
+}
+
+/// Removes the file `name` from `parent`; a link is removed itself, never its target.
+pub(crate) fn unlink(parent: &File, name: &str) -> io::Result<()> {
+    let name = c_name(Path::new(name))?;
+    // SAFETY: `parent` is an open folder and `name` a NUL-terminated name, both alive through the call.
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 /// Renames `from` to `to`, both entries of `parent`.
@@ -133,14 +136,15 @@ pub(crate) fn rename(parent: &File, from: &str, to: &str) -> io::Result<()> {
     }
 }
 
-/// `name` as a C string; one folder entry, never a path with a separator.
+/// `name` as a C string, once `check_entry_name` accepts it as one folder entry.
 fn c_name(name: &Path) -> io::Result<CString> {
-    let bytes = name.as_os_str().as_bytes();
-    if bytes.contains(&b'/') {
-        return Err(io::Error::new(
+    let text = name.to_str().ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{} is not a single folder entry", name.display()),
-        ));
-    }
-    CString::new(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+            format!("{} is not UTF-8", name.display()),
+        )
+    })?;
+    crate::private_dir::check_entry_name(text)?;
+    CString::new(name.as_os_str().as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
