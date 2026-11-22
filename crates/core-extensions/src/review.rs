@@ -88,9 +88,15 @@ fn plan_one(cli: &AgentCli, resolver: &dyn ProgramResolver, os: Option<CliOs>) -
         })
 }
 
-/// The consent fingerprint: SHA-256 over the id, the version, the package hash, the sorted permissions and the
-/// planned installer commands. Encoded as a JSON array so it never depends on map ordering.
-pub fn fingerprint(manifest: &Manifest, sha256: &str, plan: &[CliPlan]) -> String {
+/// The consent fingerprint: SHA-256 over the id, the version, the package hash, the sorted permissions, the planned
+/// installer commands, and each CLI's verify and uninstall commands for `os`. Encoded as a JSON array so it never
+/// depends on map ordering.
+pub fn fingerprint(
+    manifest: &Manifest,
+    sha256: &str,
+    plan: &[CliPlan],
+    os: Option<CliOs>,
+) -> String {
     let mut permissions: Vec<Value> = manifest
         .permissions
         .iter()
@@ -111,13 +117,28 @@ pub fn fingerprint(manifest: &Manifest, sha256: &str, plan: &[CliPlan]) -> Strin
             _ => None,
         })
         .collect();
+    let lifecycle: Vec<Value> = manifest
+        .contributes
+        .agent_adapters
+        .iter()
+        .filter_map(|adapter| {
+            let cli = adapter.cli.as_ref()?;
+            let uninstall = cli
+                .uninstall
+                .iter()
+                .find(|step| Some(step.os) == os)
+                .map(|step| &step.command);
+            Some(json!([adapter.id, cli.verify, uninstall]))
+        })
+        .collect();
     let document = json!([
-        "massorca.consent/1",
+        "massorca.consent/2",
         manifest.id,
         manifest.version.to_string(),
         sha256.to_ascii_lowercase(),
         permissions,
-        installers
+        installers,
+        lifecycle
     ]);
     sha256_hex(document.to_string().as_bytes())
 }
@@ -130,7 +151,7 @@ pub fn review(
 ) -> Review {
     let manifest = &package.manifest;
     let cli = plan(manifest, resolver, os);
-    let consent = fingerprint(manifest, &package.sha256, &cli);
+    let consent = fingerprint(manifest, &package.sha256, &cli, os);
     Review {
         id: manifest.id.clone(),
         name: manifest.name.clone(),

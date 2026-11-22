@@ -53,3 +53,33 @@ fn a_review_serializes_the_plan_state_inline() {
     assert_eq!(value["cli"][0]["command"][0], "kit-setup");
     assert_eq!(value["source"]["kind"], "dir");
 }
+
+/// The fingerprint of a manifest with the package hash held fixed, so only what the fingerprint itself names counts.
+fn fingerprint_of(manifest: &serde_json::Value) -> String {
+    let manifest = massorca_ext_package::load(&serde_json::to_vec(manifest).expect("json"))
+        .expect("a valid manifest");
+    let plan = massorca_core_extensions::review::plan(&manifest, &FakeHost::new(), current_os());
+    massorca_core_extensions::review::fingerprint(&manifest, "ab", &plan, current_os())
+}
+
+#[test]
+fn the_fingerprint_covers_the_verify_and_uninstall_commands() {
+    let base = agent_package("acme", "kit", "kit");
+    let cli = "/contributes/agentAdapters/0/cli";
+    let mut other_verify = base.clone();
+    *other_verify
+        .pointer_mut(&format!("{cli}/verify"))
+        .expect("verify") = serde_json::json!(["kit", "--help"]);
+    let mut other_uninstall = base.clone();
+    for step in other_uninstall
+        .pointer_mut(&format!("{cli}/uninstall"))
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("steps")
+    {
+        step["command"] = serde_json::json!(["kit-setup", "remove", "--everything"]);
+    }
+
+    let consent = fingerprint_of(&base);
+    assert_ne!(consent, fingerprint_of(&other_verify), "verify");
+    assert_ne!(consent, fingerprint_of(&other_uninstall), "uninstall");
+}

@@ -104,7 +104,7 @@ impl Extensions {
         self.check_kind_conflicts(&lockfile, manifest)?;
 
         let plan = review::plan(manifest, &*self.resolver, self.os);
-        let expected = review::fingerprint(manifest, &package.sha256, &plan);
+        let expected = review::fingerprint(manifest, &package.sha256, &plan, self.os);
         match consent {
             None => return Err(Error::ConsentRequired),
             Some(consent) if consent != expected => return Err(Error::ConsentMismatch),
