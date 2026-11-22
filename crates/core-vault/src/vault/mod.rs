@@ -15,6 +15,8 @@ use crate::key::{KeyError, KeyStore, LockReason, MasterKey, Protection};
 use crate::names::{Scope, is_valid_name};
 use crate::value::SecretValue;
 
+mod links;
+mod requests;
 
 const PROTECTION_FILE: &str = "protection";
 
