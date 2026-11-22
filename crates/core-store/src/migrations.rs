@@ -215,6 +215,57 @@ CREATE INDEX secret_requests_by_requester ON secret_requests(requester, created_
 "#,
         foreign_keys_off: false,
     },
+    // Agent accounts (decision 0059): several credential homes per kind, one active per kind, and per-project choices.
+    // Deleting an account clears its active mark and its choices; deleting a project clears its choices.
+    Migration {
+        sql: r#"
+CREATE TABLE agent_accounts (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    identity TEXT,
+    state TEXT NOT NULL CHECK(state IN ('signed_in','expired','needs_sign_in','not_set_up','migrated','conflict','unknown'))
+);
+CREATE INDEX agent_accounts_by_kind ON agent_accounts(kind, created_at);
+CREATE TABLE agent_account_active (
+    kind TEXT PRIMARY KEY,
+    account TEXT NOT NULL REFERENCES agent_accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE agent_account_choices (
+    kind TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    account TEXT NOT NULL REFERENCES agent_accounts(id) ON DELETE CASCADE,
+    PRIMARY KEY(kind, project_id)
+);
+CREATE INDEX agent_account_choices_by_account ON agent_account_choices(account);
+"#,
+        foreign_keys_off: false,
+    },
+    // Account origin (decision 0059): a sign-in is signed out when removed; an import or a migrated home is only deleted. Rows from
+    // before this step default to 'import', so removing them never signs the person out of an original login.
+    // Rows of the earlier step that came from 0056's home are marked `migrated`; the rest keep the 'import' default.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_accounts ADD COLUMN origin TEXT NOT NULL DEFAULT 'import' CHECK(origin IN ('sign_in','import','migrated'));
+UPDATE agent_accounts SET origin = 'migrated' WHERE state = 'migrated';
+"#,
+        foreign_keys_off: false,
+    },
+    // Pending sign-ins and the record that a kind had an account (decision 0059). Only a row still pending is one the
+    // startup sweep may decide; a kind that ever had an account never falls back to the agent's usual home.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_accounts ADD COLUMN sign_in_pending INTEGER NOT NULL DEFAULT 0 CHECK(sign_in_pending IN (0,1));
+CREATE TABLE agent_account_history (kind TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO agent_account_history (kind) SELECT DISTINCT kind FROM agent_accounts;
+CREATE TRIGGER agent_accounts_record_kind AFTER INSERT ON agent_accounts
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

@@ -1,10 +1,14 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
+pub mod add_host;
 pub mod agent_sessions;
 pub mod canvas;
+pub mod devices;
+pub mod hosts;
 pub mod marketplace;
 pub mod morph;
 pub mod navigation;
+pub mod pairing;
 pub mod palette;
 pub mod palette_recent;
 pub mod project_add;

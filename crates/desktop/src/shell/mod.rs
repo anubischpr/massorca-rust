@@ -1,11 +1,13 @@
 //! The desktop shell: the window frame, its regions, and the command palette (D-SH-01).
 
 mod actions;
+mod add_host;
 mod bring_back;
 mod canvas;
 mod debug_focus;
 mod diff_page;
 mod marketplace;
+mod pairing;
 mod palette;
 mod project_sidebar;
 mod rail;
@@ -32,10 +34,12 @@ mod zones;
 use crate::data::DataSource;
 use crate::launch_options::DebugFocus;
 use crate::model::canvas::Canvas;
+use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
 };
 use crate::model::navigation::Page;
+use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
@@ -64,9 +68,13 @@ use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
 #[cfg(test)]
+mod add_host_tests;
+#[cfg(test)]
 mod bring_back_tests;
 #[cfg(test)]
 mod debug_focus_tests;
+#[cfg(test)]
+mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -99,6 +107,22 @@ pub struct Shell {
     settings_folder: Entity<TextField>,
     /// The disabled state the field was last set to, so a frame does not notify it again.
     settings_folder_disabled: bool,
+    /// Whether the paired hosts were asked for since the Settings page was last shown.
+    settings_hosts_asked: bool,
+    /// Whether the service link was connected at the last store update, to see a reconnect.
+    service_connected: bool,
+    /// The Pairing page's state: the offer this computer makes and the pairing it accepts (D-PR-01).
+    pairing: PairingState,
+    /// The offer another host shows, typed or pasted, and the optional name for that host.
+    pairing_offer: Entity<TextField>,
+    pairing_name: Entity<TextField>,
+    _pairing_changes: Subscription,
+    /// Whether the paired devices were asked for since the Pairing page was last shown.
+    devices_asked: bool,
+    /// The revoke confirm on screen, if one is open (D-PR-02).
+    revoke: Option<RevokeFlow>,
+    /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
+    add_host: Option<add_host::AddHostFlow>,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -206,11 +230,29 @@ impl Shell {
         let snapshot = store.read(cx).snapshot(Instant::now());
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
-            if store.read(cx).state().connection.is_connected() {
+            let connected = store.read(cx).state().connection.is_connected();
+            if connected && !shell.service_connected {
+                // A reconnect asks for the paired hosts and devices again while those pages are on screen.
+                shell.settings_hosts_asked = false;
+                shell.devices_asked = false;
+            }
+            shell.service_connected = connected;
+            if connected {
                 shell.settings.folder.forget_read_failure();
             }
             shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
+            let hosts =
+                crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
+            shell.model.set_remote_hosts(hosts);
+            if shell.service.is_some() {
+                let hosts =
+                    crate::model::hosts::marketplace_hosts(store.read(cx).state(), Instant::now());
+                shell.model.set_marketplace_hosts(hosts);
+            }
+            if let Some(teams) = store.read(cx).teams() {
+                shell.model.refresh_teams(teams);
+            }
             cx.notify();
         });
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -218,7 +260,17 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        model.set_remote_hosts(crate::model::hosts::host_rows(
+            &store.read(cx).state().hosts,
+            Instant::now(),
+        ));
         model.set_marketplace(marketplace.snapshot());
+        if service.is_some() {
+            model.set_marketplace_hosts(crate::model::hosts::marketplace_hosts(
+                store.read(cx).state(),
+                Instant::now(),
+            ));
+        }
         let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
         let marketplace_search_changes = cx.subscribe(
             &marketplace_search,
@@ -236,6 +288,11 @@ impl Shell {
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
+        let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
+        let pairing_name = cx.new(|cx| TextField::new(cx).placeholder("Name"));
+        // Typing in the offer field redraws the page, which enables Pair once there is an offer.
+        let pairing_changes =
+            cx.subscribe(&pairing_offer, |_, _, _: &TextFieldEvent, cx| cx.notify());
         let folder_changes = cx.subscribe(
             &settings_folder,
             |shell, field, event: &TextFieldEvent, cx| match event {
@@ -281,6 +338,15 @@ impl Shell {
             _settings_search_changes: settings_search_changes,
             settings_folder,
             settings_folder_disabled: false,
+            settings_hosts_asked: false,
+            service_connected: false,
+            pairing: PairingState::default(),
+            pairing_offer,
+            pairing_name,
+            _pairing_changes: pairing_changes,
+            devices_asked: false,
+            revoke: None,
+            add_host: None,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -457,7 +523,10 @@ impl Render for Shell {
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
+        self.refresh_settings_hosts();
+        self.refresh_devices(cx);
         self.sync_folder_field(window, cx);
+        self.sync_pairing_field(window, cx);
         self.sync_source_control(window, cx);
         let connected = self.store.read(cx).state().connection.is_connected();
         // The start page's composer is created before the frames below borrow the Shell's fields.
@@ -474,10 +543,24 @@ impl Render for Shell {
             }
         });
         let connection = self.store.read(cx).state().connection.clone();
+        let hosts = self
+            .store
+            .read(cx)
+            .state()
+            .hosts
+            .iter()
+            .map(|entry| {
+                (
+                    entry.record.name.clone(),
+                    crate::model::hosts::host_state(entry, Instant::now()),
+                )
+            })
+            .collect();
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
             connection,
+            hosts,
             shell: shell.clone(),
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
@@ -486,6 +569,16 @@ impl Render for Shell {
                 let state = self.store.read(cx).state();
                 crate::model::secret_vault::VaultPage::from_state(&state.secrets, &state.projects)
             },
+        };
+        let pairing = pairing::PairingFrame {
+            state: self.pairing.clone(),
+            offer_field: self.pairing_offer.clone(),
+            name_field: self.pairing_name.clone(),
+            devices: crate::model::devices::devices_view(
+                self.store.read(cx).state().devices.as_ref(),
+                crate::model::pairing::now_ms(),
+            ),
+            shell: shell.clone(),
         };
         let setup_rows = crate::model::setup::checklist(
             self.store.read(cx).state(),
@@ -521,6 +614,7 @@ impl Render for Shell {
                 project,
                 diff,
                 marketplace,
+                pairing,
             },
             window,
             cx,
@@ -631,6 +725,14 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let revoke = self
+            .revoke
+            .as_ref()
+            .map(|flow| pairing::revoke_dialog(flow, &shell));
+        let add_host = self
+            .add_host
+            .as_ref()
+            .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
         let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
             let connected = self.store.read(cx).state().connection.is_connected();
             settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
@@ -707,6 +809,8 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(revoke, |el, dialog| el.child(dialog))
+            .when_some(add_host, |el, dialog| el.child(dialog))
             .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))

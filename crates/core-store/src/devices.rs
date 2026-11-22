@@ -97,4 +97,14 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// Replaces a device's permission classes, as their wire names. The pairing flow sets them once; this lets a test hold
+    /// a paired device to a narrower set. Returns whether the device exists.
+    pub fn set_device_scopes(&self, id: &str, scopes: &[String]) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE devices SET scopes = ?2 WHERE id = ?1",
+            params![id, scopes.join(",")],
+        )?;
+        Ok(changed > 0)
+    }
 }
