@@ -4,6 +4,7 @@
 //! and close one submenu level, Enter or Space chooses, and Escape closes one level and returns
 //! focus to the opener. Items do not take focus one by one; the panel does.
 
+use crate::a11y::{self, framed};
 use crate::components::kbd::Kbd;
 use crate::components::popover::{OverlayLayer, fade_in, overlay_surface};
 use crate::icon::{Icon, IconName, IconSize};
@@ -15,10 +16,10 @@ use crate::tokens::{
 };
 use gpui::relative;
 use gpui::{
-    Anchor, AnyElement, App, Bounds, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Hsla,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseDownEvent, ParentElement, Pixels, Point,
-    Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, anchored, deferred,
-    div, point, px, transparent_black,
+    Anchor, AnyElement, App, Bounds, ClickEvent, Context, Div, ElementId, Entity, EventEmitter,
+    FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, Task, Toggled, Window, anchored, deferred, div, point, px, transparent_black,
 };
 use std::fmt;
 use std::time::Duration;
@@ -251,6 +252,8 @@ pub struct MenuView {
     empty_text: SharedString,
     layer: OverlayLayer,
     _hover_timer: Option<Task<()>>,
+    /// Whether the panel is a listbox of options, as a select's popup is, rather than a menu.
+    listbox: bool,
 }
 
 impl EventEmitter<MenuEvent> for MenuView {}
@@ -285,11 +288,18 @@ impl MenuView {
             empty_text: "Nothing to do here yet".into(),
             layer: OverlayLayer::default(),
             _hover_timer: None,
+            listbox: false,
         }
     }
 
     /// The layer the menu paints on. A menu opened from inside a dialog takes
     /// [`OverlayLayer::Dialog`] so that it paints above the dialog's scrim.
+    /// Draws the panel as a listbox whose rows are its options, as a select's popup is.
+    pub fn listbox(mut self) -> Self {
+        self.listbox = true;
+        self
+    }
+
     pub fn with_layer(mut self, layer: OverlayLayer) -> Self {
         self.layer = layer;
         self
@@ -622,7 +632,18 @@ impl Render for MenuView {
         } else {
             self.render_rows(Level::Main, &theme, cx)
         };
-        fade_in("menu-enter", panel.children(body), cx)
+        let role = if self.listbox {
+            Role::ListBox
+        } else {
+            Role::Menu
+        };
+        let frame = ElementId::from(format!("menu-{}", cx.entity_id()));
+        framed(
+            frame,
+            role,
+            None,
+            fade_in("menu-enter", panel.children(body), cx),
+        )
     }
 }
 
@@ -658,7 +679,9 @@ impl MenuView {
                         Level::Child { .. } => active == Some(index),
                     };
                     let opened = matches!(level, Level::Main) && open_parent == Some(index);
-                    let row = self.render_row(level, index, item, highlighted, theme, cx);
+                    let row = self
+                        .render_row(level, index, item, highlighted, theme, cx)
+                        .into_any_element();
                     if opened {
                         let child_rows =
                             self.render_rows(Level::Child { parent: index }, theme, cx);
@@ -696,7 +719,7 @@ impl MenuView {
         highlighted: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> a11y::Annotated<Stateful<Div>> {
         let p = &theme.palette;
         let disabled = item.is_disabled();
         let label_colour = if disabled {
@@ -780,7 +803,7 @@ impl MenuView {
             row = row.bg(fills.selected);
         }
         if disabled {
-            return row.into_any_element();
+            return self.semantics(row, item, level, index);
         }
         row = row.state_fills(theme, Surface::Overlay);
         row = row.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -794,7 +817,41 @@ impl MenuView {
             cx.stop_propagation();
             this.choose(level, index, window, cx);
         }));
-        row.into_any_element()
+        self.semantics(row, item, level, index)
+    }
+
+    /// The row's role and state: a menu item, a checkable item, or a listbox option.
+    fn semantics(
+        &self,
+        row: Stateful<Div>,
+        item: &MenuItem,
+        level: Level,
+        index: usize,
+    ) -> a11y::Annotated<Stateful<Div>> {
+        let checkable = item.checked.is_some();
+        let checked = item.checked == Some(true);
+        let expanded =
+            matches!(level, Level::Main) && self.submenu.is_some_and(|open| open.parent == index);
+        let role = if self.listbox {
+            Role::ListBoxOption
+        } else if checkable {
+            Role::MenuItemCheckBox
+        } else {
+            Role::MenuItem
+        };
+        let mut row = row.role(role).aria_label(item.label.clone());
+        if self.listbox {
+            row = row.aria_selected(checked);
+        } else if checkable {
+            row = row.aria_toggled(Toggled::from(checked));
+        }
+        if item.has_submenu() {
+            row = row.aria_expanded(expanded);
+        }
+        if let Some(reason) = item.disabled_reason.clone() {
+            row = row.aria_description(reason);
+        }
+        a11y::disabled(row, item.is_disabled())
     }
 }
 
@@ -1160,5 +1217,78 @@ mod element_tests {
             submenu.origin.x,
             panel.right()
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{
+        AppContext, TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn a_menu_panel_is_a_menu(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let entries = vec![MenuItem::new("Rename").into()];
+            let menu = cx.new(|cx| MenuView::new(entries, window, cx));
+            menu.update(cx, |view, cx| reported(view.render(window, cx)))
+        })
+        .expect("the panel is reported");
+        assert_eq!(node.role(), Role::Menu);
+    }
+
+    #[gpui::test]
+    fn a_checkable_row_is_a_checkbox_item_with_its_state(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let menu = cx.new(|cx| MenuView::new(Vec::new(), window, cx));
+            menu.update(cx, |view, cx| {
+                let theme = *cx.theme();
+                let item = MenuItem::new("Show hidden").checked(true);
+                reported(view.render_row(Level::Main, 0, &item, false, &theme, cx))
+            })
+        })
+        .expect("the row is reported");
+        assert_eq!(node.role(), Role::MenuItemCheckBox);
+        assert_eq!(node.toggled(), Some(Toggled::True));
+        assert_eq!(node.label(), Some("Show hidden"));
+    }
+
+    #[gpui::test]
+    fn a_listbox_option_reports_whether_it_is_selected(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let menu = cx.new(|cx| MenuView::new(Vec::new(), window, cx).listbox());
+            menu.update(cx, |view, cx| {
+                let theme = *cx.theme();
+                let item = MenuItem::new("Beta").checked(true);
+                reported(view.render_row(Level::Main, 1, &item, false, &theme, cx))
+            })
+        })
+        .expect("the option is reported");
+        assert_eq!(node.role(), Role::ListBoxOption);
+        assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[gpui::test]
+    fn a_submenu_row_reports_whether_its_submenu_is_open(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let entries = vec![
+                MenuItem::new("Export")
+                    .submenu(vec![MenuItem::new("PDF").into()])
+                    .into(),
+            ];
+            let menu = cx.new(|cx| MenuView::new(entries, window, cx));
+            menu.update(cx, |view, cx| {
+                assert!(view.open_submenu(0, cx));
+                let theme = *cx.theme();
+                let item = MenuItem::new("Export").submenu(vec![MenuItem::new("PDF").into()]);
+                reported(view.render_row(Level::Main, 0, &item, false, &theme, cx))
+            })
+        })
+        .expect("the row is reported");
+        assert_eq!(node.role(), Role::MenuItem);
+        assert_eq!(node.is_expanded(), Some(true));
     }
 }

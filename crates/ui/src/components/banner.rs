@@ -17,7 +17,8 @@ use crate::tokens::{
 };
 use gpui::{
     Animation, AnimationExt, AnyElement, App, ElementId, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    px,
 };
 
 /// A banner carries at most this many actions (Banner.md, anatomy); extra ones are ignored.
@@ -174,6 +175,12 @@ impl Banner {
 
 impl RenderOnce for Banner {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let name = self.message.clone();
+        let role = if matches!(self.variant, BannerVariant::Danger) {
+            Role::Alert
+        } else {
+            Role::Status
+        };
         let theme = *cx.theme();
         let p = theme.palette;
         let (fill, border) = self.variant.surface(&p);
@@ -292,7 +299,8 @@ impl RenderOnce for Banner {
                     ),
                 );
         }
-        if cx.reduce_motion() {
+        // GPUI's animation wrapper forwards no accessibility role, so the role sits outside it.
+        let animated = if cx.reduce_motion() {
             root.into_any_element()
         } else {
             root.with_animation(
@@ -301,7 +309,12 @@ impl RenderOnce for Banner {
                 |banner, t| banner.opacity(t),
             )
             .into_any_element()
-        }
+        };
+        div()
+            .id(self.id.clone())
+            .role(role)
+            .aria_label(name)
+            .child(animated)
     }
 }
 
@@ -448,5 +461,33 @@ mod tests {
             }
             div().w(px(480.)).child(banner)
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_danger_banner_is_an_alert_named_by_its_message(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Banner::new("host", BannerVariant::Danger, "Host unreachable").render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Alert);
+        assert_eq!(node.label(), Some("Host unreachable"));
+    }
+
+    #[gpui::test]
+    fn an_info_banner_is_a_status_message(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Banner::new("sync", BannerVariant::Info, "Syncing").render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Status);
     }
 }

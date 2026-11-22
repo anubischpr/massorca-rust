@@ -3,16 +3,19 @@
 
 use std::ops::Range;
 
+use gpui::accesskit::Role;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, Div, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
-    ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun,
-    UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, px, relative, size,
+    ElementInputHandler, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
+    SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun, UnderlineStyle,
+    Window, actions, div, fill, point, px, relative, size,
 };
 
+use crate::a11y;
+use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
@@ -407,6 +410,8 @@ pub struct TextField {
     clearable: bool,
     disabled: bool,
     read_only: bool,
+    /// A search box: its root carries the searchbox role instead of the textbox role.
+    search: bool,
     /// The last paint, for pointer hit tests and IME geometry.
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
@@ -437,6 +442,7 @@ impl TextField {
             clearable: false,
             disabled: false,
             read_only: false,
+            search: false,
             last_layout: None,
             last_bounds: None,
             scroll_x: px(0.),
@@ -497,6 +503,12 @@ impl TextField {
         self
     }
 
+    /// Makes the field a search box: its root carries the searchbox role.
+    pub fn search(mut self) -> Self {
+        self.search = true;
+        self
+    }
+
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
@@ -539,12 +551,7 @@ impl TextField {
     }
 
     fn after_edit(&mut self, changed: bool, window: &Window, cx: &mut Context<Self>) {
-        if changed {
-            window.notify_text_input_changed(&self.focus_handle);
-            cx.emit(TextFieldEvent::Changed);
-        }
-        window.notify_text_selection_changed(&self.focus_handle);
-        cx.notify();
+        input::after_edit(self, changed, window, cx);
     }
 
     /// Applies a text change when the field accepts input.
@@ -554,10 +561,7 @@ impl TextField {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut TextBuffer) -> bool,
     ) {
-        if self.editable() {
-            let changed = change(&mut self.buffer);
-            self.after_edit(changed, window, cx);
-        }
+        input::edit(self, window, cx, change);
     }
 
     /// Moves or selects the caret without changing the text.
@@ -845,14 +849,54 @@ impl Render for TextField {
                     .clone()
                     .map(|helper| note_line(helper, palette.text.secondary, None))
             });
-        div()
+        let role = if self.search {
+            Role::SearchInput
+        } else {
+            Role::TextInput
+        };
+        // A search box has no visible label: its placeholder names it.
+        let name = self.label.clone().or_else(|| {
+            (self.search && !self.placeholder.is_empty()).then(|| self.placeholder.clone())
+        });
+        let description = self.error.clone().or_else(|| self.helper.clone());
+        let placeholder = self.placeholder.clone();
+        let value = SharedString::from(self.text().to_owned());
+        let (disabled, read_only, invalid) = (self.disabled, self.read_only, self.error.is_some());
+        let root = div()
+            .id(ElementId::from(format!("text-field-{}", cx.entity_id())))
+            .role(role)
+            .aria_value(value)
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
             .w_full()
             .when_some(label, |root, label| root.child(label))
             .child(field)
-            .when_some(note, |root, note| root.child(note))
+            .when_some(note, |root, note| root.child(note));
+        let root = match name {
+            Some(name) => root.aria_label(name),
+            None => root,
+        };
+        let root = match description {
+            Some(text) => root.aria_description(text),
+            None => root,
+        };
+        let root = if placeholder.is_empty() {
+            root
+        } else {
+            root.aria_placeholder(placeholder)
+        };
+        a11y::annotate(root, move |node| {
+            if disabled {
+                node.set_disabled();
+            }
+            if read_only {
+                node.set_read_only();
+            }
+            if invalid {
+                node.set_invalid(gpui::accesskit::Invalid::True);
+            }
+        })
     }
 }
 
@@ -1053,76 +1097,37 @@ impl Element for TextElement {
     }
 }
 
-impl EntityInputHandler for TextField {
-    fn text_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        adjusted_range: &mut Option<Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<String> {
-        let range = self.buffer.range_from_utf16(&range_utf16);
-        adjusted_range.replace(self.buffer.range_to_utf16(&range));
-        Some(self.buffer.text()[range].to_owned())
+impl InputHost for TextField {
+    fn text_buffer(&self) -> &TextBuffer {
+        &self.buffer
     }
 
-    fn selected_text_range(
-        &mut self,
-        _: bool,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.buffer.range_to_utf16(&self.buffer.selected()),
-            reversed: self.buffer.reversed(),
-        })
+    fn text_buffer_mut(&mut self) -> &mut TextBuffer {
+        &mut self.buffer
     }
 
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.buffer
-            .marked()
-            .map(|range| self.buffer.range_to_utf16(&range))
+    fn input_accepts(&self) -> bool {
+        self.editable()
     }
 
-    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.buffer.unmark();
-        self.after_edit(false, window, cx);
+    fn input_focus(&self) -> &FocusHandle {
+        &self.focus_handle
     }
 
-    fn replace_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        text: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let text = strip_line_breaks(text);
-        self.edit(window, cx, |buffer| buffer.replace_text(range_utf16, &text));
+    fn input_changed(&mut self, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Changed);
     }
 
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        new_selected_range: Option<Range<usize>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let text = strip_line_breaks(new_text);
-        self.edit(window, cx, |buffer| {
-            buffer.replace_and_mark(range_utf16, &text, new_selected_range)
-        });
+    fn sanitize_insert(text: &str) -> String {
+        strip_line_breaks(text)
     }
 
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
+    fn layout_bounds(
+        &self,
+        range: Range<usize>,
         element_bounds: Bounds<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let line = self.current_line()?;
-        let range = self.buffer.range_from_utf16(&range_utf16);
         let left = element_bounds.left() - self.scroll_x;
         Some(Bounds::from_corners(
             point(left + line.x_for_index(range.start), element_bounds.top()),
@@ -1130,48 +1135,14 @@ impl EntityInputHandler for TextField {
         ))
     }
 
-    fn selection_bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<Bounds<Pixels>> {
-        self.bounds_for_range(range_utf16, element_bounds, window, cx)
-            .into_iter()
-            .collect()
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        position: Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn offset_at(&self, position: Point<Pixels>) -> Option<usize> {
         let bounds = self.last_bounds?;
         let line = self.current_line()?;
-        let index = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
-        Some(self.buffer.offset_to_utf16(index))
-    }
-
-    fn set_selected_text_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.buffer.select_utf16(range_utf16);
-        self.after_edit(false, window, cx);
-    }
-
-    fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        Some(self.buffer.utf16_len())
-    }
-
-    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
-        self.editable()
+        Some(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x))
     }
 }
+
+impl_input_handler!(TextField);
 
 /// Typed line breaks never enter a single-line field.
 fn strip_line_breaks(text: &str) -> String {
@@ -1261,7 +1232,7 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
     use std::{cell::RefCell, rc::Rc};
 
     #[test]
@@ -1586,5 +1557,58 @@ mod tests {
         field.update_in(cx, |field, window, cx| field.clear(window, cx));
         assert_eq!(text_of(&field, cx), "");
         assert!(field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)));
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::view;
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_text_field_is_a_textbox_named_by_its_label_with_its_value(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| TextField::new(cx).label("Name").with_text("oppm"))
+            .expect("the field is reported");
+        assert_eq!(node.role(), Role::TextInput);
+        assert_eq!(node.label(), Some("Name"));
+        assert_eq!(node.value(), Some("oppm"));
+    }
+
+    #[gpui::test]
+    fn a_read_only_field_with_an_error_reports_both(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| {
+            TextField::new(cx)
+                .label("Name")
+                .read_only(true)
+                .error("Required")
+        })
+        .expect("the field is reported");
+        assert!(node.is_read_only());
+        assert!(node.invalid().is_some());
+        assert_eq!(node.description(), Some("Required"));
+    }
+
+    #[gpui::test]
+    fn a_search_field_is_a_searchbox(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| TextField::new(cx).search()).expect("the field is reported");
+        assert_eq!(node.role(), Role::SearchInput);
+    }
+}
+
+#[cfg(test)]
+mod search_name_tests {
+    use super::*;
+    use crate::a11y::probe::view;
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_search_field_is_named_by_its_placeholder(cx: &mut TestAppContext) {
+        let node = view(cx, |cx| {
+            TextField::new(cx).placeholder("Search files").search()
+        })
+        .expect("the field is reported");
+        assert_eq!(node.role(), Role::SearchInput);
+        assert_eq!(node.label(), Some("Search files"));
     }
 }

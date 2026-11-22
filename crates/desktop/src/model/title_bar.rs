@@ -1,12 +1,16 @@
 //! The Title bar's content: navigation, the title, the Sidebar toggle and the region
 //! toggles (D-SH-03). Full pages swap Back and the title in, and hide the region toggles.
 
-use super::navigation::Page;
+use super::navigation::{Mode, Page};
 use super::regions::Region;
 use super::shell_state::ShellModel;
+use super::teams::TeamPage;
 
 /// The title when no session is open (the landing view of D-SH-03).
 pub const NO_SESSION_TITLE: &str = "No session open";
+
+/// The title of the Bot Teams home, the team list (screens 4.5).
+pub const BOT_TEAMS_TITLE: &str = "Bot teams";
 
 /// The regions with a Title bar toggle, in D-SH-03 order.
 const TOGGLED_REGIONS: [Region; 3] = [
@@ -27,6 +31,8 @@ pub struct RegionToggle {
 pub struct TitleBarModel {
     /// The full page on screen, if any; its Back button and title replace the session.
     pub full_page: Option<Page>,
+    /// Back is a labelled button with the page title: full pages and Bot Teams screens (D-SH-03).
+    pub labelled_back: bool,
     pub title: String,
     /// No session is open, so the title reads in tertiary text.
     pub title_is_placeholder: bool,
@@ -46,12 +52,17 @@ pub struct TitleBarModel {
 pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     let navigation = model.navigation();
     let full_page = navigation.page.is_full_page().then_some(navigation.page);
-    let (title, title_is_placeholder) = match (full_page, model.snapshot().session_title.as_ref()) {
-        (Some(page), _) => (page.title().to_owned(), false),
-        (None, Some(session)) => (session.clone(), false),
-        (None, None) => (NO_SESSION_TITLE.to_owned(), true),
+    let bot_teams = navigation.mode == Mode::BotTeams;
+    let session = model.snapshot().session_title.as_ref();
+    let (title, title_is_placeholder) = match (full_page, navigation.page, session) {
+        (Some(page), _, _) => (page.title().to_owned(), false),
+        (None, Page::Team(page), _) => (team_page_title(model, page), false),
+        (None, _, _) if bot_teams => (BOT_TEAMS_TITLE.to_owned(), false),
+        (None, _, Some(session)) => (session.clone(), false),
+        (None, _, None) => (NO_SESSION_TITLE.to_owned(), true),
     };
-    let region_toggles = if full_page.is_some() {
+    // Bot Teams pages have no Workspaces regions to toggle.
+    let region_toggles = if full_page.is_some() || bot_teams {
         Vec::new()
     } else {
         TOGGLED_REGIONS
@@ -65,6 +76,7 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     let sidebar_on = model.region_visible(Region::Sidebar);
     TitleBarModel {
         full_page,
+        labelled_back: full_page.is_some() || bot_teams,
         title,
         title_is_placeholder,
         can_go_back: navigation.can_go_back(),
@@ -80,10 +92,23 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     }
 }
 
+/// A team page is named by its page, and a project's page by the project's name.
+fn team_page_title(model: &ShellModel, page: TeamPage) -> String {
+    match page {
+        TeamPage::Project(team, project) => model
+            .teams()
+            .team(team)
+            .and_then(|team| team.project(project))
+            .map_or_else(|| page.title().to_owned(), |project| project.name.clone()),
+        _ => page.title().to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
+    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell() -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), 1440.0)
@@ -144,5 +169,34 @@ mod tests {
         let bar = title_bar(&model);
         assert!(!bar.sidebar_on);
         assert_eq!(bar.sidebar_label, "Show sidebar");
+    }
+
+    #[test]
+    fn a_bot_teams_page_is_named_by_its_page_and_has_no_region_toggles() {
+        let mut model = shell();
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        let bar = title_bar(&model);
+        assert_eq!(bar.title, BOT_TEAMS_TITLE);
+        assert!(bar.region_toggles.is_empty());
+        assert!(bar.sidebar_enabled);
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        assert_eq!(title_bar(&model).title, "Board");
+    }
+
+    #[test]
+    fn bot_teams_screens_name_back_and_keep_the_sidebar() {
+        let mut model = shell();
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        let home = title_bar(&model);
+        assert!(home.labelled_back);
+        assert!(home.sidebar_enabled);
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        let board = title_bar(&model);
+        assert!(board.labelled_back);
+        assert_eq!(board.full_page, None);
+        assert!(board.sidebar_enabled);
+        assert!(!title_bar(&shell()).labelled_back);
     }
 }

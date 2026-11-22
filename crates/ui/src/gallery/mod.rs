@@ -2,12 +2,20 @@
 //! theme, with a toggle to the other theme (decision 0025). Opened only by a
 //! person; automated runs shoot every story headlessly (`crates/ui/tests/screenshots.rs`).
 
+mod composer;
 mod controls;
+mod data;
 mod feedback;
 mod fields;
 mod indicators;
+mod layout;
 mod lists;
 mod overlays;
+mod panels;
+mod session;
+mod settings;
+mod teams;
+mod terminal;
 
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_HEADING, TYPE_LABEL};
@@ -33,8 +41,16 @@ pub fn stories() -> Vec<Story> {
     all.extend(indicators::stories());
     all.extend(fields::stories());
     all.extend(lists::stories());
+    all.extend(data::stories());
     all.extend(overlays::stories());
     all.extend(feedback::stories());
+    all.extend(layout::stories());
+    all.extend(panels::stories());
+    all.extend(session::stories());
+    all.extend(composer::stories());
+    all.extend(terminal::stories());
+    all.extend(teams::stories());
+    all.extend(settings::stories());
     all
 }
 

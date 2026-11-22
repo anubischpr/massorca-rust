@@ -9,3 +9,4 @@ pub const CONFIG: &str = "config/1";
 pub const TERMINALS: &str = "terminals/1";
 /// Binary frame kinds beyond JSON; terminal output rides on frame kind `0x02`.
 pub const BINARY_FRAMES: &str = "binary-frames/1";
+pub const GIT: &str = "git/1";
