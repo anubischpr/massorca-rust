@@ -8,19 +8,21 @@
 use std::fmt;
 use std::rc::Rc;
 
+use crate::a11y;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::progress::Spinner;
 use crate::icon::{Icon, IconName, IconSize};
-use crate::theme::{ActiveTheme, TextStyled, box_shadows};
+use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
 use crate::tokens::{
-    LAYOUT_SETTINGS_CONTROL_MAX, LAYOUT_SETTINGS_CONTROL_MIN, RADIUS_LG, SIZE_ROW_SETTINGS,
-    SIZE_ROW_SETTINGS_HELPER, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_HALF, TYPE_BODY_SM,
+    LAYOUT_SETTINGS_CONTROL_MAX, LAYOUT_SETTINGS_CONTROL_MIN, RADIUS_FULL, RADIUS_LG, RADIUS_MD,
+    SIZE_CONTROL_DEFAULT, SIZE_ICON_MD, SIZE_ROW_SETTINGS, SIZE_ROW_SETTINGS_HELPER,
+    SIZE_SWITCH_KNOB, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION,
     TYPE_TITLE_SM,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
 };
 
 /// What a row shows under its control while a change is in hand.
@@ -32,6 +34,9 @@ pub enum RowStatus {
     Saved,
     /// The change was refused. The message says why, and the previous value stays in effect.
     Error(SharedString),
+    /// The setting has no backing yet. The message says what is missing; no glyph, so it never
+    /// reads as a failure.
+    Unavailable(SharedString),
 }
 
 impl RowStatus {
@@ -40,7 +45,7 @@ impl RowStatus {
         match self {
             Self::Saving => "Saving".into(),
             Self::Saved => "Saved".into(),
-            Self::Error(message) => message.clone(),
+            Self::Error(message) | Self::Unavailable(message) => message.clone(),
         }
     }
 }
@@ -269,6 +274,7 @@ fn status_line(id: &SharedString, status: &RowStatus, theme: &crate::theme::Them
                     .into_any_element(),
             ),
         ),
+        RowStatus::Unavailable(_) => (p.text.tertiary, None),
     };
     div()
         .flex()
@@ -279,6 +285,203 @@ fn status_line(id: &SharedString, status: &RowStatus, theme: &crate::theme::Them
         .children(glyph)
         .child(status.text())
         .into_any_element()
+}
+
+/// A text field that cannot be typed in yet. It shows `value`, or nothing.
+pub fn unavailable_input(
+    id: SharedString,
+    name: SharedString,
+    theme: &Theme,
+    value: Option<&str>,
+) -> AnyElement {
+    let text = SharedString::from(value.unwrap_or_default().to_owned());
+    disabled_box(id, name, Role::TextInput, theme, text, None)
+}
+
+/// A dropdown that cannot be opened yet. It shows its value, or "Choose" until one is set.
+pub fn unavailable_select(
+    id: SharedString,
+    name: SharedString,
+    theme: &Theme,
+    value: Option<&str>,
+) -> AnyElement {
+    let text = SharedString::from(value.unwrap_or("Choose").to_owned());
+    disabled_box(
+        id,
+        name,
+        Role::ComboBox,
+        theme,
+        text,
+        Some(IconName::ChevronDown),
+    )
+}
+
+/// A number field that cannot be changed yet: the value, a decrease and an increase button, and
+/// the unit beside them.
+pub fn unavailable_stepper(
+    id: SharedString,
+    name: SharedString,
+    theme: &Theme,
+    value: Option<&str>,
+    unit: &'static str,
+) -> AnyElement {
+    let p = &theme.palette;
+    let step = |icon: IconName, direction: &str| {
+        IconButton::new(
+            SharedString::from(format!("{id}-{direction}")),
+            icon,
+            format!("{direction} {name}"),
+        )
+        .variant(IconButtonVariant::Ghost)
+        .disabled(true)
+    };
+    let text = SharedString::from(value.unwrap_or_default().to_owned());
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .w_full()
+        .child(step(IconName::Minus, "Decrease"))
+        .child(disabled_box(
+            id.clone(),
+            name.clone(),
+            Role::SpinButton,
+            theme,
+            text,
+            None,
+        ))
+        .child(step(IconName::Plus, "Increase"))
+        .child(
+            div()
+                .text_style(TYPE_CAPTION)
+                .text_color(p.text.tertiary)
+                .child(unit),
+        )
+        .into_any_element()
+}
+
+/// A slider that cannot be moved yet: its track, the knob at `position` (0 to 1) and its value.
+pub fn unavailable_slider(
+    id: SharedString,
+    name: SharedString,
+    theme: &Theme,
+    value: &'static str,
+    position: f32,
+) -> AnyElement {
+    let p = &theme.palette;
+    let knob = div()
+        .absolute()
+        .top(px((SPACE_1 - SIZE_SWITCH_KNOB) / 2.0))
+        .left(relative(position.clamp(0.0, 1.0)))
+        .size(px(SIZE_SWITCH_KNOB))
+        .rounded(px(RADIUS_FULL))
+        .bg(p.text.disabled);
+    let track = div()
+        .id(id)
+        .role(Role::Slider)
+        .aria_label(name)
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .h(px(SPACE_1))
+        .rounded(px(RADIUS_FULL))
+        .bg(p.fill.disabled)
+        .child(knob);
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_3))
+        .w_full()
+        .child(a11y::disabled(track, true))
+        .child(div().text_body().text_color(p.text.tertiary).child(value))
+        .into_any_element()
+}
+
+/// Accent swatches that cannot be picked yet: `count` neutral disks, the first (the default) ringed.
+pub fn unavailable_swatches(theme: &Theme, count: usize) -> AnyElement {
+    let p = &theme.palette;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .children((0..count).map(|index| {
+            let swatch = div()
+                .size(px(SIZE_ICON_MD))
+                .rounded(px(RADIUS_FULL))
+                .bg(p.fill.disabled)
+                .border_1()
+                .border_color(p.border.strong);
+            if index == 0 {
+                swatch.border_2().border_color(p.text.tertiary)
+            } else {
+                swatch
+            }
+        }))
+        .into_any_element()
+}
+
+/// The header of a table whose rows are not available yet. The first column takes the spare width.
+pub fn unavailable_table_header(theme: &Theme, columns: &[&'static str]) -> AnyElement {
+    let p = &theme.palette;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_4))
+        .w_full()
+        .pb(px(SPACE_1))
+        .border_b_1()
+        .border_color(p.border.subtle)
+        .children(columns.iter().enumerate().map(|(index, column)| {
+            let cell = div()
+                .text_style(TYPE_CAPTION)
+                .text_color(p.text.tertiary)
+                .child(*column);
+            if index == 0 {
+                cell.flex_1().min_w_0()
+            } else {
+                cell.w(px(LAYOUT_SETTINGS_CONTROL_MIN))
+            }
+        }))
+        .into_any_element()
+}
+
+/// A field or dropdown box in the disabled tokens. `chevron` marks a dropdown.
+fn disabled_box(
+    id: SharedString,
+    name: SharedString,
+    role: Role,
+    theme: &Theme,
+    text: SharedString,
+    chevron: Option<IconName>,
+) -> AnyElement {
+    let p = &theme.palette;
+    let mut field = div()
+        .id(id)
+        .role(role)
+        .aria_label(name)
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .justify_between()
+        .gap(px(SPACE_2))
+        .h(px(SIZE_CONTROL_DEFAULT))
+        .px(px(SPACE_3))
+        .rounded(px(RADIUS_MD))
+        .border_1()
+        .border_color(p.border.subtle)
+        .bg(p.fill.disabled)
+        .text_body()
+        .text_color(p.text.disabled)
+        .child(div().min_w_0().truncate().child(text));
+    if let Some(icon) = chevron {
+        field = field.child(
+            Icon::new(icon)
+                .size(IconSize::XSmall)
+                .color(p.text.disabled),
+        );
+    }
+    a11y::disabled(field, true).into_any_element()
 }
 
 /// A group of rows under a title (SettingsRow.md, Section).
@@ -389,6 +592,10 @@ mod tests {
         assert_eq!(
             RowStatus::Error("Enter a folder path.".into()).text(),
             "Enter a folder path."
+        );
+        assert_eq!(
+            RowStatus::Unavailable("Not available yet".into()).text(),
+            "Not available yet"
         );
     }
 

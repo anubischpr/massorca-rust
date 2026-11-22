@@ -8,7 +8,10 @@ use crate::components::segmented_control::{segment_key, tab_segment};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::FocusRing;
 use crate::theme::ActiveTheme;
-use crate::tokens::{BORDER_WIDTH_THICK, DURATION_TOOLTIP_DELAY, SIZE_CONTROL_DEFAULT};
+use crate::tokens::{
+    BORDER_WIDTH_THICK, DURATION_TOOLTIP_DELAY, RADIUS_MD, SIZE_CONTROL_DEFAULT, SIZE_TOOLBAR,
+    SPACE_1, SPACE_2, SPACE_HALF,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ElementId, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
@@ -147,7 +150,12 @@ impl RenderOnce for ProjectSidebarTabs {
             .aria_label("Project sidebar")
             .flex()
             .items_center()
-            .h(px(SIZE_CONTROL_DEFAULT))
+            // 36 px strip (28 px tabs, 4 px above and below) so its rule meets the Work panel's.
+            .flex_none()
+            .h(px(SIZE_TOOLBAR))
+            .px(px(SPACE_2))
+            .py(px(SPACE_1))
+            .gap(px(SPACE_HALF))
             .border_b_1()
             .border_color(p.border.subtle)
             .bg(p.surface.canvas)
@@ -183,6 +191,7 @@ impl RenderOnce for ProjectSidebarTabs {
                 .items_center()
                 .justify_center()
                 .size(px(SIZE_CONTROL_DEFAULT))
+                .rounded(px(RADIUS_MD))
                 .track_focus(&handles[index])
                 .focus_ring(&theme)
                 .text_color(ink)
