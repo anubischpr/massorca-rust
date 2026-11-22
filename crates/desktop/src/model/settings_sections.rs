@@ -129,6 +129,8 @@ pub enum RowBody {
     ConversationsFolder,
     /// This PC and the state of its service.
     ThisPc,
+    /// Each paired remote host, one row per host, from the store (D-HO-07). The spec only marks the place.
+    PairedHosts,
     /// A link to the setup checklist.
     SetupChecklist,
     Planned(Planned),
@@ -425,6 +427,11 @@ const HOSTS: &[RowSpec] = &[
         body: RowBody::ThisPc,
     },
     RowSpec {
+        label: "Paired hosts",
+        helper: "Remote hosts this PC is paired with.",
+        body: RowBody::PairedHosts,
+    },
+    RowSpec {
         label: "Add host",
         helper: "Remote hosts over SSH come later.",
         body: RowBody::Planned(Planned::Action("Add host")),
@@ -707,13 +714,11 @@ mod tests {
     }
 
     #[test]
-    fn the_hosts_list_has_this_pc_only_until_a_remote_host_layer_exists() {
-        assert_eq!(rows(SettingsSection::Hosts)[0].body, RowBody::ThisPc);
-        assert!(
-            rows(SettingsSection::Hosts)
-                .iter()
-                .all(|row| !row.label.contains("VPS"))
-        );
+    fn the_hosts_list_starts_with_this_pc_then_marks_where_the_paired_hosts_go() {
+        let hosts = rows(SettingsSection::Hosts);
+        assert_eq!(hosts[0].body, RowBody::ThisPc);
+        assert_eq!(hosts[1].body, RowBody::PairedHosts);
+        assert_eq!(hosts[2].label, "Add host");
     }
 
     #[test]

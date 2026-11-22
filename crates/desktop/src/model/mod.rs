@@ -1,6 +1,7 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
 pub mod canvas;
+pub mod hosts;
 pub mod marketplace;
 pub mod morph;
 pub mod navigation;

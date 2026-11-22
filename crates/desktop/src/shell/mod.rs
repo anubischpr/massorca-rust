@@ -94,6 +94,10 @@ pub struct Shell {
     settings_folder: Entity<TextField>,
     /// The disabled state the field was last set to, so a frame does not notify it again.
     settings_folder_disabled: bool,
+    /// Whether the paired hosts were asked for since the Settings page was last shown.
+    settings_hosts_asked: bool,
+    /// Whether the service link was connected at the last store update, to see a reconnect.
+    service_connected: bool,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -189,7 +193,13 @@ impl Shell {
         let snapshot = store.read(cx).snapshot(Instant::now());
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
-            if store.read(cx).state().connection.is_connected() {
+            let connected = store.read(cx).state().connection.is_connected();
+            if connected && !shell.service_connected {
+                // A reconnect asks for the paired hosts again while Settings is on screen.
+                shell.settings_hosts_asked = false;
+            }
+            shell.service_connected = connected;
+            if connected {
                 shell.settings.folder.forget_read_failure();
             }
             shell.prune_terminal_views(store.read(cx).state());
@@ -264,6 +274,8 @@ impl Shell {
             _settings_search_changes: settings_search_changes,
             settings_folder,
             settings_folder_disabled: false,
+            settings_hosts_asked: false,
+            service_connected: false,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -437,6 +449,7 @@ impl Render for Shell {
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
+        self.refresh_settings_hosts();
         self.sync_folder_field(window, cx);
         self.sync_source_control(window, cx);
         let connected = self.store.read(cx).state().connection.is_connected();
@@ -454,10 +467,24 @@ impl Render for Shell {
             }
         });
         let connection = self.store.read(cx).state().connection.clone();
+        let hosts = self
+            .store
+            .read(cx)
+            .state()
+            .hosts
+            .iter()
+            .map(|entry| {
+                (
+                    entry.record.name.clone(),
+                    crate::model::hosts::host_state(entry, Instant::now()),
+                )
+            })
+            .collect();
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
             connection,
+            hosts,
             shell: shell.clone(),
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
