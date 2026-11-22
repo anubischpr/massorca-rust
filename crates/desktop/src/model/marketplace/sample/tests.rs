@@ -23,8 +23,8 @@ fn make_active_moves_the_active_flag_within_one_kind() {
     let mut source = fresh();
     source.accounts.push(AgentAccount {
         id: AccountId(9),
-        agent_kind: "gemini".to_owned(),
-        label: "Gemini account".to_owned(),
+        agent_kind: "codex".to_owned(),
+        label: "Codex account".to_owned(),
         state: AccountState::SignedIn,
         identity: None,
         active: true,
@@ -41,7 +41,7 @@ fn make_active_moves_the_active_flag_within_one_kind() {
         .collect();
     assert_eq!(claude, vec![(1, false), (2, true)]);
     assert!(
-        snapshot.accounts_for("gemini")[0].active,
+        snapshot.accounts_for("codex")[0].active,
         "another agent keeps its own active account"
     );
     assert_eq!(
@@ -96,7 +96,10 @@ fn uninstall_returns_the_item_to_not_installed_in_the_sample() {
 #[test]
 fn sign_in_runs_browser_then_code_then_done_and_adds_an_account() {
     let mut source = fresh();
-    assert_eq!(refusal(source.add_account("gemini")), "No such agent.");
+    assert_eq!(
+        refusal(source.add_account("unknown-kind")),
+        "No such agent."
+    );
     source.add_account("claude").expect("claude can sign in");
     assert_eq!(
         sign_in_step(&source),
@@ -182,7 +185,7 @@ fn search_matches_names_and_sorts_by_name() {
         names(&snapshot.search("")),
         vec![
             "Claude",
-            "Gemini CLI",
+            "Codex",
             "GitHub",
             "Log tail",
             "Model usage panel",
@@ -194,17 +197,9 @@ fn search_matches_names_and_sorts_by_name() {
     assert_eq!(names(&snapshot.search("  GITHUB ")), vec!["GitHub"]);
     assert_eq!(
         names(&snapshot.search("massorca extras")),
-        vec![
-            "Gemini CLI",
-            "Quick notes",
-            "Release notes",
-            "Workspace board"
-        ]
+        vec!["Codex", "Quick notes", "Release notes", "Workspace board"]
     );
-    assert_eq!(
-        names(&snapshot.search("agents")),
-        vec!["Claude", "Gemini CLI"]
-    );
+    assert_eq!(names(&snapshot.search("agents")), vec!["Claude", "Codex"]);
     assert_eq!(
         names(&snapshot.search("pull requests")),
         vec!["GitHub", "Release notes"]
@@ -220,7 +215,7 @@ fn installed_and_updates_follow_the_sample_state() {
         names(&snapshot.installed()),
         vec![
             "Claude",
-            "Gemini CLI",
+            "Codex",
             "Model usage panel",
             "Quick notes",
             "Workspace board",
@@ -237,7 +232,7 @@ fn installed_and_updates_follow_the_sample_state() {
     let snapshot = source.snapshot();
     assert_eq!(
         names(&snapshot.installed()),
-        vec!["Claude", "Gemini CLI", "Quick notes", "Workspace board"]
+        vec!["Claude", "Codex", "Quick notes", "Workspace board"]
     );
     assert!(snapshot.updates().is_empty());
     assert_eq!(

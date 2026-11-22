@@ -1,7 +1,7 @@
 //! `massorca git watch`: prints what changes in a workspace until interrupted.
 
 use clap::Args;
-use massorca_client::Client;
+use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::watch::GitWatchEvent;
 
@@ -27,6 +27,9 @@ pub(super) async fn run(client: &Client, args: WatchArgs, output: Output) -> Res
     let mut seen = 0;
     while args.max_events.is_none_or(|max| seen < max) {
         let Some(item) = stream.next_as::<GitWatchEvent>().await else {
+            if stream.connection_lost() {
+                return Err(ClientError::Disconnected.into());
+            }
             break;
         };
         // Each event is its own line: a JSON document per line with `--json`.

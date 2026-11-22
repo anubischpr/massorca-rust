@@ -13,6 +13,7 @@ use interprocess::os::windows::security_descriptor::{
     AsSecurityDescriptor, AsSecurityDescriptorExt, SecurityDescriptor,
 };
 use widestring::{U16CStr, U16CString};
+use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, INVALID_HANDLE_VALUE, LocalFree,
 };
@@ -27,10 +28,11 @@ use windows_sys::Win32::Security::{
     UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetVolumeInformationW,
-    GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, GetDriveTypeW, GetVolumeInformationW, GetVolumePathNameW, OPEN_EXISTING,
+    READ_CONTROL, WRITE_DAC,
 };
 
 use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
@@ -186,6 +188,89 @@ fn folder_times_are_reliable(dir: &Path) -> bool {
         .position(|&unit| unit == 0)
         .unwrap_or(name.len());
     read != 0 && String::from_utf16_lossy(&name[..len]) == "NTFS"
+}
+
+/// The read-only part of a start's location check: nothing is created or repaired, and the content is not scanned.
+pub(crate) fn check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    let trusted = Trusted::current()?;
+    check_link_home(home, &trusted, &RealDisk)?;
+    for (ancestor, links) in [
+        (home, Links::Follow),
+        (profiles_dir(home, dir), Links::Open),
+    ] {
+        if fs::symlink_metadata(ancestor).is_ok() {
+            check_ancestor(ancestor, links, &trusted, &RealDisk)?;
+        }
+    }
+    if fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
+/// Who can reach a folder that will hold secrets, judged from its own DACL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FolderAccess {
+    /// Protected, with one entry: full access for the user.
+    Private,
+    /// Only the accepted owners and Administrators, but not yet the protected owner-only DACL.
+    OwnersOnly,
+    WritableByOthers,
+    ReadableByOthers,
+}
+
+pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError> {
+    let descriptor = Descriptor::parse(&read_sddl(path, Links::Open)?);
+    let trusted = Trusted::current()?;
+    Ok(if descriptor.grants_write_to_others(&trusted) {
+        FolderAccess::WritableByOthers
+    } else if descriptor.grants_any_to_others(&trusted) {
+        FolderAccess::ReadableByOthers
+    } else if descriptor.is_owner_only(trusted.user()) {
+        FolderAccess::Private
+    } else {
+        FolderAccess::OwnersOnly
+    })
+}
+
+/// Gives the folder `path` the protected owner-only DACL, inherited by what is created in it later.
+pub(crate) fn make_owner_only(path: &Path) -> io::Result<()> {
+    set_dacl(path, &owner_only_dir_dacl_sddl(&current_user()?)?, true)
+}
+
+/// Creates a new file at `path` whose descriptor allows only the current user, in the same call that creates it, so it
+/// is never reachable by anyone else, not even briefly. Fails when anything is at `path`, a link included.
+pub(crate) fn create_new_owner_only(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::io::FromRawHandle;
+
+    let user = current_user()?;
+    let descriptor = descriptor(&format!("O:{user}D:P(A;;FA;;;{user})"))?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.as_sd().cast_mut(),
+        bInheritHandle: 0,
+    };
+    let wide = wide_path(path)?;
+    // SAFETY: `wide` is NUL-terminated and `attributes` points at `descriptor`, which both outlive the call; the result
+    // is checked against INVALID_HANDLE_VALUE before a File owns it.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_WRITE,
+            0,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the handle was just opened and nothing else owns it.
+    Ok(unsafe { fs::File::from_raw_handle(handle) })
 }
 
 /// A home that is itself a link is checked through its target, but the link lives in its parent: whoever can change

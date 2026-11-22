@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 directories.workspace = true
+getrandom.workspace = true
 interprocess.workspace = true
 thiserror.workspace = true
 
