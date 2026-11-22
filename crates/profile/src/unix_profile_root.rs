@@ -218,6 +218,8 @@ fn scan_entries(root: &Path, uid: u32, owner: Owner) -> io::Result<Findings> {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if dir == root => return Err(error),
+            // Removed since its parent was listed, for example by a service starting at the same time: nothing is hidden.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             // A folder that cannot be listed may hide planted content.
             Err(_) => {
                 findings.add_foreign(dir);
@@ -225,9 +227,13 @@ fn scan_entries(root: &Path, uid: u32, owner: Owner) -> io::Result<Findings> {
             }
         };
         for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let path = entry?.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                // Removed since it was listed, as a concurrent start does with the store's journal.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
             if ![uid, ROOT_UID].contains(&owner(&path, &metadata)) {
                 findings.add_foreign(path);
             } else if !metadata.file_type().is_symlink() && metadata.mode() & OTHER_WRITE != 0 {

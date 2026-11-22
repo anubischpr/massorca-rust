@@ -91,9 +91,12 @@ impl ScanCache {
                 text.push_str(&format!("{stamp}\t{relative}\n"));
             }
         }
-        let temp = root.join(format!("{CACHE_FILE}.tmp"));
+        // Per process, so two services starting at once never write or rename each other's file.
+        let temp = root.join(format!("{CACHE_FILE}.{}.tmp", std::process::id()));
         fs::write(&temp, text)?;
-        fs::rename(&temp, root.join(CACHE_FILE))
+        fs::rename(&temp, root.join(CACHE_FILE)).inspect_err(|_| {
+            let _ = fs::remove_file(&temp);
+        })
     }
 
     /// Forgets a previous scan, so the next start reads every descriptor.
