@@ -6,6 +6,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use massorca_ext_package::ids::{is_extension_id, is_kind_id};
+use massorca_ext_package::package_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -41,6 +43,10 @@ pub struct LockEntry {
     pub version: String,
     pub source: LockSource,
     pub sha256: String,
+    /// The canonical hash of the unpacked files, checked before an installed manifest is trusted. It equals `sha256`
+    /// for a folder or catalogue entry; an archive's `sha256` is the archive's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_sha256: Option<String>,
     /// Relative to the extensions folder, `/`-separated: `pkgs/<id>/<version>-<hash8>`.
     pub path: String,
     pub enabled: bool,
@@ -49,6 +55,9 @@ pub struct LockEntry {
     pub installed_at_ms: u64,
     #[serde(default)]
     pub cli: Vec<LockCli>,
+    /// The package's agent kind ids at install, so its kinds can be named even when its files cannot be trusted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_kinds: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -113,11 +122,16 @@ impl Lockfile {
                 lockfile.version
             )));
         }
+        for entry in &lockfile.packages {
+            entry.check()?;
+        }
         Ok(lockfile)
     }
 
     /// Writes the lockfile atomically: a temporary file in the same folder, flushed and synced, then renamed over it.
     pub fn write(&self, path: &Path) -> Result<(), Error> {
+        // Refused before anything is written: a lockfile that `read` would refuse must never reach the disk.
+        self.packages.iter().try_for_each(LockEntry::check)?;
         let dir = path.parent().unwrap_or(Path::new("."));
         fs::create_dir_all(dir).map_err(Error::io("cannot create", dir))?;
         let mut bytes = serde_json::to_vec_pretty(self)
@@ -134,7 +148,8 @@ impl Lockfile {
             file.flush()?;
             file.sync_all()?;
             drop(file);
-            fs::rename(&temp, path)
+            fs::rename(&temp, path)?;
+            sync_dir(dir)
         })();
         written.map_err(|error| {
             let _ = fs::remove_file(&temp);
@@ -149,6 +164,47 @@ impl Lockfile {
     pub fn get_mut(&mut self, id: &str) -> Option<&mut LockEntry> {
         self.packages.iter_mut().find(|entry| entry.id == id)
     }
+}
+
+impl LockEntry {
+    /// The id and path are used to build paths that removal deletes, so an entry that names anything outside its own
+    /// `pkgs/<id>/` folder is refused.
+    pub(crate) fn check(&self) -> Result<(), Error> {
+        if !is_extension_id(&self.id) {
+            return Err(Error::InvalidLockfile(format!(
+                "{:?} is not an extension id",
+                self.id
+            )));
+        }
+        let inside = self
+            .path
+            .strip_prefix("pkgs/")
+            .and_then(|rest| rest.strip_prefix(self.id.as_str()))
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|version| !version.is_empty() && !version.contains('/'));
+        if let Some(kind) = self.agent_kinds.iter().find(|kind| !is_kind_id(kind)) {
+            return Err(Error::InvalidLockfile(format!(
+                "{kind:?} in {} is not an agent kind id",
+                self.id
+            )));
+        }
+        if !inside || package_path::check(&self.path, false).is_err() {
+            return Err(Error::InvalidLockfile(format!(
+                "the path of {} is not under pkgs/{}/",
+                self.id, self.id
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Makes the rename durable: on Unix the folder entry is synced too. Windows has no folder handle to sync.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -191,6 +247,58 @@ mod tests {
         assert_eq!(written, expected);
         let leftovers: Vec<_> = fs::read_dir(dir.path()).expect("list").collect();
         assert_eq!(leftovers.len(), 1, "no temporary file is left behind");
+    }
+
+    #[test]
+    fn an_entry_naming_a_path_outside_its_package_folder_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lock.json");
+        let entry = |id: &str, rel: &str| {
+            serde_json::json!({ "version": 1, "packages": [{
+                "id": id, "version": "1.0.0", "source": { "kind": "dir", "ref": "x" },
+                "sha256": "ab", "path": rel, "enabled": true, "consent": "c", "installed_at_ms": 0
+            }] })
+        };
+        for (id, rel) in [
+            ("..", "pkgs/../1.0.0-ab"),
+            ("acme.kit", "pkgs/acme.kit/../../outside"),
+            ("acme.kit", "pkgs/other.kit/1.0.0-ab"),
+            ("acme.kit", "data/acme.kit"),
+            ("acme.kit", "pkgs/acme.kit"),
+            ("acme.kit", "pkgs/acme.kit/1.0.0-ab/deeper"),
+            ("acme.kit", "pkgs/acme.kit/C:"),
+        ] {
+            fs::write(&path, entry(id, rel).to_string()).expect("seed");
+            let error = Lockfile::read(&path).expect_err(rel);
+            assert_eq!(
+                error.code(),
+                crate::error::codes::INVALID_LOCKFILE,
+                "{id} {rel}"
+            );
+        }
+        fs::write(
+            &path,
+            entry("acme.kit", "pkgs/acme.kit/1.0.0-ab").to_string(),
+        )
+        .expect("seed");
+        Lockfile::read(&path).expect("a valid entry reads");
+    }
+
+    #[test]
+    fn an_entry_read_would_refuse_is_never_written() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lock.json");
+        let entry = serde_json::json!({ "version": 1, "packages": [{
+            "id": "con.kit", "version": "1.0.0", "source": { "kind": "dir", "ref": "x" },
+            "sha256": "ab", "path": "pkgs/con.kit/1.0.0-ab", "enabled": true, "consent": "c",
+            "installed_at_ms": 0
+        }] });
+        let lockfile: Lockfile = serde_json::from_value(entry).expect("shape");
+        let error = lockfile
+            .write(&path)
+            .expect_err("a device-name publisher is refused");
+        assert_eq!(error.code(), crate::error::codes::INVALID_LOCKFILE);
+        assert!(!path.exists(), "nothing reached the disk");
     }
 
     #[test]
