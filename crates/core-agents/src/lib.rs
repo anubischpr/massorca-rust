@@ -14,6 +14,7 @@ pub mod paths;
 pub mod prompt;
 pub mod resolve;
 pub mod sessions;
+pub mod sign_in;
 pub mod status;
 
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
