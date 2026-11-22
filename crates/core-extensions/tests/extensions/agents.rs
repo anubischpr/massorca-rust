@@ -62,9 +62,10 @@ fn the_catalogue_offers_the_four_first_party_kinds_with_their_cli() {
         let declaration: serde_json::Value =
             serde_json::from_slice(&kind.declaration).expect("declaration is JSON");
         assert_eq!(declaration["id"], kind.kind_id.as_str());
-        assert_eq!(
-            kind.cli.verify.as_ref().expect("a verify command")[0],
-            kind.cli.binary
-        );
+        // A verify command, where the vendor documents one, starts with the binary.
+        if let Some(verify) = &kind.cli.verify {
+            assert_eq!(verify[0], kind.cli.binary);
+        }
+        assert!(kind.cli.source.starts_with("https://"));
     }
 }

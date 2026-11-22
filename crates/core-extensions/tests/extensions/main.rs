@@ -3,6 +3,7 @@
 mod agents;
 mod busy;
 mod fakes;
+mod first_party;
 mod fixture;
 mod install;
 mod item;
