@@ -6,8 +6,10 @@ mod cipher;
 mod key;
 mod names;
 mod value;
+mod vault;
 
 pub use cipher::{Aad, AadError, NONCE_LEN, OpenError, SealError, Sealed, open, seal};
 pub use key::{KeyError, KeyStore, LockReason, MasterKey, Protection, UnknownProtection};
 pub use names::{Scope, ScopeError, is_valid_name, is_valid_reason};
 pub use value::{MAX_VALUE_BYTES, SecretValue, ValueTooLarge};
+pub use vault::{Vault, VaultEntry, VaultError, VaultStatus, Written};
