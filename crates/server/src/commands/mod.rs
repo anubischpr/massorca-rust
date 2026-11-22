@@ -1,6 +1,7 @@
 //! Command descriptors: what each CLI command or palette entry runs (extensions.md section 9, item 5).
 
 mod core_table;
+mod extension_table;
 mod git_table;
 mod secret_table;
 mod team_table;
@@ -19,12 +20,13 @@ pub struct CommandDescriptor {
     pub args_schema: Value,
 }
 
-/// Every core command: the Phase 1 table, then the git, secret and Bot Teams commands.
+/// Every core command: the Phase 1 table, then the git, secret, Bot Teams and extension commands.
 pub fn core_commands() -> Vec<CommandDescriptor> {
     let mut commands = core_table::core_commands();
     commands.extend(git_table::git_commands());
     commands.extend(secret_table::secret_commands());
     commands.extend(team_table::team_commands());
+    commands.extend(extension_table::extension_commands());
     commands
 }
 

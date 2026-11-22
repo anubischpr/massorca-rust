@@ -24,6 +24,11 @@ pub const TOPIC_SECRET_CHANGED: &str = "secret.changed";
 pub const TOPIC_SECRET_REQUESTED: &str = "secret.requested";
 /// A secret request left pending. The id is the request id.
 pub const TOPIC_SECRET_REQUEST_CHANGED: &str = "secret.request_changed";
+/// An extension was installed, enabled, disabled or removed; the id is the package id (decision 0062).
+pub const TOPIC_EXTENSION_INSTALLED: &str = "extension.installed";
+pub const TOPIC_EXTENSION_ENABLED: &str = "extension.enabled";
+pub const TOPIC_EXTENSION_DISABLED: &str = "extension.disabled";
+pub const TOPIC_EXTENSION_REMOVED: &str = "extension.removed";
 
 /// Result of `events.subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
