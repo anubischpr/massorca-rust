@@ -133,7 +133,10 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
     }
     lines.extend(review.kinds.iter().map(kind_line));
     lines.extend(review.mcp_servers.iter().map(mcp_line));
-    lines.extend(review.cli.iter().map(plan_line));
+    for plan in &review.cli {
+        lines.push(plan_line(plan));
+        lines.extend(command_lines(plan));
+    }
     lines.push(format!("consent: {}", review.consent));
     lines
 }
@@ -259,7 +262,7 @@ fn removal_line(removal: &CliRemoval) -> String {
             format!("{cli}: installed by the package, but it declares no uninstall command here")
         }
         CliRemovalAction::Offered { command } => format!(
-            "{cli}: installed by the package; run `{}` to uninstall it, or remove with --uninstall-cli",
+            "{cli}: installed by the package; run `{}` to uninstall it, or remove with --uninstall-cli --yes",
             command_text(command)
         ),
         CliRemovalAction::Ran { command, .. } => {
@@ -317,6 +320,9 @@ fn kind_line(kind: &KindView) -> String {
     if !kind.env.is_empty() {
         parts.push(format!("env {}", kind.env.join(", ")));
     }
+    if kind.own_credential_home {
+        parts.push("its own credential home".to_owned());
+    }
     if let Some(home) = &kind.credential_home_env {
         parts.push(format!("credential home in {home}"));
     }
@@ -336,4 +342,20 @@ fn mcp_line(server: &McpServerView) -> String {
         server.id,
         command_text(&server.command)
     )
+}
+
+/// The verify and uninstall commands of one CLI, quoted, so the person reads every command the install or removal can
+/// run on this system (0062, V2).
+fn command_lines(plan: &CliPlan) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(verify) = &plan.verify {
+        lines.push(format!("  verify: {}", command_text(verify)));
+    }
+    if let Some(uninstall) = &plan.uninstall {
+        lines.push(format!(
+            "  uninstall on this system: {}",
+            command_text(uninstall)
+        ));
+    }
+    lines
 }

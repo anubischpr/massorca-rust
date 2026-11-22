@@ -6,7 +6,7 @@ mod harness;
 
 use std::fs;
 
-use extension_support::{Host, KIT, Package, VENDOR_PROGRAM};
+use extension_support::{Host, KIT, Package};
 use harness::stdout_text;
 use predicates::str::contains;
 use serde_json::{Value, json};
@@ -83,33 +83,28 @@ fn show_describes_a_catalogue_entry_and_names_a_missing_one() {
 #[test]
 fn inspect_prints_the_review_and_changes_nothing() {
     let host = Host::new();
-    let source = host.write_dir(
-        KIT,
-        &["install", &host.bin.path().to_string_lossy(), "acmecli"],
-    );
+    let source = host.write_dir(KIT, &["install"]);
 
     let review = host.json(&["extension", "inspect", &source]);
 
     assert_eq!(review["id"], "acme.kit");
     assert_eq!(review["risk"]["level"], "high");
-    assert_eq!(review["runs_installer"], true);
-    assert_eq!(review["cli"][0]["state"], "will_run");
-    assert_eq!(
-        review["cli"][0]["command"],
-        json!([
-            VENDOR_PROGRAM,
-            "install",
-            host.bin.path().to_string_lossy(),
-            "acmecli"
-        ])
-    );
-    assert!(review["consent"].as_str().is_some_and(|c| c.len() == 64));
-    host.run(&["extension", "inspect", &source])
-        .success()
-        .stdout(contains("risk: high"))
-        .stdout(contains("installing runs this vendor command"));
-    assert!(host.installed_ids().is_empty());
+    assert_eq!(review["runs_installer"], false);
+    assert_eq!(review["cli"][0]["state"], "unsupported");
     assert!(!host.has_cli("acmecli"));
+}
+
+#[test]
+fn inspect_of_a_built_in_shows_its_install_verify_and_uninstall_commands() {
+    let host = Host::new();
+    let text = stdout_text(
+        &host
+            .run(&["extension", "inspect", "catalogue:massorca.claude"])
+            .success(),
+    );
+    assert!(text.contains("verify: "), "{text}");
+    assert!(text.contains("uninstall on this system: "), "{text}");
+    assert!(!host.has_cli("claude"));
 }
 
 #[test]
@@ -397,9 +392,18 @@ fn a_fingerprint_from_one_run_accepts_exactly_that_review_in_the_next() {
 #[test]
 fn the_review_quotes_every_argument_unambiguously() {
     let host = Host::new();
-    let source = host.write_dir(KIT, &["install", "two words", "a\"b", "plain"]);
-
+    let source = host.write_dir(KIT, &["install"]);
     let text = stdout_text(&host.run(&["extension", "inspect", &source]).success());
-
-    assert!(text.contains(r#""two words" "a\"b" plain"#), "{text}");
+    assert!(text.contains("process [acmecli]"), "{text}");
+    let built_in = stdout_text(
+        &host
+            .run(&["extension", "inspect", "catalogue:massorca.antigravity"])
+            .success(),
+    );
+    let quoted = if cfg!(windows) {
+        r#""irm https://antigravity.google/cli/install.ps1 | iex""#
+    } else {
+        r#""set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh | bash""#
+    };
+    assert!(built_in.contains(quoted), "{built_in}");
 }

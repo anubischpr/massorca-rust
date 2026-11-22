@@ -81,9 +81,15 @@ pub struct RemoveArgs {
     /// Also deletes the credential homes of the package's agents.
     #[arg(long)]
     pub delete_agent_homes: bool,
-    /// Also runs the uninstall command of each agent CLI the package installed.
+    /// Also runs the uninstall command of each agent CLI the package installed. Needs --yes or --uninstall-consent.
     #[arg(long)]
     pub uninstall_cli: bool,
+    /// Accepts the uninstall command the refusal printed, by its fingerprint. The removal fails if it changed.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub uninstall_consent: Option<String>,
+    /// Accepts the uninstall command of --uninstall-cli, as printed, in this run.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// Runs one `extension` subcommand against the service `target` names.
@@ -125,17 +131,7 @@ pub async fn execute(
         ExtensionCommand::Install(args) => install(&client, target, args, output).await?,
         ExtensionCommand::Enable { id } => set_enabled(&client, id, true, output).await?,
         ExtensionCommand::Disable { id } => set_enabled(&client, id, false, output).await?,
-        ExtensionCommand::Remove(args) => {
-            let removed = client
-                .extension_remove(&ExtensionRemoveParams {
-                    id: args.id,
-                    delete_agent_homes: args.delete_agent_homes,
-                    uninstall_cli: args.uninstall_cli,
-                    agent_token: agent_token(),
-                })
-                .await?;
-            output.success(&removed, &removed_lines(&removed));
-        }
+        ExtensionCommand::Remove(args) => remove(&client, args, output).await?,
     }
     Ok(())
 }
@@ -315,4 +311,44 @@ fn agent_refusal(command: &ExtensionCommand) -> Option<CliError> {
             exit::ERROR,
         )
     })
+}
+
+/// Removes a package. An uninstall runs only after its confirmation: `--yes` accepts the command the service names
+/// first, `--uninstall-consent` accepts it by its fingerprint, and without either the removal changes nothing (0062, V2).
+async fn remove(client: &Client, args: RemoveArgs, output: Output) -> Result<(), CliError> {
+    let params = |uninstall_consent: Option<String>| ExtensionRemoveParams {
+        id: args.id.clone(),
+        delete_agent_homes: args.delete_agent_homes,
+        uninstall_cli: args.uninstall_cli,
+        agent_token: agent_token(),
+        uninstall_consent,
+    };
+    let confirmation = match args.uninstall_consent.clone() {
+        Some(consent) => Some(consent),
+        None if args.uninstall_cli && args.yes => {
+            match client.extension_remove(&params(None)).await {
+                Ok(removed) => {
+                    output.success(&removed, &removed_lines(&removed));
+                    return Ok(());
+                }
+                Err(error) => {
+                    let refusal = CliError::from(error);
+                    let fingerprint = refusal
+                        .data
+                        .as_deref()
+                        .and_then(|data| data["fingerprint"].as_str().map(str::to_owned));
+                    match fingerprint {
+                        Some(fingerprint) if refusal.code == codes::EXTENSION_CONSENT_REQUIRED => {
+                            Some(fingerprint)
+                        }
+                        _ => return Err(refusal),
+                    }
+                }
+            }
+        }
+        None => None,
+    };
+    let removed = client.extension_remove(&params(confirmation)).await?;
+    output.success(&removed, &removed_lines(&removed));
+    Ok(())
 }

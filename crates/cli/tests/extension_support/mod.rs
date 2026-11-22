@@ -53,13 +53,17 @@ pub fn fake_vendor() -> String {
 /// The program every vendor command of a test package names: an allowlisted program (0062, second review). The bin folder
 /// holds a copy of the fake vendor under this name, so the command runs the fake and never a real installer.
 pub const VENDOR_PROGRAM: &str = "npm";
+/// The package managers the built-ins name; the bin folder holds the fake vendor under each of them.
+pub const VENDOR_PROGRAMS: [&str; 5] = ["npm", "winget", "brew", "powershell", "bash"];
 
 /// A fresh bin folder holding the fake vendor as `VENDOR_PROGRAM`.
 fn bin_with_npm() -> tempfile::TempDir {
     let bin = tempfile::tempdir().expect("a bin folder");
-    let name = format!("{VENDOR_PROGRAM}{}", std::env::consts::EXE_SUFFIX);
-    fs::copy(fake_vendor(), bin.path().join(name))
-        .expect("the fake vendor is copied as the vendor program");
+    for program in VENDOR_PROGRAMS {
+        let name = format!("{program}{}", std::env::consts::EXE_SUFFIX);
+        fs::copy(fake_vendor(), bin.path().join(name))
+            .expect("the fake vendor is copied as a package manager");
+    }
     bin
 }
 
@@ -79,25 +83,8 @@ impl Package {
         Self { id, agent, binary }
     }
 
-    /// The manifest. `install` is the argument list given to the fake vendor program to install the CLI, the same on
-    /// every operating system. Verify is `<binary> --version`, and uninstall removes the binary from `bin`.
-    pub fn manifest(&self, bin: &Path, install: &[&str]) -> Value {
-        let step = |os: &str, args: Vec<String>| {
-            let mut command = vec![VENDOR_PROGRAM.to_owned()];
-            command.extend(args);
-            json!({ "os": os, "command": command })
-        };
-        let install_args: Vec<String> = install.iter().map(|arg| (*arg).to_owned()).collect();
-        let uninstall_args = vec![
-            "uninstall".to_owned(),
-            bin.to_string_lossy().into_owned(),
-            self.binary.to_owned(),
-        ];
-        let on_every_os = |args: &Vec<String>| {
-            ["windows", "linux", "macos"]
-                .map(|os| step(os, args.clone()))
-                .to_vec()
-        };
+    /// The manifest. A test package declares no vendor command (0062, V1): its CLI is only detected, or it is missing.
+    pub fn manifest(&self, _bin: &Path, _install: &[&str]) -> Value {
         json!({
             "id": self.id, "name": "Kit", "version": "1.2.0", "publisher": "acme",
             "description": "A test coding agent.", "api": "1.0", "requires": { "massorca": ">=0.1.0" },
@@ -108,9 +95,7 @@ impl Package {
             "contributes": { "agentAdapters": [{
                 "id": self.agent, "kind": format!("agents/{}.json", self.agent),
                 "cli": {
-                    "binary": self.binary, "verify": [self.binary, "--version"],
-                    "source": "https://vendor.example/install",
-                    "install": on_every_os(&install_args), "uninstall": on_every_os(&uninstall_args)
+                    "binary": self.binary, "source": "https://vendor.example/install"
                 }
             }] },
             "listing": { "category": "agents", "mention": self.agent }
