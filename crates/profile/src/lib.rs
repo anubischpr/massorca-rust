@@ -3,16 +3,20 @@
 mod endpoint;
 mod error;
 mod profile;
+mod root_access;
 #[cfg(unix)]
 mod unix_user;
 #[cfg(windows)]
 mod windows_endpoint_access;
+#[cfg(windows)]
+mod windows_profile_root;
 
 pub use endpoint::local_socket_name;
 #[cfg(unix)]
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use profile::{Profile, ensure_dir};
+pub use root_access::{MAX_LISTED_ENTRIES, RootAccess, RootAccessError, secure_root};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
