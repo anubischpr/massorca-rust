@@ -859,7 +859,7 @@ mod tests {
         drop(office);
         drop(parent);
         let link = hosts.join("office").join("link");
-        let made = std::process::Command::new("cmd")
+        let made = massorca_process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(&link)
             .arg(&outside)
