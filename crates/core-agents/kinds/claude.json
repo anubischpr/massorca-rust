@@ -1,0 +1,25 @@
+{
+  "id": "claude",
+  "name": "Claude",
+  "icon": "claude",
+  "program": ["claude"],
+  "args": [],
+  "prompt": { "mode": "argv", "separator": false, "paste": "bracketed", "submit": "\r" },
+  "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
+  "resume": ["--resume", "{ref}"],
+  "status": {
+    "mechanism": "claude-settings",
+    "events": {
+      "SessionStart": "idle",
+      "UserPromptSubmit": "working",
+      "PreToolUse": "working",
+      "Notification": "waiting",
+      "Stop": "done"
+    }
+  },
+  "credentials": {
+    "home_env": "CLAUDE_CONFIG_DIR",
+    "files": [".credentials.json", ".claude.json"],
+    "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+  }
+}

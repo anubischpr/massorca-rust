@@ -1,0 +1,11 @@
+{
+  "id": "gentle-shell",
+  "name": "Gentle Shell",
+  "icon": "rose",
+  "program": ["gentle-shell"],
+  "args": [],
+  "prompt": { "mode": "argv", "separator": false, "paste": "plain", "submit": "\r" },
+  "resume": ["--", "--session", "{ref}"],
+  "status": { "mechanism": "none" },
+  "credentials": { "home_env": "PI_CODING_AGENT_DIR", "files": [], "strip_env": [] }
+}

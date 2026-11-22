@@ -119,12 +119,26 @@ impl Composer {
         cx.notify();
     }
 
-    fn attachment_chip(&self, attachment: &Attachment, cx: &mut Context<Self>) -> gpui::Div {
+    fn attachment_chip(
+        &self,
+        attachment: &Attachment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let p = cx.theme().palette;
         let id = attachment.id;
         let label = truncate_name(&attachment.name, CHIP_NAME_MAX);
         let composer = cx.entity();
+        let chip_group: SharedString = format!("composer-chip-{id}").into();
+        let remove_focus = window
+            .use_keyed_state(("composer-chip-focus", id as usize), cx, |_, cx| {
+                cx.focus_handle()
+            })
+            .read(cx)
+            .clone();
+        let remove_focused = remove_focus.is_focused(window);
         div()
+            .group(chip_group.clone())
             .flex()
             .flex_none()
             .items_center()
@@ -144,28 +158,40 @@ impl Composer {
                     .color(p.text.secondary),
             )
             .child(div().min_w_0().child(label))
+            // The remove x shows on hover and focus only (Composer.md Anatomy, chip row); at rest
+            // it is transparent, so it keeps its place and stays reachable with Tab.
             .child(
-                IconButton::new(
-                    ("composer-chip-remove", id as usize),
-                    IconName::X,
-                    "Remove attachment",
-                )
-                .size(ButtonSize::Compact)
-                .on_click(move |_, cx| {
-                    composer.update(cx, |_, cx| cx.emit(ComposerEvent::RemoveAttachment(id)));
-                }),
+                div()
+                    .debug_selector(move || format!("chip-remove-{id}"))
+                    .when(!remove_focused, |slot| {
+                        slot.opacity(0.)
+                            .group_hover(chip_group.clone(), |slot| slot.opacity(1.))
+                    })
+                    .child(
+                        IconButton::new(
+                            ("composer-chip-remove", id as usize),
+                            IconName::X,
+                            "Remove attachment",
+                        )
+                        .size(ButtonSize::Compact)
+                        .focus_handle(remove_focus)
+                        .on_click(move |_, cx| {
+                            composer
+                                .update(cx, |_, cx| cx.emit(ComposerEvent::RemoveAttachment(id)));
+                        }),
+                    ),
             )
     }
 
     /// The chip row: attachments wrap; past four, three and a "+N" chip.
-    fn chips(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    fn chips(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
         if self.attachments.is_empty() {
             return None;
         }
         let (shown, hidden) = visible_attachments(self.attachments.len());
         let mut row = div().flex().flex_wrap().gap(px(SPACE_1));
         for attachment in self.attachments.iter().take(shown) {
-            row = row.child(self.attachment_chip(attachment, cx));
+            row = row.child(self.attachment_chip(attachment, window, cx));
         }
         if hidden > 0 {
             let p = cx.theme().palette;
@@ -319,13 +345,28 @@ impl Composer {
         let p = cx.theme().palette;
         let mut lines = Vec::new();
         if let Some(reason) = &self.disabled_reason {
-            lines.push(
-                div()
-                    .text_style(TYPE_BODY_SM)
-                    .text_color(p.text.tertiary)
-                    .child(reason.clone())
-                    .into_any_element(),
-            );
+            let mut line = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(SPACE_2))
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.tertiary)
+                .child(reason.clone());
+            if self.sign_in {
+                let composer = cx.entity();
+                line = line.child(
+                    div().debug_selector(|| "composer-sign-in".into()).child(
+                        Button::new("composer-sign-in", "Sign in")
+                            .variant(ButtonVariant::Secondary)
+                            .size(ButtonSize::Compact)
+                            .on_click(move |_, cx| {
+                                composer.update(cx, |_, cx| cx.emit(ComposerEvent::SignIn));
+                            }),
+                    ),
+                );
+            }
+            lines.push(line.into_any_element());
         }
         if !self.host_confirmed {
             lines.push(
@@ -344,54 +385,61 @@ impl Composer {
                     .into_any_element(),
             );
         }
-        if let Some(reason) = &self.error {
-            let composer = cx.entity();
-            lines.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(SPACE_2))
-                    .text_style(TYPE_BODY_SM)
-                    .text_color(p.status.danger_fg)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(SPACE_1))
-                            .child(
-                                Icon::new(IconName::OctagonAlert)
-                                    .size(IconSize::XSmall)
-                                    .color(p.status.danger_fg),
-                            )
-                            .child(format!("Message not sent: {reason}")),
-                    )
-                    .child(
-                        Button::new("composer-retry", "Retry")
-                            .variant(ButtonVariant::Secondary)
-                            .size(ButtonSize::Compact)
-                            .on_click(move |_, cx| {
-                                composer.update(cx, |_, cx| cx.emit(ComposerEvent::RetrySend));
-                            }),
-                    )
-                    .into_any_element(),
-            );
-        }
-        if self.hint_shown {
-            lines.push(
-                div()
-                    .text_style(TYPE_BODY_SM)
-                    .text_color(p.text.secondary)
-                    .child("Press Escape again to stop")
-                    .into_any_element(),
-            );
-        }
         lines
+    }
+
+    /// The send-failed line, drawn above the text (Composer.md States, error).
+    fn error_line(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let p = cx.theme().palette;
+        self.error.as_ref().map(|reason| {
+            let composer = cx.entity();
+            div()
+                .debug_selector(|| "composer-error".into())
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(SPACE_2))
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.status.danger_fg)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(SPACE_1))
+                        .child(
+                            Icon::new(IconName::OctagonAlert)
+                                .size(IconSize::XSmall)
+                                .color(p.status.danger_fg),
+                        )
+                        .child(format!("Message not sent: {reason}")),
+                )
+                .child(
+                    Button::new("composer-retry", "Retry")
+                        .variant(ButtonVariant::Secondary)
+                        .size(ButtonSize::Compact)
+                        .on_click(move |_, cx| {
+                            composer.update(cx, |_, cx| cx.emit(ComposerEvent::RetrySend));
+                        }),
+                )
+                .into_any_element()
+        })
+    }
+
+    /// The hint under the text while Escape is armed.
+    fn hint_line(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let p = cx.theme().palette;
+        self.hint_shown.then(|| {
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.secondary)
+                .child("Press Escape again to stop")
+                .into_any_element()
+        })
     }
 }
 
 impl Render for Composer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let p = theme.palette;
         let situation = self.situation(cx);
@@ -442,12 +490,18 @@ impl Render for Composer {
             .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
                 cx.emit(ComposerEvent::DroppedFiles(paths.0.to_vec()));
             }));
-        if let Some(chips) = self.chips(cx) {
+        if let Some(chips) = self.chips(window, cx) {
             column = column.child(chips);
+        }
+        if let Some(error) = self.error_line(cx) {
+            column = column.child(error);
         }
         column = column.child(self.text.clone());
         for line in self.status_lines(cx) {
             column = column.child(line);
+        }
+        if let Some(hint) = self.hint_line(cx) {
+            column = column.child(hint);
         }
         column = column.child(bottom);
 

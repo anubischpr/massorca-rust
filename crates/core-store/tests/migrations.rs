@@ -50,7 +50,7 @@ fn empty_file_migrates_to_the_latest_schema_without_a_backup() {
     drop(Store::open(&path).unwrap());
 
     assert_eq!(user_version(&path), latest());
-    for table in ["projects", "workspaces", "settings"] {
+    for table in ["projects", "workspaces", "settings", "agent_sessions"] {
         assert!(table_exists(&path, table), "missing table {table}");
     }
     assert!(backups_of(&path).is_empty());
@@ -185,4 +185,33 @@ fn file_store_uses_write_ahead_logging() {
     assert_eq!(mode, "wal");
     drop(connection);
     drop(store);
+}
+
+#[test]
+fn a_version_1_store_gains_agent_sessions_and_keeps_its_workspaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = store_path(&dir);
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(MIGRATIONS[0].sql).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO projects VALUES ('p1', 'git', '/repos/app', '/repos/app', 'app', '/ws', 1);
+                 INSERT INTO workspaces VALUES ('w1', 'p1', 'worktree', 'main', '/ws/main', '/ws/main', 'main', 'main', 1, 'ready', NULL, 1);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+    assert!(store.get_workspace("w1").unwrap().is_some());
+    assert!(store.list_agent_sessions(Some("w1")).unwrap().is_empty());
+    drop(store);
+    assert_eq!(user_version(&path), latest());
+    assert!(table_exists(&path, "agent_sessions"));
+    assert_eq!(
+        backups_of(&path).len(),
+        1,
+        "migrating a used store backs it up"
+    );
 }

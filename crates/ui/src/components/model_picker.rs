@@ -235,7 +235,10 @@ impl Render for ModelPicker {
                 .color(p.text.tertiary),
             );
 
-        let host = self.trigger_bounds.track(div().relative()).child(chip);
+        // The tracked box hugs the chip, so the popover aligns to the chip's right edge even when
+        // the host is stretched by a column parent.
+        let anchor = self.trigger_bounds.track(div().flex_none()).child(chip);
+        let host = div().relative().flex().child(anchor);
         let overlay = open.then(|| self.overlay(window, cx));
         host.when_some(overlay, |host, overlay| host.child(overlay))
     }
