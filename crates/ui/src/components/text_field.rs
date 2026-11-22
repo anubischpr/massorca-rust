@@ -12,11 +12,13 @@ use gpui::{
     ElementInputHandler, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
     InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
-    SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun, UnderlineStyle,
-    Window, actions, div, fill, point, px, relative, size,
+    SharedString, StatefulInteractiveElement, Style, Styled, Subscription, TextAlign, TextRun,
+    UnderlineStyle, Window, actions, div, fill, point, px, relative, size,
 };
 
 use crate::a11y;
+use crate::components::button::ButtonSize;
+use crate::components::icon_button::IconButton;
 use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
 use crate::components::text_editing::masking::{masked_offset, masked_text, text_offset};
 use crate::icon::{Icon, IconName, IconSize};
@@ -417,6 +419,12 @@ pub struct TextField {
     search: bool,
     /// Paints the text as bullets and gives it to no clipboard, platform or accessibility reader.
     masked: bool,
+    /// Adds a Show button that reveals a masked value while the field has focus.
+    revealable: bool,
+    /// The Show button is pressed, so the masked value paints as text.
+    revealed: bool,
+    /// Hides the value again when focus leaves the field or the window loses activation.
+    _reveal_watch: Vec<Subscription>,
     /// The last paint, for pointer hit tests and IME geometry.
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
@@ -448,11 +456,13 @@ impl fmt::Debug for TextField {
             .field("read_only", &self.read_only)
             .field("search", &self.search)
             .field("masked", &self.masked)
+            .field("revealable", &self.revealable)
+            .field("revealed", &self.revealed)
             .field("last_layout", &self.last_layout)
             .field("last_bounds", &self.last_bounds)
             .field("scroll_x", &self.scroll_x)
             .field("selecting", &self.selecting)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -482,6 +492,9 @@ impl TextField {
             read_only: false,
             search: false,
             masked: false,
+            revealable: false,
+            revealed: false,
+            _reveal_watch: Vec::new(),
             last_layout: None,
             last_bounds: None,
             scroll_x: px(0.),
@@ -557,6 +570,13 @@ impl TextField {
     /// Hides the text as bullets, one per character, for a secret value (decision 0029).
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    /// Adds a Show button that reveals a masked value while the field has focus. Use it only for a
+    /// value the user types: the field shows whatever it holds.
+    pub fn revealable(mut self) -> Self {
+        self.revealable = true;
         self
     }
 
@@ -736,9 +756,14 @@ impl TextField {
         self.selecting = false;
     }
 
-    /// The text as the line paints it: one bullet per character while a masked field hides it.
+    /// Whether the text paints as bullets: a masked field whose Show button has not revealed it.
+    fn hides_text(&self) -> bool {
+        self.masked && !self.revealed
+    }
+
+    /// The text as the line paints it: one bullet per character while the text is hidden.
     fn shown_text(&self) -> Cow<'_, str> {
-        if self.masked {
+        if self.hides_text() {
             Cow::Owned(masked_text(self.buffer.text()))
         } else {
             Cow::Borrowed(self.buffer.text())
@@ -747,7 +772,7 @@ impl TextField {
 
     /// The painted offset of a text offset: a bullet stands for one whole character.
     fn painted_offset(&self, offset: usize) -> usize {
-        if self.masked {
+        if self.hides_text() {
             masked_offset(self.buffer.text(), offset)
         } else {
             offset
@@ -756,7 +781,7 @@ impl TextField {
 
     /// The text offset of a painted offset.
     fn offset_from_painted(&self, painted: usize) -> usize {
-        if self.masked {
+        if self.hides_text() {
             text_offset(self.buffer.text(), painted)
         } else {
             painted
@@ -826,6 +851,42 @@ impl TextField {
                     .color(palette.text.secondary),
             )
     }
+
+    /// The Show button, which reveals the value while the field has focus. Its wrapper keeps a click
+    /// from moving the caret, and the field takes focus back so that typing carries on.
+    fn reveal_button(&self, cx: &mut Context<Self>) -> Div {
+        let field = cx.entity();
+        div()
+            .debug_selector(|| SHOW_SELECTOR.to_owned())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(show_button(
+                ElementId::from(format!("text-field-show-{}", cx.entity_id())),
+                self.revealed,
+                move |window, cx| field.update(cx, |field, cx| field.toggle_reveal(window, cx)),
+            ))
+    }
+
+    /// Flips the reveal and returns focus to the field.
+    fn toggle_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.revealed = !self.revealed;
+        self.focus(window, cx);
+        cx.notify();
+    }
+}
+
+/// Where the test window finds a masked field's Show button.
+const SHOW_SELECTOR: &str = "text-field-show";
+
+/// The Show button of a masked field: a toggle named "Show value", pressed while the value shows.
+fn show_button(
+    id: ElementId,
+    revealed: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> IconButton {
+    IconButton::new(id, IconName::Eye, "Show value")
+        .size(ButtonSize::Compact)
+        .toggle(revealed)
+        .on_click(on_click)
 }
 
 impl Render for TextField {
@@ -893,6 +954,20 @@ impl Render for TextField {
         } else {
             palette.text.secondary
         };
+        if self.revealable && self._reveal_watch.is_empty() {
+            let blur = cx.on_focus_out(&self.focus_handle, window, |field, _, _, cx| {
+                field.revealed = false;
+                cx.notify();
+            });
+            let activation = cx.observe_window_activation(window, |field, window, cx| {
+                if !window.is_window_active() {
+                    field.revealed = false;
+                    cx.notify();
+                }
+            });
+            self._reveal_watch = vec![blur, activation];
+        }
+        let reveal = (self.revealable && self.masked && enabled).then(|| self.reveal_button(cx));
         let field = field
             .when_some(self.leading_icon, |field, icon| {
                 field.child(Icon::new(icon).size(IconSize::Small).color(icon_color))
@@ -904,6 +979,7 @@ impl Render for TextField {
                     .overflow_hidden()
                     .child(TextElement { input: cx.entity() }),
             )
+            .when_some(reveal, |field, button| field.child(button))
             .when(self.clearable && enabled, |field| {
                 field.child(self.clear_button(focused, &palette, cx))
             });
@@ -1342,7 +1418,7 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
+    use gpui::{EntityInputHandler, Modifiers, TestAppContext, VisualTestContext};
     use std::{cell::RefCell, rc::Rc};
 
     #[test]
@@ -1884,13 +1960,133 @@ mod tests {
         let printed = field.read_with(cx, |field, _| format!("{field:?}"));
         assert!(!printed.contains(SECRET), "the debug output shows no text");
     }
+
+    /// Clicks the Show button where the test window draws it.
+    fn click_show(cx: &mut VisualTestContext) {
+        redraw(cx);
+        let bounds = cx
+            .debug_bounds(SHOW_SELECTOR)
+            .expect("the field draws its Show button");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+    }
+
+    #[gpui::test]
+    fn a_revealed_value_shows_while_the_field_has_focus_and_hides_when_focus_leaves(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let hidden = "•".repeat(SECRET.chars().count());
+        assert!(
+            painted_text(&field, cx) == hidden,
+            "the value starts hidden"
+        );
+
+        click_show(cx);
+        redraw(cx);
+        assert!(
+            field.read_with(cx, |field, _| field.revealed),
+            "Show reveals the value"
+        );
+        assert!(
+            painted_text(&field, cx) == SECRET,
+            "the value shows while the field has focus"
+        );
+
+        cx.update(|window, cx| window.blur(cx));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "leaving the field hides the value again"
+        );
+        assert!(
+            painted_text(&field, cx) == hidden,
+            "the value is bullets again"
+        );
+    }
+
+    #[gpui::test]
+    fn the_show_button_keeps_focus_in_the_field_and_toggles_the_value(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        click_show(cx);
+        assert!(
+            field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)),
+            "the field keeps focus after Show"
+        );
+        click_show(cx);
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "a second click hides the value"
+        );
+        assert!(
+            field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)),
+            "the field keeps focus after the second click"
+        );
+    }
+
+    #[gpui::test]
+    fn a_revealed_value_hides_when_the_window_loses_activation(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        click_show(cx);
+        assert!(
+            field.read_with(cx, |field, _| field.revealed),
+            "Show reveals the value"
+        );
+        cx.deactivate_window();
+        cx.run_until_parked();
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "a window in the background shows no revealed value"
+        );
+    }
+
+    #[gpui::test]
+    fn a_masked_field_that_is_not_revealable_draws_no_show_button(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        redraw(cx);
+        assert!(
+            cx.debug_bounds(SHOW_SELECTOR).is_none(),
+            "no Show button unless the field is revealable"
+        );
+    }
 }
 
 #[cfg(test)]
 mod a11y_tests {
     use super::*;
-    use crate::a11y::probe::view;
-    use gpui::{TestAppContext, accesskit::Role};
+    use crate::a11y::probe::{reported, root, view};
+    use gpui::{
+        RenderOnce, TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn the_show_button_is_a_toggle_named_show_value(cx: &mut TestAppContext) {
+        let hidden = root(cx, |window, cx| {
+            reported(show_button(ElementId::from("show"), false, |_, _| {}).render(window, cx))
+        })
+        .expect("the Show button is reported");
+        assert_eq!(hidden.role(), Role::Button);
+        assert_eq!(hidden.label(), Some("Show value"));
+        assert_eq!(hidden.toggled(), Some(Toggled::False));
+
+        let shown = root(cx, |window, cx| {
+            reported(show_button(ElementId::from("show"), true, |_, _| {}).render(window, cx))
+        })
+        .expect("the Show button is reported");
+        assert_eq!(shown.toggled(), Some(Toggled::True));
+    }
 
     #[gpui::test]
     fn a_text_field_is_a_textbox_named_by_its_label_with_its_value(cx: &mut TestAppContext) {
