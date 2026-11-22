@@ -20,3 +20,5 @@ pub const GIT: &str = "git/1";
 pub const SECRETS: &str = "secrets/1";
 /// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
 pub const TEAMS: &str = "teams/1";
+/// Extension install and management (`extensions.*`, decision 0062).
+pub const EXTENSIONS: &str = "extensions/1";
