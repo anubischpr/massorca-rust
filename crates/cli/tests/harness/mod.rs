@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -39,6 +39,9 @@ const CLEARED_ENV: [&str; 5] = [
     "MASSORCA_HOST",
     "MASSORCA_LISTEN",
 ];
+
+/// How many lines of a service log a failed run prints.
+const SERVICE_LOG_TAIL_LINES: usize = 200;
 
 /// The `massorca` binary with `home` on its environment and no profile flag. Its services keep vault keys in a file
 /// inside the temporary profile, never in the developer's keyring.
@@ -127,6 +130,8 @@ pub struct Sandbox {
     /// A private home below the temporary folder, which may be shared with other users (ADR 0073).
     home: PathBuf,
     profiles: RefCell<BTreeSet<String>>,
+    /// Variables every command of this sandbox sets, besides the harness's own.
+    env: RefCell<Vec<(String, String)>>,
 }
 
 impl Sandbox {
@@ -138,6 +143,7 @@ impl Sandbox {
             _temp: temp,
             home,
             profiles: RefCell::new(BTreeSet::new()),
+            env: RefCell::new(Vec::new()),
         }
     }
 
@@ -154,16 +160,29 @@ impl Sandbox {
         self.profiles.borrow_mut().insert(profile.to_owned());
     }
 
+    /// Sets `name` for every command this sandbox runs from now on.
+    pub fn set_env(&self, name: &str, value: &str) {
+        self.env
+            .borrow_mut()
+            .push((name.to_owned(), value.to_owned()));
+    }
+
     /// `massorca --profile <profile>` on this home.
     pub fn command(&self, profile: &str) -> Command {
         self.track(profile);
         let mut command = massorca_in(self.home());
         command.arg("--profile").arg(profile);
+        for (name, value) in self.env.borrow().iter() {
+            command.env(name, value);
+        }
         command
     }
 
     pub fn run(&self, profile: &str, args: &[&str]) -> Assert {
-        execute(self.command(profile).args(args))
+        let mut command = self.command(profile);
+        command.args(args);
+        let output = self.output_of(profile, &mut command, Stdio::null());
+        self.settle(profile, args, output)
     }
 
     /// Runs `args` with `input` as standard input, read from a file so no pipe outlives the command.
@@ -173,15 +192,73 @@ impl Sandbox {
         file.seek(SeekFrom::Start(0)).expect("stdin can be rewound");
         let mut command = self.command(profile);
         command.args(args);
-        let output = capture_with(&mut command, Stdio::from(file), COMMAND_TIMEOUT)
-            .unwrap_or_else(|| panic!("the command did not finish in time: {command:?}"));
-        Assert::new(output)
+        let output = self.output_of(profile, &mut command, Stdio::from(file));
+        self.settle(profile, args, output)
     }
 
-    /// Runs `--json <args>`, which must succeed, and returns the document's `result`.
+    /// Runs `--json <args>`, which must succeed, and returns the document's `result`. A failure also names the tail of
+    /// the profile's service log, so a start that was refused, failed or timed out explains itself.
     pub fn json_ok(&self, profile: &str, args: &[&str]) -> Value {
-        let outcome = self.run(profile, &with_json(args)).success();
+        let mut command = self.command(profile);
+        command.args(with_json(args));
+        let output = self.output_of(profile, &mut command, Stdio::null());
+        let outcome = self
+            .settle(profile, args, output)
+            .try_success()
+            .unwrap_or_else(|error| panic!("{error}"));
         single_document(&outcome)["result"].clone()
+    }
+
+    /// Runs `command` to completion. A timeout panics with the tail of the profile's service log.
+    fn output_of(&self, profile: &str, command: &mut Command, stdin: Stdio) -> Output {
+        capture_with(command, stdin, COMMAND_TIMEOUT).unwrap_or_else(|| {
+            panic!(
+                "the command did not finish in time: {command:?}\n{}",
+                self.service_log_tail(profile)
+            )
+        })
+    }
+
+    /// The outcome of a run. A failed run that may have started the profile's service names the tail of that service's
+    /// log in its failure message, so a start that was refused, failed or timed out explains itself. A run with
+    /// `--no-autostart` starts nothing.
+    fn settle(&self, profile: &str, args: &[&str], output: Output) -> Assert {
+        let assert = Assert::new(output);
+        if !assert.get_output().status.success() && !args.contains(&"--no-autostart") {
+            return assert.append_context("service log", self.service_log_tail(profile));
+        }
+        assert
+    }
+
+    /// The last `SERVICE_LOG_TAIL_LINES` lines of the newest service log of `profile`, for a failure message.
+    pub fn service_log_tail(&self, profile: &str) -> String {
+        let logs = self.profile_dir(profile).join("logs");
+        let newest = fs::read_dir(&logs)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("service.") && name.ends_with(".log"))
+            })
+            .max();
+        let Some(path) = newest else {
+            return format!("no service log in {}", logs.display());
+        };
+        let text = fs::read(&path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = &lines[lines.len().saturating_sub(SERVICE_LOG_TAIL_LINES)..];
+        format!(
+            "service log {} (last {} of {} lines):\n{}",
+            path.display(),
+            tail.len(),
+            lines.len(),
+            tail.join("\n")
+        )
     }
 
     /// The result of `service status`.
@@ -353,6 +430,7 @@ fn processes_in_home(home: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Kills the process `pid` by id, never by name.
 #[cfg(unix)]
 pub fn kill(pid: u32) {
     let _ = Command::new("kill")
@@ -363,6 +441,7 @@ pub fn kill(pid: u32) {
         .status();
 }
 
+/// Kills the process `pid` by id, never by name.
 #[cfg(windows)]
 pub fn kill(pid: u32) {
     let _ = Command::new("taskkill")

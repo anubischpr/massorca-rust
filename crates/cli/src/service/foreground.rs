@@ -54,7 +54,10 @@ fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
         server_name: "massorca".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
-    let running = runtime.block_on(Service::start_with_network(config, network))?;
+    // Logged here, while the log file is still open: the guard below flushes it when this function returns.
+    let running = runtime
+        .block_on(Service::start_with_network(config, network))
+        .inspect_err(|error| tracing::error!(%error, "service did not start"))?;
     Ok(Started {
         runtime,
         running,
