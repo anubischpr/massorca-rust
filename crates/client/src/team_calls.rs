@@ -4,9 +4,9 @@ use massorca_protocol::methods::tasks::{
     self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskUpdateParams,
 };
 use massorca_protocol::methods::teams::{
-    self, Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team,
-    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
-    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team,
+    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -38,6 +38,11 @@ impl Client {
         self.call(teams::REMOVE, params).await
     }
 
+    /// `team.bot_list`: the bots of a team, in creation order.
+    pub async fn team_bot_list(&self, params: &TeamRef) -> Result<BotList, ClientError> {
+        self.call(teams::BOT_LIST, params).await
+    }
+
     /// `team.bot_add`: adds a bot to a team.
     pub async fn team_bot_add(&self, params: &BotAddParams) -> Result<Bot, ClientError> {
         self.call(teams::BOT_ADD, params).await
@@ -51,6 +56,14 @@ impl Client {
     /// `team.bot_rm`: removes a bot; refused while it owns open tasks unless they are unassigned.
     pub async fn team_bot_remove(&self, params: &BotRemoveParams) -> Result<Bot, ClientError> {
         self.call(teams::BOT_REMOVE, params).await
+    }
+
+    /// `team.project_list`: the projects of a team, in creation order.
+    pub async fn team_project_list(
+        &self,
+        params: &TeamRef,
+    ) -> Result<TeamProjectList, ClientError> {
+        self.call(teams::PROJECT_LIST, params).await
     }
 
     /// `team.project_add`: adds a project to a team.

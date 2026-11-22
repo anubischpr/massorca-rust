@@ -194,6 +194,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   With `--timeout SECS` it gives up after that long and fails with `agent.status_timeout`.
   `agent status [SESSION] --watch` prints the sessions, then one line per change, until it
   is interrupted; with `--json` each item is its own `{"ok":true,"result":...}` line.
+- `agent status --watch` and `git watch` outlive their connection (decision 0040). When the
+  connection drops or the service stops, they print a `link` line, `unverifiable` with the
+  attempt and the pause, and connect again with backoff: 250 ms doubling to 30 s, with jitter,
+  reset after 60 s connected. A reconnect never starts the service. Once back they print
+  `live`, and the stream starts afresh: a new snapshot of the sessions, or `watching` again.
+  Nothing seen during the gap is reported as ended. A refusal ends the watch non-zero with
+  its reason, for example a revoked device (`auth.device_revoked`).
 - `agent hook EVENT [PAYLOAD]` reads the session and token from `MASSORCA_AGENT_SESSION` and
   `MASSORCA_AGENT_TOKEN`, which the service sets in every run, and the payload from the
   argument or else from stdin when stdin is not a terminal (at most 64 KiB). It never starts

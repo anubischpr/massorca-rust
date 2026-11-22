@@ -453,3 +453,59 @@ fn watch_reports_an_edit_made_right_after_the_ready_line() {
     assert!(changed.contains("worktree"), "{changed}");
     assert!(child.wait().expect("wait").success());
 }
+
+/// A watch whose service stops says its view is unverifiable, comes back when the service does, and keeps watching.
+#[test]
+fn watch_survives_a_service_restart_and_reports_the_gap() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let mut child = sandbox
+        .command("default")
+        .args([
+            "--json",
+            "git",
+            "watch",
+            "-w",
+            "feature",
+            "--max-events",
+            "1",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let mut next = move || -> serde_json::Value {
+        let line = lines.next().expect("a line").expect("read");
+        serde_json::from_str(&line).expect("json")
+    };
+    assert_eq!(next()["result"]["ready"], true);
+
+    sandbox.run("default", &["service", "stop"]).success();
+    let lost = next();
+    assert_eq!(lost["result"]["link"], "unverifiable", "{lost}");
+    assert_eq!(lost["result"]["attempt"], 1, "{lost}");
+
+    // The watch never starts the service itself; this command does.
+    sandbox.json_ok("default", &["workspace", "list"]);
+    let back = loop {
+        let item = next();
+        if item["result"]["link"] != "unverifiable" {
+            break item;
+        }
+    };
+    assert_eq!(back["result"]["link"], "live", "{back}");
+    assert_eq!(next()["result"]["ready"], true, "a new watch says ready");
+
+    std::fs::write(dir.join("after-restart.txt"), "x").expect("write");
+    let changed = next();
+    assert!(
+        changed["result"]["kinds"]
+            .as_array()
+            .is_some_and(|kinds| !kinds.is_empty()),
+        "{changed}"
+    );
+    assert!(child.wait().expect("wait").success());
+}

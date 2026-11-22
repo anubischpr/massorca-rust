@@ -1,7 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::error::GitError;
@@ -37,6 +36,13 @@ impl Git {
     /// Finds git through `MASSORCA_GIT` or PATH, and checks that it runs.
     pub fn discover() -> Result<Self, GitError> {
         discover_with(std::env::var_os(BINARY_ENV))
+    }
+
+    /// The git `discover` would use (`MASSORCA_GIT`, else `git` on the path), without running it. A binary that is
+    /// missing or broken is reported by each call that needs it, so a start does not wait for a `git --version`.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::with_binary(resolve_binary(std::env::var_os(BINARY_ENV)))
     }
 
     /// Replaces the timeout of read-only queries.
@@ -153,7 +159,7 @@ impl Git {
             .iter()
             .map(|arg| redact_urls(&arg.to_string_lossy()))
             .collect();
-        let mut command = Command::new(&self.binary);
+        let mut command = massorca_process::command(&self.binary);
         command
             .arg("-c")
             .arg("core.quotepath=off")
