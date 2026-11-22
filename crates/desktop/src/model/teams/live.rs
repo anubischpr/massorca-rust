@@ -102,9 +102,6 @@ pub fn agent_of_kind(kind: &str) -> Option<Agent> {
         "codex" => Some(Agent::Codex),
         "antigravity" => Some(Agent::Antigravity),
         "gentle-shell" => Some(Agent::GentleShell),
-        "gemini" => Some(Agent::Gemini),
-        "opencode" => Some(Agent::OpenCode),
-        "cursor" => Some(Agent::Cursor),
         _ => None,
     }
 }

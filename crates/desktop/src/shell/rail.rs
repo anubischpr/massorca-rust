@@ -503,9 +503,6 @@ pub(super) fn agent_kind(agent: Agent) -> AgentKind {
         Agent::Codex => AgentKind::Codex,
         Agent::Antigravity => AgentKind::Antigravity,
         Agent::GentleShell => AgentKind::GentleShell,
-        Agent::Gemini => AgentKind::Gemini,
-        Agent::OpenCode => AgentKind::OpenCode,
-        Agent::Cursor => AgentKind::Cursor,
         Agent::Unknown => AgentKind::Unknown,
     }
 }
