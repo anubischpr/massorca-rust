@@ -2,7 +2,8 @@
 //!
 //! It prints `fake-agent: ...` lines, takes prompts from its arguments and then from
 //! stdin, and reports its activity through `massorca agent hook` when `MASSORCA_BIN`
-//! names that program. It prints whether a credential file exists, never its contents.
+//! names that program. It prints whether a credential file exists, never its contents, and whether the
+//! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values.
 
 use std::env;
 use std::ffi::OsString;
@@ -20,6 +21,8 @@ const HOOK_PROGRAM_ENV: &str = "MASSORCA_BIN";
 /// The credential home. `<home>/token.json` being a file means credentials were found.
 const CREDENTIAL_HOME_ENV: &str = "FAKE_AGENT_HOME";
 const CREDENTIAL_FILE: &str = "token.json";
+/// Comma-separated variable names whose state (`set`, `empty` or `unset`) is printed at start, never their values.
+const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
@@ -124,6 +127,9 @@ impl Agent {
         } else {
             "credentials missing"
         });
+        for name in probed_env() {
+            say(&format!("env {name} {}", env_state(&name)));
+        }
         self.hook("start", None);
     }
 
@@ -247,6 +253,26 @@ fn credentials_found() -> bool {
     env::var_os(CREDENTIAL_HOME_ENV)
         .filter(|home| !home.is_empty())
         .is_some_and(|home| Path::new(&home).join(CREDENTIAL_FILE).is_file())
+}
+
+/// The names listed in `FAKE_AGENT_PROBE_ENV`.
+fn probed_env() -> Vec<String> {
+    env::var(PROBE_ENV)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether a variable is set, set to the empty string, or not set. Its value is never printed.
+fn env_state(name: &str) -> &'static str {
+    match env::var_os(name) {
+        None => "unset",
+        Some(value) if value.is_empty() => "empty",
+        Some(_) => "set",
+    }
 }
 
 /// A name made of letters, digits, `.`, `_` and `-`, as `write:<name>` requires.

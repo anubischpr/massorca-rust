@@ -65,7 +65,9 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
-- `credentials`: optional. `files` empty means import is unsupported.
+- `credentials`: optional. `files` empty means import is unsupported. `files` are plain
+  names (no separator, `..`, drive or absolute path). Every declared file is required by
+  import: the declaration has no optional flag.
 
 ## Session record (`AgentSession`)
 
@@ -87,7 +89,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
 | `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
@@ -285,6 +287,40 @@ massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
 ```
+
+## Credential import
+
+`core-agents::credentials` (0056). Import reads every declared file before writing
+anything: each must be a regular file, checked with `symlink_metadata` and opened without
+following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, where
+every reparse point counts as a link), and at most 1 MiB as read from the open handle. The
+new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`, files
+`0600` and created new on Unix; on Windows created with a protected DACL for the owner and
+SYSTEM, which the files inherit) and renamed into place after its DACL is checked again.
+On Windows `agents` and `homes` are created the same way, and restricted when they already
+exist. Homes imported before this fix keep their old access until they are imported again
+with `--replace`. On Windows import holds `agents`, `homes` and the new home open without
+delete sharing, from before their access changes until the swap is done, so none of them can
+be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. Each pinned directory
+must be owned by the service's user, its token's default owner (the Administrators group for an
+elevated administrator) or SYSTEM, compared as binary SIDs; any other owner refuses the import with
+`agent.credentials_invalid`. The directories it creates or restricts (`agents`, run files included)
+are owned by the user, elevated or not, with a DACL for the user and SYSTEM, so elevated and
+non-elevated runs read each other's. An `agents` or `homes` owned by Administrators, left by an
+older elevated run, is refused by a non-elevated run with that reason: run MassOrca elevated once,
+which makes it the user's, or take ownership of it. With
+`replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
+swap fails (the error names where it is when that fails too), and deleted after it succeeds.
+Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
+that kind; an `.old-` leftover may be the only copy of a login, so it is never deleted: the
+next import of the kind is refused with `agent.credentials_invalid` naming it
+(`data.leftover`) until the owner moves it. `agents`, `homes` and the home itself must not
+be links; show and remove check all three and refuse a link instead of following it.
+Imports and removals in one service run one at a time (`credentials::lock_homes`). The
+service refuses `import --replace` and `remove` with `agent.busy` while any session of the
+kind has a run that has not exited. Declared file names must also not be Windows device
+names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
+in a dot or a space.
 
 ## Security
 
