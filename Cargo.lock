@@ -3309,6 +3309,7 @@ dependencies = [
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
