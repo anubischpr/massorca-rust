@@ -31,8 +31,9 @@ refuse such a place rather than try to make it safe.
   Folders above the home are created as usual.
 - **At every start**, before anything in the profile is written or opened,
   `massorca_profile::secure_root` checks, in this order:
-  1. **Location.** `<home>` and `<home>/profiles` must be owned by the user,
-     SYSTEM or Administrators, and no other SID may hold a right that changes
+  1. **Location.** `<home>` and `<home>/profiles` must have an accepted
+     owner (below), and no SID other than an accepted owner or Administrators
+     may hold a right that changes
      them (add a file or folder, delete a child, delete, change the DACL or
      owner, generic write or all). `profiles` must not be a link; the home may
      be one the user chose. Otherwise the start is refused with
@@ -40,7 +41,7 @@ refuse such a place rather than try to make it safe.
      owned by the user or root and not group- or world-writable unless it is
      sticky.
   2. **Root.** A root that is a link or junction is refused with
-     `profile.unsafe_location`. A root another user owns is refused with
+     `profile.unsafe_location`. A root without an accepted owner is refused with
      `profile.foreign_entries`. A root whose DACL, inherited entries included,
      let another SID change it is refused with `profile.writable_by_others`
      and left as it is: files the user owns may have been rewritten, and a
@@ -52,7 +53,7 @@ refuse such a place rather than try to make it safe.
      Unix a root that is not `0700` is set to `0700`.
   4. **Content.** The whole tree below the root is scanned after the repair,
      so nothing can be planted between the listing and the new access. Links
-     are read themselves, never followed. An entry another user owns, or whose
+     are read themselves, never followed. An entry without an accepted owner, or whose
      owner cannot be read, is refused with `profile.foreign_entries`; an entry
      whose own DACL lets another SID change it is refused with
      `profile.writable_by_others`. On Unix the owner must be the user or root,
@@ -61,6 +62,18 @@ refuse such a place rather than try to make it safe.
 
   A refusal lists up to ten paths (`data.paths`, or `data.path` for a
   location). Nothing is repaired once the location or the root is refused.
+- **Accepted owners.** An owner is accepted when it equals the token's user
+  (`TokenUser`), the token's default owner (`TokenOwner`), or SYSTEM. An
+  elevated administrator token's default owner is Administrators, so what such
+  a process creates is owned by Administrators and stays accepted while it
+  runs elevated. Administrators is not accepted as an owner otherwise: an
+  ordinary token creates nothing owned by it, so on that token such an entry
+  was made by someone else. Administrators stays acceptable as a holder of
+  write access in a DACL, since Windows grants it full access on the user's
+  own folders. Every crate checks owners with the same functions:
+  `owner_matches(&Sid, &[Sid])`, `owner_is_acceptable(PSID)` and
+  `dir_owner_is_acceptable(HANDLE)` in `massorca_profile`; the last two take
+  raw pointers and are `unsafe fn`.
 - SIDs are compared as SIDs (`EqualSid`), never as text: SDDL writes some
   accounts as aliases, such as `SY`, `BA` and `LA` for the built-in
   Administrator. Every SID read from a descriptor is parsed back into its
@@ -100,9 +113,9 @@ example with `icacls`), and starts again. There is no override command.
   refused profile receives nothing, not even a log file.
 - Folders above the home are not checked. Someone who can change them can
   move the home itself; choosing a home in such a place is outside this rule.
-- Entries an elevated process created belong to Administrators and are
-  accepted. A root owned by Administrators is refused, since a normal user
-  could not repair it.
+- Entries an elevated process created belong to Administrators. They are
+  accepted while the service runs elevated, and refused as foreign when it
+  later runs on an ordinary token.
 - Every start reads the descriptor of every entry in the profile. Large
   agent homes make the start slower.
 - A temporary folder shared with other users is an unsafe location, so tests
