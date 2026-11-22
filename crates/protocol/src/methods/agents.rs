@@ -303,6 +303,9 @@ pub struct AgentDelegateParams {
     /// Name of the child workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The child session's title; the first line of `prompt` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default)]
     pub read_only: bool,
     /// The parent run's token, required when called from inside that run.

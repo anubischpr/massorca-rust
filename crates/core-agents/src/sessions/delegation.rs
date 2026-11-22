@@ -109,11 +109,11 @@ impl Agents {
             AgentStartParams {
                 workspace,
                 kind,
+                title: child_title(params.title.as_deref(), &params.prompt),
                 prompt: Some(params.prompt),
                 args: Vec::new(),
                 env: BTreeMap::new(),
                 read_only: params.read_only,
-                title: None,
                 cols: None,
                 rows: None,
                 request_id: params.request_id,
@@ -585,8 +585,66 @@ fn one_line(text: &str, max: usize) -> String {
     line.trim().to_owned()
 }
 
+/// The most characters a delegated child's title keeps.
+const CHILD_TITLE_CHARS: usize = 80;
+
+/// A delegated child's title: the caller's title, else the first non-empty line of its prompt, trimmed, with control
+/// characters replaced by spaces and cut to [`CHILD_TITLE_CHARS`] characters. `None` when both are blank.
+fn child_title(title: Option<&str>, prompt: &str) -> Option<String> {
+    let source = match title.map(str::trim).filter(|title| !title.is_empty()) {
+        Some(title) => title,
+        None => prompt
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())?,
+    };
+    let clean: String = source
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(CHILD_TITLE_CHARS)
+        .collect();
+    let clean = clean.trim();
+    (!clean.is_empty()).then(|| clean.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_child_is_titled_by_its_title_or_the_first_line_of_its_prompt() {
+        use super::{CHILD_TITLE_CHARS, child_title};
+
+        assert_eq!(
+            child_title(Some("  Fix the parser  "), "ignored").as_deref(),
+            Some("Fix the parser")
+        );
+        assert_eq!(
+            child_title(
+                None,
+                "
+
+  Review the diff
+then report"
+            )
+            .as_deref(),
+            Some("Review the diff")
+        );
+        assert_eq!(
+            child_title(
+                Some(" "),
+                "  
+ "
+            )
+            .as_deref(),
+            None
+        );
+        assert_eq!(child_title(None, "tab	here").as_deref(), Some("tab here"));
+        let long = "x".repeat(200);
+        assert_eq!(
+            child_title(None, &long).map(|title| title.chars().count()),
+            Some(CHILD_TITLE_CHARS)
+        );
+    }
+
     use super::one_line;
     use crate::launch::check_prompt;
 
@@ -668,6 +726,7 @@ mod tests {
 
     fn delegate_params(parent: &str, request_id: &str) -> AgentDelegateParams {
         AgentDelegateParams {
+            title: None,
             parent: parent.to_owned(),
             prompt: "look".to_owned(),
             kind: None,
