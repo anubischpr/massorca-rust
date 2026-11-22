@@ -1,5 +1,6 @@
 //! Binary frames on the client, against a stand-in service: `hello` lists `binary-frames/1`, a subscription yields events and
-//! bytes in order, `next` skips bytes, and bytes for a stream nobody holds are dropped.
+//! bytes in order, `next` skips bytes, bytes for a stream nobody holds are dropped,
+//! and a stream cut off by the connection says so.
 
 mod support;
 
@@ -36,8 +37,9 @@ fn options() -> ConnectOptions {
 }
 
 /// A stand-in service for one connection. It welcomes the client, opens `STREAM` for its request, and sends events and
-/// bytes for it with bytes for `UNKNOWN_STREAM` between them. Its task returns the capabilities the client's hello named.
-async fn stand_in(home: &Path) -> (Profile, JoinHandle<Vec<String>>) {
+/// bytes for it with bytes for `UNKNOWN_STREAM` between them, then ends the stream, or with `drop_connection` closes the
+/// connection instead. Its task returns the capabilities the client's hello named.
+async fn stand_in(home: &Path, drop_connection: bool) -> (Profile, JoinHandle<Vec<String>>) {
     let profile = profile(home);
     ensure_dir(&profile).expect("the profile directory exists");
     let listener = ListenerOptions::new()
@@ -87,7 +89,7 @@ async fn stand_in(home: &Path) -> (Profile, JoinHandle<Vec<String>>) {
             .await
             .expect("the answer is sent");
 
-        let frames = [
+        let mut frames = vec![
             Frame::Message(Message::Event {
                 stream: STREAM,
                 data: json!({"n": 1}),
@@ -113,6 +115,9 @@ async fn stand_in(home: &Path) -> (Profile, JoinHandle<Vec<String>>) {
                 error: None,
             }),
         ];
+        if drop_connection {
+            frames.pop();
+        }
         for frame in &frames {
             write_frame(&mut stream, frame, MAX_FRAME_LEN_LOCAL)
                 .await
@@ -138,7 +143,7 @@ async fn next_event(subscription: &mut Subscription) -> Option<Result<Value, Err
 #[tokio::test]
 async fn hello_lists_binary_frames_and_items_arrive_in_order() {
     let home = support::temp_home();
-    let (profile, stand_in) = stand_in(home.path()).await;
+    let (profile, stand_in) = stand_in(home.path(), false).await;
     let client = Client::connect(&profile, options())
         .await
         .expect("the client connects");
@@ -164,6 +169,7 @@ async fn hello_lists_binary_frames_and_items_arrive_in_order() {
         Some(Ok(StreamItem::Bytes(vec![1, 2, 3])))
     );
     assert_eq!(next_item(&mut subscription).await, None);
+    assert!(!subscription.connection_lost(), "the service ended it");
 
     let offered = stand_in.await.expect("the stand-in finishes");
     assert!(
@@ -177,7 +183,7 @@ async fn hello_lists_binary_frames_and_items_arrive_in_order() {
 #[tokio::test]
 async fn next_skips_bytes_and_unknown_stream_bytes_never_arrive() {
     let home = support::temp_home();
-    let (profile, stand_in) = stand_in(home.path()).await;
+    let (profile, stand_in) = stand_in(home.path(), false).await;
     let client = Client::connect(&profile, options())
         .await
         .expect("the client connects");
@@ -195,5 +201,30 @@ async fn next_skips_bytes_and_unknown_stream_bytes_never_arrive() {
         Some(Ok(json!({"n": 2})))
     );
     assert_eq!(next_event(&mut subscription).await, None);
+    stand_in.await.expect("the stand-in finishes");
+}
+
+#[tokio::test]
+async fn a_stream_cut_off_by_the_connection_reports_it_was_lost() {
+    let home = support::temp_home();
+    let (profile, stand_in) = stand_in(home.path(), true).await;
+    let client = Client::connect(&profile, options())
+        .await
+        .expect("the client connects");
+    let mut subscription = client
+        .subscribe("ext.demo.stream", &json!({}))
+        .await
+        .expect("the subscription opens");
+
+    assert_eq!(
+        next_event(&mut subscription).await,
+        Some(Ok(json!({"n": 1})))
+    );
+    assert_eq!(
+        next_event(&mut subscription).await,
+        Some(Ok(json!({"n": 2})))
+    );
+    assert_eq!(next_event(&mut subscription).await, None);
+    assert!(subscription.connection_lost());
     stand_in.await.expect("the stand-in finishes");
 }
