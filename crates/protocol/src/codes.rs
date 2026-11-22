@@ -107,6 +107,10 @@ pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
 /// CLI only: the service refused a profile directory that holds entries another user owns; `data.paths` lists up to ten.
 pub const PROFILE_FOREIGN_ENTRIES: &str = "profile.foreign_entries";
+/// CLI only: other users could change the profile directory or entries in it; `data.paths` lists up to ten.
+pub const PROFILE_WRITABLE_BY_OTHERS: &str = "profile.writable_by_others";
+/// CLI only: a folder from the home down to the profile is a link, another user's, or changeable by others; `data.path`.
+pub const PROFILE_UNSAFE_LOCATION: &str = "profile.unsafe_location";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";

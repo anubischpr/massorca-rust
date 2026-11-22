@@ -1,6 +1,8 @@
 //! Terminal attach decoding, against a stand-in service: snapshot parts reassemble, output offsets skip repeats and trim
 //! overlaps, and unknown events and chunk tags are ignored.
 
+mod support;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -143,7 +145,7 @@ async fn next(attachment: &mut TerminalAttachment) -> Option<Result<AttachUpdate
 
 #[tokio::test]
 async fn snapshot_parts_reassemble_and_output_offsets_skip_repeats_and_trim_overlaps() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let frames = vec![
         event(
             json!({"kind": "attached", "terminal": terminal(), "mode": "snapshot", "offset": 10}),
@@ -231,7 +233,7 @@ async fn snapshot_parts_reassemble_and_output_offsets_skip_repeats_and_trim_over
 
 #[tokio::test]
 async fn a_resumed_attach_starts_at_its_offset_and_a_chunk_past_it_keeps_its_offset() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let frames = vec![
         event(json!({"kind": "attached", "terminal": terminal(), "mode": "resume", "offset": 40})),
         bytes(ChunkKind::Output, 40, b"resume"),
@@ -276,7 +278,7 @@ async fn a_resumed_attach_starts_at_its_offset_and_a_chunk_past_it_keeps_its_off
 
 #[tokio::test]
 async fn a_service_error_ends_the_attach_with_that_error() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let frames = vec![Frame::Message(Message::End {
         stream: STREAM,
         error: Some(ErrorBody::new("terminal.not_found", "no such terminal")),

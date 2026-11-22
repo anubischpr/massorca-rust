@@ -1,5 +1,7 @@
 //! A refused handshake: the client reports the refusal and the protocol range the service names.
 
+mod support;
+
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::traits::tokio::Listener as _;
 use massorca_client::{Client, ClientError, ConnectOptions};
@@ -11,7 +13,7 @@ use massorca_protocol::{
 
 #[tokio::test]
 async fn a_refused_handshake_reports_the_range_the_service_speaks() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let profile = Profile::resolve_with(
         Some(home.path().to_path_buf()),
         Some("default".to_owned()),

@@ -233,9 +233,9 @@ async fn the_profile_directory_and_socket_are_private_to_their_owner() {
     stop(running).await;
 }
 
-/// A profile directory made without the owner-only access is repaired before the service opens anything in it.
+/// A profile directory made the ordinary way is made owner-only before the service opens anything in it.
 #[tokio::test]
-async fn a_start_repairs_a_profile_directory_that_others_could_reach() {
+async fn a_start_makes_an_ordinary_profile_directory_private() {
     use massorca_profile::{RootAccess, secure_root};
 
     let home = temp_home();

@@ -1,10 +1,13 @@
 //! The failure a command reports: a stable code, a message, optional data and the exit code.
 
 use std::io;
+use std::path::PathBuf;
 
 use massorca_client::ClientError;
-use massorca_profile::ProfileError;
-use massorca_protocol::codes::PROFILE_FOREIGN_ENTRIES;
+use massorca_profile::{ProfileError, RootAccessError};
+use massorca_protocol::codes::{
+    PROFILE_FOREIGN_ENTRIES, PROFILE_UNSAFE_LOCATION, PROFILE_WRITABLE_BY_OTHERS,
+};
 use massorca_server::ServiceError;
 use serde_json::{Value, json};
 
@@ -96,17 +99,39 @@ impl From<ServiceError> for CliError {
                 "another service already runs this profile",
                 exit::ALREADY_RUNNING,
             ),
-            ServiceError::ForeignEntries { paths, message } => {
-                let paths: Vec<String> = paths
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect();
-                Self {
-                    data: Some(Box::new(json!({ "paths": paths }))),
-                    ..Self::new(PROFILE_FOREIGN_ENTRIES, message, exit::ERROR)
-                }
-            }
+            ServiceError::ProfileAccess(refused) => Self::from(refused),
             other => Self::new("service.failed", other.to_string(), exit::ERROR),
+        }
+    }
+}
+
+impl From<RootAccessError> for CliError {
+    fn from(error: RootAccessError) -> Self {
+        let message = error.to_string();
+        let shown = |paths: &[PathBuf]| -> Vec<String> {
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect()
+        };
+        let (code, data) = match &error {
+            RootAccessError::ForeignEntries { paths } => {
+                (PROFILE_FOREIGN_ENTRIES, json!({ "paths": shown(paths) }))
+            }
+            RootAccessError::WritableByOthers { paths } => {
+                (PROFILE_WRITABLE_BY_OTHERS, json!({ "paths": shown(paths) }))
+            }
+            RootAccessError::UnsafeLocation { path } => (
+                PROFILE_UNSAFE_LOCATION,
+                json!({ "path": path.display().to_string() }),
+            ),
+            RootAccessError::Io(error) => {
+                return Self::new("io.failed", error.to_string(), exit::ERROR);
+            }
+        };
+        Self {
+            data: Some(Box::new(data)),
+            ..Self::new(code, message, exit::ERROR)
         }
     }
 }
@@ -115,26 +140,67 @@ impl From<ServiceError> for CliError {
 mod tests {
     use std::path::PathBuf;
 
+    use massorca_profile::RootAccessError;
     use massorca_server::ServiceError;
     use serde_json::json;
 
     use super::{CliError, exit};
 
-    #[test]
-    fn foreign_entries_report_their_code_and_paths() {
-        let planted = PathBuf::from("profiles")
+    fn planted() -> PathBuf {
+        PathBuf::from("profiles")
             .join("default")
-            .join("planted.json");
-        let error = CliError::from(ServiceError::ForeignEntries {
-            paths: vec![planted.clone()],
-            message: "foreign".to_owned(),
-        });
+            .join("planted.json")
+    }
 
-        assert_eq!(error.code, "profile.foreign_entries");
-        assert_eq!(error.exit_code, exit::ERROR);
-        assert_eq!(
-            error.data.as_deref(),
-            Some(&json!({ "paths": [planted.display().to_string()] }))
+    #[test]
+    fn refused_profiles_report_their_code_and_paths() {
+        let cases = [
+            (
+                RootAccessError::ForeignEntries {
+                    paths: vec![planted()],
+                },
+                "profile.foreign_entries",
+                json!({ "paths": [planted().display().to_string()] }),
+            ),
+            (
+                RootAccessError::WritableByOthers {
+                    paths: vec![planted()],
+                },
+                "profile.writable_by_others",
+                json!({ "paths": [planted().display().to_string()] }),
+            ),
+            (
+                RootAccessError::UnsafeLocation { path: planted() },
+                "profile.unsafe_location",
+                json!({ "path": planted().display().to_string() }),
+            ),
+        ];
+        for (refused, code, data) in cases {
+            let error = CliError::from(ServiceError::from(refused));
+
+            assert_eq!(error.code, code);
+            assert_eq!(error.exit_code, exit::ERROR);
+            assert_eq!(error.data.as_deref(), Some(&data));
+        }
+    }
+
+    #[test]
+    fn a_profile_writable_by_others_says_it_must_be_reviewed_or_recreated() {
+        let error = CliError::from(ServiceError::from(RootAccessError::WritableByOthers {
+            paths: vec![planted()],
+        }));
+
+        assert!(
+            error.message.contains("writable by other users"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("review it, then recreate the profile"),
+            "{}",
+            error.message
         );
     }
 }

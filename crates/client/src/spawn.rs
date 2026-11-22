@@ -8,10 +8,7 @@ use crate::error::ClientError;
 use crate::options::Autostart;
 
 pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<(), ClientError> {
-    // The profile directory exists before the service writes anything into it.
-    std::fs::create_dir_all(profile.dir()).map_err(|error| {
-        ClientError::StartFailed(format!("{}: {error}", profile.dir().display()))
-    })?;
+    create_profile_dir(profile)?;
     let mut command = service_command(profile, autostart);
     detach(&mut command);
     keep_handles_private();
@@ -20,6 +17,14 @@ pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<()
     })?;
     reap_when_it_exits(child);
     Ok(())
+}
+
+/// The service starts in its profile directory, so it must exist. Missing folders are created private to their owner in
+/// one step, never with inherited access the service would only repair later (ADR 0073); the service checks the rest.
+fn create_profile_dir(profile: &Profile) -> Result<(), ClientError> {
+    massorca_profile::create_root(profile)
+        .map(drop)
+        .map_err(|error| ClientError::StartFailed(format!("{}: {error}", profile.dir().display())))
 }
 
 /// Waits for the started service on a thread of its own. Until it exits the service is this process's child, and an
@@ -86,7 +91,7 @@ mod tests {
 
     use massorca_profile::Profile;
 
-    use super::service_command;
+    use super::{create_profile_dir, service_command};
     use crate::options::Autostart;
 
     #[test]
@@ -106,5 +111,23 @@ mod tests {
         let command = service_command(&profile, &autostart);
 
         assert_eq!(command.get_current_dir(), Some(profile.dir()));
+    }
+
+    #[test]
+    fn the_autostart_path_creates_the_profile_directory_private_so_nothing_needs_repair() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = Profile::resolve_with(
+            Some(temp.path().join("home")),
+            Some("default".to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+
+        create_profile_dir(&profile).expect("the profile directory");
+
+        assert_eq!(
+            massorca_profile::secure_root(&profile).expect("checked"),
+            massorca_profile::RootAccess::Private
+        );
     }
 }
