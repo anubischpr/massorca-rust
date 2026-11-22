@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials};
 
+use crate::credentials;
 use crate::kind::{KindDecl, StatusMechanism};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
@@ -156,7 +157,14 @@ fn enabled_package() -> wire::KindPackage {
 }
 
 fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind {
-    let imported = paths::valid_home(profile_dir, &entry.id).is_some_and(|home| home.is_dir());
+    // The 0056 home counts only as a plain directory, checked under the homes gate (decision 0056, 0059).
+    let imported = {
+        let _gate = credentials::lock_homes();
+        credentials::usable_home(profile_dir, &entry.id)
+            .ok()
+            .flatten()
+            .is_some()
+    };
     let Some(decl) = &entry.decl else {
         return AgentKind {
             id: entry.id.clone(),
@@ -455,6 +463,29 @@ mod tests {
         assert_eq!(
             claude.status_mechanism,
             wire::StatusMechanism::ClaudeSettings
+        );
+    }
+
+    #[test]
+    fn only_claude_declares_a_sign_in_among_the_built_ins() {
+        let kinds = built_ins();
+        let with_accounts: Vec<&str> = kinds
+            .iter()
+            .filter(|kind| kind.accounts_supported())
+            .map(|kind| kind.id.as_str())
+            .collect();
+        assert_eq!(with_accounts, ["claude"]);
+        let claude = kinds.iter().find(|kind| kind.id == "claude").unwrap();
+        let accounts = claude.accounts.as_ref().unwrap();
+        assert_eq!(accounts.login, ["auth", "login"]);
+        let check = accounts.check.as_ref().unwrap();
+        assert_eq!(check.args, ["auth", "status"]);
+        assert_eq!(check.signed_in_exit, 0);
+        assert_eq!(check.expired_pattern, None);
+        assert_eq!(check.identity_pattern, None);
+        assert_eq!(
+            accounts.logout,
+            Some(vec!["auth".to_owned(), "logout".to_owned()])
         );
     }
 }

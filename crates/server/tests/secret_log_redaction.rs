@@ -77,13 +77,12 @@ async fn a_value_sent_through_secret_set_appears_in_no_trace_line() {
         .expect("the only subscriber of this binary");
     tracing::trace!(SENTINEL);
 
-    let home = tempfile::tempdir().expect("a temporary home");
-    let profile = Profile::resolve_with(
-        Some(home.path().to_path_buf()),
-        Some("default".to_owned()),
-        |_| None,
-    )
-    .expect("the profile resolves");
+    // A private home below the temporary folder, which may be shared with other users (ADR 0073).
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let home = temp.path().join("home");
+    massorca_profile::create_home(&home).expect("a private home");
+    let profile = Profile::resolve_with(Some(home.clone()), Some("default".to_owned()), |_| None)
+        .expect("the profile resolves");
     let config = ServiceConfig {
         profile: profile.clone(),
         server_name: "massorca-test".to_owned(),

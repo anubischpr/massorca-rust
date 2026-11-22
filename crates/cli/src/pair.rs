@@ -2,7 +2,7 @@
 
 use std::io::{self, Read};
 
-use massorca_client::{Client, Hosts};
+use massorca_client::{Client, Hosts, default_device_name};
 use massorca_profile::Profile;
 use massorca_protocol::methods::devices::{self, PairingCreateParams, PairingCreated};
 use massorca_protocol::pairing::Offer;
@@ -14,9 +14,6 @@ use crate::host::records::record_lines;
 use crate::output::Output;
 use crate::target::Target;
 use crate::time_text;
-
-/// The device name when this computer's host name cannot be read.
-const FALLBACK_DEVICE_NAME: &str = "massorca";
 
 /// Makes a pairing offer on the service `target` names, and prints it once.
 pub async fn offer(
@@ -73,16 +70,4 @@ fn offer_text(argument: &str) -> Result<String, CliError> {
     let mut text = String::new();
     io::stdin().read_to_string(&mut text)?;
     Ok(text)
-}
-
-/// This computer's host name, for the name it has on a server: COMPUTERNAME, HOSTNAME, then /etc/hostname.
-pub fn default_device_name() -> String {
-    let candidates = ["COMPUTERNAME", "HOSTNAME"]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .chain(std::fs::read_to_string("/etc/hostname").ok());
-    candidates
-        .map(|name| name.trim().to_owned())
-        .find(|name| !name.is_empty())
-        .unwrap_or_else(|| FALLBACK_DEVICE_NAME.to_owned())
 }

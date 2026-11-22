@@ -28,7 +28,8 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 ```
 <profile>/agents/
   kinds/*.json            declared kinds (owner `user`)
-  homes/<kind>/           credential home per kind (0056)
+  homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
+  accounts/<kind>/<id>/   credential home per account (0059)
   runs/<session>/         generated hook settings for a run (0053)
 ```
 
@@ -99,12 +100,18 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.resume` | workspace | `session` | `AgentSession` |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child) |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
 | `agent.credentials.show` | read | `kind` | `{ kind, home, exists, files: [{ name, present, bytes?, modified_at_ms? }] }` |
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
+| `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects }] }` |
+| `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
+| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
+| `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
+| `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -112,7 +119,7 @@ Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
-`agent.credentials_invalid`.
+`agent.credentials_invalid`, `agent.account_not_found`.
 
 Event bus topic: `agent.changed` (id = session id).
 
@@ -188,6 +195,47 @@ no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
 
+## Delegation
+
+`agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
+
+- The result of `agent.delegate` is the child's `AgentSession` with an optional `note` beside its fields
+  (`AgentDelegated`), so a reader that expects a session reads it unchanged. A writing child's note says that the
+  parent's uncommitted changes were not carried over.
+- The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
+  workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
+  `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
+- A `request_id` is unique across sessions: a retry returns its first child only to the same parent. One that belongs
+  to a call for another session is `request.invalid_params`. The parent and its token are checked before the retry is
+  answered.
+- `<parent workspace>-<n>` skips a number whose workspace name, branch or directory is already taken.
+- Authorization: inside a run (`MASSORCA_AGENT_SESSION` set) the CLI always sends the run's own token, whatever
+  session the call names. The service accepts a token only when it is the live run token of the parent: the named
+  parent for `agent.delegate`, the child's parent for `agent.bring_back`. Anything else is `agent.hook_refused`, so a
+  child cannot delegate as its parent or bring itself back. Residual risk: a caller outside any run sends no token and
+  is treated as a person, and an agent that clears its environment can do the same. That gives it nothing new, since it
+  can already run any command as the service's user.
+- `agent.tree` of a child returns its parent as the root.
+- `agent.bring_back` of a session that was not delegated is `request.invalid_params`. A child is finished when its run
+  has exited, or its activity is `done` and no prompt was typed since. Bring-backs are serialised. The git work goes
+  through a `RepoOps` port that the service implements with `core-git`.
+- A merge never runs unlocked. The service takes the parent workspace's git mutation lock (0010) for the whole call; a
+  parent workspace that is not a git worktree, is missing or is being removed refuses the bring-back before anything
+  runs.
+- Just before the merge, under the start gate, the parent workspace is checked again: another live writing session
+  there is `agent.workspace_busy` (its id in `data.session`). Under the status lock the parent's activity is read again:
+  `working`, or a prompt it has not answered yet, is `agent.parent_busy`. The workspace is then listed as merging until
+  the merge ends. Meanwhile a start or resume there, and any prompt to a session there (even with `force`), are `agent.busy`.
+- The parent's worktree must be clean and have no rebase, merge, cherry-pick, revert or mailbox apply stopped in it,
+  read from git's own state files in that worktree's git directory; otherwise `agent.parent_dirty` says which.
+- The merge takes `refs/heads/<child branch>`, so a tag of the same name is never merged instead. A merge that fails
+  for any reason other than a conflict (a refusing hook, a missing identity) is aborted too when it left a merge in
+  progress, and HEAD is checked to be where it was.
+- The child is marked brought back after the merge. If the mark fails after a merge, the error carries the merge commit
+  (`data.merge_commit`), so a retry that is refused does not hide that the merge happened.
+- The prompt to the parent is one line: control characters in the child's result, line breaks included, become spaces,
+  and at most 4 KiB of it is quoted, so it passes the prompt rules (0058).
+
 ## Status store
 
 `core-agents` applies every status change under one lock: a start, a hook report, a
@@ -239,12 +287,18 @@ massorca agent attach <session>
 massorca agent prompt <session> <text> [--force]
 massorca agent resume <session>
 massorca agent hook <event> [<payload>]
-massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--read-only]
+massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--title <t>] [--read-only]
 massorca agent tree <session>
 massorca agent bring-back <child> [--no-merge] [--no-prompt]
 massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
+massorca agent accounts list <kind>
+massorca agent accounts add <kind> [--label <l>] [--no-attach]
+massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts activate <kind> <account> [--project <p>]
+massorca agent accounts remove <kind> <account>
+massorca agent accounts check <kind> [<account>]
 ```
 
 ## Credential import
@@ -280,6 +334,160 @@ service refuses `import --replace` and `remove` with `agent.busy` while any sess
 kind has a run that has not exited. Declared file names must also not be Windows device
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
+
+## Accounts (decision 0059)
+
+A kind can have several accounts on one host, and one of them is active. An account is a
+credential home at `<profile>/agents/accounts/<kind>/<id>/`, built with the 0056 rules
+(`credentials.rs`: owner-only directories, pinning, link refusal, the homes gate). Its row in
+the store (`agent_accounts`, with `agent_account_active` and `agent_account_choices`) holds the
+label, the identity the check captured, and the state. Ids are canonical lower-case UUIDs.
+
+- **Run resolution** (`accounts::resolve_home`, under `lock_homes`, for start and resume alike):
+  the project's choice, else the active account, else no home variable. The home is taken only
+  as a plain directory; a link is refused with `agent.credentials_invalid`. A run records its
+  account in memory, and `agent.accounts.remove` is refused with `agent.busy` while a live run
+  uses it.
+- **Sign-in** (`sign_in.rs`): the empty home and its row (origin `sign_in`) are created under the
+  gate, and the account is pending until its terminal ends. A service-owned terminal runs the
+  kind's `accounts.login` arguments with the home variable set and `strip_env` applied (set to
+  empty, as in 0056). The terminal is listed under `agent-accounts`, which is no workspace. When it
+  ends, `decide_sign_in` keeps the account only when the check reports `signed_in`, and stores that
+  check's own state and identity. A check that did not finish (`unknown`), or a kind with no check,
+  keeps the account only if its declared files exist, as `unknown`. Any other verdict deletes it.
+  A row that is already gone is left alone, with no event.
+- **Pending and removing accounts**: a pending sign-in refuses removal and activation with
+  `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
+  removing under the gate, so no run starts on it while the sign-out runs.
+- **Check** (`account_check.rs`): it runs with the home variable set and the account commands' stripped
+  names removed (`credentials.strip_env` and `accounts.strip_env`, decision 0059 amendment 2026-11-22), for at most 10 s. Its whole
+  process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
+  output is read for at most one second after that, so a child that keeps the pipes open cannot
+  hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
+  An expired pattern match means `expired`; the signed-in exit means `signed_in`, with the identity
+  pattern's first group as the identity; another exit means `needs_sign_in`; a check that does not
+  finish means `unknown`. A captured identity is kept only when it is at most 256 characters with no
+  control character. A different identity than the recorded one is `conflict`, and the recorded
+  identity stays.
+- **Import** copies the declared files into a new account (origin `import`) and checks it. A check
+  that reports the login is not signed in deletes the new account, and the result is `failed`.
+  `not_found` means none of the declared files is in the source.
+- **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
+  already running) is refused, and the account is marked removing. Outside the gate, the kind's
+  `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
+  is the person's, so the service never signs it out; its files are only deleted. Under the gate
+  again, the home and the row are deleted.
+- **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
+  `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
+  the row and moving the home); moves 0056's home of each kind into an account; adopts an account
+  directory that has no row as `migrated` (active only when its kind has no active account); and
+  decides each sign-in still open. Only a row marked pending (`sign_in_pending`, set when `add`
+  creates it, cleared when the sign-in is kept) is a sign-in still open. A `needs_sign_in` state on
+  an imported or migrated account is only a state: the sweep never discards it. The row is recorded
+  before the move, and its active mark too when the kind has none, so a crash after the move leaves
+  the kind on that account. A move that fails deletes the row again. The reads `agent.kinds`,
+  `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a resume still
+  moves it as a fallback.
+- **No silent fallback** (decision 0059): a kind that has ever had an account (the history record
+  `agent_account_history`, written by a trigger on every insert and kept when the accounts are
+  removed) and has no active account refuses to start with `agent.credentials_invalid`, until an
+  account is activated. Only a kind that never had an account uses the vendor's usual home.
+- **Terminals and restarts**: the service owns its terminals. A graceful stop kills every live
+  terminal (`TerminalManager::shutdown`, called from `service.rs`), and on Windows each terminal's
+  job object kills its processes when the service's handle closes. A restart therefore starts with
+  no sign-in terminal running from the previous service on those paths. On Unix, after a crash, a
+  login process can outlive the service; the sweep decides a sign-in by its files and check and
+  does not wait for that process.
+  resume still moves it as a fallback.
+- **Labels**: at most 256 characters with no control character, refused with
+  `request.invalid_params`. The CLI prints labels and identities without control characters.
+- **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
+  bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
+  publishes nothing.
+- **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
+  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`), `logout` (arguments) and `strip_env`
+  (variable names removed from the check, sign-in and sign-out, in addition to `credentials.strip_env`;
+  agent runs keep their environment). They
+  go to the resolved program and are never run at declaration time. Patterns are compiled with
+  the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
+  on the service, as its programs do; they are not a trust boundary for other users. Only `claude`
+  declares accounts among the built-ins; see "Built-in sign-in commands" below.
+
+Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,
+`agent.usage`, `agent.models`, and the vault environment provider.
+
+## Built-in sign-in commands
+
+A built-in kind gets an `accounts` block only when every command in it is confirmed from a primary
+source (the vendor's documentation, the CLI's own `--help`, or, for Gentle Shell, the owner's
+product source). Confirmed on 2026-11-22; the programs were run only with `--help` and `--version`
+under an empty temporary home.
+
+| Kind | Program | Home variable | Login | Check | Logout |
+| :- | :- | :- | :- | :- | :- |
+| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status`, exit 0 signed in, 1 not (confirmed) | `claude auth logout` (confirmed) |
+| `codex` | `codex` | `CODEX_HOME` (documented for file storage only) | `codex login` exists; not confirmed to honour `CODEX_HOME` | `codex login status` exists; exit code and output not documented | `codex logout` exists; not confirmed to honour `CODEX_HOME` |
+| `antigravity` | `agy` | none; credentials are in the OS keyring | no `login` subcommand; sign-in runs when `agy` is first launched | none; no non-interactive status | `/logout` inside the prompt only |
+| `gentle-shell` | `gentle-shell` | `PI_CODING_AGENT_DIR` (as declared today) | `/login` slash command inside its terminal UI; no command-line form | none | none |
+
+Sources:
+
+- Claude: `code.claude.com/docs/en/authentication` (read 2026-11-22). Browser sign-in, with a code
+  pasted into the terminal when the browser shows one; with `CLAUDE_CONFIG_DIR` set, credentials
+  are kept under that directory on Linux and Windows. `code.claude.com/docs/en/cli-reference` (read
+  2026-11-22): `claude auth status` exits 0 when logged in and 1 when not; its JSON carries
+  `configDirectory` (Claude Code 2.1.268 or later). Local `claude --help` and
+  `claude auth {login,status,logout} --help` on 2.1.268.
+- Codex: `developers.openai.com/codex/auth`, which redirects to `learn.chatgpt.com/docs/auth` (read
+  2026-11-22). Lists `codex login`, `codex login --device-auth`, `codex login status` and
+  `codex logout`; `CODEX_HOME` holds `auth.json` in file storage mode; storage modes are file,
+  keyring, auto and ephemeral. The docs state no exit code or identity for `login status`, and do
+  not say whether the commands honour `CODEX_HOME`. Local `codex --help` and the `login`,
+  `login status` and `logout` helps on 0.159.2.
+- Antigravity: `antigravity.google/docs/install?tab=cli` (read 2026-11-22). Sign-in starts on first
+  launch of `agy`; credentials live in the OS keyring; `/logout` signs out; no status command or
+  credential-home variable is documented. Local `agy --help` on 1.5.11 lists no login or logout
+  subcommand.
+- Gentle Shell: the owner's product source, read in the previous app's repository (read-only). Its
+  sign-in table lists a `/login` slash command for the Gentle Shell runtime (internal id `pi`) with
+  no command-line form, and the credential variable in the launch specs. The binary is not
+  installed on this machine, so it was not run.
+
+Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status"],
+signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `identity_pattern` is
+declared, because neither is documented. Without an `expired_pattern`, an expired login probably
+reads as `needs_sign_in`, not `expired`; this is not verified.
+
+`claude` also declares `accounts.strip_env` (decision 0059, amendment 2026-11-22). The check, the
+sign-out and the sign-in terminal judge the account's home only, so these variables are removed from
+their environment in addition to `credentials.strip_env`. The sign-in terminal can only add variables,
+so it sets them to empty. The list is the authentication inputs in Claude's documentation, read
+2026-11-22:
+
+- `code.claude.com/docs/en/authentication`, "Authentication precedence" and "Anthropic profiles and
+  federation credentials": `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, the provider
+  selectors `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`, and
+  `ANTHROPIC_IDENTITY_TOKEN_FILE`, which the page names as a Workload Identity Federation variable.
+  The page sends the WIF variables to the WIF reference, which was not read.
+- `code.claude.com/docs/en/env-vars`, rows whose description says they supply or select an
+  authentication credential: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_WORKSPACE_ID`,
+  `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `ANTHROPIC_AWS_API_KEY`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY` and
+  `CLAUDE_CODE_CLIENT_KEY_PASSPHRASE`.
+
+Excluded: `CLAUDE_CODE_OAUTH_SCOPES` (a scope list, not a credential), `ANTHROPIC_BASE_URL` and the
+endpoint variables (they route requests, they do not authenticate), and the `CLAUDE_CODE_SKIP_*_AUTH`
+switches. The environment-variable reference page was longer than one fetch: the first fetch covered its
+first 100000 characters, and the rest was searched for the variables above, not read in full.
+
+Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
+may still see a set but empty variable; and the list covers the variables named in the documents read,
+not every variable a future Claude release may read.
+
+## Follow-ups
+
+- Agent sessions (runs) keep the vendor credential variables; whether they strip `accounts.strip_env` is open (decision 0059, amendment 2026-11-22).
 
 ## Security
 

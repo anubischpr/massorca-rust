@@ -3557,6 +3557,7 @@ dependencies = [
 name = "massorca-client"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "interprocess",
  "massorca-net",
  "massorca-profile",
@@ -3581,12 +3582,14 @@ dependencies = [
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "win32job",
 ]
 
 [[package]]
@@ -3706,6 +3709,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "massorca-client",
+ "massorca-core-remote",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
@@ -3733,6 +3737,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "massorca-profile",
  "massorca-protocol",
  "rcgen",
  "ring",
@@ -3744,6 +3749,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
  "x509-parser",
 ]
 

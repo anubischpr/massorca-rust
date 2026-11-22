@@ -367,6 +367,43 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.delegate",
+            "Start a child session for a parent session",
+            "agent.delegate",
+            json!({
+                "type": "object",
+                "required": ["parent", "prompt"],
+                "properties": {
+                    "parent": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "name": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.tree",
+            "Show an agent session's delegation tree",
+            "agent.tree",
+            selector("session"),
+        ),
+        command(
+            "agent.bring-back",
+            "Merge a finished child session back into its parent",
+            "agent.bring_back",
+            json!({
+                "type": "object",
+                "required": ["child"],
+                "properties": {
+                    "child": { "type": "string" },
+                    "merge": { "type": "boolean" },
+                    "prompt": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.attach",
             "Attach to an agent session's terminal",
             "agent.show",
@@ -397,6 +434,79 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "Delete an agent kind's credential home in this profile",
             "agent.credentials.remove",
             selector("kind"),
+        ),
+        command(
+            "agent.accounts.list",
+            "List an agent kind's accounts and their states",
+            "agent.accounts.list",
+            selector("kind"),
+        ),
+        command(
+            "agent.accounts.add",
+            "Sign a new account of an agent kind in",
+            "agent.accounts.add",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.import",
+            "Import an agent kind's login files into a new account",
+            "agent.accounts.import",
+            json!({
+                "type": "object",
+                "required": ["kind", "from"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "from": { "type": "string" },
+                    "label": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.activate",
+            "Make an agent account the active one, or a project's choice",
+            "agent.accounts.activate",
+            json!({
+                "type": "object",
+                "required": ["kind", "account"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.remove",
+            "Delete an agent account",
+            "agent.accounts.remove",
+            json!({
+                "type": "object",
+                "required": ["kind", "account"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.accounts.check",
+            "Check an agent account's sign-in now",
+            "agent.accounts.check",
+            json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
         ),
     ]
 }

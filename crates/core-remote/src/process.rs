@@ -73,9 +73,11 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     find_in_dirs(std::env::split_paths(&path), name)
 }
 
-/// The first executable called `name` among `dirs`, in order.
+/// The first executable called `name` among `dirs`, in order. Empty and relative entries are skipped: they would
+/// resolve against the current directory, which may hold a planted `ssh` or `tailscale`.
 pub(crate) fn find_in_dirs(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Option<PathBuf> {
     dirs.into_iter()
+        .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(name))
         .find(|candidate| is_executable(candidate))
 }
@@ -256,6 +258,35 @@ mod tests {
         assert_eq!(
             find_in_dirs([dir.path().to_owned()], &exe_name("absent-tool")),
             None
+        );
+    }
+
+    #[test]
+    fn empty_and_relative_path_entries_are_skipped() {
+        // A directory under the current one, named relatively, like a `.` or empty PATH entry would be.
+        let dir = tempfile::tempdir_in(".").expect("temp dir in the current directory");
+        let tool = dir.path().join(exe_name("planted-tool"));
+        fs::write(&tool, b"not a real program").expect("write the planted tool");
+        make_executable(&tool);
+        let relative = PathBuf::from(dir.path().file_name().expect("a name"));
+        assert!(
+            relative.join(exe_name("planted-tool")).is_file(),
+            "reachable relatively"
+        );
+        assert_eq!(
+            find_in_dirs(
+                [PathBuf::new(), PathBuf::from("."), relative],
+                &exe_name("planted-tool")
+            ),
+            None
+        );
+        let absolute = std::path::absolute(dir.path()).expect("absolute");
+        assert_eq!(
+            find_in_dirs(
+                [PathBuf::from("."), absolute.clone()],
+                &exe_name("planted-tool")
+            ),
+            Some(absolute.join(exe_name("planted-tool")))
         );
     }
 

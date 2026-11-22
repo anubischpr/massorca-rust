@@ -120,20 +120,26 @@ pub fn execute_with_stdin(command: &mut Command, input: &str) -> Assert {
 /// A temporary home, and the profiles whose services it stops when dropped.
 #[derive(Debug)]
 pub struct Sandbox {
-    home: TempDir,
+    _temp: TempDir,
+    /// A private home below the temporary folder, which may be shared with other users (ADR 0073).
+    home: PathBuf,
     profiles: RefCell<BTreeSet<String>>,
 }
 
 impl Sandbox {
     pub fn new() -> Self {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let home = temp.path().join("home");
+        massorca_profile::create_home(&home).expect("a private home");
         Self {
-            home: tempfile::tempdir().expect("a temporary home"),
+            _temp: temp,
+            home,
             profiles: RefCell::new(BTreeSet::new()),
         }
     }
 
     pub fn home(&self) -> &Path {
-        self.home.path()
+        &self.home
     }
 
     pub fn profile_dir(&self, profile: &str) -> PathBuf {

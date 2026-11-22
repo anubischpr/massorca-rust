@@ -1,5 +1,7 @@
 //! Connecting without a running service: unavailable without autostart, and a start that fails or times out with it.
 
+mod support;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -23,7 +25,7 @@ fn options() -> ConnectOptions {
 
 #[tokio::test]
 async fn without_autostart_nobody_listening_is_unavailable() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let error = Client::connect(&profile(home.path()), options())
         .await
         .expect_err("nothing listens on a fresh profile");
@@ -36,7 +38,7 @@ async fn without_autostart_nobody_listening_is_unavailable() {
 
 #[tokio::test]
 async fn a_missing_executable_fails_to_start_at_once() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let mut options = options();
     options.autostart = Some(Autostart {
         exe: home.path().join("no-such-massorca"),
@@ -63,7 +65,7 @@ async fn a_missing_executable_fails_to_start_at_once() {
 #[tokio::test]
 async fn autostart_gives_up_once_the_connect_timeout_passes() {
     // The test binary stands in for `massorca`: it rejects the `service run` arguments and never listens.
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let mut options = options();
     options.autostart = Some(Autostart {
         exe: std::env::current_exe().expect("the test binary path"),

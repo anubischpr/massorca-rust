@@ -78,6 +78,9 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. The child's title is T, or the first line of TEXT (at most 80 characters). Prints the child. |
+| `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
+| `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
 | `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
 | `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
@@ -88,6 +91,12 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `extension install <SOURCE> [--sha256 HEX] [--yes \| --consent FINGERPRINT] [--yes-run-installer]` | Installs a package. Without `--yes` or `--consent` it prints the review and exits 1 with `extension.consent_required`. `--yes` accepts the review this run prints. `--consent` accepts exactly the review an earlier run printed, by its fingerprint, and fails with `extension.consent_mismatch` if the package or what it would run changed since. A package from a folder or archive that declares a vendor command is refused with `extension.vendor_command_refused`; only the built-in catalogue names one. A package whose agent CLI is missing also needs `--yes-run-installer`, which runs the vendor's official command shown in the review; the review says it installs the current release, unpinned. In an agent's run (`MASSORCA_AGENT_SESSION` or `MASSORCA_AGENT_TOKEN` set) `--yes-run-installer` is refused with `extension.needs_person`: a person runs the command. `file:` needs `--sha256`. Never prompts. |
 | `extension enable <ID>` / `extension disable <ID>` | Registers or unregisters the package's contributions. Files and data stay. While an install or removal of the package runs, either is refused with `extension.busy`. |
 | `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
+| `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
+| `agent accounts add <KIND> [--label L] [--no-attach]` | Signs a new account in: runs the kind's login in a service-owned terminal, prints the account and the terminal, then attaches to it unless `--no-attach`. Refused with `--json` unless `--no-attach`. Built-in sign-in is declared for `claude` only (`claude auth login`); a kind without a sign-in is refused with `agent.credentials_unsupported`, which says to sign in from the vendor's CLI, then import the login. |
+| `agent accounts import <KIND> --from <DIR> [--label L]` | Copies the kind's declared login files from `DIR` into a new account, then checks it. Prints `imported`, `failed` (with the reason) or `not_found`. Names and sizes only. |
+| `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
+| `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
+| `agent accounts check <KIND> [<ACCOUNT>]` | Runs the kind's check on an account, or on the active one, and prints its state. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
 which must be an absolute path.
@@ -200,6 +209,43 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent accounts` (decision 0059) keeps several credential homes per kind, one of them
+  active. A run uses the project's choice, else the active account, else the agent's usual
+  home. `agent credentials` (0056) still works and acts on the active account; it is
+  deprecated in favour of `agent accounts`. The first account of a kind made from an
+  existing 0056 home is named `default`, state `migrated`, and is moved, not copied.
+  A kind has accounts only when its declaration sets `accounts.login`; the four built-in
+  kinds do not, until their real login commands are verified.
+- `agent delegate --prompt TEXT` starts a child session of the `--from` session (decision
+  0055). Inside an agent run `--from` defaults to the run's own session, and the run's
+  `MASSORCA_AGENT_TOKEN` always goes with the call, whatever session `--from` names; a token
+  that is not the parent run's fails with `agent.hook_refused`, so a child cannot delegate as
+  its parent. The kind is the parent's unless `--kind` names another. A writing
+  child gets a new workspace in the parent's project, named `--name` or `<parent
+  workspace>-<n>` with the first free `n`, on a branch of that name based on the parent
+  workspace's branch; it starts from that branch's last commit, so uncommitted changes in the
+  parent are not carried over, and the result's `note` says so. A parent in a folder workspace
+  fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
+  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  cannot delegate: `agent.depth_exceeded`.
+- `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
+  and the root's children, oldest first, with their execution and activity. `--json` prints
+  `{ root, children }` with each session's result text.
+- `agent bring-back CHILD` needs a child whose run has exited, or whose last turn is `done`;
+  otherwise it fails with `agent.busy`. Inside an agent run the run's token goes with the call
+  and must be the child's parent's, so a child cannot bring itself back (`agent.hook_refused`). When the child has a workspace of its own, its branch
+  is merged into the parent's worktree with `git merge --no-ff --no-edit`, unless
+  `--no-merge`: the parent must not be `working` (`agent.parent_busy`), no other session may
+  write in its workspace (`agent.workspace_busy`), and its worktree must be clean with no
+  rebase or merge stopped in it (`agent.parent_dirty`). While the merge runs, a start in that
+  workspace and any prompt to its sessions, even with `--force`, fail with `agent.busy`. A merge that stops on conflicts is aborted, the parent is
+  left as it was, and the call fails with `agent.merge_conflict`, the conflicting paths in
+  the error's `data.paths`. Unless `--no-prompt`, a live parent run then gets one prompt, by
+  the `agent prompt` rules without `--force`, naming the child, the merge commit and the
+  child's result on one line. A prompt the parent cannot take does not fail the call: the
+  result says `prompt delivered: no` with a note. The child is marked brought back; a second
+  bring-back fails with `agent.already_brought_back`. The child's workspace is kept, and
+  nothing is ever pushed.
 - `agent credentials import KIND --from DIR` copies only the files the kind declares
   (`credentials.files`) into `<profile>/agents/homes/<KIND>/`; from then on every run of the
   kind in the profile gets the kind's home variable pointing there (decision 0056). Every

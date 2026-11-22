@@ -34,6 +34,10 @@ pub struct SecretStatus {
     pub state: String,
     /// Owned secrets.
     pub count: u64,
+    /// Stored names that differ only by case and that one process would receive together, as
+    /// `<name> in <scope>, <name> in <scope>`; injection refuses them with `secret.name_clash`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_clashes: Vec<String>,
 }
 
 /// Params of `secret.list`.
@@ -127,13 +131,32 @@ pub struct SecretRemoved {
 }
 
 /// Params of `secret.request`. Name and reason are untrusted text and are validated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretRequestParams {
     pub scope: String,
     pub name: String,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The run token of agent session `session` (`MASSORCA_AGENT_TOKEN`): when it matches a live run, the request
+    /// counts against that agent's own quota instead of the connection's. `Debug` never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+impl fmt::Debug for SecretRequestParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretRequestParams")
+            .field("scope", &self.scope)
+            .field("name", &self.name)
+            .field("reason", &self.reason)
+            .field("session", &self.session)
+            .field(
+                "agent_token",
+                &self.agent_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 /// Params of `secret.requests`.

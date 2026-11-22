@@ -11,7 +11,7 @@ use tokio::runtime::Builder;
 
 use crate::agent;
 use crate::agent_hook;
-use crate::args::{Cli, Commands, PairCommand, ServerCommand, ServiceCommand};
+use crate::args::{Cli, Commands, PairCommand, ProfileCommand, ServerCommand, ServiceCommand};
 use crate::config;
 use crate::device;
 use crate::error::CliError;
@@ -19,6 +19,7 @@ use crate::extension;
 use crate::host;
 use crate::output::{self, Output};
 use crate::pair;
+use crate::profile_secure;
 use crate::project;
 use crate::server_status;
 use crate::service::{control, foreground, unit};
@@ -106,6 +107,12 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Terminal { command } => {
             let target = globals.target()?;
             block_on(terminal::execute(&target, autostart, command, output, json))
+        }
+        Commands::Profile {
+            command: ProfileCommand::Secure(args),
+        } => {
+            globals.local_only("profile secure")?;
+            profile_secure::run(&globals.profile()?, &args, output)
         }
         Commands::Pair { command } => pair_command(&globals, command, output),
         Commands::Device { command } => {

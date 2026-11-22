@@ -5,8 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use massorca_core_remote::bootstrap::{
-    BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_OFFER_TTL_SECS, DEFAULT_REMOTE_DIR,
-    bootstrap, uninstall, validate_listen,
+    BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_LISTEN, DEFAULT_OFFER_TTL_SECS,
+    DEFAULT_REMOTE_DIR, bootstrap, uninstall, validate_listen,
 };
 use massorca_core_remote::ssh::{RemoteOutput, RemoteShell, SshError};
 use tempfile::TempDir;
@@ -136,6 +136,21 @@ fn run(
 fn defaults_match_the_decision() {
     assert_eq!(DEFAULT_REMOTE_DIR, "~/.massorca");
     assert_eq!(DEFAULT_OFFER_TTL_SECS, 120);
+    assert_eq!(DEFAULT_LISTEN, "tailscale");
+}
+
+#[test]
+fn the_ssh_host_plan_takes_the_default_directory_offer_lifetime_and_listen() {
+    let plan = BootstrapPlan::for_ssh_host(
+        PathBuf::from("massorca"),
+        vec![DEFAULT_LISTEN.to_owned()],
+        "laptop".to_owned(),
+    );
+    assert_eq!(plan.binary, PathBuf::from("massorca"));
+    assert_eq!(plan.listen, vec!["tailscale".to_owned()]);
+    assert_eq!(plan.remote_dir, DEFAULT_REMOTE_DIR);
+    assert_eq!(plan.device_name, "laptop");
+    assert_eq!(plan.offer_ttl_secs, DEFAULT_OFFER_TTL_SECS);
 }
 
 #[test]

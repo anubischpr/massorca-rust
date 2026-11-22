@@ -36,6 +36,7 @@ pub fn init_service_logging(profile: &Profile, to_stderr: bool) -> Result<Worker
         to_stderr.then(|| fmt::layer().with_writer(std::io::stderr).with_ansi(false));
     tracing_subscriber::registry()
         .with(filter)
+        .with(massorca_net::frame_dump_guard())
         .with(fmt::layer().with_writer(writer).with_ansi(false))
         .with(stderr_layer)
         .try_init()

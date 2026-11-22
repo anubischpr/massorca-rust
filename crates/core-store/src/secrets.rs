@@ -267,19 +267,34 @@ impl Store {
         )
     }
 
-    /// Pending requests `requester` made for `scope` from `session`, or from no session.
+    /// Pending requests `requester` made for `scope`, from any session.
     pub fn count_pending_secret_requests(
         &self,
         scope: &str,
         requester: &str,
-        session: Option<&str>,
     ) -> Result<u64, StoreError> {
         let count: i64 = self.lock().query_row(
-            "SELECT COUNT(*) FROM secret_requests              WHERE scope = ?1 AND requester = ?2 AND session IS ?3 AND state = 'pending'",
-            params![scope, requester, session],
+            "SELECT COUNT(*) FROM secret_requests \
+             WHERE scope = ?1 AND requester = ?2 AND state = 'pending'",
+            params![scope, requester],
             |row| row.get(0),
         )?;
         Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    /// Deletes answered requests resolved before `answered_before` and pending ones created before
+    /// `pending_before` (both ms), and returns how many went.
+    pub fn prune_secret_requests(
+        &self,
+        answered_before: i64,
+        pending_before: i64,
+    ) -> Result<u64, StoreError> {
+        let deleted = self.lock().execute(
+            "DELETE FROM secret_requests \
+             WHERE (state <> 'pending' AND resolved_at < ?1) OR (state = 'pending' AND created_at < ?2)",
+            params![answered_before, pending_before],
+        )?;
+        Ok(u64::try_from(deleted).unwrap_or(0))
     }
 
     /// Requests `requester` made at or after `since` (ms), in any scope and state.

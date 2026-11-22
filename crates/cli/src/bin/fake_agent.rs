@@ -11,6 +11,8 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
@@ -27,11 +29,41 @@ const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
+/// Set to `1`, start prints `home <directory name>` (decision 0059): the account tests use it, other runs print nothing
+/// extra.
+const PRINT_HOME_ENV: &str = "FAKE_AGENT_PRINT_HOME";
+/// Set to `1`, `login` exits 1 without writing the token (decision 0059).
+const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
+/// Set to `1`, `login` never finishes (decision 0059): the sign-in terminal stays open.
+const LOGIN_HANG_ENV: &str = "FAKE_AGENT_LOGIN_HANG";
+/// Set to `1`, `login` writes an expired token, so the check that follows reports expired.
+const LOGIN_EXPIRED_ENV: &str = "FAKE_AGENT_LOGIN_EXPIRED";
+/// Names a file that `logout` writes outside the home, so a test can see that the sign-out ran.
+const LOGOUT_MARKER_ENV: &str = "FAKE_AGENT_LOGOUT_MARKER";
+/// The token `login` writes when it is told to expire it.
+const EXPIRED_LOGIN_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
+/// What `login` writes into the token file.
+const FAKE_LOGIN_TOKEN: &str = r#"{"fake":true}"#;
+/// A token containing this is expired: `whoami` then reports `expired`.
+const EXPIRED_MARK: &str = r#""expired":true"#;
+/// A token containing this is unreachable: `whoami` exits 2 without the word `expired`, as a check that cannot reach its vendor.
+const OFFLINE_MARK: &str = r#""offline":true"#;
+/// The identity `whoami` reports for a token that names none.
+const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
 
 fn main() -> ExitCode {
+    // The sign-in and check of an account (decision 0059) are subcommands: `login` and `whoami`, run in the account home.
+    match env::args().nth(1).as_deref() {
+        Some("login") => return login(),
+        Some("whoami") => return whoami(),
+        Some("logout") => return logout(),
+        Some("hang") => return hang(),
+        Some("hang-child") => return hang_child(),
+        _ => {}
+    }
     let arguments = Arguments::parse(env::args().skip(1));
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
@@ -127,6 +159,9 @@ impl Agent {
         } else {
             "credentials missing"
         });
+        if env::var_os(PRINT_HOME_ENV).is_some_and(|value| value == "1") {
+            say(&format!("home {}", home_name()));
+        }
         for name in probed_env() {
             say(&format!("env {name} {}", env_state(&name)));
         }
@@ -255,6 +290,101 @@ fn credentials_found() -> bool {
         .is_some_and(|home| Path::new(&home).join(CREDENTIAL_FILE).is_file())
 }
 
+/// The sign-in: writes the fake token into the credential home and exits 0; with `FAKE_AGENT_LOGIN_FAIL=1` it exits 1
+/// without writing.
+fn login() -> ExitCode {
+    if env::var_os(LOGIN_FAIL_ENV).is_some_and(|value| value == "1") {
+        say("login failed");
+        return ExitCode::from(1);
+    }
+    if env::var_os(LOGIN_HANG_ENV).is_some_and(|value| value == "1") {
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
+    let Some(home) = credential_home() else {
+        say("no credential home");
+        return ExitCode::from(1);
+    };
+    let token = if env::var_os(LOGIN_EXPIRED_ENV).is_some_and(|value| value == "1") {
+        EXPIRED_LOGIN_TOKEN
+    } else {
+        FAKE_LOGIN_TOKEN
+    };
+    match fs::write(home.join(CREDENTIAL_FILE), token) {
+        Ok(()) => {
+            say("signed in");
+            ExitCode::SUCCESS
+        }
+        Err(_) => {
+            say("login failed");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// A credential the vendor would read from the environment (an API key or token). When `FAKE_AGENT_AMBIENT_TOKEN` is
+/// set and not empty, the check reports signed in whatever the home holds.
+const AMBIENT_TOKEN_ENV: &str = "FAKE_AGENT_AMBIENT_TOKEN";
+const AMBIENT_IDENTITY: &str = "ambient@example.com";
+
+/// The check: prints `signed in as <identity>` and exits 0 when the token exists and is not expired; otherwise prints
+/// `expired` and exits 1. A token's `email` names its identity; the default identity is used otherwise.
+fn whoami() -> ExitCode {
+    if env::var_os(AMBIENT_TOKEN_ENV).is_some_and(|value| !value.is_empty()) {
+        let _ = writeln!(io::stdout().lock(), "signed in as {AMBIENT_IDENTITY}");
+        return ExitCode::SUCCESS;
+    }
+    let token =
+        credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
+    match token {
+        Some(text) if text.contains(OFFLINE_MARK) => {
+            let _ = writeln!(io::stdout().lock(), "unreachable");
+            ExitCode::from(2)
+        }
+        Some(text) if !text.contains(EXPIRED_MARK) => {
+            let identity = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
+            let _ = writeln!(io::stdout().lock(), "signed in as {identity}");
+            ExitCode::SUCCESS
+        }
+        Some(_) => {
+            let _ = writeln!(io::stdout().lock(), "expired");
+            ExitCode::from(1)
+        }
+        // No token at all: a home with nothing in it is not signed in, and is not an expired login.
+        None => {
+            let _ = writeln!(io::stdout().lock(), "not signed in");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// The credential home, when the variable names one.
+fn credential_home() -> Option<PathBuf> {
+    env::var_os(CREDENTIAL_HOME_ENV)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The directory name of the credential home: an account id, never a path. `none` when there is no home.
+fn home_name() -> String {
+    credential_home()
+        .and_then(|home| {
+            home.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+/// The value of the `email` field of a token, when it has one.
+fn email_of(text: &str) -> Option<String> {
+    text.split("\"email\":\"")
+        .nth(1)?
+        .split('"')
+        .next()
+        .map(str::to_owned)
+}
+
 /// The names listed in `FAKE_AGENT_PROBE_ENV`.
 fn probed_env() -> Vec<String> {
     env::var(PROBE_ENV)
@@ -296,4 +426,34 @@ fn clean(line: &str) -> String {
         .replace("\x1b[201~", "")
         .trim()
         .to_owned()
+}
+
+/// The sign-out (decision 0059): writes the marker `FAKE_AGENT_LOGOUT_MARKER` names, outside the home, and leaves the
+/// token alone. Without a marker it does nothing.
+fn logout() -> ExitCode {
+    if let Some(marker) = env::var_os(LOGOUT_MARKER_ENV).filter(|path| !path.is_empty())
+        && fs::write(&marker, "logged out\n").is_err()
+    {
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+/// A check that never finishes: it starts a child that inherits the same output pipes, and both sleep. A stopped check
+/// must take its child with it, or the pipes stay open and its output is never read to the end.
+fn hang() -> ExitCode {
+    if let Ok(me) = env::current_exe() {
+        let _ = Command::new(me)
+            .arg("hang-child")
+            .stdin(Stdio::null())
+            .spawn();
+    }
+    hang_child()
+}
+
+/// The sleeping half of [`hang`].
+fn hang_child() -> ExitCode {
+    loop {
+        thread::sleep(Duration::from_secs(3600));
+    }
 }
