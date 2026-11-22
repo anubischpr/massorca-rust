@@ -30,7 +30,7 @@ pub use projects::{ProjectKind, ProjectRow};
 pub use secret_key_check::SecretKeyCheck;
 pub use secrets::{SecretLinkRow, SecretMeta, SecretRequestRow, SecretRow};
 pub use store::Store;
-pub use tasks::{TaskOrigin, TaskOutcome, TaskRow};
+pub use tasks::{TaskDetails, TaskOrigin, TaskOutcome, TaskRow};
 pub use team_projects::TeamProjectRow;
 pub use teams::TeamRow;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};

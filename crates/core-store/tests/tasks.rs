@@ -1,8 +1,8 @@
 //! Tasks: the rows, their links to a team, bot and project, and what a removal of those does to them.
 
 use massorca_core_store::{
-    BotRow, Store, StoreError, TaskOrigin, TaskOutcome, TaskRow, TeamProjectRow, TeamRow, new_id,
-    now_ms,
+    BotRow, Store, StoreError, TaskDetails, TaskOrigin, TaskOutcome, TaskRow, TeamProjectRow,
+    TeamRow, new_id, now_ms,
 };
 
 fn store() -> Store {
@@ -297,4 +297,146 @@ fn a_start_error_is_recorded_and_a_session_link_clears_it_once() {
     assert_eq!(kept.error, None);
 
     assert!(!store.link_task_session("missing", "session-3", 50).unwrap());
+}
+
+#[test]
+fn a_details_update_never_touches_the_session_outcome_or_error() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let mara = bot_row(&team.id, "mara");
+    store.insert_bot(&mara).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    // A start links the session after the update read the row.
+    assert!(store.link_task_session(&row.id, "session-1", 20).unwrap());
+
+    assert!(
+        store
+            .update_task_details(
+                &row.id,
+                &TaskDetails {
+                    bot: Some(Some(&mara.id)),
+                    title: Some("parse the body"),
+                    body: Some("all of it"),
+                    ..TaskDetails::default()
+                },
+                30
+            )
+            .unwrap()
+    );
+
+    let found = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(found.session_id.as_deref(), Some("session-1"));
+    assert_eq!(found.title, "parse the body");
+    assert_eq!(found.body, "all of it");
+    assert_eq!(found.bot_id.as_deref(), Some(mara.id.as_str()));
+    assert_eq!(found.updated_at, 30);
+    // A title-only update leaves the bot another call set after it read the row.
+    assert!(
+        store
+            .update_task_details(
+                &row.id,
+                &TaskDetails {
+                    title: Some("parse again"),
+                    ..TaskDetails::default()
+                },
+                35
+            )
+            .unwrap()
+    );
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.title, "parse again");
+    assert_eq!(kept.body, "all of it");
+    assert_eq!(kept.bot_id.as_deref(), Some(mara.id.as_str()));
+    assert!(
+        !store
+            .update_task_details(
+                "missing",
+                &TaskDetails {
+                    title: Some("gone"),
+                    ..TaskDetails::default()
+                },
+                40
+            )
+            .unwrap()
+    );
+}
+
+#[test]
+fn done_and_reopen_are_refused_when_the_session_changed_since_it_was_read() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert!(store.link_task_session(&row.id, "session-1", 20).unwrap());
+
+    // Both calls read the task before the link: no session.
+    assert!(
+        !store
+            .set_task_outcome(&row.id, TaskOutcome::Success, None, 30)
+            .unwrap()
+    );
+    assert!(!store.reopen_task(&row.id, None, 30).unwrap());
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.session_id.as_deref(), Some("session-1"));
+    assert_eq!(kept.outcome, None);
+
+    assert!(
+        store
+            .set_task_outcome(&row.id, TaskOutcome::Success, Some("session-1"), 40)
+            .unwrap()
+    );
+    assert_eq!(
+        store.get_task(&row.id).unwrap().expect("task").outcome,
+        Some(TaskOutcome::Success)
+    );
+    assert!(store.reopen_task(&row.id, Some("session-1"), 50).unwrap());
+    let reopened = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!((reopened.session_id, reopened.outcome), (None, None));
+    assert_eq!(reopened.updated_at, 50);
+}
+
+#[test]
+fn a_start_attempt_is_set_once_reused_and_cleared_when_settled() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+
+    let first = store
+        .begin_task_start_attempt(&row.id, "attempt-1")
+        .unwrap();
+    assert_eq!(first.as_deref(), Some("attempt-1"));
+    // A failed start that left a live run keeps the attempt, and a recorded error does not change it.
+    assert!(
+        store
+            .set_task_start_error(&row.id, "internal", "link failed", 20)
+            .unwrap()
+    );
+    let retry = store
+        .begin_task_start_attempt(&row.id, "attempt-2")
+        .unwrap();
+    assert_eq!(retry.as_deref(), Some("attempt-1"));
+
+    // Settled without a live run: only the attempt it names is cleared.
+    assert!(!store.end_task_start_attempt(&row.id, "attempt-2").unwrap());
+    assert!(store.end_task_start_attempt(&row.id, "attempt-1").unwrap());
+    let next = store
+        .begin_task_start_attempt(&row.id, "attempt-3")
+        .unwrap();
+    assert_eq!(next.as_deref(), Some("attempt-3"));
+
+    // A link settles the attempt too.
+    assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
+    assert!(!store.end_task_start_attempt(&row.id, "attempt-3").unwrap());
+
+    assert_eq!(
+        store
+            .begin_task_start_attempt("missing", "attempt-4")
+            .unwrap(),
+        None
+    );
 }
