@@ -3367,6 +3367,7 @@ dependencies = [
  "embed-resource",
  "gpui",
  "gpui_platform",
+ "image",
  "massorca-client",
  "massorca-profile",
  "massorca-protocol",
