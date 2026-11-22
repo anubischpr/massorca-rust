@@ -295,12 +295,15 @@ impl Extensions {
                             installer: Some(command.clone()),
                         }
                     };
-                    let verified = self
-                        .runner
-                        .run(&cli.verify, &log, INSTALLER_TIMEOUT)
-                        .map_err(|error| unverified(error.to_string()))?;
-                    if !verified.success() {
-                        return Err(unverified(describe(verified)));
+                    // Without a verify command the install succeeds when the binary resolves.
+                    if let Some(verify) = &cli.verify {
+                        let verified = self
+                            .runner
+                            .run(verify, &log, INSTALLER_TIMEOUT)
+                            .map_err(|error| unverified(error.to_string()))?;
+                        if !verified.success() {
+                            return Err(unverified(describe(verified)));
+                        }
                     }
                     if self.resolver.resolve(&cli.binary).is_none() {
                         return Err(unverified(format!("`{}` does not resolve", cli.binary)));

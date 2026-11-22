@@ -295,8 +295,17 @@ pub struct AgentItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CliSpec {
     pub binary: String,
-    pub verify: Vec<String>,
+    /// Absent when the vendor documents no check: the install then needs only the binary to resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Vec<String>>,
     pub source: String,
+    /// The day the vendor docs were read, `YYYY-MM-DD`.
+    #[serde(
+        default,
+        rename = "sourceChecked",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub source_checked: Option<String>,
     #[serde(default)]
     pub install: Vec<CliStep>,
     #[serde(default)]

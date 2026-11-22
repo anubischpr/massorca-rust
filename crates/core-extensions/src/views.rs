@@ -192,8 +192,10 @@ fn category_name(category: Category) -> &'static str {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CliSpec {
     pub binary: String,
-    pub verify: Vec<String>,
+    /// `None` when the vendor documents no check; the install then needs only the binary to resolve.
+    pub verify: Option<Vec<String>>,
     pub source: String,
+    pub source_checked: Option<String>,
     pub install: Vec<CliStepView>,
     pub uninstall: Vec<CliStepView>,
 }
@@ -219,6 +221,7 @@ impl CliSpec {
             binary: cli.binary.clone(),
             verify: cli.verify.clone(),
             source: cli.source.clone(),
+            source_checked: cli.source_checked.clone(),
             install: steps(&cli.install),
             uninstall: steps(&cli.uninstall),
         }

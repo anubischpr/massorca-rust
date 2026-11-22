@@ -181,3 +181,42 @@ fn the_same_package_or_agent_kind_cannot_be_installed_twice() {
     let conflict = s.install(&other, false).expect_err("kind conflict");
     assert_eq!(conflict.code(), codes::KIND_CONFLICT);
 }
+
+/// The agent package with its `verify` command removed, as a vendor that documents no check is declared.
+fn without_verify(name: &str) -> serde_json::Value {
+    let mut manifest = agent_package("acme", name, name);
+    manifest["contributes"]["agentAdapters"][0]["cli"]
+        .as_object_mut()
+        .expect("the cli block")
+        .remove("verify");
+    manifest
+}
+
+#[test]
+fn without_a_verify_command_an_installer_that_leaves_the_binary_registers() {
+    let s = setup(FakeHost::new());
+    let source = s.package_dir("kit", &without_verify("kit"));
+
+    s.install(&source, true).expect("installs");
+
+    let runs = s.host.runs();
+    assert!(
+        runs.iter()
+            .all(|argv| argv.get(1).map(String::as_str) != Some("--version")),
+        "no verify command runs: {runs:?}"
+    );
+    assert!(s.lock_json().is_some());
+}
+
+#[test]
+fn without_a_verify_command_an_installer_that_leaves_no_binary_fails_and_installs_nothing() {
+    let s = setup(FakeHost::new().without_binary());
+    let source = s.package_dir("kit", &without_verify("kit"));
+
+    let error = s
+        .install(&source, true)
+        .expect_err("the binary does not resolve");
+
+    assert_eq!(error.code(), codes::VERIFY_FAILED);
+    assert!(s.lock_json().is_none(), "nothing is registered");
+}
