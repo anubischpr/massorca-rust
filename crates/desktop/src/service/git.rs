@@ -172,8 +172,9 @@ fn mutate<T, Fut>(
     let updates = updates.clone();
     tokio::spawn(async move {
         let result = call(client.clone()).await;
-        refresh(&client, &updates, &workspace, history).await;
+        // The answer goes first: a slow status read must not keep the caller waiting for it.
         let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        refresh(&client, &updates, &workspace, history).await;
     });
 }
 
