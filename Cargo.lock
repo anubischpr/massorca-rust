@@ -3536,6 +3536,7 @@ dependencies = [
  "chacha20poly1305",
  "getrandom 0.4.3",
  "libc",
+ "massorca-core-store",
  "oo7 0.7.3",
  "tempfile",
  "thiserror 2.0.21",
