@@ -16,8 +16,9 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR,
+    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
 };
+use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 
 use crate::windows_endpoint_access::{current_user_sid, wide_to_string};
 
@@ -30,12 +31,69 @@ pub fn owner_only_dir_sddl() -> io::Result<String> {
     ))
 }
 
-/// Replaces `dir`'s DACL with [`owner_only_dir_sddl`] and cuts inheritance from its parent. Call it on a new, empty
-/// directory before anything is written in it, so every child inherits the owner-only entries.
-pub fn restrict_dir_to_owner(dir: &Path) -> io::Result<()> {
+/// The descriptor of [`owner_only_dir_sddl`].
+fn owner_only_dir_descriptor() -> io::Result<SecurityDescriptor> {
     let sddl = U16CString::from_str(owner_only_dir_sddl()?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let descriptor = SecurityDescriptor::deserialize(&sddl)?;
+    SecurityDescriptor::deserialize(&sddl)
+}
+
+/// Creates `dir` with the owner-only DACL of [`owner_only_dir_sddl`] from its first moment, so no other user ever has
+/// access to it. Fails with `AlreadyExists` when anything is at the path, a link or junction included, which is never
+/// followed.
+pub fn create_dir_owner_only(dir: &Path) -> io::Result<()> {
+    let descriptor = owner_only_dir_descriptor()?;
+    let name = wide_path(dir)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.borrow().as_sd().cast_mut(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: `name` is a NUL-terminated path, and `attributes` points at `descriptor`; both outlive the call, which
+    // only reads them.
+    if unsafe { CreateDirectoryW(name.as_ptr(), &attributes) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Whether `path`'s DACL is protected and grants only the current user and SYSTEM, with no inherited entry: what
+/// [`create_dir_owner_only`] and [`restrict_dir_to_owner`] set.
+pub fn has_owner_only_dacl(path: &Path) -> io::Result<bool> {
+    Ok(is_owner_only_sddl(&dacl_sddl(path)?, &current_user_sid()?))
+}
+
+fn is_owner_only_sddl(sddl: &str, user_sid: &str) -> bool {
+    // `D:`, then the DACL's control flags (`P` protected, `AI`/`AR` auto-inherit), then the ACEs.
+    let Some(rest) = sddl.strip_prefix("D:") else {
+        return false;
+    };
+    let Some(open) = rest.find('(') else {
+        return false;
+    };
+    let (flags, aces) = rest.split_at(open);
+    if !flags.contains('P') {
+        return false;
+    }
+    let Some(aces) = aces
+        .strip_prefix('(')
+        .and_then(|aces| aces.strip_suffix(')'))
+    else {
+        return false;
+    };
+    aces.split(")(").all(|ace| {
+        let fields: Vec<&str> = ace.split(';').collect();
+        fields.len() == 6
+            && fields[0] == "A"
+            && !fields[1].contains("ID")
+            && (fields[5] == user_sid || fields[5] == "SY")
+    })
+}
+
+/// Replaces `dir`'s DACL with [`owner_only_dir_sddl`] and cuts inheritance from its parent; children that inherit
+/// get the owner-only entries. A directory made with [`create_dir_owner_only`] needs no call to this.
+pub fn restrict_dir_to_owner(dir: &Path) -> io::Result<()> {
+    let descriptor = owner_only_dir_descriptor()?;
     let mut present = 0;
     let mut acl: *mut ACL = ptr::null_mut();
     let mut defaulted = 0;
@@ -127,8 +185,53 @@ fn wide_path(path: &Path) -> io::Result<U16CString> {
 
 #[cfg(test)]
 mod tests {
-    use super::{dacl_sddl, owner_only_dir_sddl, restrict_dir_to_owner};
+    use super::{
+        create_dir_owner_only, dacl_sddl, has_owner_only_dacl, is_owner_only_sddl,
+        owner_only_dir_sddl, restrict_dir_to_owner,
+    };
     use crate::windows_endpoint_access::current_user_sid;
+
+    #[test]
+    fn a_directory_created_owner_only_is_protected_from_its_first_moment() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("secret");
+        create_dir_owner_only(&dir).unwrap();
+        assert!(
+            has_owner_only_dacl(&dir).unwrap(),
+            "{}",
+            dacl_sddl(&dir).unwrap()
+        );
+        std::fs::write(dir.join("file"), b"fake").unwrap();
+        let file = dacl_sddl(&dir.join("file")).unwrap();
+        for other in [";AU)", ";BU)", ";WD)", ";BA)"] {
+            assert!(!file.contains(other), "{file}");
+        }
+        let again = create_dir_owner_only(&dir).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!has_owner_only_dacl(parent.path()).unwrap());
+    }
+
+    #[test]
+    fn only_a_protected_dacl_for_the_user_and_system_counts_as_owner_only() {
+        let sid = "S-1-5-21-1-2-3-1001";
+        assert!(is_owner_only_sddl(
+            &format!("D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)"),
+            sid
+        ));
+        assert!(is_owner_only_sddl(
+            &format!("D:PAI(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)"),
+            sid
+        ));
+        for sddl in [
+            format!("D:(A;OICI;FA;;;{sid})"),
+            format!("D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;AU)"),
+            format!("D:P(A;OICIID;FA;;;{sid})"),
+            "D:P(A;OICI;FA;;;S-1-5-21-9-9-9-1005)".to_owned(),
+            format!("D:AI(A;OICI;FA;;;{sid})"),
+        ] {
+            assert!(!is_owner_only_sddl(&sddl, sid), "{sddl}");
+        }
+    }
 
     #[test]
     fn a_restricted_directory_has_a_protected_dacl_for_the_owner_and_system_only() {

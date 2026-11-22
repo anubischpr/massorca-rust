@@ -18,7 +18,10 @@ pub use profile::{Profile, ensure_dir};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
-pub use windows_dir_access::{dacl_sddl, owner_only_dir_sddl, restrict_dir_to_owner};
+pub use windows_dir_access::{
+    create_dir_owner_only, dacl_sddl, has_owner_only_dacl, owner_only_dir_sddl,
+    restrict_dir_to_owner,
+};
 #[cfg(windows)]
 pub use windows_endpoint_access::{
     owner_only_sddl, owner_only_security_descriptor, process_belongs_to_current_user,
