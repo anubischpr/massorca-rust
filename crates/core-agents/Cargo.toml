@@ -24,6 +24,7 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 massorca-profile.workspace = true
+win32job.workspace = true
 
 [dev-dependencies]
 massorca-core-git.workspace = true
