@@ -24,7 +24,7 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams, Execution,
-    MAX_HOOK_PAYLOAD_BYTES,
+    MAX_HOOK_PAYLOAD_BYTES, PromptReceipt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -33,8 +33,10 @@ use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
+use crate::kind::{KindDecl, PasteMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, Run};
 use crate::paths;
+use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
@@ -188,6 +190,27 @@ struct Inner {
 struct LiveRun {
     token: String,
     rules: HookRules,
+    /// How a prompt is typed into the run (0054).
+    prompt: PromptRules,
+}
+
+/// What a prompt needs from its run's kind, copied when the run starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptRules {
+    /// The kind reports activity, so a prompt waits for `idle` or `done`; without a mechanism every prompt is ready.
+    has_status: bool,
+    paste: PasteMode,
+    submit: String,
+}
+
+impl PromptRules {
+    fn of(decl: &KindDecl) -> Self {
+        Self {
+            has_status: decl.status.mechanism != StatusMechanism::None,
+            paste: decl.prompt.paste,
+            submit: decl.prompt.submit.clone(),
+        }
+    }
 }
 
 type LiveRuns = HashMap<String, LiveRun>;
@@ -310,6 +333,7 @@ impl Agents {
             LiveRun {
                 token,
                 rules: HookRules::of(&decl),
+                prompt: PromptRules::of(&decl),
             },
         );
         let started = write_files(&plan.files)
@@ -418,6 +442,56 @@ impl Agents {
         let session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session)));
         Ok(())
+    }
+
+    /// Types a prompt into a live run's terminal (0054): the text, then the kind's submit sequence. The text is refused
+    /// over the size limit or with a NUL. Unless `force` is set, the run must be ready (see [`prompt::ready`]). The
+    /// receipt counts the bytes written; it never says the agent read them.
+    pub fn prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+    ) -> Result<PromptReceipt, AgentError> {
+        launch::check_prompt(text)?;
+        let row = self.resolve(selector)?;
+        // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
+        // wait for the agent to read, and the agent's own hook reports need the lock to return.
+        let (session_id, terminal, bytes) = {
+            let mut live = lock(&self.inner.status);
+            let row = self.reload(&row.id)?;
+            let session = self.view_with(&mut live, row)?;
+            let Some(run) = live.get(&session.id) else {
+                return Err(not_live(&session.id));
+            };
+            let state = session.activity.as_ref().map(|activity| activity.state);
+            if !force && !prompt::ready(run.prompt.has_status, state) {
+                return Err(AgentError::new(
+                    codes::AGENT_BUSY,
+                    format!(
+                        "session {} is not ready for a prompt: wait for it to be idle or done, or use force",
+                        session.id
+                    ),
+                ));
+            }
+            let bytes = prompt::input_bytes(text, run.prompt.paste, &run.prompt.submit);
+            let Some(terminal) = session.terminal_id.clone() else {
+                return Err(not_live(&session.id));
+            };
+            (session.id.clone(), terminal, bytes)
+        };
+        self.inner
+            .config
+            .terminals
+            .input(&terminal, &bytes)
+            .map_err(|error| match error {
+                TerminalError::Exited | TerminalError::NotFound => not_live(&session_id),
+                other => AgentError::from(other),
+            })?;
+        Ok(PromptReceipt {
+            receipt: ReceiptKind::HandedToTerminal,
+            bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        })
     }
 
     /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
@@ -689,6 +763,14 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
     }
 }
 
+/// The refusal for a prompt to a run that has ended. The session's id only, never the prompt.
+fn not_live(session: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_NOT_LIVE,
+        format!("the run of session {session} has exited"),
+    )
+}
+
 /// Compares two tokens without stopping at the first difference.
 fn tokens_match(expected: &str, given: &str) -> bool {
     expected.len() == given.len()
@@ -801,6 +883,7 @@ mod tests {
     };
     use massorca_core_terminal::ManagerConfig;
     use massorca_core_terminal::shell::EnvSnapshot;
+    use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 
     use super::*;
 
@@ -909,5 +992,18 @@ mod tests {
             .unwrap();
         assert_eq!(stored.activity, Some(activity("done", Some("success"))));
         assert_eq!(stored.result.as_deref(), Some("the answer"));
+    }
+
+    /// A prompt with a NUL or over the size limit is refused before its session is looked up (0054).
+    #[test]
+    fn a_prompt_is_checked_before_its_session_is_looked_up() {
+        let (agents, _workspace_id, _profile) = service();
+        let nul = agents.prompt("no-such-session", "a\0b", false).unwrap_err();
+        assert_eq!(nul.code, codes::AGENT_PROMPT_INVALID);
+        let long = "a".repeat(MAX_PROMPT_BYTES + 1);
+        let over = agents.prompt("no-such-session", &long, false).unwrap_err();
+        assert_eq!(over.code, codes::AGENT_PROMPT_INVALID);
+        let missing = agents.prompt("no-such-session", "fine", false).unwrap_err();
+        assert_eq!(missing.code, codes::AGENT_NOT_FOUND);
     }
 }
