@@ -217,3 +217,35 @@ fn an_origin_is_stored_and_one_outside_the_vocabulary_is_refused() {
     assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
     assert_eq!(store.list_all_agent_accounts().unwrap().len(), 1);
 }
+
+#[test]
+fn a_pending_sign_in_is_listed_until_cleared_and_a_kind_keeps_the_record_of_its_accounts() {
+    let store = Store::open_in_memory().unwrap();
+    assert!(!store.kind_has_had_account("fake").unwrap());
+    let signing = account("fake", "signing", 1);
+    store.insert_pending_sign_in(&signing).unwrap();
+    let pending: Vec<String> = store
+        .list_pending_sign_ins()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(pending, [signing.id.clone()]);
+    assert!(store.kind_has_had_account("fake").unwrap());
+
+    let imported = account("fake", "imported", 2);
+    store.insert_agent_account(&imported).unwrap();
+    assert_eq!(
+        store.list_pending_sign_ins().unwrap().len(),
+        1,
+        "only a sign-in is pending"
+    );
+
+    assert!(store.set_agent_account_pending(&signing.id, false).unwrap());
+    assert!(store.list_pending_sign_ins().unwrap().is_empty());
+    assert!(store.delete_agent_account(&signing.id).unwrap());
+    assert!(
+        store.kind_has_had_account("fake").unwrap(),
+        "removing every account keeps the record that the kind had one"
+    );
+}

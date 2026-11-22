@@ -252,6 +252,20 @@ UPDATE agent_accounts SET origin = 'migrated' WHERE state = 'migrated';
 "#,
         foreign_keys_off: false,
     },
+    // Pending sign-ins and the record that a kind had an account (decision 0059). Only a row still pending is one the
+    // startup sweep may decide; a kind that ever had an account never falls back to the agent's usual home.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_accounts ADD COLUMN sign_in_pending INTEGER NOT NULL DEFAULT 0 CHECK(sign_in_pending IN (0,1));
+CREATE TABLE agent_account_history (kind TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO agent_account_history (kind) SELECT DISTINCT kind FROM agent_accounts;
+CREATE TRIGGER agent_accounts_record_kind AFTER INSERT ON agent_accounts
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
