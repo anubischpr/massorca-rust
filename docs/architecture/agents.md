@@ -28,7 +28,8 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 ```
 <profile>/agents/
   kinds/*.json            declared kinds (owner `user`)
-  homes/<kind>/           credential home per kind (0056)
+  homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
+  accounts/<kind>/<id>/   credential home per account (0059)
   runs/<session>/         generated hook settings for a run (0053)
 ```
 
@@ -99,12 +100,18 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.resume` | workspace | `session` | `AgentSession` |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
 | `agent.credentials.show` | read | `kind` | `{ kind, home, exists, files: [{ name, present, bytes?, modified_at_ms? }] }` |
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
+| `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects }] }` |
+| `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
+| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
+| `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
+| `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -112,7 +119,7 @@ Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
-`agent.credentials_invalid`.
+`agent.credentials_invalid`, `agent.account_not_found`.
 
 Event bus topic: `agent.changed` (id = session id).
 
@@ -280,12 +287,18 @@ massorca agent attach <session>
 massorca agent prompt <session> <text> [--force]
 massorca agent resume <session>
 massorca agent hook <event> [<payload>]
-massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--read-only]
+massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--title <t>] [--read-only]
 massorca agent tree <session>
 massorca agent bring-back <child> [--no-merge] [--no-prompt]
 massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
+massorca agent accounts list <kind>
+massorca agent accounts add <kind> [--label <l>] [--no-attach]
+massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts activate <kind> <account> [--project <p>]
+massorca agent accounts remove <kind> <account>
+massorca agent accounts check <kind> [<account>]
 ```
 
 ## Credential import
@@ -321,6 +334,84 @@ service refuses `import --replace` and `remove` with `agent.busy` while any sess
 kind has a run that has not exited. Declared file names must also not be Windows device
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
+
+## Accounts (decision 0059)
+
+A kind can have several accounts on one host, and one of them is active. An account is a
+credential home at `<profile>/agents/accounts/<kind>/<id>/`, built with the 0056 rules
+(`credentials.rs`: owner-only directories, pinning, link refusal, the homes gate). Its row in
+the store (`agent_accounts`, with `agent_account_active` and `agent_account_choices`) holds the
+label, the identity the check captured, and the state. Ids are canonical lower-case UUIDs.
+
+- **Run resolution** (`accounts::resolve_home`, under `lock_homes`, for start and resume alike):
+  the project's choice, else the active account, else no home variable. The home is taken only
+  as a plain directory; a link is refused with `agent.credentials_invalid`. A run records its
+  account in memory, and `agent.accounts.remove` is refused with `agent.busy` while a live run
+  uses it.
+- **Sign-in** (`sign_in.rs`): the empty home and its row (origin `sign_in`) are created under the
+  gate, and the account is pending until its terminal ends. A service-owned terminal runs the
+  kind's `accounts.login` arguments with the home variable set and `strip_env` applied (set to
+  empty, as in 0056). The terminal is listed under `agent-accounts`, which is no workspace. When it
+  ends, `decide_sign_in` keeps the account only when the check reports `signed_in`, and stores that
+  check's own state and identity. A check that did not finish (`unknown`), or a kind with no check,
+  keeps the account only if its declared files exist, as `unknown`. Any other verdict deletes it.
+  A row that is already gone is left alone, with no event.
+- **Pending and removing accounts**: a pending sign-in refuses removal and activation with
+  `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
+  removing under the gate, so no run starts on it while the sign-out runs.
+- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s. Its whole
+  process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
+  output is read for at most one second after that, so a child that keeps the pipes open cannot
+  hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
+  An expired pattern match means `expired`; the signed-in exit means `signed_in`, with the identity
+  pattern's first group as the identity; another exit means `needs_sign_in`; a check that does not
+  finish means `unknown`. A captured identity is kept only when it is at most 256 characters with no
+  control character. A different identity than the recorded one is `conflict`, and the recorded
+  identity stays.
+- **Import** copies the declared files into a new account (origin `import`) and checks it. A check
+  that reports the login is not signed in deletes the new account, and the result is `failed`.
+  `not_found` means none of the declared files is in the source.
+- **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
+  already running) is refused, and the account is marked removing. Outside the gate, the kind's
+  `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
+  is the person's, so the service never signs it out; its files are only deleted. Under the gate
+  again, the home and the row are deleted.
+- **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
+  `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
+  the row and moving the home); moves 0056's home of each kind into an account; adopts an account
+  directory that has no row as `migrated` (active only when its kind has no active account); and
+  decides each sign-in still open. Only a row marked pending (`sign_in_pending`, set when `add`
+  creates it, cleared when the sign-in is kept) is a sign-in still open. A `needs_sign_in` state on
+  an imported or migrated account is only a state: the sweep never discards it. The row is recorded
+  before the move, and its active mark too when the kind has none, so a crash after the move leaves
+  the kind on that account. A move that fails deletes the row again. The reads `agent.kinds`,
+  `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a resume still
+  moves it as a fallback.
+- **No silent fallback** (decision 0059): a kind that has ever had an account (the history record
+  `agent_account_history`, written by a trigger on every insert and kept when the accounts are
+  removed) and has no active account refuses to start with `agent.credentials_invalid`, until an
+  account is activated. Only a kind that never had an account uses the vendor's usual home.
+- **Terminals and restarts**: the service owns its terminals. A graceful stop kills every live
+  terminal (`TerminalManager::shutdown`, called from `service.rs`), and on Windows each terminal's
+  job object kills its processes when the service's handle closes. A restart therefore starts with
+  no sign-in terminal running from the previous service on those paths. On Unix, after a crash, a
+  login process can outlive the service; the sweep decides a sign-in by its files and check and
+  does not wait for that process.
+  resume still moves it as a fallback.
+- **Labels**: at most 256 characters with no control character, refused with
+  `request.invalid_params`. The CLI prints labels and identities without control characters.
+- **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
+  bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
+  publishes nothing.
+- **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
+  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
+  go to the resolved program and are never run at declaration time. Patterns are compiled with
+  the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
+  on the service, as its programs do; they are not a trust boundary for other users. The four built-in kinds declare no accounts, because
+  their real login commands are not verified in this phase.
+
+Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,
+`agent.usage`, `agent.models`, and the vault environment provider.
 
 ## Security
 

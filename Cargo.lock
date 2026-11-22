@@ -3581,12 +3581,14 @@ dependencies = [
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "win32job",
 ]
 
 [[package]]
