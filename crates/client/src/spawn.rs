@@ -166,7 +166,7 @@ fn reap_when_it_exits(child: Child) {
 /// working directory: a service that inherits a caller's directory resolves relative paths
 /// against it, so two clients in different directories would share one service's view of paths.
 fn service_command(profile: &Profile, autostart: &Autostart) -> Command {
-    let mut command = Command::new(&autostart.exe);
+    let mut command = massorca_process::command(&autostart.exe);
     command
         .args(["service", "run", "--profile", profile.name()])
         .args(&autostart.args_extra)
@@ -189,12 +189,9 @@ fn keep_handles_private() {}
 
 #[cfg(windows)]
 fn detach(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
+    use massorca_process::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
 
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    massorca_process::creation_flags(command, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
 }
 
 #[cfg(unix)]
@@ -356,7 +353,7 @@ mod tests {
         let profiles = home.join("profiles");
         #[cfg(windows)]
         {
-            let made = std::process::Command::new("cmd")
+            let made = massorca_process::command("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(&profiles)
                 .arg(&elsewhere)

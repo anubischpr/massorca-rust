@@ -14,7 +14,7 @@ use massorca_protocol::pairing::Offer;
 fn share(home: &std::path::Path) {
     #[cfg(windows)]
     {
-        let granted = std::process::Command::new("icacls")
+        let granted = massorca_process::command("icacls")
             .arg(home)
             .args(["/grant", "*S-1-1-0:(OI)(CI)(M)"])
             .output()
