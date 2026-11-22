@@ -67,14 +67,22 @@ owner then makes the home private once with `massorca profile secure`.
      nothing can be planted between the listing and the new access. Links
      are read themselves, never followed. On Windows, reading every
      descriptor of a 30,000-file agent home took 8 to 11 seconds, so a clean
-     scan records each folder's modification time in `<root>/.access-scan`.
-     While the root stays owner-only, a later start reads descriptors only in
-     folders whose time changed. Adding, removing or renaming an entry
-     changes its folder's time, and inside a private root only trusted
-     principals can change anything else. A new or repaired root, and
-     `profile secure`, always read every descriptor; that measured case took
-     about 9 seconds once, and cached starts took 70 to 90 ms. Unix reads
-     owner and mode with one `lstat` per entry and scans in full. An entry without an accepted owner, or whose
+     scan records each folder's modification time in `<root>/.access-scan`,
+     with the time of the last full scan and the version that ran it. While
+     the root stays owner-only, a later start reads descriptors only in
+     folders whose time changed: adding, removing or renaming an entry
+     changes its folder's time. The cache does not see a change to an
+     existing entry's owner or access list, which leaves its folder's time
+     alone; the owner of a file inside the root can make such a change. So
+     a full scan still runs at least once a day, after a version change,
+     after a repair, in `profile secure`, and whenever the cache is missing,
+     unreadable or larger than 16 MiB. The cache is used only on a local NTFS
+     volume. Folder times on FAT and exFAT, ReFS, network drives (SMB, NFS
+     and other remote file systems) and any volume whose file system cannot
+     be read are treated as unreliable, so every start there reads every
+     descriptor. The measured full scan took about 9 seconds; cached starts
+     took 70 to 90 ms. Unix reads owner and mode with one `lstat` per entry
+     and always scans in full. An entry without an accepted owner, or whose
      owner cannot be read, is refused with `profile.foreign_entries`; an entry
      whose own DACL lets another SID change it is refused with
      `profile.writable_by_others`. On Unix the owner must be the user or root,
@@ -95,9 +103,16 @@ owner then makes the home private once with `massorca profile secure`.
 - **`massorca profile secure`.** The owner's explicit way to make an existing
   home private. Without `--yes` it prints, for the home, `profiles` and the
   root, every access entry it would remove and the one it keeps, changes
-  nothing, and exits 0. With `--yes` it sets the protected owner-only DACL on
-  each of them, home first, so inherited entries below follow, then runs the
-  full check, reading every descriptor. It refuses a folder another user owns
+  nothing, and exits 0. With `--yes` it first opens all three without
+  following links (the home may be a link the user chose), refuses a reparse
+  point, and holds them so none can be renamed or swapped. It then sets the
+  protected owner-only DACL through each handle, home first. Once they are
+  owner-only, nobody else can rename them, so it releases them and resets
+  the inherited entries of everything below (`TreeSetNamedSecurityInfoW`,
+  keeping explicit entries). On Unix it sets `0700` through an `O_NOFOLLOW`
+  descriptor. A failure part-way leaves the folders already done private
+  and the rest unchanged; running the command again finishes the job. Then
+  it runs the full check, reading every descriptor. It refuses a folder another user owns
   or a link it cannot make safe. Existing files are kept and trusted as they
   are: the owner reviewed the plan and vouched for them by applying it. The
   scan still refuses entries another user owns, or that keep their own
@@ -109,7 +124,21 @@ owner then makes the home private once with `massorca profile secure`.
   `ClientError::StartRefused` with that code and message, exit code 1,
   instead of a ten-second timeout. It is an option rather than an
   environment variable, so it never reaches the terminals the service
-  starts.
+  starts. The client reads the file only after the child has exited with a
+  failure status, and only up to 64 KiB, so a file planted while the
+  service runs is never shown.
+- **Client writes.** A client writes into a profile without the service in
+  two places, both in `massorca_client::Hosts`: `add`, used by `pair accept`
+  and `host add-ssh` through `Client::pair`, and `remove`, used by `host
+  remove`. Each runs the same root check as a start and refuses an unsafe
+  profile with the same codes (`ClientError::ProfileRefused`). It then holds
+  `hosts` and the host folder open with `open_private_dir`, without
+  following links: a pinned handle on Windows, an
+  `O_NOFOLLOW | O_DIRECTORY` descriptor on Unix. An existing link at
+  either is refused, and the files are written while the folders are held.
+  `Client::pair` checks before it uses the offer, which works only once.
+  Autostart only creates missing folders, private, and leaves the check to
+  the service.
 - **Accepted owners.** An owner is accepted when it equals the token's user
   (`TokenUser`), the token's default owner (`TokenOwner`), or SYSTEM. An
   elevated administrator token's default owner is Administrators, so what such
@@ -169,9 +198,11 @@ profile that someone else could have changed. The owner reviews it, then runs
 - Entries an elevated process created belong to Administrators. They are
   accepted while the service runs elevated, and refused as foreign when it
   later runs on an ordinary token.
-- The first start after a repair, and `profile secure`, read every
-  descriptor; later starts read only changed folders. The cache sits in the
-  private root, where only trusted principals can write it.
+- The first start after a repair, `profile secure` and the daily full scan
+  read every descriptor; other starts read only changed folders. The cache
+  sits in the private root, where only accepted owners can write it. An
+  access change made inside the root by such an owner can stay unseen until
+  the next full scan, at most a day later.
 - A temporary folder shared with other users is an unsafe location, so tests
   put their home one level below it, where the service creates it private.
 - A foreign owner cannot be set without a second account or privileges, so
