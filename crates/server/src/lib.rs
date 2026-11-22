@@ -23,6 +23,7 @@ mod registry;
 mod service;
 mod service_json;
 mod session;
+mod setting_values;
 mod settings;
 mod shutdown;
 mod store_blocking;
@@ -41,6 +42,6 @@ pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, iden
 pub use owner::Owner;
 pub use permission::{Permission, Principal, Scopes, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
-pub use service::{RunningService, Service, ServiceConfig};
+pub use service::{RunningService, Service, ServiceConfig, VAULT_PROTECTION_ENV, VaultOptions};
 pub use settings::{SettingDecl, SettingKind, SettingsRegistry};
 pub use shutdown::ShutdownHandle;

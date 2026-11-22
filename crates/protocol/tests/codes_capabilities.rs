@@ -115,6 +115,16 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::AGENT_CREDENTIALS_INVALID,
         "agent.credentials_invalid",
     ),
+    (codes::TEAM_NOT_FOUND, "team.not_found"),
+    (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
+    (codes::TEAM_PROJECT_NOT_FOUND, "team.project_not_found"),
+    (codes::TEAM_PROJECT_NAME_IN_USE, "team.project_name_in_use"),
+    (codes::BOT_NOT_FOUND, "bot.not_found"),
+    (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
+    (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
+    (codes::BOT_HAS_TASKS, "bot.has_tasks"),
+    (codes::TASK_NOT_FOUND, "task.not_found"),
+    (codes::TASK_RUNNING, "task.running"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -142,4 +152,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::TERMINALS, "terminals/1");
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
     assert_eq!(capabilities::AGENTS, "agents/1");
+    assert_eq!(capabilities::TEAMS, "teams/1");
 }

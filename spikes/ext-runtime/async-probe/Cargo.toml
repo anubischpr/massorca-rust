@@ -1,0 +1,13 @@
+[package]
+name = "async-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone spike probe for the WASI 0.3 / component-model-async decision.
+# Deliberately its own workspace; not a member of the ext-runtime workspace.
+[workspace]
+
+[dependencies]
+wasmtime = { version = "51.0.0", features = ["component-model", "component-model-async"] }
+wasmtime-wasi = { version = "51.0.0", features = ["p3"] }

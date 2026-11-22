@@ -6,6 +6,8 @@ mod profile;
 #[cfg(unix)]
 mod unix_user;
 #[cfg(windows)]
+mod windows_dir_access;
+#[cfg(windows)]
 mod windows_endpoint_access;
 
 pub use endpoint::local_socket_name;
@@ -16,7 +18,13 @@ pub use profile::{Profile, ensure_dir};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
+pub use windows_dir_access::{
+    PinnedDir, Sid, create_dir_owner_only, dacl_grantees, dacl_sddl, dir_owner_is_acceptable,
+    has_owner_only_dacl, owner_is_acceptable, owner_matches, owner_only_dir_sddl,
+    restrict_dir_to_owner,
+};
+#[cfg(windows)]
 pub use windows_endpoint_access::{
-    dacl_sddl, is_owner_only, owner_only_sddl, owner_only_security_descriptor,
-    process_belongs_to_current_user, restrict_to_owner, set_dacl_sddl,
+    owner_only_sddl, owner_only_security_descriptor, process_belongs_to_current_user,
+    restrict_to_owner, set_dacl_sddl,
 };

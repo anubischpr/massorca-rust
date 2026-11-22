@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
+use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde_json::Value;
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::NoParams;
+use crate::features::{NoParams, config_keys};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -19,7 +20,11 @@ use crate::store_blocking;
 pub(crate) const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
-    Ok(vec![
+    let mut handles = Vec::new();
+    for decl in config_keys::core_settings(home_path(&["MassOrca", "Conversations"])?) {
+        handles.push(registries.settings.register(decl)?);
+    }
+    handles.extend([
         registries
             .capabilities
             .register(capabilities::CONFIG, Owner::Core)?,
@@ -52,22 +57,32 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             list,
         )?,
-    ])
+        registries.methods.register(
+            Owner::Core,
+            config::RESET,
+            capabilities::CONFIG,
+            Permission::HostAdmin,
+            reset,
+        )?,
+    ]);
+    Ok(handles)
 }
 
 /// `<user home>/massorca/workspaces`, as a string the protocol can carry.
 pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
+    home_path(&["massorca", "workspaces"])
+}
+
+/// `parts` joined under the user's home directory, as a string the protocol can carry.
+fn home_path(parts: &[&str]) -> Result<String, ServiceError> {
     let base = directories::BaseDirs::new().ok_or_else(|| {
         ServiceError::DefaultWorkspaceRoot("there is no user home directory".to_owned())
     })?;
-    base.home_dir()
-        .join("massorca")
-        .join("workspaces")
-        .into_os_string()
-        .into_string()
-        .map_err(|_| {
-            ServiceError::DefaultWorkspaceRoot("the user home directory is not UTF-8".to_owned())
-        })
+    let mut path = base.home_dir().to_path_buf();
+    path.extend(parts);
+    path.into_os_string().into_string().map_err(|_| {
+        ServiceError::DefaultWorkspaceRoot("the user home directory is not UTF-8".to_owned())
+    })
 }
 
 async fn get(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorBody> {
@@ -95,11 +110,50 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     let json = serde_json::to_string(&params.value)
         .map_err(|error| ErrorBody::new(codes::INTERNAL, error.to_string()))?;
     let (owner, key) = (decl.owner.to_string(), decl.key.clone());
-    store_blocking::run(&ctx.state, move |store| {
-        store.set_setting(&owner, &key, &json)
+    let before = store_blocking::run(&ctx.state, move |store| {
+        let before = store.get_setting(&owner, &key)?;
+        store.set_setting(&owner, &key, &json)?;
+        Ok(before)
     })
     .await?;
-    Ok(view(&decl, Some(params.value)))
+    let before = before.as_deref().map(stored_json).transpose()?;
+    let after = view(&decl, Some(params.value));
+    publish_if_changed(&ctx, &decl, before, &after);
+    Ok(after)
+}
+
+async fn reset(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorBody> {
+    let decl = find(
+        &ctx.state.registries.settings,
+        params.owner.as_deref(),
+        &params.key,
+    )?;
+    let (owner, key) = (decl.owner.to_string(), decl.key.clone());
+    let before = store_blocking::run(&ctx.state, move |store| {
+        let before = store.get_setting(&owner, &key)?;
+        store.delete_setting(&owner, &key)?;
+        Ok(before)
+    })
+    .await?;
+    let before = before.as_deref().map(stored_json).transpose()?;
+    let after = view(&decl, None);
+    publish_if_changed(&ctx, &decl, before, &after);
+    Ok(after)
+}
+
+/// Publishes `config.changed` when the value in effect before differs from the one now.
+fn publish_if_changed(
+    ctx: &RequestCtx,
+    decl: &SettingDecl,
+    before: Option<Value>,
+    after: &ConfigValue,
+) {
+    if before.unwrap_or_else(|| decl.default.clone()) != after.value {
+        ctx.state.events.publish(ChangeEvent {
+            topic: events::TOPIC_CONFIG_CHANGED.to_owned(),
+            id: format!("{}/{}", decl.owner, decl.key),
+        });
+    }
 }
 
 async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ConfigList, ErrorBody> {
@@ -161,5 +215,12 @@ fn view(decl: &SettingDecl, stored: Option<Value>) -> ConfigValue {
         value,
         default: decl.default.clone(),
         is_default,
+        kind: Some(decl.kind.wire_name().to_owned()),
+        choices: decl
+            .kind
+            .choices()
+            .map(|list| list.iter().map(|&choice| choice.to_owned()).collect()),
+        min: decl.kind.range().map(|(min, _)| min),
+        max: decl.kind.range().map(|(_, max)| max),
     }
 }

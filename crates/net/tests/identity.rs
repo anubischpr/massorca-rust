@@ -132,7 +132,7 @@ fn key_file_is_owner_only() {
 /// Asserts the DACL is protected and holds a single allow entry, for the current user.
 #[cfg(windows)]
 fn assert_owner_only(path: &std::path::Path) {
-    let owner_only = massorca_profile::is_owner_only(path).expect("read the DACL");
+    let owner_only = massorca_profile::has_owner_only_dacl(path).expect("read the DACL");
     let dacl = massorca_profile::dacl_sddl(path).unwrap_or_default();
     assert!(owner_only, "{}: {dacl}", path.display());
 }

@@ -127,3 +127,61 @@ fn an_edited_file_is_read_again_without_a_restart() {
     let after = sandbox.json_ok("default", &["agent", "kinds"]);
     assert_eq!(kind(&after, "fake", "user")["installed"], true);
 }
+
+/// The table row whose line holds `needle`, from the text output of `agent kinds`.
+fn row<'a>(text: &'a str, needle: &str) -> &'a str {
+    text.lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| {
+            panic!(
+                "no row with {needle} in:
+{text}"
+            )
+        })
+}
+
+#[test]
+fn detection_and_package_state_are_separate_columns() {
+    let sandbox = Sandbox::new();
+    declare(&sandbox, "fake.json", &fake_kind().to_string());
+    let mut absent = fake_kind();
+    absent["id"] = json!("absent");
+    absent["name"] = json!("Absent agent");
+    absent["program"] = json!(["massorca-test-absent-agent"]);
+    declare(&sandbox, "absent.json", &absent.to_string());
+
+    let kinds = sandbox.json_ok("default", &["agent", "kinds"]);
+    let fake = kind(&kinds, "fake", "user");
+    assert_eq!(fake["detected"], true);
+    assert_eq!(
+        fake["installed"], true,
+        "installed keeps its agents/1 meaning"
+    );
+    assert_eq!(fake["package"]["state"], "enabled");
+    assert!(fake["package"].get("id").is_none(), "{fake}");
+    let absent = kind(&kinds, "absent", "user");
+    assert_eq!(absent["detected"], false);
+    assert_eq!(absent["installed"], false);
+    assert_eq!(absent["package"]["state"], "enabled");
+    assert!(absent.get("program_path").is_none(), "{absent}");
+
+    let text = stdout_text(&sandbox.run("default", &["agent", "kinds"]).success());
+    let header = text.lines().next().expect("a header line");
+    for column in ["INSTALLED", "DETECTED", "PATH"] {
+        assert!(header.contains(column), "no {column} column in {header}");
+    }
+    let fake_row = row(&text, "Fake agent");
+    assert!(fake_row.contains("enabled"), "{fake_row}");
+    assert!(fake_row.contains("yes"), "{fake_row}");
+    assert!(
+        fake_row.contains(env!("CARGO_BIN_EXE_massorca")),
+        "a detected kind shows its path: {fake_row}"
+    );
+    let absent_row = row(&text, "Absent agent");
+    assert!(absent_row.contains("enabled"), "{absent_row}");
+    assert!(absent_row.contains("no"), "{absent_row}");
+    assert!(
+        !absent_row.contains("massorca-test-absent-agent"),
+        "a kind that does not resolve shows no path: {absent_row}"
+    );
+}

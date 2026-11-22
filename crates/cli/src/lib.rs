@@ -3,6 +3,7 @@
 //! The binary is a thin shell over [`run`], so parsing, output and exit codes stay testable.
 
 pub mod agent;
+pub mod agent_credentials;
 pub mod agent_hook;
 pub mod agent_text;
 pub mod app;
@@ -19,9 +20,13 @@ pub mod logging;
 pub mod output;
 pub mod pair;
 pub mod project;
+pub mod secret;
+pub mod secret_input;
 pub mod server_status;
 pub mod service;
 pub mod target;
+pub mod task;
+pub mod team;
 pub mod terminal;
 pub mod terminal_attach;
 pub mod time_text;

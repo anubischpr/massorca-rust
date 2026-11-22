@@ -68,7 +68,7 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
 | `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
-| `agent kinds` | Lists the agent kinds: id, name, owner and the resolved program, or `no` / `invalid`. Problems follow the table. |
+| `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
@@ -78,6 +78,9 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
+| `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
+| `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -132,11 +135,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 
 - `agent kinds` lists the built-in kinds (owner `core`: `claude`, `codex`, `antigravity`,
   `gentle-shell`) and the profile's own declarations in `<profile>/agents/kinds/*.json`
-  (owner `user`). The files are read again on every call. A kind is installed when one of
-  its programs resolves: an absolute path that is a file, or a bare name on the service's
-  `PATH` (on Windows also with the `PATHEXT` extensions). A file that does not parse, breaks
-  a rule, or reuses a built-in id is listed with its problems and never started.
-  `--json` prints the `agent.kinds` result.
+  (owner `user`). The files are read again on every call. `INSTALLED` is the kind's package
+  state (`enabled` for every kind until packages land); `DETECTED` is `yes` when one of its
+  programs resolves: an absolute path that is a file, or a bare name on the service's `PATH`
+  (on Windows also with the `PATHEXT` extensions). `PATH` shows the resolved program. A file
+  that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
+  never detected, and never started. `--json` prints the `agent.kinds` result, where
+  `installed` is deprecated and equals `detected`.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
   shell in between), with the first prompt as the kind declares. A workspace holds one live
   session that is not `--read-only`; a second writing start fails with
@@ -189,6 +194,23 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent credentials import KIND --from DIR` copies only the files the kind declares
+  (`credentials.files`) into `<profile>/agents/homes/<KIND>/`; from then on every run of the
+  kind in the profile gets the kind's home variable pointing there (decision 0056). Every
+  declared file is required and must be a regular file of at most 1 MiB: a missing name, a
+  link, a directory or a larger file fails the import with `agent.credentials_invalid`, lists
+  each name with its reason (`--json`: `error.data.files`), and copies nothing. A relative
+  `DIR` is taken from the current directory. An existing home is replaced only with
+  `--replace` (`agent.credentials_exist` otherwise); a failed import leaves it as it was. A
+  kind that declares no files is refused with `agent.credentials_unsupported`. The copy does
+  not move the login: refresh tokens are single use, so stop using the source login after
+  importing. File contents are never printed or logged.
+- `agent credentials show KIND` and `remove KIND` never follow a link: a home that is a link
+  is refused with `agent.credentials_invalid` and must be removed by hand.
+- `agent credentials import KIND --replace` and `remove KIND` are refused with `agent.busy`
+  while a run of the kind is live; stop it first. An old home left aside by a replace that
+  could not finish (`homes/.KIND.old-...`) refuses the next import with
+  `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the
