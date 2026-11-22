@@ -130,3 +130,103 @@ fn a_refusal_in_json_is_an_error_document_with_its_code() {
     assert_eq!(document["ok"], false);
     assert_eq!(document["error"]["code"], "team.not_found");
 }
+
+#[test]
+fn the_board_round_trips_through_create_done_and_reopen_in_json_and_text() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team",
+                "bot",
+                "add",
+                "alpha",
+                "mara",
+                "--agent",
+                "claude",
+                "--job",
+                "Writes the parser",
+            ],
+        )
+        .success();
+    sandbox
+        .run("default", &["team", "project", "add", "alpha", "parser"])
+        .success();
+
+    let task = sandbox.json_ok(
+        "default",
+        &[
+            "task",
+            "create",
+            "alpha",
+            "parse the header",
+            "--bot",
+            "mara",
+            "--project",
+            "parser",
+            "--body",
+            "Magic bytes first.",
+        ],
+    );
+    assert_eq!(task["column"], "open");
+    assert_eq!(task["state"], "not_started");
+    let id = task["id"].as_str().expect("the task id").to_owned();
+
+    let board = sandbox.json_ok("default", &["team", "board", "alpha"]);
+    let open_cards = board["columns"][0]["cards"].as_array().expect("cards");
+    assert_eq!(open_cards.len(), 1);
+    assert_eq!(open_cards[0]["bot"], "mara");
+    let text = sandbox
+        .run("default", &["team", "board", "alpha"])
+        .success();
+    assert!(stdout_text(&text).contains("parse the header"));
+    assert!(stdout_text(&text).contains("Not started"));
+
+    let done = sandbox.json_ok("default", &["task", "done", id.as_str()]);
+    assert_eq!(done["column"], "done");
+    let done_board = sandbox.json_ok("default", &["team", "board", "alpha"]);
+    assert_eq!(
+        done_board["columns"][3]["cards"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let reopened = sandbox.json_ok("default", &["task", "reopen", id.as_str()]);
+    assert_eq!(reopened["column"], "open");
+    let listed = sandbox.json_ok(
+        "default",
+        &["task", "list", "--team", "alpha", "--column", "open"],
+    );
+    assert_eq!(listed["tasks"].as_array().map(Vec::len), Some(1));
+
+    let shown = sandbox
+        .run("default", &["task", "show", id.as_str()])
+        .success();
+    assert!(stdout_text(&shown).contains("parse the header"));
+
+    sandbox.json_ok("default", &["task", "rm", id.as_str()]);
+    sandbox
+        .run("default", &["task", "show", id.as_str()])
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn task_refusals_exit_with_code_one_and_name_their_code() {
+    let sandbox = Sandbox::new();
+
+    let no_team = sandbox
+        .run("default", &["task", "create", "nothing", "orphan"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&no_team).contains("team.not_found"));
+
+    let missing = sandbox
+        .run("default", &["task", "show", "missing"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&missing).contains("task.not_found"));
+}

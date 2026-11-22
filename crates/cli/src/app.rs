@@ -149,6 +149,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(crate::team::execute(&target, autostart, command, output))
         }
+        Commands::Task { command } => {
+            let target = globals.target()?;
+            block_on(crate::task::execute(&target, autostart, command, output))
+        }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
 }

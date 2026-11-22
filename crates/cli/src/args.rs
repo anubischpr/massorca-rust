@@ -7,6 +7,7 @@ use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
+use crate::task::TaskCommand;
 use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
 
@@ -116,6 +117,11 @@ pub enum Commands {
     Team {
         #[command(subcommand)]
         command: TeamCommand,
+    },
+    /// Creates, lists, shows, finishes and removes the tasks on a team's Board.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
