@@ -116,7 +116,9 @@ in four groups, the commit box and the first page of history. It runs on `git/1`
   mutation refetches the workspace's status (and history after a commit) before it replies, whatever
   the answer.
 - **Watch.** While the tab is on screen, the bridge follows the selected workspace with `git.watch`.
-  Each event refetches the status. Watches survive a reconnect and end with their connection.
+  Each event shows at once and refetches the status beside the stream, so a slow git call never holds back
+  the panel's readiness or a change. Answers are ordered: an older status never replaces a newer one.
+  Watches survive a reconnect and end with their connection.
 - **Store.** `StoreState.git` holds each workspace's status, first history page and degraded-watch
   state. A removed workspace takes them with it.
 - **Models.** `model::source_control` derives the panel from the store; `model::source_control_diff`
@@ -183,9 +185,26 @@ Linux only. No automated run opens a visible window.
   General and account. A step the core cannot satisfy says so instead of
   claiming a result.
 - Not built yet: search highlighting and the outline after a jump
-  (SettingsRow.md), the Marketplace and vault pages, the first-run wizard, and
-  host rows beyond This PC. Sample data holds no workspace records, so the
+  (SettingsRow.md), the vault page, the first-run wizard, and host rows beyond
+  This PC. Sample data holds no workspace records, so the
   start page shows "not listed by the service" in `--sample` mode.
+
+## Marketplace
+
+- **The Marketplace** (`Page::Marketplace`) is a full page with a left
+  navigation: Discover, Installed, Updates and the five categories. Its lists
+  are in `model/marketplace/catalogue.rs`; an item page shows its nine parts in
+  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2).
+- Its data comes from `MarketplaceSource`. The sample implements it in memory and
+  changes only itself. Without a service, `UnavailableMarketplace` lists nothing
+  and refuses every change. Actions the sample does not model are drawn disabled
+  with "Not available yet": installing, the host choice, the default agent and
+  item settings.
+- Settings lists the installed agents from the same snapshot, each linking to its
+  item page. Settings never installs anything. The Extensions row opens
+  Marketplace > Installed.
+- The element tests (`shell/marketplace/tests.rs`) find a button as
+  `button:<id>`, which every `Button` publishes under test.
 
 ## Browser pane
 

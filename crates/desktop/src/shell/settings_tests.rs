@@ -4,7 +4,7 @@
 
 use super::settings::host_word;
 use super::*;
-use crate::model::navigation::Page;
+use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
@@ -80,6 +80,7 @@ fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
             Some(handle),
             None,
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )
@@ -317,18 +318,12 @@ fn this_pc_reads_the_store_connection_in_words() {
 }
 
 #[gpui::test]
-fn the_extensions_entry_stays_on_settings_because_marketplace_has_no_page_yet(
-    cx: &mut TestAppContext,
-) {
+fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
     click(cx, "settings-nav-Extensions");
     assert_eq!(
-        rig.shell.read_with(cx, |shell, _| shell.settings.section),
-        SettingsSection::Extensions
-    );
-    assert_eq!(
         rig.shell
             .read_with(cx, |shell, _| shell.model().navigation().page),
-        Page::Settings
+        Page::Marketplace(MarketplacePage::Installed)
     );
 }

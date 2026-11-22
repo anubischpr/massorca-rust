@@ -156,9 +156,8 @@ returns a handle that the host drops on deactivate, so an unload leaves
 nothing behind (Harness's reversible effects).
 
 **Long-running work.** Agent adapters and jobs use streams and host-driven
-calls rather than long-blocking component calls. This holds until the WASI
-0.3 async spike (decision §Consequences) shows that async exports are
-dependable.
+calls rather than long-blocking component calls. World 1.0.0 has no async
+exports; they come later as an additive world version (decision 0060).
 
 **Limits** (defaults; set by the core, not by the manifest):
 
@@ -512,7 +511,11 @@ mechanism:
 6. **Share.** `massorca ext pack` produces an archive. Publishing to an index
    is outside the app in v1.
 
-**Fallback if the JS spike fails.** Creator mode writes Rust components. It
+**JS engine.** The bundled engine is QuickJS-NG, built once in CI as a
+`wasm32-wasip2` component and shipped as `.wasm`; Boa is its fallback
+(decision 0060).
+
+**Fallback if the JS engine cannot be used.** Creator mode writes Rust components. It
 builds them on the host with `cargo` and the `wasm32-wasip2` target;
 `massorca ext new` checks for that toolchain and offers to install it. Creator
 mode never turns logic into a process contribution to avoid the sandbox. A
@@ -535,9 +538,9 @@ process contribution it writes goes through the High review like any other.
 
 - **Owner item 17:** web views for extensions on desktop.
 - **Owner item 1:** prototypes, core or extension.
-- **Spike:** a JS-engine component that loads source at runtime (size, start
-  time, async host calls).
-- **Spike:** WASI 0.3 async in Wasmtime for adapters and jobs.
+- **Spikes done** (decision 0060): the JS engine is QuickJS-NG; async exports
+  wait for a later world version. Still to test in the tier 2 host: deep
+  recursion in the shipped engine and async exports at run time.
 - **Process sandboxing per OS** for process contributions. There is no plan
   yet.
 - **Design conflicts to resolve in the design docs, not here.**
