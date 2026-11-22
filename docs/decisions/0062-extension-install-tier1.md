@@ -279,7 +279,7 @@ fixed with a test, except where a row says otherwise.
   counts as installed only when it is the catalogue's own install with the embedded content hash; any other entry is
   shown with that problem, never as a built-in, never runs its kinds and never blocks a built-in install, which
   replaces it. The reviews show the source (`catalogue`, `dir` or `file` with its reference) first.
-- **Review shows what runs.** Each agent kind's program, arguments, environment names, credential home and files, and
+- **Review shows what runs.** The verify and uninstall commands for this system are listed with the install command. Each agent kind's program, arguments, environment names, credential home and files, and
   each MCP server's command are listed. Values are not shown. Every installer step states that it installs the vendor's
   current release and that the version is not pinned.
 - **Allowlist.** Install and uninstall commands start with `winget`, `brew`, `npm`, `powershell` or `bash`, bare. The
@@ -316,10 +316,31 @@ fixed with a test, except where a row says otherwise.
 - **Forged data.** A lockfile entry whose path leaves its package folder, a publisher or id segment that names a
   Windows device (`COM¹`, `LPT²`, superscript digits included), and a folder changed after review are each refused.
   The lockfile is validated before it is written.
+- **Uninstall confirmation (V2).** `remove --uninstall-cli` runs the uninstall only after `--yes`, or `--uninstall-consent` with the fingerprint the refusal prints. A refusal changes nothing. The built-in review names no internal variable (V3); a third-party kind keeps naming its credential variables.
 - **Gentle Shell (open question for the owner).** The npm package and the binary name are unconfirmed and not shipped:
   the package declares no vendor command, so it only detects and registers. Its binary stays `gentle-shell` as the
   kind file has it. Its kind file reads `PI_CODING_AGENT_DIR` for credentials; the kind file is unchanged byte for byte
   and that variable stays internal until a source is cited. No user-visible text names the unconfirmed package.
+
+#### Third-party vendor commands (refused in tier 1)
+
+Only a built-in catalogue package may declare a vendor command (`cli.install`, `cli.verify` or `cli.uninstall`). A package
+from a folder or an archive that declares one is refused at review and at install with
+`extension.vendor_command_refused`, before anything runs. The reasons: the argv allowlist still admits
+`powershell -Command <any script>` and `bash -c`, `verify` is not allowlisted, and the verify and uninstall commands
+were not shown in the review. Third-party vendor commands come back in a later tier, with a design of their own.
+
+#### Follow-ups (not code)
+
+- Opaque fetches: `npm` and `winget` install whatever the registry serves under a name, and `powershell -EncodedCommand`
+  hides its script. Neither is refused by the allowlist; a later tier must pin or show the content.
+- `bash` on Windows may be the WSL launcher, which runs a Linux distribution. Refusing `bash` on Windows is the
+  preferred fix; until then the built-in Antigravity command is the only user of it.
+- An installed built-in whose embedded catalogue hash changes in a later build. Options: keep it recognised as the
+  built-in while the id and the hash recorded at install match the catalogue's history, or show "update available".
+  Undecided; today it is shown as not built-in until it is reinstalled.
+- The `dir:` consent reading is confirmed: a folder changed after its review is refused for the reviewed consent, and
+  the CLI cannot re-inspect and resend a new fingerprint silently.
 
 #### Vendor commands
 
