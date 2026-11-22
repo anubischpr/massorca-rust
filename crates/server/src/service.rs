@@ -17,9 +17,11 @@ use massorca_core_workspace::Workspaces;
 use massorca_profile::owner_only_security_descriptor;
 #[cfg(unix)]
 use massorca_profile::restrict_socket;
-use massorca_profile::{Profile, ensure_dir, local_socket_name};
+use massorca_profile::{Profile, RootAccess, ensure_dir, local_socket_name, secure_root};
 use massorca_protocol::PeerInfo;
-use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
+use massorca_protocol::methods::events::{
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED,
+};
 use massorca_protocol::methods::service::ServiceInfo;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -100,6 +102,13 @@ impl Service {
             server_name,
             server_version,
         } = config;
+        // Before anything in the profile is opened, so planted content is never trusted (ADR 0073).
+        if secure_root(&profile)? == RootAccess::Repaired {
+            tracing::warn!(
+                path = %profile.dir().display(),
+                "profile directory access was repaired: it is now private to its owner"
+            );
+        }
         ensure_dir(&profile)?;
         let lock = instance_lock::acquire(&profile).await?;
         instance_lock::remove_stale_socket(&profile)?;
@@ -139,6 +148,11 @@ impl Service {
             profile.dir().join("vault"),
             vault_options.force_file,
         ));
+        // Credential homes and account rows are put in order before requests are served (decision 0059).
+        let sweeper = agents.clone();
+        tokio::task::spawn_blocking(move || sweeper.startup_sweep())
+            .await
+            .map_err(io::Error::other)?;
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
@@ -200,6 +214,14 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
         let id = match &change {
             Change::Updated(session) => session.id.clone(),
             Change::Forgotten(id) => id.clone(),
+            // An account change is announced under its kind; it is not a session change, so no watcher gets it.
+            Change::Account(account) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
+                    id: account.kind.clone(),
+                });
+                return;
+            }
         };
         events.publish(ChangeEvent {
             topic: TOPIC_AGENT_CHANGED.to_owned(),

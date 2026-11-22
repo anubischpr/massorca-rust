@@ -28,6 +28,25 @@ use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(30);
 
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
+
 fn profile(home: &Path) -> Profile {
     Profile::resolve_with(Some(home.to_path_buf()), Some("default".to_owned()), |_| {
         None
@@ -243,7 +262,7 @@ struct Session {
 }
 
 impl Session {
-    async fn start(home: &TempDir) -> (Self, PathBuf) {
+    async fn start(home: &TempHome) -> (Self, PathBuf) {
         let repo_dir = home.path().join("demo");
         repo(&repo_dir);
         let service = start_service(home.path()).await;
@@ -342,7 +361,7 @@ impl Session {
 
 #[tokio::test]
 async fn status_diff_stage_and_commit_show_in_the_store() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let (mut session, worktree) = Session::start(&home).await;
     session.handle.git_watch(session.id());
     std::fs::write(worktree.join("README.md"), "hello\nworld\n").expect("an edit");
@@ -449,7 +468,7 @@ async fn status_diff_stage_and_commit_show_in_the_store() {
 
 #[tokio::test]
 async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let (mut session, worktree) = Session::start(&home).await;
     session.handle.git_watch(session.id());
     // The watch's ready item comes first and is sent once its OS watcher is armed (core #117), so an edit
@@ -522,7 +541,7 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
 
 #[tokio::test]
 async fn a_reconnect_re_establishes_the_watch_with_one_subscription_per_workspace() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let (mut session, worktree) = Session::start(&home).await;
     let id = session.id().to_owned();
     session.handle.git_watch(&id);

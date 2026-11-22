@@ -7,6 +7,7 @@ mod discovery;
 mod fixture;
 mod index;
 mod log;
+mod merge;
 mod refs;
 mod remote;
 mod repository;

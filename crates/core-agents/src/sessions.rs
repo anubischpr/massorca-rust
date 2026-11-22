@@ -6,13 +6,14 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::credentials;
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
 };
@@ -23,8 +24,8 @@ use massorca_core_terminal::{
 };
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
-    Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams, Execution,
-    MAX_HOOK_PAYLOAD_BYTES, PromptReceipt, ReceiptKind,
+    AccountsChanged, Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams,
+    Execution, MAX_HOOK_PAYLOAD_BYTES, PromptReceipt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -40,6 +41,10 @@ use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
+mod delegation;
+
+pub use delegation::{MergeResult, RepoOps};
+
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -54,6 +59,8 @@ pub enum Change {
     Updated(Box<AgentSession>),
     /// The session was forgotten; its id.
     Forgotten(String),
+    /// An account of a kind changed, or its state did (decision 0059). Not a session change, so watchers do not get it.
+    Account(AccountsChanged),
 }
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
@@ -190,10 +197,18 @@ struct Inner {
     listener: OnceLock<Listener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
+    /// The accounts a call is working on: sign-ins still open, and removals (decision 0059). See `accounts`.
+    accounts: Mutex<crate::accounts::AccountBusy>,
+    /// Serialises bring-backs, so a child is merged and marked once (0055).
+    bring_back_gate: Mutex<()>,
+    /// The workspaces a bring-back is merging into (0055). While one is listed, a start or resume in it and a prompt
+    /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
+    /// held.
+    merging: Mutex<HashSet<String>>,
 }
 
 /// A run whose exit the service has not seen yet.
-struct LiveRun {
+pub(crate) struct LiveRun {
     token: String,
     rules: HookRules,
     /// How a prompt is typed into the run (0054).
@@ -203,6 +218,8 @@ struct LiveRun {
     /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
     /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
     typed_since_report: bool,
+    /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
+    pub(crate) account: Option<String>,
 }
 
 /// What a prompt needs from its run's kind, copied when the run starts.
@@ -240,7 +257,7 @@ impl PendingPrompt {
     }
 }
 
-type LiveRuns = HashMap<String, LiveRun>;
+pub(crate) type LiveRuns = HashMap<String, LiveRun>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -255,6 +272,9 @@ impl Agents {
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
+                accounts: Mutex::new(crate::accounts::AccountBusy::default()),
+                bring_back_gate: Mutex::new(()),
+                merging: Mutex::new(HashSet::new()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -269,30 +289,57 @@ impl Agents {
         let _ = self.inner.listener.set(listener);
     }
 
-    fn notify(&self, change: Change) {
+    pub(crate) fn notify(&self, change: Change) {
         if let Some(listener) = self.inner.listener.get() {
             listener(change);
         }
     }
 
-    fn store(&self) -> &Store {
+    /// The terminal manager the runs and sign-ins are created in.
+    pub(crate) fn terminals(&self) -> &TerminalManager {
+        &self.inner.config.terminals
+    }
+
+    /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.
+    pub(crate) fn account_busy(&self) -> MutexGuard<'_, crate::accounts::AccountBusy> {
+        lock(&self.inner.accounts)
+    }
+
+    /// The live runs, under the status lock.
+    pub(crate) fn live_runs(&self) -> MutexGuard<'_, LiveRuns> {
+        lock(&self.inner.status)
+    }
+
+    pub(crate) fn store(&self) -> &Store {
         &self.inner.config.store
     }
 
-    fn profile_dir(&self) -> &Path {
+    pub(crate) fn profile_dir(&self) -> &Path {
         &self.inner.config.profile_dir
     }
 
     /// Every declared kind, read again from the profile, with programs resolved on the service's `PATH`.
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
-        AgentKinds {
-            kinds: Catalog::load(profile_dir).views(profile_dir, &SearchEnv::current()),
+        let mut kinds = Catalog::load(profile_dir).views(profile_dir, &SearchEnv::current());
+        // A kind is imported when its active account has a usable home (decision 0059).
+        for kind in &mut kinds {
+            kind.credentials.imported = self.has_usable_account(&kind.id);
         }
+        AgentKinds { kinds }
     }
 
     /// Starts a session: its first run in a new terminal in the workspace root (0051).
     pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
+        self.start_session(params, None)
+    }
+
+    /// Starts a session, delegated from `parent_id` when one is given (0055).
+    fn start_session(
+        &self,
+        params: AgentStartParams,
+        parent_id: Option<String>,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
             && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
@@ -304,6 +351,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&params.workspace)?;
+        self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
                 codes::PATH_NOT_FOUND,
@@ -338,7 +386,9 @@ impl Agents {
         let session_id = new_id();
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
-        let home = paths::valid_home(self.profile_dir(), &decl.id).filter(|home| home.is_dir());
+        // The gate holds from the account's resolution until the run is registered, so a removal of the account sees it.
+        let gate = credentials::lock_homes();
+        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
         let plan = launch::plan(&LaunchInput {
             decl: &decl,
             program: &program,
@@ -350,7 +400,7 @@ impl Agents {
             },
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
-            credential_home: home.as_deref(),
+            credential_home: access.home.as_deref(),
             caller_args: &params.args,
             caller_env: &params.env,
         })?;
@@ -367,6 +417,7 @@ impl Agents {
                 prompt: PromptRules::of(&decl),
                 pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
+                account: access.account.clone(),
             },
         );
         let agent_ref = plan.agent_ref.clone();
@@ -386,7 +437,7 @@ impl Agents {
             id: session_id.clone(),
             kind: decl.id.clone(),
             workspace_id: workspace.id,
-            parent_id: None,
+            parent_id,
             title: params.title,
             read_only: params.read_only,
             agent_ref,
@@ -444,6 +495,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&row.workspace_id)?;
+        self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
                 codes::PATH_NOT_FOUND,
@@ -462,7 +514,9 @@ impl Agents {
         }
 
         let token = new_token();
-        let home = paths::valid_home(self.profile_dir(), &decl.id).filter(|home| home.is_dir());
+        // The gate holds from the account's resolution until the run is registered (see `start`).
+        let gate = credentials::lock_homes();
+        let access = self.resolve_home(&gate, &decl.id, &workspace.project_id)?;
         // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
         // are not kept with the session (docs/architecture/agents.md).
         let no_env = BTreeMap::new();
@@ -476,7 +530,7 @@ impl Agents {
             },
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
-            credential_home: home.as_deref(),
+            credential_home: access.home.as_deref(),
             caller_args: &[],
             caller_env: &no_env,
         })?;
@@ -492,6 +546,7 @@ impl Agents {
                 prompt: PromptRules::of(&decl),
                 pending: None,
                 typed_since_report: false,
+                account: access.account.clone(),
             },
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
@@ -585,6 +640,13 @@ impl Agents {
         Ok((decl.clone(), program))
     }
 
+    /// Whether `token` is the run token of a live run of `session`, compared in constant time.
+    pub fn run_token_matches(&self, session: &str, token: &str) -> bool {
+        lock(&self.inner.status)
+            .get(session)
+            .is_some_and(|run| tokens_match(&run.token, token))
+    }
+
     /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
     /// `agent.hook_refused` and changes nothing; an event the kind does not map, or maps to `ignore`, changes nothing.
     pub fn hook(&self, params: &AgentHookParams) -> Result<(), AgentError> {
@@ -674,6 +736,9 @@ impl Agents {
             let mut live = lock(&self.inner.status);
             let row = self.reload(&row.id)?;
             let session = self.view_with(&mut live, row)?;
+            // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
+            // this, because a prompt could make the agent write into the worktree while git merges into it.
+            self.refuse_while_merging(&session.workspace_id)?;
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
@@ -856,7 +921,10 @@ impl Agents {
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
     }
 
-    fn startable_kind(&self, id: &str) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+    pub(crate) fn startable_kind(
+        &self,
+        id: &str,
+    ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
         let catalog = Catalog::load(self.profile_dir());
         let entry = catalog.find(id).ok_or_else(|| {
             AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
@@ -1173,7 +1241,7 @@ mod tests {
     use super::*;
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
-    fn service() -> (Agents, String, tempfile::TempDir) {
+    pub(super) fn service() -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {
@@ -1309,6 +1377,7 @@ mod tests {
                 due,
             }),
             typed_since_report: false,
+            account: None,
         };
         let mut live: LiveRuns = HashMap::new();
         live.insert("waiting".to_owned(), run(now + FIRST_PROMPT_WAIT));
@@ -1384,6 +1453,7 @@ mod tests {
                 },
                 pending: None,
                 typed_since_report: false,
+                account: None,
             },
         );
 

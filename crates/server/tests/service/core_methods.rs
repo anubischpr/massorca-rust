@@ -54,7 +54,7 @@ const TERMINAL_METHODS: [&str; 8] = [
 ];
 
 /// The agent methods this build registers (capability `agents/1`).
-const AGENT_METHODS: [&str; 11] = [
+const AGENT_METHODS: [&str; 14] = [
     "agent.kinds",
     "agent.start",
     "agent.list",
@@ -63,6 +63,9 @@ const AGENT_METHODS: [&str; 11] = [
     "agent.forget",
     "agent.hook",
     "agent.watch",
+    "agent.delegate",
+    "agent.tree",
+    "agent.bring_back",
     "agent.credentials.import",
     "agent.credentials.show",
     "agent.credentials.remove",

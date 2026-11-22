@@ -96,7 +96,8 @@ open that check, or the vault is locked with reason `KeyMismatch`
 (`secret.vault_locked`) and nothing is written: a key planted in the vault
 directory with an edited `protection` file is refused. A vault from before the
 check accepts its key once, only when every existing secret opens with it, and
-then records the check; otherwise it is locked.
+then records the check; otherwise it is locked, and the refusal names every
+secret that did not open, by scope and name.
 
 The only ways out are restoring the key or `secret.remove` per name, which
 needs `force: true`, because the value cannot be checked. A vault that holds
@@ -107,6 +108,9 @@ ones. It is refused with `secret.vault_not_empty` while any secret exists.
 
 On Windows the vault folder and its files are created with an owner-only,
 protected DACL, so a file key never inherits the profile folder's permissions.
+A folder or file an earlier build left with inherited access is given that
+DACL when the vault opens. A link or junction at the vault path is never
+followed: the vault is locked with reason `UnsafeDirectory`.
 
 ### Methods
 
@@ -141,9 +145,14 @@ screen show.
     session and scope ids refuse control characters, Unicode format
     characters (Cf, bidi controls included) and U+2028/U+2029.
   - Limits, refused with `secret.request_limit`: at most 20 pending requests
-    per scope, requester and session, and at most 10 new requests a minute per
-    requester. The requester is the connection's principal, the owner or one
-    paired device, so a caller cannot widen its limit by naming new sessions.
+    per requester and scope, whatever session they name, and at most 10 new
+    requests a minute per requester. The requester is `owner`, `device:<id>`,
+    or `agent:<session>` when the request carries `agent_token`, the run token
+    of a live run of that session (`massorca secret request` sends it from
+    `MASSORCA_AGENT_TOKEN`); a token that matches no live run is refused with
+    `secret.invalid_session`.
+  - Requests answered more than 7 days ago, and pending ones older than 30
+    days, are deleted when the next request is made.
   - `secret.requests`: lists open requests.
   - `secret.decline` `{ request }`: declines one.
   - A request resolves when a matching `set` or `link` lands. Its states are
@@ -155,7 +164,10 @@ Names are 1 to 64 characters: letters, digits and `_`, not starting with a
 digit (X-VT-01). Windows environment variables ignore case, so a name that
 differs only by case from an owned or linked name one process would receive
 with it (global with any project, a project with global) is refused with
-`secret.name_in_use`. Scopes are `global`, `project:<id>` and `team:<id>`. Team
+`secret.name_in_use`. Such pairs stored by an earlier build are listed in
+`secret.status` as `name_clashes`, and injection for a project that would get
+both is refused with `secret.name_clash`, which names both and their scopes.
+Scopes are `global`, `project:<id>` and `team:<id>`. Team
 scopes are accepted once Bot Teams has teams.
 
 Events, ids only and never values:

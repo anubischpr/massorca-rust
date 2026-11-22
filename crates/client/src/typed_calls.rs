@@ -1,10 +1,13 @@
 //! Typed helpers over the methods of the core features.
 
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, PromptReceipt,
+    self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
+    AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
+    AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -236,6 +239,27 @@ impl Client {
         self.call(agents::RESUME, &session_ref(session)).await
     }
 
+    /// `agent.delegate`: starts a child session of a parent session; the child's record and an optional note.
+    pub async fn agent_delegate(
+        &self,
+        params: &AgentDelegateParams,
+    ) -> Result<AgentDelegated, ClientError> {
+        self.call(agents::DELEGATE, params).await
+    }
+
+    /// `agent.tree`: a session's delegation tree, its root and the root's children.
+    pub async fn agent_tree(&self, session: &str) -> Result<AgentTree, ClientError> {
+        self.call(agents::TREE, &session_ref(session)).await
+    }
+
+    /// `agent.bring_back`: merges a finished child into its parent and tells the parent run about it.
+    pub async fn agent_bring_back(
+        &self,
+        params: &AgentBringBackParams,
+    ) -> Result<BringBackResult, ClientError> {
+        self.call(agents::BRING_BACK, params).await
+    }
+
     /// `agent.hook`: one status report from a run's hook, with the run's token.
     pub async fn agent_hook(&self, params: &AgentHookParams) -> Result<(), ClientError> {
         let _: serde_json::Value = self.call(agents::HOOK, params).await?;
@@ -274,6 +298,54 @@ impl Client {
         kind: &str,
     ) -> Result<CredentialsRemoved, ClientError> {
         self.call(agents::CREDENTIALS_REMOVE, &kind_ref(kind)).await
+    }
+
+    /// `agent.accounts.list`: the kind's accounts, oldest first.
+    pub async fn agent_accounts_list(&self, kind: &str) -> Result<AccountsList, ClientError> {
+        let params = AccountsListParams {
+            kind: kind.to_owned(),
+        };
+        self.call(agents::ACCOUNTS_LIST, &params).await
+    }
+
+    /// `agent.accounts.add`: starts a sign-in and returns the new account and its terminal.
+    pub async fn agent_accounts_add(
+        &self,
+        params: &AccountsAddParams,
+    ) -> Result<AccountsAdded, ClientError> {
+        self.call(agents::ACCOUNTS_ADD, params).await
+    }
+
+    /// `agent.accounts.import`: imports the kind's declared files into a new account.
+    pub async fn agent_accounts_import(
+        &self,
+        params: &AccountsImportParams,
+    ) -> Result<AccountsImported, ClientError> {
+        self.call(agents::ACCOUNTS_IMPORT, params).await
+    }
+
+    /// `agent.accounts.activate`: makes an account the kind's active one, or a project's choice.
+    pub async fn agent_accounts_activate(
+        &self,
+        params: &AccountsActivateParams,
+    ) -> Result<AccountSummary, ClientError> {
+        self.call(agents::ACCOUNTS_ACTIVATE, params).await
+    }
+
+    /// `agent.accounts.remove`: deletes an account.
+    pub async fn agent_accounts_remove(
+        &self,
+        params: &AccountsRemoveParams,
+    ) -> Result<AccountsRemoved, ClientError> {
+        self.call(agents::ACCOUNTS_REMOVE, params).await
+    }
+
+    /// `agent.accounts.check`: checks an account, or the kind's active one, and returns its state.
+    pub async fn agent_accounts_check(
+        &self,
+        params: &AccountsCheckParams,
+    ) -> Result<AccountSummary, ClientError> {
+        self.call(agents::ACCOUNTS_CHECK, params).await
     }
 }
 

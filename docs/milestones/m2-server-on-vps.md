@@ -153,6 +153,19 @@ $ ls -la ~/.massorca/home/profiles/default/network
 Paired devices left on the server: `win-desktop` (active, its key is in the
 throwaway client home on this machine) and `second-device` (revoked).
 
+## After the security review
+
+The independent security review of the Phase 3 chain found a revocation race
+(a device revoked while it was connecting could keep its connection) and
+asked for hardening of pairing limits, unauthenticated connections, `PATH`
+lookup, Windows key files and logging; the fixes are on
+`phase3/security-fixes`. The server on the VPS still runs the build from
+before those fixes. It listens on the tailnet address only, so it stays up
+until the fixes are merged. Then the new binary replaces
+`~/.massorca/bin/massorca` and the unit restarts; the server key and the paired
+devices live in `~/.massorca/home` and are kept. This section will record that
+redeploy.
+
 ## Not checked
 
 - `host discover` against the real tailnet with a second MassOrca server (there

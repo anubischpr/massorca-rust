@@ -19,7 +19,11 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", 
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 x509-parser.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+massorca-profile.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

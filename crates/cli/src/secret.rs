@@ -8,6 +8,7 @@ use massorca_protocol::methods::secrets::{
     SecretRequest, SecretRequestParams, SecretRequestsParams, SecretSet,
 };
 
+use crate::agent_hook::{ENV_SESSION as ENV_AGENT_SESSION, ENV_TOKEN as ENV_AGENT_TOKEN};
 use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
@@ -152,6 +153,11 @@ async fn status(client: &Client, output: Output) -> Result<(), CliError> {
         format!("state: {}", status.state),
         format!("secrets: {}", status.count),
     ];
+    for clash in &status.name_clashes {
+        lines.push(format!(
+            "names that differ only by case, refused at agent start until one is renamed: {clash}"
+        ));
+    }
     if status.protection == "file" {
         lines.push(
             "the vault key is stored on disk next to the data: anyone who can read the profile directory can read the secrets"
@@ -247,12 +253,13 @@ async fn remove(client: &Client, args: RemoveArgs, output: Output) -> Result<(),
 
 async fn request(client: &Client, args: RequestArgs, output: Output) -> Result<(), CliError> {
     let request = client
-        .secret_request(&SecretRequestParams {
+        .secret_request(&agent_request(SecretRequestParams {
             scope: args.target.scope,
             name: args.target.name,
             reason: args.reason,
             session: args.session,
-        })
+            agent_token: None,
+        }))
         .await?;
     output.success(&request, &[request_line(&request)]);
     Ok(())
@@ -275,6 +282,26 @@ async fn decline(client: &Client, args: DeclineArgs, output: Output) -> Result<(
         .await?;
     output.success(&request, &[request_line(&request)]);
     Ok(())
+}
+
+/// Inside an agent run, the run's session and token, so the request counts against the agent's own quota. A
+/// `--session` naming another session is sent as given, without the token.
+fn agent_request(mut params: SecretRequestParams) -> SecretRequestParams {
+    let (Ok(session), Ok(token)) = (
+        std::env::var(ENV_AGENT_SESSION),
+        std::env::var(ENV_AGENT_TOKEN),
+    ) else {
+        return params;
+    };
+    if params
+        .session
+        .as_deref()
+        .is_none_or(|given| given == session)
+    {
+        params.session = Some(session);
+        params.agent_token = Some(token);
+    }
+    params
 }
 
 /// `<scope> <name>`, then where a link points or which scopes link to an owned secret.

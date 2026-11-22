@@ -149,6 +149,7 @@ async fn requests_past_the_limit_are_request_limit() {
         name: format!("N{index}"),
         reason: "needed".to_owned(),
         session: None,
+        agent_token: None,
     };
     for index in 0..10 {
         let _: Value = client
@@ -158,5 +159,25 @@ async fn requests_past_the_limit_are_request_limit() {
     }
     let body = refused(&client, secrets::REQUEST, &params(10)).await;
     assert_eq!(body.code, codes::SECRET_REQUEST_LIMIT);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_agent_token_that_matches_no_live_run_is_refused() {
+    let home = temp_home();
+    let running = start_file_vault(home.path()).await;
+    let client = connect(home.path(), "default").await;
+    for session in [Some("no-such-session".to_owned()), None] {
+        let params = SecretRequestParams {
+            scope: "global".to_owned(),
+            name: "TOKEN".to_owned(),
+            reason: "needed".to_owned(),
+            session,
+            agent_token: Some("forged-token".to_owned()),
+        };
+        let body = refused(&client, secrets::REQUEST, &params).await;
+        assert_eq!(body.code, codes::SECRET_INVALID_SESSION);
+        assert!(!body.message.contains("forged-token"));
+    }
     stop(running).await;
 }

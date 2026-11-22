@@ -2,10 +2,10 @@
 
 use std::io;
 
-use massorca_client::ClientError;
+use massorca_client::{ClientError, profile_refusal};
 use massorca_core_remote::bootstrap::BootstrapError;
 use massorca_core_remote::ssh::SshError;
-use massorca_profile::ProfileError;
+use massorca_profile::{ProfileError, RootAccessError};
 use massorca_protocol::codes;
 use massorca_protocol::pairing::OfferError;
 use massorca_server::{ListenSpecError, ServiceError};
@@ -66,6 +66,9 @@ impl From<ClientError> for CliError {
         let message = error.to_string();
         let code = match error {
             ClientError::Remote(body) => return Self::from_body(body, exit_code),
+            ClientError::StartRefused(body) | ClientError::ProfileRefused(body) => {
+                return Self::from_body(*body, exit_code);
+            }
             ClientError::Handshake { error: body, .. } => {
                 return Self::from_body(*body, exit_code);
             }
@@ -104,7 +107,17 @@ impl From<ServiceError> for CliError {
                 "another service already runs this profile",
                 exit::ALREADY_RUNNING,
             ),
+            ServiceError::ProfileAccess(refused) => Self::from(refused),
             other => Self::new("service.failed", other.to_string(), exit::ERROR),
+        }
+    }
+}
+
+impl From<RootAccessError> for CliError {
+    fn from(error: RootAccessError) -> Self {
+        match profile_refusal(&error) {
+            Some(body) => Self::from_body(body, exit::ERROR),
+            None => Self::new("io.failed", error.to_string(), exit::ERROR),
         }
     }
 }
@@ -164,5 +177,75 @@ impl From<BootstrapError> for CliError {
 impl From<tokio::task::JoinError> for CliError {
     fn from(error: tokio::task::JoinError) -> Self {
         Self::new(codes::INTERNAL, error.to_string(), exit::ERROR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use massorca_profile::RootAccessError;
+    use massorca_server::ServiceError;
+    use serde_json::json;
+
+    use super::{CliError, exit};
+
+    fn planted() -> PathBuf {
+        PathBuf::from("profiles")
+            .join("default")
+            .join("planted.json")
+    }
+
+    #[test]
+    fn refused_profiles_report_their_code_and_paths() {
+        let cases = [
+            (
+                RootAccessError::ForeignEntries {
+                    paths: vec![planted()],
+                },
+                "profile.foreign_entries",
+                json!({ "paths": [planted().display().to_string()] }),
+            ),
+            (
+                RootAccessError::WritableByOthers {
+                    paths: vec![planted()],
+                },
+                "profile.writable_by_others",
+                json!({ "paths": [planted().display().to_string()] }),
+            ),
+            (
+                RootAccessError::UnsafeLocation { path: planted() },
+                "profile.unsafe_location",
+                json!({ "path": planted().display().to_string() }),
+            ),
+        ];
+        for (refused, code, data) in cases {
+            let error = CliError::from(ServiceError::from(refused));
+
+            assert_eq!(error.code, code);
+            assert_eq!(error.exit_code, exit::ERROR);
+            assert_eq!(error.data.as_deref(), Some(&data));
+        }
+    }
+
+    #[test]
+    fn a_profile_writable_by_others_says_why_and_names_profile_secure() {
+        let error = CliError::from(ServiceError::from(RootAccessError::WritableByOthers {
+            paths: vec![planted()],
+        }));
+
+        assert!(
+            error.message.contains("writable by other users"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("other programs on this computer could change these files")
+                && error.message.contains("massorca profile secure"),
+            "{}",
+            error.message
+        );
     }
 }

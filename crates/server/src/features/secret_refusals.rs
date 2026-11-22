@@ -1,6 +1,6 @@
 //! Vault refusals as protocol errors. Messages and data carry scopes, names and request ids, never a value.
 
-use massorca_core_vault::{Scope, ScopeError, VaultError};
+use massorca_core_vault::{Scope, ScopeError, ScopedName, VaultError};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
@@ -15,6 +15,14 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
     let message = error.to_string();
     let (code, data) = match error {
         VaultError::Locked(_) => (codes::SECRET_VAULT_LOCKED, None),
+        VaultError::KeyMismatch { unreadable } => (
+            codes::SECRET_VAULT_LOCKED,
+            Some(json!({ "reason": "key_mismatch", "unreadable": scoped(unreadable) })),
+        ),
+        VaultError::NameClash { clash } => (
+            codes::SECRET_NAME_CLASH,
+            Some(json!({ "names": scoped(clash) })),
+        ),
         VaultError::NotFound { scope, name } => (codes::SECRET_NOT_FOUND, Some(named(scope, name))),
         VaultError::NameInUse { scope, name } => {
             (codes::SECRET_NAME_IN_USE, Some(named(scope, name)))
@@ -73,6 +81,12 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
         message,
         data,
     }
+}
+
+fn scoped(list: Vec<ScopedName>) -> Value {
+    list.into_iter()
+        .map(|entry| named(entry.scope, entry.name))
+        .collect()
 }
 
 fn named(scope: String, name: String) -> Value {

@@ -83,6 +83,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: TerminalCommand,
     },
+    /// Checks and fixes who can reach the profile's folders on this computer.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
     /// Makes pairing offers for other computers, and pairs this computer with a server.
     Pair {
         #[command(subcommand)]
@@ -152,6 +157,20 @@ pub enum ServiceCommand {
     Unit(UnitArgs),
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ProfileCommand {
+    /// Makes the home private when other programs on this computer could change its files. Prints the access
+    /// entries it removes and keeps, and changes them only with --yes; without it, it exits 0 having changed nothing.
+    Secure(ProfileSecureArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileSecureArgs {
+    /// Apply the change. Existing files are kept and trusted as they are, so review them first.
+    #[arg(long)]
+    pub yes: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Also write log lines to stderr.
@@ -168,6 +187,9 @@ pub struct RunArgs {
     /// Allows a listen address on every interface (0.0.0.0 or ::), which public networks can reach.
     #[arg(long)]
     pub allow_all_interfaces: bool,
+    /// Where an autostarting client reads why the service did not start; set by the client, not by people.
+    #[arg(long, hide = true, value_name = "FILE")]
+    pub start_status: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

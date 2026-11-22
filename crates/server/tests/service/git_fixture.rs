@@ -3,16 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::common::{TempHome, connect, start, stop, temp_home};
 use massorca_client::Client;
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
 use massorca_server::RunningService;
-use tempfile::TempDir;
-
-use super::common::{connect, start, stop, temp_home};
 
 pub struct GitService {
-    pub home: TempDir,
+    pub home: TempHome,
     pub running: RunningService,
     pub client: Client,
     /// The workspace's worktree; the git methods act on it.

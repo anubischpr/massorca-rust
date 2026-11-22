@@ -1,7 +1,7 @@
 //! The bridge against a real service in a temporary profile, driven headlessly: no window opens.
 //! The service runs in this test's runtime; the bridge runs on its own thread, as in the app.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,25 @@ use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -156,7 +175,7 @@ fn remove_params(workspace: &str) -> WorkspaceRemoveParams {
 
 #[tokio::test]
 async fn the_store_follows_the_service_and_waivers_retry_with_one_more_flag() {
-    let home: TempDir = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let repo_dir = home.path().join("demo");
     repo(&repo_dir);
     let service = start_service(home.path()).await;
@@ -244,7 +263,7 @@ async fn the_store_follows_the_service_and_waivers_retry_with_one_more_flag() {
 
 #[tokio::test]
 async fn an_absent_service_is_unreachable_until_retry_now_finds_it() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let (bridge, handle, mut updates) = bridge_for(home.path());
     let mut state = StoreState::default();
     until(&mut updates, &mut state, "the unreachable state", |s| {
@@ -274,7 +293,7 @@ async fn an_absent_service_is_unreachable_until_retry_now_finds_it() {
 
 #[tokio::test]
 async fn a_lost_connection_reconnects_and_resyncs() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let repo_dir = home.path().join("demo");
     repo(&repo_dir);
     let service = start_service(home.path()).await;
@@ -312,7 +331,7 @@ async fn a_lost_connection_reconnects_and_resyncs() {
 #[tokio::test]
 async fn config_values_are_read_and_stored_through_the_bridge() {
     const FOLDER: &str = "workspaces.default_root";
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let (bridge, handle, mut updates) = bridge_for(home.path());
     let mut state = StoreState::default();
