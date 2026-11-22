@@ -21,7 +21,9 @@ mod keys;
 mod links;
 mod requests;
 
-pub use requests::{MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE};
+pub use requests::{
+    ANSWERED_RETENTION_DAYS, MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, PENDING_EXPIRY_DAYS,
+};
 
 use keys::{Recorded, recorded};
 

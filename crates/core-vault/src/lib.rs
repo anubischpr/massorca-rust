@@ -13,6 +13,6 @@ pub use key::{KeyError, KeyStore, LockReason, MasterKey, Protection, UnknownProt
 pub use names::{Scope, ScopeError, is_valid_name, is_valid_reason, is_valid_session};
 pub use value::{MAX_VALUE_BYTES, SecretValue, ValueTooLarge};
 pub use vault::{
-    MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, Vault, VaultEntry, VaultError, VaultStatus,
-    Written,
+    ANSWERED_RETENTION_DAYS, MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, PENDING_EXPIRY_DAYS,
+    Vault, VaultEntry, VaultError, VaultStatus, Written,
 };

@@ -175,12 +175,10 @@ async fn request(ctx: RequestCtx, params: SecretRequestParams) -> Result<SecretR
         name,
         reason,
         session,
+        agent_token,
         ..
     } = params;
-    let requester = ctx
-        .principal
-        .device_id()
-        .map_or_else(|| "owner".to_owned(), |id| format!("device:{id}"));
+    let requester = requester(&ctx, session.as_deref(), agent_token.as_deref())?;
     let row = blocking(&ctx, move |vault| {
         vault.request(&scope, &name, &reason, session, &requester)
     })
@@ -204,6 +202,30 @@ async fn decline(ctx: RequestCtx, params: SecretDecline) -> Result<SecretRequest
     let row = blocking(&ctx, move |vault| vault.decline(&id)).await?;
     publish(&ctx, TOPIC_SECRET_REQUEST_CHANGED, &row.id);
     Ok(request_view(row))
+}
+
+/// Who a request counts against: `agent:<session>` when the agent's run token matches a live run of that session,
+/// else the connection's principal, `owner` or `device:<id>`.
+fn requester(
+    ctx: &RequestCtx,
+    session: Option<&str>,
+    agent_token: Option<&str>,
+) -> Result<String, ErrorBody> {
+    if let Some(token) = agent_token {
+        return match session {
+            Some(session) if ctx.state.agents.run_token_matches(session, token) => {
+                Ok(format!("agent:{session}"))
+            }
+            _ => Err(ErrorBody::new(
+                codes::SECRET_INVALID_SESSION,
+                "the agent token does not match a live run of that session",
+            )),
+        };
+    }
+    Ok(ctx
+        .principal
+        .device_id()
+        .map_or_else(|| "owner".to_owned(), |id| format!("device:{id}")))
 }
 
 /// Runs one vault call on the blocking pool, counted as activity until it returns.
