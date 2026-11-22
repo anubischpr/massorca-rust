@@ -5,11 +5,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{Activity, ActivityState, AgentSession, Outcome};
 use massorca_protocol::methods::terminals::TerminalState;
 
 use super::shell::{Agent, AgentState, SessionRow};
-use crate::service::StoreState;
+use crate::service::{Refusal, StoreState};
 
 /// The title of a top session the service has no title for.
 const UNTITLED: &str = "Untitled session";
@@ -123,6 +124,33 @@ fn done_state(outcome: Option<Outcome>) -> AgentState {
     } else {
         AgentState::Done
     }
+}
+
+/// What a refused bring-back says, in plain words. A code this build does not know keeps the service's text.
+pub fn bring_back_refusal(refusal: &Refusal) -> String {
+    let sentence = match refusal.code() {
+        Some(codes::AGENT_NOT_FOUND) => "This session no longer exists.",
+        Some(codes::AGENT_ALREADY_BROUGHT_BACK) => "This session was already brought back.",
+        Some(codes::AGENT_DELEGATE_NEEDS_GIT) => "The child's workspace has no branch to merge.",
+        Some(codes::AGENT_PARENT_BUSY) => {
+            "The parent session is working. Bring the child back once it is not."
+        }
+        Some(codes::AGENT_PARENT_DIRTY) => {
+            "The parent workspace has uncommitted changes, or a git operation in progress. Commit, discard or finish them first."
+        }
+        Some(codes::AGENT_MERGE_CONFLICT) => {
+            "The merge stopped on conflicts, so it was aborted and nothing changed."
+        }
+        Some(codes::AGENT_WORKSPACE_BUSY) => {
+            "The parent workspace is being written by another session. Bring the child back once that session has stopped."
+        }
+        Some(codes::AGENT_BUSY) => {
+            "Another bring-back is merging into this workspace. Try again once it ends."
+        }
+        Some(codes::AGENT_DEPTH_EXCEEDED) => "A delegated session cannot delegate.",
+        _ => return refusal.message(),
+    };
+    sentence.to_owned()
 }
 
 /// The mark of a session's agent. A kind the desktop has no mark for is `Agent::Unknown`.
@@ -359,6 +387,65 @@ mod tests {
             .map(|row| row.id.as_str())
             .collect();
         assert_eq!(ids, vec!["root"], "a loop has no top session to hang from");
+    }
+
+    #[test]
+    fn each_bring_back_refusal_says_why_in_plain_words() {
+        let refused = |code: &str| Refusal::Failed {
+            code: code.to_owned(),
+            message: "the service's own text".to_owned(),
+        };
+        let cases = [
+            (codes::AGENT_NOT_FOUND, "This session no longer exists."),
+            (
+                codes::AGENT_ALREADY_BROUGHT_BACK,
+                "This session was already brought back.",
+            ),
+            (
+                codes::AGENT_DELEGATE_NEEDS_GIT,
+                "The child's workspace has no branch to merge.",
+            ),
+            (
+                codes::AGENT_PARENT_BUSY,
+                "The parent session is working. Bring the child back once it is not.",
+            ),
+            (
+                codes::AGENT_PARENT_DIRTY,
+                "The parent workspace has uncommitted changes, or a git operation in progress. Commit, discard or finish them first.",
+            ),
+            (
+                codes::AGENT_MERGE_CONFLICT,
+                "The merge stopped on conflicts, so it was aborted and nothing changed.",
+            ),
+            (
+                codes::AGENT_WORKSPACE_BUSY,
+                "The parent workspace is being written by another session. Bring the child back once that session has stopped.",
+            ),
+            (
+                codes::AGENT_BUSY,
+                "Another bring-back is merging into this workspace. Try again once it ends.",
+            ),
+            (
+                codes::AGENT_DEPTH_EXCEEDED,
+                "A delegated session cannot delegate.",
+            ),
+        ];
+        for (code, sentence) in cases {
+            assert_eq!(bring_back_refusal(&refused(code)), sentence, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_without_a_plain_sentence_keeps_the_service_text() {
+        let unknown = Refusal::Failed {
+            code: "git.failed".to_owned(),
+            message: "git said no".to_owned(),
+        };
+        assert_eq!(bring_back_refusal(&unknown), "git said no");
+        assert_eq!(
+            bring_back_refusal(&Refusal::Dirty),
+            "This workspace has uncommitted changes."
+        );
     }
 
     #[test]

@@ -5,8 +5,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use massorca_client::Client;
+use massorca_desktop::model::agent_sessions::bring_back_refusal;
 use massorca_desktop::service::{ServiceBridge, StoreUpdate, connect_options};
 use massorca_profile::Profile;
+use massorca_protocol::codes;
+use massorca_protocol::methods::agents::AgentBringBackParams;
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -69,6 +72,57 @@ async fn the_agent_sessions_the_service_lists_reach_the_store_on_connect() {
         .await
         .expect("the service answers agent.list");
     assert!(direct.sessions.is_empty());
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_bring_back_the_service_refuses_arrives_with_its_code_and_a_plain_sentence() {
+    let home: TempDir = tempfile::tempdir().expect("a temporary home");
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    // The first agent list comes once the bridge is connected, so the call below reaches the service.
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentsResync(_) = updates.recv().await.expect("the bridge is alive")
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the bridge connects");
+
+    let child = "0196a6f0-0000-7000-8000-000000000000".to_owned();
+    let refusal = handle
+        .agent_bring_back(AgentBringBackParams {
+            child: child.clone(),
+            merge: true,
+            prompt: true,
+            token: None,
+        })
+        .await
+        .expect_err("a session the service does not have is refused");
+    assert_eq!(refusal.code(), Some(codes::AGENT_NOT_FOUND), "{refusal:?}");
+    assert_eq!(
+        bring_back_refusal(&refusal),
+        "This session no longer exists."
+    );
+    // The refetch after the write finds the session gone, whatever the answer was.
+    let gone = timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentGone(id) = updates.recv().await.expect("the bridge is alive") {
+                return id;
+            }
+        }
+    })
+    .await
+    .expect("the refetch after the write reports the session gone");
+    assert_eq!(gone, child);
 
     drop(bridge);
     stop_service(service).await;

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscription};
 use massorca_profile::Profile;
+use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
@@ -68,6 +69,10 @@ pub(crate) enum Command {
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    BringBack {
+        params: AgentBringBackParams,
+        reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -576,6 +581,9 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::BringBack { params, reply } => {
+            agents::spawn_bring_back(&client, params, reply, updates);
+        }
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -612,6 +620,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::SetConfig { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::BringBack { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
