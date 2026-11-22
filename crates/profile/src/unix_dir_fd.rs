@@ -136,6 +136,92 @@ pub(crate) fn rename(parent: &File, from: &str, to: &str) -> io::Result<()> {
     }
 }
 
+/// The names in the folder `dir`, read through a duplicate of its descriptor; `.` and `..` are left out.
+pub(crate) fn list_names(dir: &File) -> io::Result<Vec<std::ffi::OsString>> {
+    use std::ffi::{CStr, OsStr};
+
+    // SAFETY: `dir` is an open folder; dup returns a new descriptor or -1, which is checked.
+    let fd = unsafe { libc::dup(dir.as_raw_fd()) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is a fresh descriptor for a folder; fdopendir takes ownership of it, or fails and leaves it open.
+    let stream = unsafe { libc::fdopendir(fd) };
+    if stream.is_null() {
+        let error = io::Error::last_os_error();
+        // SAFETY: fdopendir failed, so `fd` is still ours to close, once.
+        unsafe { libc::close(fd) };
+        return Err(error);
+    }
+    // The duplicate shares the original's position, so start from the first entry.
+    // SAFETY: `stream` is an open directory stream.
+    unsafe { libc::rewinddir(stream) };
+    let mut names = Vec::new();
+    loop {
+        // SAFETY: `stream` is an open directory stream until closedir below; a null result ends the listing.
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: `entry` points at a dirent whose name is NUL-terminated and valid until the next readdir.
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let name = OsStr::from_bytes(name.to_bytes());
+        if name != "." && name != ".." {
+            names.push(name.to_os_string());
+        }
+    }
+    // SAFETY: `stream` came from fdopendir and is closed only here, which also closes `fd`.
+    unsafe { libc::closedir(stream) };
+    Ok(names)
+}
+
+/// Removes the entry `name` of `parent` and, for a folder, everything in it, never following a link: a link is
+/// removed itself, and each folder is opened with `O_NOFOLLOW | O_DIRECTORY` relative to its parent.
+pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+    let c_name = CString::new(name.as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `parent` is an open folder, `c_name` is NUL-terminated, and `stat` is a valid out-pointer.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let is_dir = stat.st_mode & libc::S_IFMT == libc::S_IFDIR;
+    if is_dir {
+        // SAFETY: as above; a returned descriptor is owned by the File made from it, and -1 is checked first.
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                c_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `fd` was just opened and nothing else owns it.
+        let folder = unsafe { File::from_raw_fd(fd) };
+        for child in list_names(&folder)? {
+            remove_entry(&folder, &child)?;
+        }
+    }
+    let flags = if is_dir { libc::AT_REMOVEDIR } else { 0 };
+    // SAFETY: `parent` is an open folder and `c_name` a NUL-terminated name, both alive through the call.
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), c_name.as_ptr(), flags) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// `name` as a C string, once `check_entry_name` accepts it as one folder entry.
 fn c_name(name: &Path) -> io::Result<CString> {
     let text = name.to_str().ok_or_else(|| {

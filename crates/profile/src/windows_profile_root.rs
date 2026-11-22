@@ -236,8 +236,34 @@ pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError
 }
 
 /// Gives the folder `path` the protected owner-only DACL, inherited by what is created in it later.
+/// Gives the folder `path` the protected owner-only DACL and resets the inherited entries of everything below it, so a
+/// grant the folder used to pass on (an inherit-only entry included) is taken away from what already inherited it.
+/// Explicit entries below are kept; `entries_others_can_reach` finds any that still let others in.
 pub(crate) fn make_owner_only(path: &Path) -> io::Result<()> {
-    set_dacl(path, &owner_only_dir_dacl_sddl(&current_user()?)?, true)
+    reset_inherited_below(path, &owner_only_dir_dacl_sddl(&current_user()?)?)
+}
+
+/// Up to `MAX_LISTED_ENTRIES` entries below `dir`, links read themselves and never followed, whose DACL gives anyone
+/// outside the accepted owners and Administrators any access.
+pub(crate) fn entries_others_can_reach(dir: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let trusted = Trusted::current()?;
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            let path = entry.path();
+            if Descriptor::parse(&read_sddl(&path, Links::Open)?).grants_any_to_others(&trusted) {
+                found.push(path);
+                if found.len() >= crate::root_access::MAX_LISTED_ENTRIES {
+                    return Ok(found);
+                }
+            } else if entry.file_type()?.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Creates a new file at `path` whose descriptor allows only the current user, in the same call that creates it, so it

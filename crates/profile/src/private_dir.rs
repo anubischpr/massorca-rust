@@ -1,9 +1,9 @@
 //! A folder of the profile held open without following links, and the entries it creates, writes and removes
 //! (ADR 0073). On Windows the folder is pinned, so it cannot be renamed or replaced while it is held, and its entries are
-//! reached through its path. On Unix entries are created, opened and renamed relative to the folder's descriptor
-//! (`openat`, `mkdirat`, `renameat`, `unlinkat`). A removed folder is first renamed through an open handle; the
-//! renamed folder is then deleted by path inside the held folder with `fs::remove_dir_all`, which deletes links
-//! themselves and never follows them.
+//! reached through its path. On Unix entries are created, opened, renamed and deleted relative to the folder's
+//! descriptor (`openat`, `mkdirat`, `renameat`, `unlinkat`), never through a link. A removed folder is first renamed
+//! through an open handle; on Windows the renamed folder is then deleted by path inside the held folder with
+//! `fs::remove_dir_all`, which deletes links themselves and never follows them.
 
 use std::fs;
 use std::io;
@@ -30,7 +30,7 @@ pub fn is_leftover(name: &str) -> bool {
 pub struct PrivateDir {
     path: PathBuf,
     #[cfg(windows)]
-    _pin: crate::windows_dir_access::PinnedDir,
+    pin: crate::windows_dir_access::PinnedDir,
     #[cfg(unix)]
     dir: fs::File,
 }
@@ -47,14 +47,33 @@ pub fn open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
 
 #[cfg(windows)]
 fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
-    use crate::windows_profile_root::{FolderAccess, folder_access, make_owner_only};
+    use crate::windows_profile_root::{
+        FolderAccess, entries_others_can_reach, folder_access, make_owner_only,
+    };
 
-    let pin = crate::windows_dir_access::PinnedDir::open(dir)
-        .map_err(|error| refused_open(dir, error))?;
+    let pin = |dir: &Path| {
+        crate::windows_dir_access::PinnedDir::open(dir).map_err(|error| refused_open(dir, error))
+    };
     let paths = || vec![dir.to_path_buf()];
+    let mut held = pin(dir)?;
     match folder_access(dir)? {
         FolderAccess::Private => {}
-        FolderAccess::OwnersOnly => make_owner_only(dir)?,
+        FolderAccess::OwnersOnly => {
+            // Only the accepted owners and Administrators can reach it, so it is released while the change walks the
+            // folders below (the pin would block that walk), then pinned again and checked once more. Entries below
+            // may have inherited a grant the folder only passed on (inherit-only); the reset takes it away, and any
+            // explicit grant that still lets others in is refused.
+            drop(held);
+            make_owner_only(dir)?;
+            held = pin(dir)?;
+            if folder_access(dir)? != FolderAccess::Private {
+                return Err(RootAccessError::ReadableByOthers { paths: paths() });
+            }
+            let exposed = entries_others_can_reach(dir)?;
+            if !exposed.is_empty() {
+                return Err(RootAccessError::ReadableByOthers { paths: exposed });
+            }
+        }
         FolderAccess::WritableByOthers => {
             return Err(RootAccessError::WritableByOthers { paths: paths() });
         }
@@ -64,7 +83,7 @@ fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
     }
     Ok(PrivateDir {
         path: dir.to_path_buf(),
-        _pin: pin,
+        pin: held,
     })
 }
 
@@ -105,6 +124,45 @@ impl PrivateDir {
         }
         #[cfg(not(unix))]
         open_private_dir(&path)
+    }
+
+    /// A new, empty, private folder in this one under a random `.writing-` name, to fill and then `publish` under its
+    /// real name in one rename. Until then readers skip it, and a sweep deletes it after a crash.
+    pub fn staged_child(&self) -> Result<PrivateDir, RootAccessError> {
+        self.child(&format!("{TEMP_PREFIX}{}", random_hex()?))
+    }
+
+    /// Renames `staged`, a folder `staged_child` made in this one, to `name` through its open handle. Fails when
+    /// anything is at `name`.
+    pub fn publish(&self, staged: PrivateDir, name: &str) -> Result<(), RootAccessError> {
+        check_entry_name(name)?;
+        #[cfg(windows)]
+        staged.pin.rename_to(&self.path.join(name))?;
+        #[cfg(unix)]
+        {
+            let staged_name = staged
+                .path
+                .file_name()
+                .and_then(|staged_name| staged_name.to_str())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "a staged folder has no name")
+                })?
+                .to_owned();
+            if crate::unix_dir_fd::list_names(&self.dir)?
+                .iter()
+                .any(|entry| entry == name)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{name} already exists"),
+                )
+                .into());
+            }
+            crate::unix_dir_fd::rename(&self.dir, &staged_name, name)?;
+        }
+        #[cfg(not(any(unix, windows)))]
+        fs::rename(&staged.path, self.path.join(name))?;
+        Ok(())
     }
 
     /// Writes `name` in this folder through a temporary file with an unpredictable name, created new, never through a
@@ -155,39 +213,66 @@ impl PrivateDir {
             );
             crate::unix_dir_fd::rename(&self.dir, name, &tombstone)?;
         }
-        delete_with_retries(&self.path.join(tombstone))?;
+        self.delete_entry(&tombstone)?;
         Ok(())
+    }
+
+    /// Deletes the entry `name` of this folder and what it holds, without following links, trying a few times: on
+    /// Unix relative to the folder's descriptor, on Windows by path inside the held folder.
+    fn delete_entry(&self, name: &str) -> io::Result<()> {
+        with_retries(|| {
+            #[cfg(unix)]
+            {
+                match crate::unix_dir_fd::remove_entry(&self.dir, std::ffi::OsStr::new(name)) {
+                    Err(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(()),
+                    other => other,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                delete_path(&self.path.join(name))
+            }
+        })
     }
 
     /// Deletes the tombstones and temporary files an interrupted write or removal left in this folder. Each is tried a
     /// few times; one that still cannot be deleted is left for the next sweep.
     pub fn sweep_leftovers(&self) -> io::Result<()> {
-        for entry in fs::read_dir(&self.path)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if name.to_str().is_some_and(is_leftover) {
-                let _ = delete_with_retries(&entry.path());
+        #[cfg(unix)]
+        let names = crate::unix_dir_fd::list_names(&self.dir)?;
+        #[cfg(not(unix))]
+        let names = fs::read_dir(&self.path)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        for name in names {
+            if let Some(name) = name.to_str().filter(|name| is_leftover(name)) {
+                let _ = self.delete_entry(name);
             }
         }
         Ok(())
     }
 }
 
-/// Deletes a file, a link or a folder tree at `path`, without following links, trying a few times.
-fn delete_with_retries(path: &Path) -> io::Result<()> {
+/// Runs `delete` up to `DELETE_ATTEMPTS` times, pausing briefly between failures.
+fn with_retries(mut delete: impl FnMut() -> io::Result<()>) -> io::Result<()> {
     let mut attempt = 0;
     loop {
-        let deleted = match fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
-            Ok(_) => fs::remove_file(path),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        };
         attempt += 1;
-        match deleted {
+        match delete() {
             Err(_) if attempt < DELETE_ATTEMPTS => std::thread::sleep(Duration::from_millis(50)),
             other => return other,
         }
+    }
+}
+
+/// Deletes a file, a link or a folder tree at `path`, without following links.
+#[cfg(not(unix))]
+fn delete_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -458,5 +543,69 @@ mod tests {
             let now = fs::metadata(&hosts).expect("metadata").permissions().mode();
             assert_eq!(now & 0o777, 0o700, "{mode:o}");
         }
+    }
+
+    /// A hosts folder that passes a read grant for everyone on to what is created in it, without holding it itself.
+    #[cfg(windows)]
+    fn hosts_passing_on_a_read_grant(temp: &Path) -> std::path::PathBuf {
+        let hosts = temp.join("hosts");
+        drop(open_private_dir(&hosts).expect("created"));
+        let user = crate::windows_trust::current_user().expect("the user");
+        crate::windows_profile_root::set_dacl(
+            &hosts,
+            &format!("D:P(A;OICI;FA;;;{user})(A;OICIIO;FR;;;WD)"),
+            true,
+        )
+        .expect("an inherit-only grant");
+        hosts
+    }
+
+    #[cfg(windows)]
+    fn others_can_reach(path: &Path) -> bool {
+        use crate::windows_profile_root::{Links, read_sddl};
+        let descriptor = crate::windows_sddl::Descriptor::parse(
+            &read_sddl(path, Links::Open).expect("its DACL"),
+        );
+        descriptor.grants_any_to_others(&crate::windows_trust::Trusted::current().expect("trusted"))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tightening_a_folder_takes_an_inherited_read_grant_away_from_what_is_below_it() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = hosts_passing_on_a_read_grant(temp.path());
+        let office = hosts.join("office");
+        fs::create_dir(&office).expect("a host folder");
+        fs::write(office.join("device.key"), b"key").expect("a key");
+        assert!(
+            others_can_reach(&office),
+            "the folder inherited the read grant"
+        );
+        assert!(
+            others_can_reach(&office.join("device.key")),
+            "the key inherited it too"
+        );
+
+        drop(open_private_dir(&hosts).expect("tightened"));
+
+        assert!(crate::windows_dir_access::has_owner_only_dacl(&hosts).expect("its DACL"));
+        assert!(!others_can_reach(&office));
+        assert!(!others_can_reach(&office.join("device.key")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_explicit_grant_below_a_tightened_folder_is_refused() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = hosts_passing_on_a_read_grant(temp.path());
+        let office = hosts.join("office");
+        fs::create_dir(&office).expect("a host folder");
+        crate::windows_profile_root::set_dacl(&office, "D:(A;;FR;;;WD)", false)
+            .expect("an explicit grant");
+
+        assert!(matches!(
+            open_private_dir(&hosts),
+            Err(RootAccessError::ReadableByOthers { paths }) if paths == vec![office.clone()]
+        ));
     }
 }
