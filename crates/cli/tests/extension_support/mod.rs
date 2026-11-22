@@ -1,0 +1,194 @@
+//! A host for the extension tests: a sandboxed service whose `PATH` is one temporary folder, test packages written
+//! as folders or archives, and a fake vendor program that stands in for every CLI and installer.
+//!
+//! No test runs a real vendor installer: each package's install, verify and uninstall commands point at
+//! `massorca-fake-vendor` (`src/bin/fake_vendor.rs`), and the package ids and agent ids are not the reserved ones.
+#![allow(dead_code)] // each test binary uses a different subset of these helpers
+
+use std::fs;
+use std::io::{Cursor, Write};
+use std::path::{Path, PathBuf};
+
+use assert_cmd::assert::Assert;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use zip::write::SimpleFileOptions;
+
+use crate::harness::{Sandbox, execute, single_document, with_json};
+
+/// The fake vendor program every test package runs.
+pub const FAKE_VENDOR: &str = env!("CARGO_BIN_EXE_massorca-fake-vendor");
+
+/// The package `acme.kit`, whose agent is `kitagent` and whose CLI is `acmecli`.
+pub const KIT: Package = Package::new("acme.kit", "kitagent", "acmecli");
+
+/// A test package: the id, the agent it contributes and the CLI binary that agent needs.
+#[derive(Debug, Clone, Copy)]
+pub struct Package {
+    pub id: &'static str,
+    pub agent: &'static str,
+    pub binary: &'static str,
+}
+
+impl Package {
+    pub const fn new(id: &'static str, agent: &'static str, binary: &'static str) -> Self {
+        Self { id, agent, binary }
+    }
+
+    /// The manifest. `install` is the argument list given to the fake vendor program to install the CLI, the same on
+    /// every operating system. Verify is `<binary> --version`, and uninstall removes the binary from `bin`.
+    pub fn manifest(&self, bin: &Path, install: &[&str]) -> Value {
+        let step = |os: &str, args: Vec<String>| {
+            let mut command = vec![FAKE_VENDOR.to_owned()];
+            command.extend(args);
+            json!({ "os": os, "command": command })
+        };
+        let install_args: Vec<String> = install.iter().map(|arg| (*arg).to_owned()).collect();
+        let uninstall_args = vec![
+            "uninstall".to_owned(),
+            bin.to_string_lossy().into_owned(),
+            self.binary.to_owned(),
+        ];
+        let on_every_os = |args: &Vec<String>| {
+            ["windows", "linux", "macos"]
+                .map(|os| step(os, args.clone()))
+                .to_vec()
+        };
+        json!({
+            "id": self.id, "name": "Kit", "version": "1.2.0", "publisher": "acme",
+            "description": "A test coding agent.", "api": "1.0", "requires": { "massorca": ">=0.1.0" },
+            "surfaces": ["desktop"], "modes": ["workspaces"],
+            "permissions": [
+                { "kind": "process", "scope": { "programs": [self.binary] }, "reason": "Runs the agent." }
+            ],
+            "contributes": { "agentAdapters": [{
+                "id": self.agent, "kind": format!("agents/{}.json", self.agent),
+                "cli": {
+                    "binary": self.binary, "verify": [self.binary, "--version"],
+                    "source": "https://vendor.example/install",
+                    "install": on_every_os(&install_args), "uninstall": on_every_os(&uninstall_args)
+                }
+            }] },
+            "listing": { "category": "agents", "mention": self.agent }
+        })
+    }
+
+    /// The files of the package.
+    pub fn files(&self, manifest: &Value) -> Vec<(String, Vec<u8>)> {
+        vec![
+            (
+                "extension.json".to_owned(),
+                manifest.to_string().into_bytes(),
+            ),
+            (
+                format!("agents/{}.json", self.agent),
+                format!("{{\"id\":\"{}\"}}", self.agent).into_bytes(),
+            ),
+        ]
+    }
+}
+
+/// A sandboxed service and the folders of one test.
+#[derive(Debug)]
+pub struct Host {
+    pub sandbox: Sandbox,
+    /// The only folder on the service's `PATH`. Fake CLIs live here, and the fake installer puts them here.
+    pub bin: TempDir,
+    /// Where test packages are written.
+    pub packages: TempDir,
+}
+
+impl Host {
+    pub fn new() -> Self {
+        Self {
+            sandbox: Sandbox::new(),
+            bin: tempfile::tempdir().expect("a bin folder"),
+            packages: tempfile::tempdir().expect("a packages folder"),
+        }
+    }
+
+    /// Runs `massorca <args>` with `PATH` set to the bin folder. The service starts on the first call, so it sees
+    /// that `PATH` and no other.
+    pub fn run(&self, args: &[&str]) -> Assert {
+        let mut command = self.sandbox.command("default");
+        command.env("PATH", self.bin.path()).args(args);
+        execute(&mut command)
+    }
+
+    /// The `result` of a command that must succeed, run with `--json`.
+    pub fn json(&self, args: &[&str]) -> Value {
+        let outcome = self.run(&with_json(args)).success();
+        single_document(&outcome)["result"].clone()
+    }
+
+    /// The error of a command that must fail with exit code 1, run with `--json`.
+    pub fn json_error(&self, args: &[&str]) -> Value {
+        let outcome = self.run(&with_json(args)).code(1);
+        let document = single_document(&outcome);
+        assert_eq!(document["ok"], false, "{document}");
+        document["error"].clone()
+    }
+
+    /// Puts a copy of the fake vendor program on the service's `PATH` under the name of a CLI.
+    pub fn put_cli(&self, binary: &str) {
+        fs::copy(FAKE_VENDOR, self.cli_path(binary)).expect("the fake CLI is copied");
+    }
+
+    pub fn cli_path(&self, binary: &str) -> PathBuf {
+        self.bin
+            .path()
+            .join(format!("{binary}{}", std::env::consts::EXE_SUFFIX))
+    }
+
+    pub fn has_cli(&self, binary: &str) -> bool {
+        self.cli_path(binary).exists()
+    }
+
+    /// A file the fake vendor appends to when a command runs, and where it would be.
+    pub fn marker(&self) -> PathBuf {
+        self.packages.path().join("ran.txt")
+    }
+
+    /// Writes `package` as a folder named after its id, and returns its `dir:` source.
+    pub fn write_dir(&self, package: Package, install: &[&str]) -> String {
+        let manifest = package.manifest(self.bin.path(), install);
+        let dir = self.packages.path().join(package.id);
+        for (path, bytes) in package.files(&manifest) {
+            let target = dir.join(&path);
+            fs::create_dir_all(target.parent().expect("a parent")).expect("a folder");
+            fs::write(target, bytes).expect("a package file");
+        }
+        format!("dir:{}", dir.display())
+    }
+
+    /// Writes `package` as an archive, and returns its `file:` source.
+    pub fn write_archive(&self, package: Package, install: &[&str]) -> String {
+        let manifest = package.manifest(self.bin.path(), install);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in package.files(&manifest) {
+            writer
+                .start_file(path.as_str(), SimpleFileOptions::default())
+                .expect("an archive entry");
+            writer.write_all(&bytes).expect("the entry's bytes");
+        }
+        let bytes = writer.finish().expect("the archive").into_inner();
+        let file = self.packages.path().join(format!("{}.zip", package.id));
+        fs::write(&file, bytes).expect("the archive file");
+        format!("file:{}", file.display())
+    }
+
+    /// `<profile>/extensions`.
+    pub fn extensions_dir(&self) -> PathBuf {
+        self.sandbox.profile_dir("default").join("extensions")
+    }
+
+    /// The ids of the installed packages.
+    pub fn installed_ids(&self) -> Vec<String> {
+        self.json(&["extension", "list"])["extensions"]
+            .as_array()
+            .expect("an extensions array")
+            .iter()
+            .map(|item| item["id"].as_str().expect("an id").to_owned())
+            .collect()
+    }
+}
