@@ -73,7 +73,7 @@ impl Shell {
                 let workspace = match self.service {
                     None => {
                         self.store
-                            .update(cx, |store, cx| store.apply(sample_start_records(), cx));
+                            .update(cx, |store, _| store.apply_quietly(sample_start_records()));
                         Some(SAMPLE_WORKSPACE.to_owned())
                     }
                     Some(_) => self
