@@ -138,11 +138,16 @@ parts are rendered from data, with no agent-specific UI code.
 | 1 | Logo | manifest `icon` |
 | 2 | Name | manifest `name` |
 | 3 | Host | the host the package is installed in, or would be |
-| 4 | Banner | the `agentAdapters` entry's `examples`: up to 8 `{ text, description }` showing how the agent is invoked in the chat composer. They are display-only, and are in the manifest so the page shows them before install. |
-| 5 | Connection | accounts of the kind on this host (below), when the kind declares `accounts` |
+| 4 | Banner | the manifest's generic `listing.banner.examples` (0061), 1 to 6 `{ kind: mention\|command\|usage, text?, caption }`. A mention example's text is "@" plus `listing.mention` (for Claude, `listing.mention: "claude"` and `{ "kind": "mention", "text": "@claude", "caption": "Ask Claude to review the workspace changes" }`). Display-only, so the page shows it before install. |
+| 5 | Connection | present when `listing.connections` has `{ "id": "account", "kind": "agent-login", "multiple": true }` (which requires the `credentials` permission); its content is the kind's accounts from `agent.accounts.*` (below) |
 | 6 | Information | manifest description, version, publisher, permissions, and the `cli` source link |
 | 7 | Settings | the kind's `options` with `section: basic` |
 | 8 | Advanced Options | the kind's `options` with `section: advanced`, when there are any |
+
+Before install, an available agent's page shows parts 1 to 6 from the
+manifest only. Parts 7 and 8 appear once the kind is installed and
+`agent.options` answers. An agent package declares no
+`contributes.settings`: its options live in the kind file.
 | 9 | Danger Zone | uninstall, under the removal rules above |
 
 **Options.** A kind declaration may list `options`:
@@ -179,28 +184,66 @@ one is active.
   the agent's usual home, as in 0056 today.
 - Methods (permission `workspace`, except `list`, which is `read`):
   - `agent.accounts.list { kind }`.
-  - `agent.accounts.add { kind, label? }`: this is the login. It creates
+  - `agent.accounts.add { kind, label? }`: this is the sign-in. It creates
     an empty account home and opens a service-owned terminal that runs
     the kind's `accounts.login` command with the home variable pointing
-    at it. The client attaches to that terminal, so the vendor's own flow
-    (a URL, a code) works unchanged. Once the declared credential files
-    exist, or `accounts.check` succeeds, the account is kept; if the
-    terminal ends first, it is discarded.
+    at it, and returns `{ account, terminal_id }`. Once the declared
+    credential files exist, or `accounts.check` reports `signed_in`, the
+    account is kept; if the terminal ends first, it is discarded.
   - `agent.accounts.import { kind, from, label? }`: 0056's import, into a
-    new account.
+    new account. It runs `accounts.check` afterwards ("checked on
+    import") and returns a per-kind result: `imported`, `failed` with a
+    reason, or `not_found`. It never shows a secret.
   - `agent.accounts.activate { kind, account, project? }`.
   - `agent.accounts.remove { kind, account }`: refused with `agent.busy`
     while a live session uses it. Runs the kind's `accounts.logout` when
     it is declared, then deletes the home.
-  - Event `agent.accounts_changed` (id = kind) on every change.
-- The kind declaration gains
-  `accounts: { "login": [...], "check"?: [...], "logout"?: [...] }`.
+  - `agent.accounts.check { kind, account? }`: runs `accounts.check` now
+    and returns the state.
+- **Account states**: `signed_in`, `expired`, `needs_sign_in` (an account
+  with no credentials yet), `not_set_up` (the kind has no account),
+  `migrated` (made from 0056's single home), `conflict` (the vendor
+  reports another identity than the one recorded), and `unknown` (the kind
+  declares no check). `#[serde(other)] unknown` keeps clients safe.
+- **Event** `agent.accounts_changed { kind, account, state }` (id = kind)
+  on every change of an account or its state. A client shows "Signed out,
+  sign in again" when the active account becomes `expired`.
+- **Sign-in progress.** The desktop's sign-in dialog shows starting,
+  waiting for the browser, waiting for a code, done and failed. The
+  service drives it from data, not per-vendor UI code:
+  - The kind's `accounts.patterns` may declare `url` and `code_prompt`
+    regular expressions, matched against the sign-in terminal's output
+    on the service.
+  - The service emits `agent.accounts.progress { kind, account, state:
+    starting|waiting_browser|waiting_code|done|failed, url?, message? }`.
+    `url` is set only when it matched the declared pattern. A code the
+    person types is sent to the terminal as input plus Enter.
+  - When a kind declares no patterns, or nothing matched, the client
+    embeds the terminal (attach to `terminal_id`, with `answers_queries`
+    as for any terminal), so sign-in always works.
+- The kind declaration gains `accounts: { "login": [...], "check"?: {
+  "args": [...], "signed_in_exit": 0, "expired_pattern"?: "...",
+  "identity_pattern"?: "..." }, "logout"?: [...], "patterns"?: { "url"?:
+  "...", "code_prompt"?: "..." } }`. The check's exit code and output
+  patterns decide the state; the identity pattern fills `identity`.
+- **Several accounts, one row at first.** The owner's Connection part
+  allows several accounts per kind with one active, so the core supports
+  that from the start. A client may show one row per kind until it needs
+  more; the methods do not change.
 - **Migration from #121.** The single home `<profile>/agents/homes/<kind>/`
-  becomes the kind's first account, labelled "default" and active. The
-  `agent.credentials.*` methods keep working on the active account and are
-  deprecated in favour of `agent.accounts.*`.
-- The login flow is specified with the desktop session; this part is the
-  shape it plugs into.
+  becomes the kind's first account, labelled "default", state `migrated`
+  until its first check, and active. The `agent.credentials.*` methods
+  keep working on the active account and are deprecated in favour of
+  `agent.accounts.*`.
+- **Default agent.** The config key `agents.default_kind` (a kind id) is
+  the agent a new chat uses. It is an ordinary `config.set` key.
+- **Usage and models**, shaped now and filled later:
+  - `agent.usage { kind, account? }` returns `{ plan?, windows: [{ name:
+    "5h"|"week", used_percent, resets_at_ms }], checked_at_ms }`, or
+    `{ unavailable: reason }`. Until a kind declares a usage source it
+    always returns `unavailable`.
+  - `agent.models { kind }` returns the kind's model list when its
+    declaration has one (a static list, or a command), else an empty list.
 
 ### How the built-in declarations move
 
