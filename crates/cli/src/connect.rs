@@ -1,23 +1,32 @@
-//! Connecting to the service of a profile, with or without starting it.
+//! Connecting to the service a command addresses: a paired host over the network, or the local service of a profile.
 
 use std::path::PathBuf;
 
-use massorca_client::{Autostart, Client, ClientError, ConnectOptions};
+use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Hosts};
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 
 use crate::error::{CliError, exit};
+use crate::target::Target;
 
 /// Who this command says it is in the handshake.
-fn peer() -> PeerInfo {
+pub fn peer() -> PeerInfo {
     PeerInfo {
         name: "massorca".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
     }
 }
 
-/// Connects to the service, starting it first when nothing listens and `autostart` is set.
-pub async fn connect(profile: &Profile, autostart: bool) -> Result<Client, CliError> {
+/// Connects to the service `target` names. A host is reached over the network and never started.
+pub async fn connect(target: &Target, autostart: bool) -> Result<Client, CliError> {
+    match &target.host {
+        Some(name) => Ok(Client::connect_host(&Hosts::of(&target.profile), name, &peer()).await?),
+        None => connect_local(&target.profile, autostart).await,
+    }
+}
+
+/// Connects to the local service of `profile`, starting it first when nothing listens and `autostart` is set.
+pub async fn connect_local(profile: &Profile, autostart: bool) -> Result<Client, CliError> {
     let mut options = ConnectOptions::new(peer());
     if autostart {
         options.autostart = Some(Autostart {
