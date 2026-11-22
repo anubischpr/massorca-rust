@@ -6,7 +6,7 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -34,7 +34,7 @@ use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
-use crate::launch::{self, LaunchError, LaunchInput, Run};
+use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::paths;
 use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
@@ -363,35 +363,18 @@ impl Agents {
                 pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
             },
         );
-        let started = write_files(&plan.files)
-            .map_err(AgentError::from)
-            .and_then(|()| {
-                let mut env = plan.env;
-                // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).
-                for name in plan.remove_env {
-                    env.entry(name).or_default();
-                }
-                let spec = CreateSpec {
-                    workspace_id: workspace.id.clone(),
-                    cwd: PathBuf::from(&workspace.path),
-                    shell: Some(ShellChoice {
-                        program: plan.program.to_string_lossy().into_owned(),
-                        args: plan.args,
-                    }),
-                    env,
-                    size: PtySize {
-                        cols: params.cols.unwrap_or(DEFAULT_COLS),
-                        rows: params.rows.unwrap_or(DEFAULT_ROWS),
-                    },
-                    title: Some(params.title.clone().unwrap_or_else(|| decl.name.clone())),
-                    request_id: None,
-                };
-                Ok(self.inner.config.terminals.create(spec)?)
-            });
-        let terminal = started.inspect_err(|_| {
-            live.remove(&session_id);
-            remove_dir(&run_dir);
-        })?;
+        let agent_ref = plan.agent_ref.clone();
+        let size = PtySize {
+            cols: params.cols.unwrap_or(DEFAULT_COLS),
+            rows: params.rows.unwrap_or(DEFAULT_ROWS),
+        };
+        let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
+        let terminal_id = self
+            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+            .inspect_err(|_| {
+                live.remove(&session_id);
+                remove_dir(&run_dir);
+            })?;
 
         let row = AgentSessionRow {
             id: session_id.clone(),
@@ -400,8 +383,8 @@ impl Agents {
             parent_id: None,
             title: params.title,
             read_only: params.read_only,
-            agent_ref: plan.agent_ref,
-            terminal_id: Some(terminal.id.clone()),
+            agent_ref,
+            terminal_id: Some(terminal_id.clone()),
             request_id: params.request_id,
             created_at: now_ms(),
             exit: None,
@@ -411,13 +394,174 @@ impl Agents {
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
-            let _ = self.inner.config.terminals.close(&terminal.id);
+            let _ = self.inner.config.terminals.close(&terminal_id);
             remove_dir(&run_dir);
             return Err(error.into());
         }
         let session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         Ok(session)
+    }
+
+    /// Starts a new run of an exited session, in the same session (0054): the kind's resume arguments, with the agent's
+    /// ref in place of `{ref}`, in a new terminal in the workspace root. The session keeps its id and its ref; its exit
+    /// and activity are cleared, so the activity starts absent until the agent reports. Refused with `agent.busy` while
+    /// its run is live; `agent.resume_unavailable` when the kind is no longer declared, has no resume form, or the
+    /// agent's ref is not known; `agent.not_installed` when no program of the kind resolves; `agent.workspace_busy` when
+    /// another session writes in the workspace.
+    pub fn resume(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let _gate = lock(&self.inner.start_gate);
+        let row = self.resolve(selector)?;
+        if self.view(row.clone())?.execution.state != TerminalState::Exited {
+            return Err(AgentError::new(
+                codes::AGENT_BUSY,
+                format!("session {} is still running; stop it first", row.id),
+            ));
+        }
+        let row = self.reload(&row.id)?;
+        let agent_ref = row
+            .agent_ref
+            .clone()
+            .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
+        let (decl, program) = self.resumable_kind(&row)?;
+        let workspace = self
+            .inner
+            .config
+            .workspaces
+            .show_workspace(&row.workspace_id)?;
+        if workspace.missing {
+            return Err(AgentError::new(
+                codes::PATH_NOT_FOUND,
+                format!("the workspace directory is missing: {}", workspace.path),
+            ));
+        }
+        if !row.read_only
+            && let Some(holder) = self.live_writer(&workspace.id)?
+        {
+            let mut error = AgentError::new(
+                codes::AGENT_WORKSPACE_BUSY,
+                format!("session {holder} already writes in this workspace"),
+            );
+            error.data = Some(json!({ "session": holder }));
+            return Err(error);
+        }
+
+        let token = new_token();
+        let home = paths::valid_home(self.profile_dir(), &decl.id).filter(|home| home.is_dir());
+        // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
+        // are not kept with the session (docs/architecture/agents.md).
+        let no_env = BTreeMap::new();
+        let plan = launch::plan(&LaunchInput {
+            decl: &decl,
+            program: &program,
+            session_id: &row.id,
+            token: &token,
+            run: Run::Resume {
+                agent_ref: &agent_ref,
+            },
+            profile_dir: self.profile_dir(),
+            massorca_bin: &self.inner.config.massorca_bin,
+            credential_home: home.as_deref(),
+            caller_args: &[],
+            caller_env: &no_env,
+        })?;
+        let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
+        // the row names the new terminal, so the run's first report waits instead of being refused.
+        let mut live = lock(&self.inner.status);
+        live.insert(
+            row.id.clone(),
+            LiveRun {
+                token,
+                rules: HookRules::of(&decl),
+                prompt: PromptRules::of(&decl),
+                pending: None,
+            },
+        );
+        let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
+        let size = PtySize {
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+        };
+        let terminal_id = self
+            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+            .inspect_err(|_| {
+                live.remove(&row.id);
+                remove_dir(&run_dir);
+            })?;
+        let restarted = self.store().restart_agent_session(&row.id, &terminal_id);
+        if !matches!(restarted, Ok(true)) {
+            live.remove(&row.id);
+            let _ = self.inner.config.terminals.close(&terminal_id);
+            remove_dir(&run_dir);
+            restarted?;
+            return Err(AgentError::new(
+                codes::AGENT_NOT_FOUND,
+                format!("no agent session {}", row.id),
+            ));
+        }
+        let fresh = self.reload(&row.id)?;
+        let session = self.view_with(&mut live, fresh)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(session)
+    }
+
+    /// Writes a run's files, then creates its terminal in the workspace root with the launch plan's program, arguments
+    /// and environment (0051). Returns the terminal's id.
+    fn spawn_run(
+        &self,
+        plan: LaunchPlan,
+        workspace_id: &str,
+        cwd: &str,
+        title: String,
+        size: PtySize,
+    ) -> Result<String, AgentError> {
+        write_files(&plan.files)?;
+        let mut env = plan.env;
+        // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).
+        for name in plan.remove_env {
+            env.entry(name).or_default();
+        }
+        let spec = CreateSpec {
+            workspace_id: workspace_id.to_owned(),
+            cwd: PathBuf::from(cwd),
+            shell: Some(ShellChoice {
+                program: plan.program.to_string_lossy().into_owned(),
+                args: plan.args,
+            }),
+            env,
+            size,
+            title: Some(title),
+            request_id: None,
+        };
+        Ok(self.inner.config.terminals.create(spec)?.id)
+    }
+
+    /// The declaration and program a resume starts with: declared, valid, with a resume form, and installed (0054).
+    fn resumable_kind(&self, row: &AgentSessionRow) -> Result<(KindDecl, PathBuf), AgentError> {
+        let catalog = Catalog::load(self.profile_dir());
+        let entry = catalog.find(&row.kind).ok_or_else(|| {
+            resume_unavailable(&row.id, &format!("kind {} is no longer declared", row.kind))
+        })?;
+        let decl = entry
+            .valid()
+            .ok_or_else(|| resume_unavailable(&row.id, &format!("kind {} is invalid", row.kind)))?;
+        if !decl.resumable() {
+            return Err(resume_unavailable(
+                &row.id,
+                &format!("kind {} declares no resume form", row.kind),
+            ));
+        }
+        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!(
+                    "agent kind {} is not installed: none of its programs was found",
+                    row.kind
+                ),
+            )
+        })?;
+        Ok((decl.clone(), program))
     }
 
     /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
@@ -838,6 +982,14 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
     }
 }
 
+/// The refusal for a resume the session cannot make (0054).
+fn resume_unavailable(session: &str, reason: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_RESUME_UNAVAILABLE,
+        format!("session {session} cannot resume: {reason}"),
+    )
+}
+
 /// The refusal for a prompt to a run that has ended. The session's id only, never the prompt.
 fn not_live(session: &str) -> AgentError {
     AgentError::new(
@@ -1125,5 +1277,13 @@ mod tests {
         );
         assert!(live["waiting"].pending.is_some());
         assert!(live["late"].pending.is_none());
+    }
+
+    /// A resume of a session that does not exist is refused as not found (0054).
+    #[test]
+    fn a_resume_of_an_unknown_session_is_not_found() {
+        let (agents, _workspace_id, _profile) = service();
+        let error = agents.resume("no-such-session").unwrap_err();
+        assert_eq!(error.code, codes::AGENT_NOT_FOUND);
     }
 }

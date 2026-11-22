@@ -268,3 +268,42 @@ fn a_status_change_writes_activity_and_result_and_learns_the_ref_once() {
             .unwrap()
     );
 }
+
+#[test]
+fn a_restart_moves_an_exited_session_to_a_new_terminal_and_clears_its_exit_and_activity() {
+    let (store, workspace) = store_with_workspace();
+    let mut row = session_row(&workspace, 10);
+    row.exit = Some(RunExit {
+        code: Some(0),
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: 20,
+    });
+    row.activity = Some(StoredActivity {
+        state: "done".to_owned(),
+        outcome: Some("success".to_owned()),
+        source: "hook".to_owned(),
+        at: 19,
+    });
+    row.result = Some("kept".to_owned());
+    store.insert_agent_session(&row).unwrap();
+
+    let terminal = new_id();
+    assert!(store.restart_agent_session(&row.id, &terminal).unwrap());
+    let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(restarted.terminal_id.as_deref(), Some(terminal.as_str()));
+    assert_eq!(restarted.exit, None);
+    assert_eq!(restarted.activity, None, "absent until the agent reports");
+    assert_eq!(restarted.result.as_deref(), Some("kept"));
+    assert_eq!(restarted.agent_ref.as_deref(), Some("ref-1"));
+}
+
+#[test]
+fn a_live_session_is_not_restarted() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(!store.restart_agent_session(&row.id, &new_id()).unwrap());
+    assert_eq!(store.get_agent_session(&row.id).unwrap(), Some(row));
+}

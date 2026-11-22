@@ -213,6 +213,17 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Starts a new run of an exited session (0054): the row names the new run's terminal, and its exit and activity are
+    /// cleared, so the activity starts absent until the agent reports. The result and the agent ref stay. One statement,
+    /// so a reader never sees the exit cleared with the old terminal. Returns whether an exited row changed.
+    pub fn restart_agent_session(&self, id: &str, terminal_id: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET terminal_id = ?2, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            params![id, terminal_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Writes a session's activity and result (0052), replacing both, and sets its agent ref from `agent_ref_if_unset`
     /// only when the row has none. One statement, so a reader never sees half a change. Returns whether a row matched.
     pub fn set_agent_session_status(

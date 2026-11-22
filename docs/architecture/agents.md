@@ -166,6 +166,18 @@ cannot wait for one, so `agent.start` refuses such a first prompt with `agent.pr
 before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
 held prompt still follows at `idle`.
 
+`agent.resume` (0054) starts a new run of an exited session, in the same session: the kind's resume
+arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
+one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
+exit is cleared, and its activity is absent until the new run reports. The caller's arguments and
+environment of the first start are not kept, so a resumed run gets the kind's own arguments and the
+resume arguments only. The run is registered under the status lock before its program starts, as in
+`agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
+`agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
+session's ref is not known yet (a Codex session learns its ref at a turn's end); `agent.not_installed`
+when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
+workspace.
+
 ## Status store
 
 `core-agents` applies every status change under one lock: a start, a hook report, a
