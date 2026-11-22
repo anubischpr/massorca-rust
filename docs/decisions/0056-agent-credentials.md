@@ -38,6 +38,10 @@ single use, so a login copied to two places will fail in one of them.
   - each file is written to a temporary name and renamed into place;
     on Unix the home is `0700` and files `0600`; on Windows they inherit the
     profile directory's owner-only access (0004);
+  - *Amended 2026-11-21:* 0004 does not make the profile directory
+    owner-only on Windows (it keeps its inherited access); the home gets its
+    own protected DACL (owner and SYSTEM, inherited by its files) before any
+    file is written;
   - the result lists file names and sizes only, never contents; nothing
     about the files is logged beyond names and sizes;
   - an existing home is replaced only with `--replace`.

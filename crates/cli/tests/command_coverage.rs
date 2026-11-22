@@ -80,6 +80,9 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         checked,
         BTreeSet::from([
             "agent.attach",
+            "agent.credentials.import",
+            "agent.credentials.remove",
+            "agent.credentials.show",
             "agent.forget",
             "agent.hook",
             "agent.kinds",

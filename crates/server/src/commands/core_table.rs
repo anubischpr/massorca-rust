@@ -372,6 +372,32 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.show",
             selector("session"),
         ),
+        command(
+            "agent.credentials.import",
+            "Copy an agent kind's login files into this profile",
+            "agent.credentials.import",
+            json!({
+                "type": "object",
+                "required": ["kind", "from"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "from": { "type": "string" },
+                    "replace": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.credentials.show",
+            "Show an agent kind's credential home in this profile",
+            "agent.credentials.show",
+            selector("kind"),
+        ),
+        command(
+            "agent.credentials.remove",
+            "Delete an agent kind's credential home in this profile",
+            "agent.credentials.remove",
+            selector("kind"),
+        ),
     ]
 }
 

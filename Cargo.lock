@@ -3440,10 +3440,12 @@ dependencies = [
 name = "massorca-core-agents"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "massorca-core-git",
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-workspace",
+ "massorca-profile",
  "massorca-protocol",
  "serde",
  "serde_json",
