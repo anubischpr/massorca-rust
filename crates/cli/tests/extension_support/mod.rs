@@ -22,7 +22,7 @@ use crate::harness::{Sandbox, execute, single_document, with_json};
 pub fn fake_vendor() -> String {
     static BUILT: std::sync::Once = std::sync::Once::new();
     BUILT.call_once(|| {
-        let status = std::process::Command::new(env!("CARGO"))
+        let status = massorca_process::command(env!("CARGO"))
             .args([
                 "build",
                 "--locked",

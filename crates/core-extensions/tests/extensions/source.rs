@@ -100,7 +100,7 @@ fn a_fifo_in_a_folder_or_as_an_archive_is_refused_without_blocking() {
         &package_files(&agent_package("acme", "kit", "kit")),
     );
     let fifo = dir.path().join("pipe");
-    let made = std::process::Command::new("mkfifo")
+    let made = massorca_process::command("mkfifo")
         .arg(&fifo)
         .status()
         .expect("mkfifo runs");

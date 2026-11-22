@@ -3600,6 +3600,7 @@ name = "massorca-core-extensions"
 version = "0.1.0"
 dependencies = [
  "massorca-ext-package",
+ "massorca-process",
  "massorca-profile",
  "serde",
  "serde_json",
