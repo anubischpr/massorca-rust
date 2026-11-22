@@ -136,3 +136,76 @@ fn delete_matching(attributes: Vec<(&str, &str)>) {
         Some(())
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use oo7::Secret;
+
+    use super::{
+        APPLICATION, Created, ID_ATTRIBUTE, ITEM_ATTRIBUTE, create, delete_all, delete_created,
+        run, unlocked_default, vault_id,
+    };
+    use crate::key::MasterKey;
+
+    /// The items of this vault, by their unique tag.
+    fn tags(id: &str) -> Option<Vec<String>> {
+        run(|| async {
+            let collection = unlocked_default().await?;
+            let mut tags = Vec::new();
+            for item in collection
+                .search_items(&[APPLICATION, (ID_ATTRIBUTE, id)])
+                .await
+                .ok()?
+            {
+                let attributes = item.attributes().await.ok()?;
+                tags.push(attributes.get(ITEM_ATTRIBUTE).cloned().unwrap_or_default());
+            }
+            Some(tags)
+        })
+    }
+
+    #[test]
+    #[expect(
+        clippy::print_stderr,
+        reason = "a skipped test must name why it skipped"
+    )]
+    fn delete_created_removes_only_the_item_it_was_given() {
+        if run(|| async { unlocked_default().await.map(|_| ()) }).is_none() {
+            eprintln!("skipped: no unlocked Secret Service default collection is reachable");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = MasterKey::generate().expect("key");
+        let Created::Stored(mine) = create(dir.path(), &key) else {
+            eprintln!("skipped: the Secret Service refused to store an item");
+            return;
+        };
+        let id = vault_id::read(dir.path()).expect("the vault id");
+        // A racing creator's item for the same vault, with its own tag.
+        let theirs = vault_id::random_hex().expect("tag");
+        let stored = run(|| async {
+            let collection = unlocked_default().await?;
+            collection
+                .create_item(
+                    "MassOrca vault test",
+                    &[
+                        APPLICATION,
+                        (ID_ATTRIBUTE, id.as_str()),
+                        (ITEM_ATTRIBUTE, theirs.as_str()),
+                    ],
+                    Secret::blob(key.bytes()),
+                    false,
+                    None,
+                )
+                .await
+                .ok()
+        });
+        assert!(stored.is_some(), "the second item is stored");
+
+        delete_created(dir.path(), &mine);
+        let left = tags(&id).expect("the items are listed");
+        delete_all(dir.path());
+        assert_eq!(left, vec![theirs], "only the given item was removed");
+        assert_eq!(tags(&id).expect("listed"), Vec::<String>::new());
+    }
+}
