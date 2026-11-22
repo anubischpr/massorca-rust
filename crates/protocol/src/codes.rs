@@ -95,6 +95,12 @@ pub const GIT_NO_OPERATION: &str = "git.no_operation";
 pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
 /// The repository's git directory cannot be watched; the stream ends with this code.
 pub const GIT_WATCH_UNAVAILABLE: &str = "git.watch_unavailable";
+/// CLI only: a fast-forward-only pull found local and remote commits on both sides; nothing changed.
+pub const GIT_DIVERGED: &str = "git.diverged";
+/// CLI only: a pull's merge or rebase stopped on conflicts.
+pub const GIT_CONFLICTS: &str = "git.conflicts";
+/// CLI only: the remote refused the push.
+pub const GIT_PUSH_REJECTED: &str = "git.push_rejected";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

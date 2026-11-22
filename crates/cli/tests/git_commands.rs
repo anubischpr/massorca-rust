@@ -334,6 +334,60 @@ fn push_fetch_and_pull_through_the_cli() {
         .stderr(contains("git.no_operation"));
 }
 
+/// A pull that could not fast-forward and a push the remote refused did not do what was asked: both exit 1 with a
+/// typed code, in text and under `--json`, and the JSON error carries the result.
+#[test]
+fn a_diverged_pull_and_a_rejected_push_exit_1_with_their_codes() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let remote = sandbox.home().join("remote.git");
+    let remote_text = remote.to_string_lossy().into_owned();
+    harness::git(sandbox.home(), &["init", "-q", "--bare", &remote_text]);
+    harness::git(&dir, &["remote", "add", "origin", &remote_text]);
+    sandbox.json_ok("default", &["git", "push", "-w", "feature"]);
+
+    let other = sandbox.home().join("other");
+    let other_text = other.to_string_lossy().into_owned();
+    harness::git(
+        sandbox.home(),
+        &["clone", "-q", "-b", "feature", &remote_text, &other_text],
+    );
+    std::fs::write(other.join("theirs.txt"), "theirs").expect("write");
+    harness::git(&other, &["add", "theirs.txt"]);
+    harness::git(&other, &["commit", "-q", "-m", "theirs"]);
+    harness::git(&other, &["push", "-q", "origin", "feature"]);
+    std::fs::write(dir.join("ours.txt"), "ours").expect("write");
+    harness::git(&dir, &["add", "ours.txt"]);
+    harness::git(&dir, &["commit", "-q", "-m", "ours"]);
+
+    sandbox
+        .run("default", &["git", "pull", "-w", "feature"])
+        .code(1)
+        .stderr(contains("diverge"))
+        .stderr(contains("git.diverged"));
+    let pulled = sandbox
+        .run("default", &["--json", "git", "pull", "-w", "feature"])
+        .code(1);
+    let document: serde_json::Value =
+        serde_json::from_str(stdout_text(&pulled).trim()).expect("one JSON document");
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "git.diverged");
+    assert_eq!(document["error"]["data"]["outcome"], "diverged");
+
+    sandbox
+        .run("default", &["git", "push", "-w", "feature"])
+        .code(1)
+        .stderr(contains("rejected"))
+        .stderr(contains("git.push_rejected"));
+    let pushed = sandbox
+        .run("default", &["--json", "git", "push", "-w", "feature"])
+        .code(1);
+    let document: serde_json::Value =
+        serde_json::from_str(stdout_text(&pushed).trim()).expect("one JSON document");
+    assert_eq!(document["error"]["code"], "git.push_rejected");
+    assert_eq!(document["error"]["data"]["outcome"]["kind"], "rejected");
+}
+
 #[test]
 fn watch_prints_ready_then_the_change_and_stops_after_max_events() {
     use std::io::{BufRead, BufReader};
