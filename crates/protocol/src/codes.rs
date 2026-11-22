@@ -133,6 +133,29 @@ pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
 pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
 pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
 pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
+/// The vault key will not open; the ciphertext is kept (decision 0071).
+pub const SECRET_VAULT_LOCKED: &str = "secret.vault_locked";
+pub const SECRET_NOT_FOUND: &str = "secret.not_found";
+/// The name is already owned or linked in this scope.
+pub const SECRET_NAME_IN_USE: &str = "secret.name_in_use";
+/// The name in this scope is a link; change it at its owning scope, named in the message.
+pub const SECRET_LINKED: &str = "secret.linked";
+/// Other scopes link to this secret; they are named in the message. `include_links` removes them too.
+pub const SECRET_HAS_LINKS: &str = "secret.has_links";
+pub const SECRET_INVALID_NAME: &str = "secret.invalid_name";
+pub const SECRET_INVALID_SCOPE: &str = "secret.invalid_scope";
+pub const SECRET_TOO_LARGE: &str = "secret.too_large";
+pub const SECRET_INVALID_REASON: &str = "secret.invalid_reason";
+pub const SECRET_INVALID_SESSION: &str = "secret.invalid_session";
+/// A secret, named in the data, does not open with the vault key; nothing was marked used.
+pub const SECRET_UNREADABLE: &str = "secret.unreadable";
+/// `secret.reset_key` while the vault still holds secrets; the count is in the data.
+pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
+/// Too many pending or recent requests from one requester; see decision 0071 for the limits.
+pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
+pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
+/// The request is no longer pending.
+pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
 
 pub const AGENT_NOT_FOUND: &str = "agent.not_found";
 pub const AGENT_KIND_NOT_FOUND: &str = "agent.kind_not_found";
@@ -155,6 +178,23 @@ pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
 pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
+
+/// A team, bot or team project is named by a selector that matches none, or none of its own team.
+pub const TEAM_NOT_FOUND: &str = "team.not_found";
+/// Another team has this name.
+pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
+pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
+pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+pub const BOT_NOT_FOUND: &str = "bot.not_found";
+/// Another bot of the team has this name.
+pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
+/// The team already has a lead bot; clear its lead first.
+pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
+/// The bot owns open tasks; it can be removed only with `unassign`.
+pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
+pub const TASK_NOT_FOUND: &str = "task.not_found";
+/// The task's agent session still runs; stop it first.
+pub const TASK_RUNNING: &str = "task.running";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

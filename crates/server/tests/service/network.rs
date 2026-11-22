@@ -10,6 +10,7 @@ use massorca_net::TlsIdentity;
 use massorca_protocol::methods::devices::{
     self, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret, WhoAmI,
 };
+use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service};
@@ -221,6 +222,34 @@ async fn scopes_limit_a_device_and_admin_widens_them() {
         list.devices.iter().filter(|device| device.current).count(),
         1
     );
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_standard_device_cannot_set_or_reset_a_secret() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (standard, _) = pair(&hosts, &standard_offer, "plain").await.unwrap();
+    let value = "device-secret-value-27aa";
+    let set = SecretSet {
+        scope: "global".to_owned(),
+        name: "TOKEN".to_owned(),
+        value: value.to_owned(),
+        replace: false,
+    };
+    let denied = standard
+        .call::<_, serde_json::Value>(secrets::SET, &set)
+        .await
+        .expect_err("denied");
+    assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED);
+    assert!(!format!("{denied:?}").contains(value));
+    let denied = standard
+        .call::<_, serde_json::Value>(secrets::RESET_KEY, &())
+        .await
+        .expect_err("denied");
+    assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED);
     stop(running).await;
 }
 

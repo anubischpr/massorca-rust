@@ -99,6 +99,122 @@ CREATE TABLE devices (
 "#,
         foreign_keys_off: false,
     },
+    // Bot Teams core (decision 0072): teams and their bots. A team's removal removes its bots; at most one bot is the lead.
+    Migration {
+        sql: r#"
+CREATE TABLE teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    character TEXT NOT NULL,
+    access TEXT NOT NULL,
+    workspaces INTEGER NOT NULL CHECK(workspaces IN (0,1)),
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE bots (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    job TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    model TEXT,
+    effort TEXT,
+    lead INTEGER NOT NULL CHECK(lead IN (0,1)),
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+CREATE UNIQUE INDEX bots_one_lead ON bots(team_id) WHERE lead = 1;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team projects (decision 0072): each has its own Board and Brief; a team's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE team_projects (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Tasks (decision 0072). A task keeps its own lifecycle; the agent session it names is read from the agents domain.
+    // A removed bot or project leaves its tasks without that link; a removed team takes its tasks with it.
+    Migration {
+        sql: r#"
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES team_projects(id) ON DELETE SET NULL,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('room','cli')),
+    session_id TEXT,
+    outcome TEXT CHECK(outcome IN ('success','failure','cancelled','interrupted')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX tasks_by_team ON tasks(team_id, created_at);
+CREATE INDEX tasks_by_bot ON tasks(bot_id);
+CREATE INDEX tasks_by_project ON tasks(project_id);
+"#,
+        foreign_keys_off: false,
+    },
+    // Secret vault (decision 0071): ciphertext only; names and scopes in clear.
+    Migration {
+        sql: r#"
+CREATE TABLE secrets (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    rotated_at INTEGER NOT NULL,
+    used_at INTEGER,
+    UNIQUE(scope, name)
+);
+CREATE TABLE secret_links (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+    linked_at INTEGER NOT NULL,
+    PRIMARY KEY(scope, name)
+);
+CREATE INDEX secret_links_by_secret ON secret_links(secret_id);
+CREATE TABLE secret_requests (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    session TEXT,
+    state TEXT NOT NULL CHECK(state IN ('pending','stored','linked','declined','failed')),
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // The vault key check, so a planted key is refused, and who asked for each request, for its limits (0071).
+    Migration {
+        sql: r#"
+CREATE TABLE secret_key_check (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    nonce BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+);
+ALTER TABLE secret_requests ADD COLUMN requester TEXT;
+CREATE INDEX secret_requests_by_requester ON secret_requests(requester, created_at);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

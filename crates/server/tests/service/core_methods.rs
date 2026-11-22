@@ -54,7 +54,7 @@ const TERMINAL_METHODS: [&str; 8] = [
 ];
 
 /// The agent methods this build registers (capability `agents/1`).
-const AGENT_METHODS: [&str; 8] = [
+const AGENT_METHODS: [&str; 11] = [
     "agent.kinds",
     "agent.start",
     "agent.list",
@@ -63,10 +63,36 @@ const AGENT_METHODS: [&str; 8] = [
     "agent.forget",
     "agent.hook",
     "agent.watch",
+    "agent.credentials.import",
+    "agent.credentials.show",
+    "agent.credentials.remove",
+];
+
+/// The Bot Teams methods this build registers (capability `teams/1`).
+const TEAM_METHODS: [&str; 19] = [
+    "team.create",
+    "team.list",
+    "team.show",
+    "team.update",
+    "team.rm",
+    "team.bot_add",
+    "team.bot_update",
+    "team.bot_rm",
+    "team.project_add",
+    "team.project_update",
+    "team.project_rm",
+    "team.board",
+    "task.create",
+    "task.list",
+    "task.show",
+    "task.update",
+    "task.done",
+    "task.reopen",
+    "task.rm",
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 16] = [
+const CLI_COMMAND_IDS: [&str; 26] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -83,6 +109,16 @@ const CLI_COMMAND_IDS: [&str; 16] = [
     "workspace.list",
     "workspace.show",
     "workspace.rm",
+    "secret.status",
+    "secret.list",
+    "secret.set",
+    "secret.link",
+    "secret.unlink",
+    "secret.remove",
+    "secret.request",
+    "secret.requests",
+    "secret.decline",
+    "secret.reset-key",
 ];
 
 #[tokio::test]
@@ -232,6 +268,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(&TERMINAL_METHODS)
         .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
+        .chain(&TEAM_METHODS)
     {
         assert!(
             commands.iter().any(|command| command.method == *method),

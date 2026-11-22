@@ -12,6 +12,7 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
+use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
@@ -21,7 +22,7 @@ use crate::terminal_attach;
 
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
-    /// Lists the agent kinds: built in and declared in the profile, whether each is installed, and any problems.
+    /// Lists the agent kinds: built in and declared in the profile, each one's package state, whether its program is detected, and any problems.
     Kinds,
     /// Starts an agent in a workspace. The agent keeps running after this command exits.
     Start(AgentStartArgs),
@@ -56,6 +57,11 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
+    /// Copies a kind's login files into this profile, shows them or removes them. Prints names and sizes only.
+    Credentials {
+        #[command(subcommand)]
+        command: CredentialsCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -261,6 +267,9 @@ pub async fn execute(
                 &forgotten,
                 &[format!("forgot agent session {}", forgotten.id)],
             );
+        }
+        AgentCommand::Credentials { command } => {
+            agent_credentials::execute(&client, command, output).await?;
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),

@@ -14,6 +14,7 @@ massorca-protocol = { path = "crates/protocol" }
 massorca-ui = { path = "crates/ui" }
 massorca-profile = { path = "crates/profile" }
 massorca-core-store = { path = "crates/core-store" }
+massorca-core-vault = { path = "crates/core-vault" }
 massorca-core-git = { path = "crates/core-git" }
 massorca-core-terminal = { path = "crates/core-terminal" }
 massorca-core-watch = { path = "crates/core-watch" }
@@ -34,12 +35,16 @@ alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev 
 
 anyhow = "1.0.104"
 base64 = "0.22.1"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 clap = { version = "4.6.9", features = ["derive", "env"] }
 crossterm = "0.29.0"
 directories = "6.0.0"
 embed-resource = "3.0.12"
+getrandom = "0.4.3"
 libc = "0.2.191"
 notify = "9.0.0"
+# Secret Service over D-Bus, pure Rust (no libsecret or OpenSSL).
+oo7 = { version = "0.7.3", default-features = false, features = ["tokio", "native_crypto"] }
 dunce = "1.0.5"
 futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
 interprocess = { version = "2.4.9", features = ["tokio"] }
@@ -68,6 +73,7 @@ vt100 = "0.18.1"
 widestring = "1.2.1"
 x509-parser = "0.18.1"
 win32job = "2.1.0"
+zeroize = "1.9.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 # test only

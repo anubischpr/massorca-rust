@@ -272,7 +272,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.kinds",
-            "List agent kinds and whether they are installed",
+            "List agent kinds: package state (installed), whether a program is detected, and problems",
             "agent.kinds",
             no_args(),
         ),
@@ -372,10 +372,41 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.show",
             selector("session"),
         ),
+        command(
+            "agent.credentials.import",
+            "Copy an agent kind's login files into this profile",
+            "agent.credentials.import",
+            json!({
+                "type": "object",
+                "required": ["kind", "from"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "from": { "type": "string" },
+                    "replace": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.credentials.show",
+            "Show an agent kind's credential home in this profile",
+            "agent.credentials.show",
+            selector("kind"),
+        ),
+        command(
+            "agent.credentials.remove",
+            "Delete an agent kind's credential home in this profile",
+            "agent.credentials.remove",
+            selector("kind"),
+        ),
     ]
 }
 
-fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDescriptor {
+pub(super) fn command(
+    id: &str,
+    title: &str,
+    method: &str,
+    args_schema: Value,
+) -> CommandDescriptor {
     CommandDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
@@ -384,12 +415,12 @@ fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDe
     }
 }
 
-fn no_args() -> Value {
+pub(super) fn no_args() -> Value {
     json!({ "type": "object", "properties": {} })
 }
 
 /// Arguments that name one project or workspace by selector.
-fn selector(name: &str) -> Value {
+pub(super) fn selector(name: &str) -> Value {
     let mut properties = Map::new();
     properties.insert(name.to_owned(), json!({ "type": "string" }));
     json!({ "type": "object", "required": [name], "properties": properties })

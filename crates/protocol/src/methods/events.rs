@@ -14,6 +14,16 @@ pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
 pub const TOPIC_AGENT_CHANGED: &str = "agent.changed";
 /// A setting's value changed. The id is `<owner>/<key>`; the event carries no value.
 pub const TOPIC_CONFIG_CHANGED: &str = "config.changed";
+/// A team, bot or team project changed; the id is the team id.
+pub const TOPIC_TEAM_CHANGED: &str = "team.changed";
+/// A task was created, changed, finished, reopened or removed; the id is the task id.
+pub const TOPIC_TASK_CHANGED: &str = "task.changed";
+/// A secret was set, rotated, linked, unlinked or removed. The id is `<scope>/<name>`; never a value.
+pub const TOPIC_SECRET_CHANGED: &str = "secret.changed";
+/// A secret request opened. The id is the request id.
+pub const TOPIC_SECRET_REQUESTED: &str = "secret.requested";
+/// A secret request left pending. The id is the request id.
+pub const TOPIC_SECRET_REQUEST_CHANGED: &str = "secret.request_changed";
 
 /// Result of `events.subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

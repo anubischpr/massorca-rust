@@ -18,6 +18,7 @@ massorca-core-remote.workspace = true
 massorca-core-watch.workspace = true
 massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
+massorca-core-vault.workspace = true
 massorca-core-workspace.workspace = true
 massorca-net.workspace = true
 massorca-profile.workspace = true
@@ -35,6 +36,7 @@ tracing.workspace = true
 massorca-client.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

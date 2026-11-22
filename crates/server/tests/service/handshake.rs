@@ -35,7 +35,9 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::GIT,
             capabilities::NETWORK,
             capabilities::PROJECTS,
+            capabilities::SECRETS,
             capabilities::SERVICE,
+            capabilities::TEAMS,
             capabilities::TERMINALS,
             capabilities::WORKSPACES,
         ]
