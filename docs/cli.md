@@ -57,6 +57,9 @@ letters, digits, `-` or `_`.
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
+| `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
+| `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -143,6 +146,19 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent credentials import KIND --from DIR` copies only the files the kind declares
+  (`credentials.files`) into `<profile>/agents/homes/<KIND>/`; from then on every run of the
+  kind in the profile gets the kind's home variable pointing there (decision 0056). Every
+  declared file is required and must be a regular file of at most 1 MiB: a missing name, a
+  link, a directory or a larger file fails the import with `agent.credentials_invalid`, lists
+  each name with its reason (`--json`: `error.data.files`), and copies nothing. A relative
+  `DIR` is taken from the current directory. An existing home is replaced only with
+  `--replace` (`agent.credentials_exist` otherwise); a failed import leaves it as it was. A
+  kind that declares no files is refused with `agent.credentials_unsupported`. The copy does
+  not move the login: refresh tokens are single use, so stop using the source login after
+  importing. File contents are never printed or logged.
+- `agent credentials show KIND` and `remove KIND` never follow a link: a home that is a link
+  is refused with `agent.credentials_invalid` and must be removed by hand.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

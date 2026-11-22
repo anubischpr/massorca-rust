@@ -65,7 +65,9 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
-- `credentials`: optional. `files` empty means import is unsupported.
+- `credentials`: optional. `files` empty means import is unsupported. `files` are plain
+  names (no separator, `..`, drive or absolute path). Every declared file is required by
+  import: the declaration has no optional flag.
 
 ## Session record (`AgentSession`)
 
@@ -190,6 +192,20 @@ massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
 ```
+
+## Credential import
+
+`core-agents::credentials` (0056). Import reads every declared file before writing
+anything: each must be a regular file, checked with `symlink_metadata` and opened without
+following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, where
+every reparse point counts as a link), and at most 1 MiB as read from the open handle. The
+new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`, files
+`0600` and created new on Unix; inherited access on Windows) and renamed into place. With
+`replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
+swap fails, and deleted after it succeeds; leftovers of an interrupted import are deleted by
+the next import of that kind. `agents`, `homes` and the home itself must not be links;
+show and remove refuse a linked home instead of following it. Imports and removals in one
+service run one at a time.
 
 ## Security
 
