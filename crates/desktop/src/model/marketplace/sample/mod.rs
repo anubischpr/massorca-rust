@@ -8,6 +8,8 @@ use super::types::{
 };
 
 mod items;
+#[cfg(test)]
+mod tests;
 
 use items::sample_items;
 

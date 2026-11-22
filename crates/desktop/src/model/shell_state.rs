@@ -2,6 +2,7 @@
 //! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
+use super::marketplace::MarketplaceSnapshot;
 use super::navigation::{Mode, Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
 use super::palette_recent::RecentActions;
@@ -28,6 +29,12 @@ pub struct ShellModel {
     regions: RegionState,
     /// The Bot Teams data the Bot Teams pages and Sidebar show (screens 4).
     teams: TeamsState,
+    /// The Marketplace data the Marketplace pages show: the catalogue, accounts and sign-in.
+    marketplace: MarketplaceSnapshot,
+    /// The text of the catalogue search field.
+    marketplace_query: String,
+    /// Whether an item page's Advanced Options section is open (collapsed by default).
+    marketplace_advanced_open: bool,
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
@@ -51,6 +58,9 @@ impl ShellModel {
             navigation: Navigation::default(),
             regions: RegionState::default(),
             teams: TeamsState::unavailable(),
+            marketplace: MarketplaceSnapshot::default(),
+            marketplace_query: String::new(),
+            marketplace_advanced_open: false,
             window_width,
             palette: None,
             usage_popover: None,
@@ -99,6 +109,32 @@ impl ShellModel {
     /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
     pub fn set_teams(&mut self, teams: TeamsState) {
         self.teams = teams;
+    }
+
+    /// The Marketplace data the Marketplace pages draw.
+    pub fn marketplace(&self) -> &MarketplaceSnapshot {
+        &self.marketplace
+    }
+
+    /// Swaps in the Marketplace data of a source, as `set_teams` does for Bot Teams.
+    pub fn set_marketplace(&mut self, snapshot: MarketplaceSnapshot) {
+        self.marketplace = snapshot;
+    }
+
+    pub fn marketplace_query(&self) -> &str {
+        &self.marketplace_query
+    }
+
+    pub fn set_marketplace_query(&mut self, query: impl Into<String>) {
+        self.marketplace_query = query.into();
+    }
+
+    pub fn marketplace_advanced_open(&self) -> bool {
+        self.marketplace_advanced_open
+    }
+
+    pub fn set_marketplace_advanced_open(&mut self, open: bool) {
+        self.marketplace_advanced_open = open;
     }
 
     /// The Bot Teams Sidebar for the page on screen.
@@ -602,5 +638,20 @@ mod tests {
             Some("Feed endpoints")
         );
         assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
+    }
+
+    #[test]
+    fn the_marketplace_starts_empty_and_keeps_its_query_and_advanced_flag() {
+        use crate::model::marketplace::{MarketplaceSource, SampleMarketplaceSource};
+        let mut model = shell(1440.0);
+        assert!(model.marketplace().items.is_empty());
+        assert_eq!(model.marketplace_query(), "");
+        assert!(!model.marketplace_advanced_open());
+        model.set_marketplace(SampleMarketplaceSource::default().snapshot());
+        assert_eq!(model.marketplace().items.len(), 8);
+        model.set_marketplace_query("github");
+        model.set_marketplace_advanced_open(true);
+        assert_eq!(model.marketplace_query(), "github");
+        assert!(model.marketplace_advanced_open());
     }
 }
