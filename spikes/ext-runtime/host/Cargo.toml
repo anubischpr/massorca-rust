@@ -1,0 +1,10 @@
+[package]
+name = "spike-host"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+wasmtime = "51.0.0"
+wasmtime-wasi = "51.0.0"
