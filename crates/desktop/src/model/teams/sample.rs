@@ -63,7 +63,7 @@ fn bot(id: BotId, name: &str, role: &str, agent: Agent) -> Bot {
         id,
         name: name.into(),
         role: role.into(),
-        agent,
+        agent: Some(agent),
     }
 }
 
@@ -168,7 +168,7 @@ fn desarrollo() -> Team {
                 Agent::Claude,
             ),
             bot(BRUNO, "Bruno", "API and server work.", Agent::Codex),
-            bot(IRIS, "Iris", "Copy and product text.", Agent::Gemini),
+            bot(IRIS, "Iris", "Copy and product text.", Agent::Antigravity),
         ],
         lead: Some(MARA),
         workspaces: false,

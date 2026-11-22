@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
-use massorca_client::Client;
+use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
     AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
@@ -458,6 +458,9 @@ async fn watch(client: &Client, session: Option<String>, output: Output) -> Resu
             AgentWatchEvent::Unknown => continue,
         };
         output.success(&item, &lines);
+    }
+    if stream.connection_lost() {
+        return Err(ClientError::Disconnected.into());
     }
     Ok(())
 }
