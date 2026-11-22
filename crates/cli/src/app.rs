@@ -9,6 +9,8 @@ use clap::Parser;
 use massorca_profile::Profile;
 use tokio::runtime::Builder;
 
+use crate::agent;
+use crate::agent_hook;
 use crate::args::{Cli, Commands, PairCommand, ServerCommand, ServiceCommand};
 use crate::config;
 use crate::device;
@@ -121,6 +123,23 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))
+        }
+        Commands::Agent {
+            command: agent::AgentCommand::Hook(args),
+        } => {
+            // Fails open: never an error, never a service start (0053).
+            // The hook runs on the host that runs the agent, so it always reports to the local service.
+            agent_hook::run(
+                globals.home.clone(),
+                globals.profile.clone(),
+                args.event,
+                args.payload,
+            );
+            Ok(())
+        }
+        Commands::Agent { command } => {
+            let target = globals.target()?;
+            block_on(agent::execute(&target, autostart, command, output, json))
         }
         Commands::Git { command } => {
             let target = globals.target()?;

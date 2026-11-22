@@ -79,6 +79,14 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
     assert_eq!(
         checked,
         BTreeSet::from([
+            "agent.attach",
+            "agent.forget",
+            "agent.hook",
+            "agent.kinds",
+            "agent.list",
+            "agent.start",
+            "agent.status",
+            "agent.stop",
             "config.get",
             "config.list",
             "config.set",

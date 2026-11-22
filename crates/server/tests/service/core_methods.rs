@@ -52,6 +52,18 @@ const TERMINAL_METHODS: [&str; 8] = [
     "terminal.close",
 ];
 
+/// The agent methods this build registers (capability `agents/1`).
+const AGENT_METHODS: [&str; 8] = [
+    "agent.kinds",
+    "agent.start",
+    "agent.list",
+    "agent.show",
+    "agent.stop",
+    "agent.forget",
+    "agent.hook",
+    "agent.watch",
+];
+
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: [&str; 15] = [
     "service.info",
@@ -217,6 +229,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .iter()
         .chain(&TERMINAL_METHODS)
         .chain(&DEVICE_METHODS)
+        .chain(&AGENT_METHODS)
     {
         assert!(
             commands.iter().any(|command| command.method == *method),

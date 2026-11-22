@@ -117,18 +117,22 @@ impl Git {
         Ok(captured.text()?.lines().map(str::to_owned).collect())
     }
 
-    /// The work tree's own git directory and the common directory where refs live, both absolute.
+    /// The work tree's own git directory and the common directory where refs live, both absolute. Read from `.git` when
+    /// it has git's usual layout, so a watch starts without spawning git; otherwise one `rev-parse` answers both.
     pub fn repository_dirs(&self, dir: &Path) -> Result<(PathBuf, PathBuf), GitError> {
-        let git_dir = self.absolute_git_dir(dir)?;
-        let captured = self.run(Some(dir), ["rev-parse", "--git-common-dir"])?;
+        if let Some(dirs) = read_repository_dirs(dir) {
+            return Ok(dirs);
+        }
+        let captured = self.run(
+            Some(dir),
+            ["rev-parse", "--absolute-git-dir", "--git-common-dir"],
+        )?;
         captured.require_success()?;
-        let common = path_from_git(captured.text()?.trim_end_matches(['\r', '\n']));
+        let text = captured.text()?;
+        let mut lines = text.lines().map(|line| line.trim_end_matches('\r'));
+        let git_dir = path_from_git(lines.next().unwrap_or_default());
         // Git prints the common directory relative to `dir` when it is not absolute.
-        let common = if common.is_absolute() {
-            common
-        } else {
-            dir.join(common)
-        };
+        let common = relative_to(dir, lines.next().unwrap_or_default());
         Ok((git_dir, common))
     }
 
@@ -168,4 +172,38 @@ fn refuse<T>(code: &'static str, message: impl Into<String>) -> Result<T, Commit
         code,
         message: message.into(),
     })
+}
+
+/// The git and common directories from the `.git` directory, or from the `.git` file of a linked worktree and its
+/// `commondir`. `None` for anything else, which `rev-parse` then resolves.
+fn read_repository_dirs(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot_git = dir.join(".git");
+    let kind = std::fs::symlink_metadata(&dot_git).ok()?.file_type();
+    if kind.is_dir() {
+        return Some((dot_git.clone(), dot_git));
+    }
+    if !kind.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir = relative_to(dir, text.strip_prefix("gitdir:")?.trim());
+    if !git_dir.is_dir() {
+        return None;
+    }
+    let common = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(text) => relative_to(&git_dir, text.trim()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => git_dir.clone(),
+        Err(_) => return None,
+    };
+    common.is_dir().then_some((git_dir, common))
+}
+
+/// `path` as git wrote it, joined to `base` when it is relative.
+fn relative_to(base: &Path, path: &str) -> PathBuf {
+    let path = path_from_git(path);
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
 }

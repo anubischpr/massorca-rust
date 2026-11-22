@@ -2,6 +2,7 @@
 //! through a scripted service. Each call the page sends is answered by hand, so no window opens and
 //! no service runs.
 
+use super::settings::host_word;
 use super::*;
 use crate::model::navigation::Page;
 use crate::model::settings::FolderStatus;
@@ -287,4 +288,46 @@ fn a_search_query_is_the_text_the_field_settled_on(cx: &mut TestAppContext) {
     );
     // A search does not touch the folder.
     assert_eq!(folder(&rig, cx).draft, STORED);
+}
+
+#[test]
+fn this_pc_reads_the_store_connection_in_words() {
+    assert_eq!(host_word(&ConnectionState::Connecting), "Connecting");
+    assert_eq!(
+        host_word(&ConnectionState::Connected {
+            server: "massorca".into(),
+            version: "0.1.0".into(),
+        }),
+        "Connected"
+    );
+    assert_eq!(
+        host_word(&ConnectionState::Reconnecting {
+            attempt: 2,
+            retry_at: std::time::Instant::now(),
+        }),
+        "Reconnecting"
+    );
+    assert_eq!(
+        host_word(&ConnectionState::Unreachable {
+            reason: "the link is down".into(),
+        }),
+        "Unreachable"
+    );
+}
+
+#[gpui::test]
+fn the_extensions_entry_stays_on_settings_because_marketplace_has_no_page_yet(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = settings_rig(cx);
+    click(cx, "settings-nav-Extensions");
+    assert_eq!(
+        rig.shell.read_with(cx, |shell, _| shell.settings.section),
+        SettingsSection::Extensions
+    );
+    assert_eq!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.model().navigation().page),
+        Page::Settings
+    );
 }

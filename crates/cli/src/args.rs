@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::agent::AgentCommand;
 use crate::terminal::TerminalCommand;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
@@ -98,6 +99,11 @@ pub enum Commands {
     Host {
         #[command(subcommand)]
         command: HostCommand,
+    },
+    /// Runs coding agents in workspaces and lists the agent kinds.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
     },
     /// Reads and changes the git state of a workspace.
     Git {

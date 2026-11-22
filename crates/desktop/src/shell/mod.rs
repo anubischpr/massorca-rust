@@ -2,8 +2,10 @@
 
 mod actions;
 mod canvas;
+mod debug_focus;
 mod palette;
 mod rail;
+mod resize_edges;
 mod service_banner;
 mod settings;
 mod setup;
@@ -19,6 +21,7 @@ mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
+use crate::launch_options::DebugFocus;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
@@ -37,13 +40,16 @@ use gpui::{
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
-use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
+use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use std::collections::HashMap;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
+#[cfg(test)]
+mod debug_focus_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -86,6 +92,12 @@ pub struct Shell {
     /// Keeps the bridge's runtime alive for as long as the shell lives.
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
+    /// Keeps the debug focus's query log alive; only a debug launch sets it.
+    _debug_input: Option<Subscription>,
+    /// The debug focus the launch asked for, if any; the start page composer logs for it.
+    debug_focus: Option<DebugFocus>,
+    /// Each workspace's start page composer, kept so its draft survives redraws.
+    start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
@@ -197,6 +209,9 @@ impl Shell {
             service,
             _bridge: bridge,
             _store_changes: store_changes,
+            _debug_input: None,
+            debug_focus: None,
+            start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
             team_confirm: None,
@@ -314,7 +329,8 @@ impl Shell {
 
 /// Registers the key bindings of the shell and of the widgets it uses.
 pub fn bind_keys(cx: &mut App) {
-    text_field::bind_keys(cx);
+    // The composer binds its text area and the text fields it holds: Enter, Backspace, arrows.
+    massorca_ui::components::composer::bind_keys(cx);
     actions::bind_keys(cx);
 }
 
@@ -332,11 +348,34 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         let shell = cx.entity().downgrade();
-        let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
-            .track_focus(self.zones.get(Zone::TitleBar));
+        let show_controls = title_bar::draws_window_controls(
+            window.window_decorations(),
+            cfg!(target_os = "linux"),
+        );
+        let title_bar = title_bar::title_bar(
+            &self.model,
+            &shell,
+            window.is_maximized(),
+            show_controls,
+            &theme,
+        )
+        .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
+        let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        // The start page's composer is created before the frames below borrow the Shell's fields.
+        let start = self.model.selected_workspace().and_then(|id| {
+            crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
+        });
+        let start = start.map(|page| {
+            let composer = self.start_composer(&page.id, cx);
+            start_page::StartFrame {
+                page,
+                composer,
+                shell: shell.clone(),
+            }
+        });
         let connection = self.store.read(cx).state().connection.clone();
         let settings = settings::SettingsFrame {
             model: &self.settings,
@@ -350,16 +389,6 @@ impl Render for Shell {
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
         );
-        let start = self
-            .model
-            .selected_workspace()
-            .and_then(|id| {
-                crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
-            })
-            .map(|page| start_page::StartFrame {
-                page,
-                shell: shell.clone(),
-            });
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -481,7 +510,8 @@ impl Render for Shell {
             .text_body()
             .track_focus(&self.focus)
             // Escape closes the palette first, then an overlay region. The palette's own
-            // Escape binding loses to this one, so the palette is handled here.
+            // Escape binding loses to this one, so the palette is handled here. With nothing
+            // of the shell open it propagates, so a focused Search field clears.
             .on_action(cx.listener(|shell, _: &CloseOverlay, window, cx| {
                 if shell.model.palette().is_some() {
                     shell.close_palette(window, cx);
@@ -490,9 +520,11 @@ impl Render for Shell {
                     cx.notify();
                 } else if shell.settings.folder.dirty() {
                     shell.revert_folder(window, cx);
-                } else {
+                } else if shell.model.has_overlay() {
                     shell.model.close_overlay();
                     cx.notify();
+                } else {
+                    cx.propagate();
                 }
             }))
             .on_action(cx.listener(|shell, _: &CycleRegionForward, window, cx| {
@@ -522,6 +554,7 @@ impl Render for Shell {
                     .child(title_bar)
                     .child(body),
             )
+            .when_some(resize_grabs, |el, grabs| el.child(grabs))
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))

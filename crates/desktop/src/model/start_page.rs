@@ -11,6 +11,18 @@ use crate::service::StoreState;
 pub const SESSIONS_LATER: &str = "Agent sessions come later.";
 pub const TERMINALS_LATER: &str = "Terminals come later.";
 pub const GIT_LATER: &str = "Git operations come later.";
+pub const VOICE_LATER: &str = "Voice input comes later.";
+
+/// The composer's placeholder: the session composer's words (A33).
+pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
+
+/// The key hints under the composer, each key with what it does (D-AG-01).
+pub const KEY_HINTS: [(&str, &str); 4] = [
+    ("Enter", "send"),
+    ("Shift+Enter", "new line"),
+    ("@", "mention files"),
+    ("/", "commands"),
+];
 
 /// One workspace as the start page shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,5 +142,15 @@ mod tests {
         assert_eq!(first_workspace_of(&store(), "p1").as_deref(), Some("w1"));
         assert_eq!(first_workspace_of(&store(), "p2").as_deref(), Some("w3"));
         assert_eq!(first_workspace_of(&store(), "p9"), None);
+    }
+
+    #[test]
+    fn the_composer_keeps_the_session_placeholder_and_its_key_hints() {
+        assert_eq!(
+            COMPOSER_PLACEHOLDER,
+            "Ask anything, @ to mention files, / for commands"
+        );
+        let keys: Vec<&str> = KEY_HINTS.iter().map(|(key, _)| *key).collect();
+        assert_eq!(keys, ["Enter", "Shift+Enter", "@", "/"]);
     }
 }
