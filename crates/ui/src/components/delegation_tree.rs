@@ -12,8 +12,9 @@ use crate::icon::{Icon, IconName, IconSize};
 use crate::style::{FocusRing, StateFill, Surface};
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
-    Palette, RADIUS_LG, RADIUS_MD, SIZE_CONTROL_COMFORTABLE, SIZE_ICON_MD, SIZE_ICON_XS, SPACE_1,
-    SPACE_2, SPACE_3, SPACE_HALF, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_MONO_SM,
+    Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM, SIZE_CONTROL_COMFORTABLE, SIZE_ICON_MD, SIZE_ICON_XS,
+    SPACE_1, SPACE_2, SPACE_3, SPACE_HALF, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION,
+    TYPE_MONO_SM,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -54,6 +55,15 @@ impl RunOrder {
     }
 }
 
+/// A state's word in the tree: idle reads "Not started" and unreachable "Can't reach".
+fn tree_word(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Idle => "Not started",
+        AgentState::Unreachable => "Can't reach",
+        state => state.label(),
+    }
+}
+
 /// One agent or bot in the tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationNode {
@@ -81,6 +91,10 @@ pub struct DelegationNode {
     pub reason: Option<SharedString>,
     /// When an unreachable child was last seen, such as "5 min ago".
     pub last_known: Option<SharedString>,
+    /// The state an unreachable child was in when it was last seen.
+    pub last_state: Option<AgentState>,
+    /// The host an unreachable child runs on, named in "Can't reach VPS".
+    pub host: Option<SharedString>,
     pub commits_ready: u32,
     /// How this node's children run; `None` when the order does not matter.
     pub run: Option<RunOrder>,
@@ -109,9 +123,40 @@ impl DelegationNode {
             task: title,
             reason: None,
             last_known: None,
+            last_state: None,
+            host: None,
             commits_ready: 0,
             run: None,
             children: Vec::new(),
+        }
+    }
+
+    /// The row's status word (DelegationTree.md Copy): an idle child has not started yet, and an
+    /// unreachable one names its host.
+    pub fn status_word(&self) -> String {
+        match (self.state, &self.host) {
+            (AgentState::Unreachable, Some(host)) => format!("Can't reach {host}"),
+            (state, _) => tree_word(state).to_owned(),
+        }
+    }
+
+    /// The second line of an unreachable row: "Last known: running, 5 min ago".
+    pub fn last_known_line(&self) -> String {
+        let age = self.last_known.as_deref().unwrap_or("time unknown");
+        match self.last_state {
+            Some(state) if state != AgentState::Unreachable => {
+                format!("Last known: {}, {age}", tree_word(state).to_lowercase())
+            }
+            _ => format!("Last known state, {age}"),
+        }
+    }
+
+    /// The row action: a waiting child is opened to answer it.
+    pub fn open_label(&self) -> &'static str {
+        if self.state == AgentState::Waiting {
+            "Open to answer"
+        } else {
+            "Open"
         }
     }
 
@@ -596,13 +641,18 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
         .child(AgentIcon::new(node.agent).size(AgentIconSize::Medium))
         .child(
             div()
-                .flex_1()
+                .flex_shrink(1.)
                 .min_w_0()
                 .truncate()
                 .text_style(TYPE_BODY_STRONG)
                 .text_color(title_color)
                 .child(node.title.clone()),
         );
+    // The role tag follows the name (DelegationTree.md Anatomy, row name).
+    if let (false, Some(role)) = (card, node.role.clone()) {
+        name_line = name_line.child(div().flex_none().child(Badge::text(role)));
+    }
+    name_line = name_line.child(div().flex_1());
     if !card {
         name_line = name_line
             .child(
@@ -611,7 +661,7 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
                     .text_style(TYPE_CAPTION)
                     .tabular_figures()
                     .text_color(node.state.color(p))
-                    .child(node.state.label()),
+                    .child(node.status_word()),
             )
             .children(node.duration.clone().map(|duration| {
                 div()
@@ -624,20 +674,13 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
     }
 
     let line = if unreachable {
-        SharedString::from(format!(
-            "Last known: {}, {}",
-            node.state.label().to_lowercase(),
-            node.last_known.as_deref().unwrap_or("unknown")
-        ))
+        SharedString::from(node.last_known_line())
     } else if node.state == AgentState::Error {
         node.reason.clone().unwrap_or_else(|| node.task.clone())
     } else {
         node.task.clone()
     };
     let mut meta = div().flex().items_center().gap(px(SPACE_2)).min_w_0();
-    if let Some(role) = node.role.clone() {
-        meta = meta.child(Badge::text(role));
-    }
     if look.variant == TreeVariant::BotTeams
         && let Some(competence) = node.competence.clone()
     {
@@ -657,13 +700,7 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
             .branch
             .clone()
             .unwrap_or_else(|| SharedString::from("Current worktree"));
-        meta = meta.child(
-            div()
-                .flex_none()
-                .text_style(TYPE_MONO_SM)
-                .text_color(p.text.tertiary)
-                .child(place),
-        );
+        meta = meta.child(place_chip(place, p));
     }
     meta = meta.child(
         div()
@@ -683,7 +720,7 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
             .flex_none()
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
-                Button::new(("tree-open", index), "Open")
+                Button::new(("tree-open", index), node.open_label())
                     .variant(ButtonVariant::Ghost)
                     .size(ButtonSize::Compact)
                     .on_click(on(&handler, TreeAction::Open(id.clone()))),
@@ -714,10 +751,10 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
                 "{}, {}, {}, {}",
                 node.title,
                 node.name,
-                node.state.label(),
+                node.status_word(),
                 duration
             ),
-            None => format!("{}, {}, {}", node.title, node.name, node.state.label()),
+            None => format!("{}, {}, {}", node.title, node.name, node.status_word()),
         })
         .flex()
         .flex_col()
@@ -762,6 +799,29 @@ fn node_row(index: usize, row: &Row, roots: &[DelegationNode], look: &Look) -> A
         el = el.child(name_line).child(meta);
     }
     el.into_any_element()
+}
+
+/// The worktree or branch a Workspaces child runs in, as a chip with the branch icon.
+fn place_chip(place: SharedString, p: &Palette) -> AnyElement {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .px(px(SPACE_1))
+        .rounded(px(RADIUS_SM))
+        .border_1()
+        .border_color(p.border.subtle)
+        .bg(p.surface.sunken)
+        .text_style(TYPE_MONO_SM)
+        .text_color(p.text.secondary)
+        .child(
+            Icon::new(IconName::GitBranch)
+                .size(IconSize::XSmall)
+                .color(p.text.tertiary),
+        )
+        .child(place)
+        .into_any_element()
 }
 
 /// The caption above a set of children, and the rows that fold or cut a list.
@@ -1161,6 +1221,29 @@ mod tests {
             }),
             "1 agent"
         );
+    }
+
+    #[test]
+    fn rows_use_the_tree_words_and_actions() {
+        let mut node = DelegationNode::new(
+            "n",
+            AgentKind::Claude,
+            AgentState::Idle,
+            "Extract the module",
+        );
+        assert_eq!(node.status_word(), "Not started");
+        assert_eq!(node.open_label(), "Open");
+        node.state = AgentState::Waiting;
+        assert_eq!(node.status_word(), "Waiting for you");
+        assert_eq!(node.open_label(), "Open to answer");
+        node.state = AgentState::Unreachable;
+        node.last_known = Some("5 min ago".into());
+        assert_eq!(node.status_word(), "Can't reach");
+        assert_eq!(node.last_known_line(), "Last known state, 5 min ago");
+        node.host = Some("VPS".into());
+        node.last_state = Some(AgentState::Running);
+        assert_eq!(node.status_word(), "Can't reach VPS");
+        assert_eq!(node.last_known_line(), "Last known: running, 5 min ago");
     }
 
     #[test]

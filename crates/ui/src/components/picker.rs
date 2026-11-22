@@ -385,6 +385,12 @@ impl PickerState {
         }
     }
 
+    /// The reason under "No branches yet"; a query or a folder names what it needs instead.
+    pub fn empty_reason(&self) -> Option<SharedString> {
+        (!self.folder && self.query.is_empty())
+            .then(|| format!("Nothing to choose from until {} appear.", self.noun).into())
+    }
+
     /// The copy of a failed load, which offers Retry.
     pub fn error_title(&self) -> SharedString {
         format!("Could not load {}.", self.noun).into()
@@ -786,13 +792,15 @@ impl PickerView {
     }
 
     fn empty(&self) -> AnyElement {
+        let mut state = EmptyState::new((self.id.clone(), "empty"), self.state.empty_title())
+            .variant(EmptyStateVariant::Section);
+        if let Some(reason) = self.state.empty_reason() {
+            state = state.explanation(reason);
+        }
         div()
             .debug_selector(|| "picker-empty".into())
             .p(px(SPACE_2))
-            .child(
-                EmptyState::new((self.id.clone(), "empty"), self.state.empty_title())
-                    .variant(EmptyStateVariant::Compact),
-            )
+            .child(state)
             .into_any_element()
     }
 
@@ -1185,7 +1193,14 @@ mod tests {
         let mut state = branches();
         state.set_items(Vec::new());
         assert_eq!(state.empty_title(), SharedString::from("No branches yet"));
+        assert_eq!(
+            state.empty_reason(),
+            Some(SharedString::from(
+                "Nothing to choose from until branches appear."
+            ))
+        );
         state.set_query("x");
+        assert_eq!(state.empty_reason(), None, "a query names no reason");
         assert_eq!(
             state.empty_title(),
             SharedString::from("No branches match \"x\"")
