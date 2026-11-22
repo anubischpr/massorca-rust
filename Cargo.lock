@@ -3758,6 +3758,7 @@ name = "massorca-profile"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "getrandom 0.4.3",
  "interprocess",
  "libc",
  "tempfile",
