@@ -6,7 +6,7 @@
 use std::fmt;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, Window, div, px};
+use gpui::{AnyElement, App, Context, Entity, EntityId, Subscription, WeakEntity, Window, div, px};
 use massorca_protocol::methods::secrets::SecretEntry;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogWidth};
@@ -182,10 +182,11 @@ impl Shell {
         {
             Ok(params) => {
                 dialog.lock_fields(true, cx);
+                let dialog_id = dialog.value_field.entity_id();
                 cx.spawn_in(window, async move |this, cx| {
                     let result = service.secret_set(params).await;
                     let _ = this.update_in(cx, |shell, window, cx| {
-                        shell.secret_answered(&name, result, window, cx)
+                        shell.secret_answered(dialog_id, &name, result, window, cx)
                     });
                 })
                 .detach();
@@ -196,14 +197,23 @@ impl Shell {
     }
 
     /// The service's answer to a save: stored clears the value and closes the dialog; a refusal keeps the value,
-    /// unlocks the fields and says why.
+    /// unlocks the fields and says why. An answer for a dialog that is no longer open is dropped, so it never
+    /// acts on a newer dialog.
     fn secret_answered(
         &mut self,
+        dialog_id: EntityId,
         name: &str,
         result: Result<SecretEntry, Refusal>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let answers_open_dialog = self
+            .vault_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.value_field.entity_id() == dialog_id);
+        if !answers_open_dialog {
+            return;
+        }
         match result {
             Ok(_) => self.close_secret_dialog(window, cx),
             Err(refusal) => {

@@ -13,7 +13,9 @@ use crate::service::fixtures::{project, workspace};
 use crate::service::{
     Command, ConnectionState, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
 };
-use gpui::{AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{
+    AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext, point, px,
+};
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretSet, SecretStatus};
@@ -734,6 +736,112 @@ fn the_value_stays_out_of_debug_output_at_every_step(cx: &mut TestAppContext) {
         .expect("the page listens");
     cx.run_until_parked();
     assert!(!debug_text(&rig, cx).contains(VALUE), "after a refusal");
+}
+
+/// The value the open dialog's field holds, or `None` once no dialog is open.
+fn dialog_value(rig: &Rig, cx: &mut VisualTestContext) -> Option<String> {
+    let field = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .vault_dialog
+            .as_ref()
+            .map(|dialog| dialog.value_field.clone())
+    })?;
+    Some(field.read_with(cx, |field, _| field.text().to_owned()))
+}
+
+#[gpui::test]
+fn a_scrim_press_during_a_save_keeps_the_dialog_and_a_late_success_closes_it(
+    cx: &mut TestAppContext,
+) {
+    const VALUE: &str = "settings-test-value-e41a";
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    draw(cx);
+    cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some(VALUE),
+        "a scrim press neither closes the busy dialog nor clears its value"
+    );
+    let (_, reply) = next_set(&mut rig);
+    reply
+        .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the late success closes the dialog that sent it"
+    );
+}
+
+#[gpui::test]
+fn a_late_success_does_not_close_a_newer_dialog(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "FIRST_KEY", "settings-test-value-a1");
+    let (_, reply) = next_set(&mut rig);
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+    open_add_named(&mut rig, cx, "SECOND_KEY");
+    type_value(&rig, cx, "settings-test-value-b2");
+    reply
+        .send(Ok(owned_secret("project:p1", "FIRST_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some("settings-test-value-b2"),
+        "the newer dialog stays open with its value"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("the newer dialog is open");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Idle,
+            "its own status is untouched"
+        );
+    });
+    assert!(rig.script.next().is_none(), "nothing else is sent");
+}
+
+#[gpui::test]
+fn a_late_refusal_does_not_touch_a_newer_dialog(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "FIRST_KEY", "settings-test-value-c3");
+    let (_, reply) = next_set(&mut rig);
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+    open_add_named(&mut rig, cx, "SECOND_KEY");
+    type_value(&rig, cx, "settings-test-value-d4");
+    reply
+        .send(Err(Refusal::Failed {
+            code: codes::SECRET_NAME_IN_USE.to_owned(),
+            message: "FIRST_KEY already exists in project:p1".to_owned(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some("settings-test-value-d4"),
+        "the newer dialog keeps its value"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("the newer dialog is open");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Idle,
+            "a refusal for an older save is not shown in the newer dialog"
+        );
+    });
 }
 
 #[gpui::test]
