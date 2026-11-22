@@ -408,6 +408,7 @@ pub struct TextField {
     comfortable: bool,
     mono: bool,
     clearable: bool,
+    clear_when_filled: bool,
     disabled: bool,
     read_only: bool,
     /// A search box: its root carries the searchbox role instead of the textbox role.
@@ -440,6 +441,7 @@ impl TextField {
             comfortable: false,
             mono: false,
             clearable: false,
+            clear_when_filled: false,
             disabled: false,
             read_only: false,
             search: false,
@@ -495,6 +497,12 @@ impl TextField {
     /// Shows a clear action while the field has a value and is focused or hovered.
     pub fn clearable(mut self) -> Self {
         self.clearable = true;
+        self
+    }
+
+    /// Keeps the clear action shown whenever the field has a value (SearchField.md), not only on hover or focus.
+    pub fn clear_when_filled(mut self) -> Self {
+        self.clear_when_filled = true;
         self
     }
 
@@ -732,6 +740,7 @@ impl TextField {
                 button.group_hover(FIELD_GROUP, |style| style.visible())
             })
             .when(filled && focused, |button| button.visible())
+            .when(filled && self.clear_when_filled, |button| button.visible())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
             .child(
