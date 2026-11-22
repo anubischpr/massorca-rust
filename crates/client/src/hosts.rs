@@ -119,6 +119,8 @@ impl Hosts {
         }
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        // One writer at a time, across processes: a sweep then never deletes another add's staged folder.
+        let _lock = hosts.lock()?;
         hosts.sweep_leftovers()?;
         // A host folder without a host file is what an interrupted add of an older build left: it never became a host.
         // It is moved aside only when the host file is certainly absent, checked again under the held folder.
@@ -168,7 +170,13 @@ impl Hosts {
         }
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        let _lock = hosts.lock()?;
         hosts.sweep_leftovers()?;
+        if !present(&self.dir.join(name).join(HOST_FILE))
+            .map_err(|error| unreadable(name, &error))?
+        {
+            return Err(ClientError::HostNotFound(name.to_owned()));
+        }
         hosts.remove_child_dir(name)?;
         Ok(())
     }
@@ -563,7 +571,10 @@ mod tests {
                     .into_owned()
             })
             .collect();
-        assert_eq!(names, vec!["office".to_owned()]);
+        let mut names = names;
+        names.sort();
+        // The writers' lock file stays; no leftover does.
+        assert_eq!(names, vec![".lock".to_owned(), "office".to_owned()]);
     }
 
     #[test]

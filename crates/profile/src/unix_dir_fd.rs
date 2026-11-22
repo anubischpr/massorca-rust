@@ -105,6 +105,27 @@ pub(crate) fn write_new(parent: &File, name: &str, contents: &[u8]) -> io::Resul
     file.sync_all()
 }
 
+/// Opens the file `name` in `parent` for reading and writing, creating it with mode `0600` when it is missing, never
+/// through a link (`O_NOFOLLOW`).
+pub(crate) fn open_or_create(parent: &File, name: &str) -> io::Result<File> {
+    let c_name = c_name(Path::new(name))?;
+    // SAFETY: `parent` is an open folder and `c_name` a NUL-terminated name, both alive through the call; the mode is
+    // the variadic third argument, and -1 is checked before the descriptor is owned by a File.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` was just opened and nothing else owns it.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
 /// Whether `parent` holds an entry `name`, a link included; only `ENOENT` means absent, and any other error is
 /// returned.
 pub(crate) fn entry_present(parent: &File, name: &str) -> io::Result<bool> {

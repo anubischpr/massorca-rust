@@ -167,7 +167,9 @@ owner then makes the home private once with `massorca profile secure`.
   while that folder is held open; when that cannot be read, the add is
   refused with `host.unreadable` and nothing is deleted. Publishing never
   replaces a folder, so of two adds of one name, one wins and the other
-  gets `host.exists`. `list` skips tombstones
+  gets `host.exists`. `add` and `remove` hold an exclusive lock on
+  `hosts/.lock` while they work, across processes, so a sweep never deletes
+  the staged folder of another write still in progress. `list` skips tombstones
   and temporary files, and `add` and `remove` delete those a crash left,
   retrying each a few times. `Client::pair` checks before it uses
   the offer, which works only once. Autostart first checks the location

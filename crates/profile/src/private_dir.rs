@@ -18,6 +18,9 @@ pub const TOMBSTONE_PREFIX: &str = ".removing-";
 /// Names starting with this are files being written.
 const TEMP_PREFIX: &str = ".writing-";
 
+/// The file whose lock `lock` takes; readers skip it, since it is not a folder.
+const LOCK_FILE: &str = ".lock";
+
 /// How often a leftover is deleted before it is left for the next sweep; a virus scanner can hold a file briefly.
 const DELETE_ATTEMPTS: u32 = 3;
 
@@ -134,6 +137,37 @@ impl PrivateDir {
         }
         #[cfg(not(unix))]
         open_private_dir(&path)
+    }
+
+    /// Takes the exclusive lock on this folder's `.lock` file, waiting while another writer holds it, in this process or
+    /// another; the lock ends when the returned file is dropped. Writers that sweep leftovers take it first, so a sweep
+    /// never deletes the staged folder of a write still in progress.
+    pub fn lock(&self) -> io::Result<fs::File> {
+        #[cfg(unix)]
+        let file = crate::unix_dir_fd::open_or_create(&self.dir, LOCK_FILE)?;
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+
+            // The folder is pinned and private, so its lock file is opened by path, never through a link.
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(self.path.join(LOCK_FILE))?
+        };
+        #[cfg(not(any(unix, windows)))]
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.path.join(LOCK_FILE))?;
+        file.lock()?;
+        Ok(file)
     }
 
     /// A new, empty, private folder in this one under a random `.writing-` name, to fill and then `publish` under its
