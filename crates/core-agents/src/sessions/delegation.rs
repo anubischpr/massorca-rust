@@ -592,7 +592,6 @@ mod tests {
 
     use std::collections::BTreeMap;
     use std::path::Path;
-    #[cfg(windows)]
     use std::process::Command;
 
     use massorca_core_store::{AgentSessionRow, RunExit, RunExitReason, new_id, now_ms};
@@ -600,9 +599,7 @@ mod tests {
     use massorca_protocol::methods::agents::{
         AgentBringBackParams, AgentDelegateParams, AgentStartParams,
     };
-    #[cfg(windows)]
     use massorca_protocol::methods::projects::ProjectAddParams;
-    #[cfg(windows)]
     use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 
     use super::super::tests::service;
@@ -769,7 +766,6 @@ mod tests {
     }
 
     /// Runs git in `dir` with a fixed identity; panics on failure.
-    #[cfg(windows)]
     fn git(dir: &Path, args: &[&str]) {
         let status = Command::new("git")
             .args([
@@ -791,7 +787,6 @@ mod tests {
     /// start fails at the spawn on every platform. Windows refuses a file that is not an executable image. On Unix a
     /// script without a `#!` line would run under `/bin/sh` (the exec fallback), so the file names an interpreter that
     /// does not exist, which makes the exec fail with the spawn.
-    #[cfg(windows)]
     fn declare_broken_kind(profile: &std::path::Path, dir: &std::path::Path) {
         let program = dir.join("broken.exe");
         std::fs::write(
@@ -816,11 +811,7 @@ mod tests {
         std::fs::write(kinds.join("broken.json"), kind.to_string()).unwrap();
     }
 
-    // Windows only until the terminals layer reports an exec failure on Unix: portable-pty 0.9 closes every inherited
-    // descriptor in the child before exec, including std's exec-error pipe, so a program that cannot be executed is
-    // spawned "successfully" and its child aborts at once (SIGABRT). Tracked as a core-terminal follow-up.
     #[test]
-    #[cfg(windows)]
     fn a_start_whose_program_cannot_run_fails_and_keeps_no_session() {
         let (agents, workspace_id, profile) = service();
         let root = tempfile::tempdir().unwrap();
@@ -844,11 +835,7 @@ mod tests {
         assert!(agents.list(None).unwrap().is_empty());
     }
 
-    // Windows only until the terminals layer reports an exec failure on Unix: portable-pty 0.9 closes every inherited
-    // descriptor in the child before exec, including std's exec-error pipe, so a program that cannot be executed is
-    // spawned "successfully" and its child aborts at once (SIGABRT). Tracked as a core-terminal follow-up.
     #[test]
-    #[cfg(windows)]
     fn a_child_whose_start_fails_keeps_one_workspace_and_names_it() {
         let (agents, _workspace_id, profile) = service();
         let root = tempfile::tempdir().unwrap();
