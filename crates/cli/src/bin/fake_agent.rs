@@ -27,11 +27,25 @@ const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
 const CRASH_EXIT_CODE: u8 = 3;
+/// Set to `1`, `login` exits 1 without writing the token (decision 0059).
+const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
+/// What `login` writes into the token file.
+const FAKE_LOGIN_TOKEN: &str = r#"{"fake":true}"#;
+/// A token containing this is expired: `whoami` then reports `expired`.
+const EXPIRED_MARK: &str = r#""expired":true"#;
+/// The identity `whoami` reports for a token that names none.
+const DEFAULT_IDENTITY: &str = "fake@example.com";
 
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
 
 fn main() -> ExitCode {
+    // The sign-in and check of an account (decision 0059) are subcommands: `login` and `whoami`, run in the account home.
+    match env::args().nth(1).as_deref() {
+        Some("login") => return login(),
+        Some("whoami") => return whoami(),
+        _ => {}
+    }
     let arguments = Arguments::parse(env::args().skip(1));
     let agent = Agent::new(&arguments);
     let mut input: Input = io::stdin().lock().lines();
@@ -127,6 +141,7 @@ impl Agent {
         } else {
             "credentials missing"
         });
+        say(&format!("home {}", home_name()));
         for name in probed_env() {
             say(&format!("env {name} {}", env_state(&name)));
         }
@@ -253,6 +268,73 @@ fn credentials_found() -> bool {
     env::var_os(CREDENTIAL_HOME_ENV)
         .filter(|home| !home.is_empty())
         .is_some_and(|home| Path::new(&home).join(CREDENTIAL_FILE).is_file())
+}
+
+/// The sign-in: writes the fake token into the credential home and exits 0; with `FAKE_AGENT_LOGIN_FAIL=1` it exits 1
+/// without writing.
+fn login() -> ExitCode {
+    if env::var_os(LOGIN_FAIL_ENV).is_some_and(|value| value == "1") {
+        say("login failed");
+        return ExitCode::from(1);
+    }
+    let Some(home) = credential_home() else {
+        say("no credential home");
+        return ExitCode::from(1);
+    };
+    match fs::write(home.join(CREDENTIAL_FILE), FAKE_LOGIN_TOKEN) {
+        Ok(()) => {
+            say("signed in");
+            ExitCode::SUCCESS
+        }
+        Err(_) => {
+            say("login failed");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// The check: prints `signed in as <identity>` and exits 0 when the token exists and is not expired; otherwise prints
+/// `expired` and exits 1. A token's `email` names its identity; the default identity is used otherwise.
+fn whoami() -> ExitCode {
+    let token =
+        credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
+    match token {
+        Some(text) if !text.contains(EXPIRED_MARK) => {
+            let identity = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
+            println!("signed in as {identity}");
+            ExitCode::SUCCESS
+        }
+        _ => {
+            println!("expired");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// The credential home, when the variable names one.
+fn credential_home() -> Option<PathBuf> {
+    env::var_os(CREDENTIAL_HOME_ENV)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The directory name of the credential home: an account id, never a path. `none` when there is no home.
+fn home_name() -> String {
+    credential_home()
+        .and_then(|home| {
+            home.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+/// The value of the `email` field of a token, when it has one.
+fn email_of(text: &str) -> Option<String> {
+    text.split("\"email\":\"")
+        .nth(1)?
+        .split('"')
+        .next()
+        .map(str::to_owned)
 }
 
 /// The names listed in `FAKE_AGENT_PROBE_ENV`.
