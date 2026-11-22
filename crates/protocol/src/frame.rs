@@ -8,6 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Largest body (kind byte included) a local connection accepts unless the peers negotiate otherwise.
 pub const MAX_FRAME_LEN_LOCAL: u32 = 8 * 1024 * 1024;
 
+/// Largest body a network connection accepts (decision 0040); announced in `welcome.max_frame_len`.
+pub const MAX_FRAME_LEN_NETWORK: u32 = 1024 * 1024;
+
 /// The `u32` length prefix that opens every frame.
 const LENGTH_PREFIX_LEN: usize = 4;
 
@@ -45,6 +48,12 @@ pub enum Frame {
         stream: u64,
         payload: Vec<u8>,
     },
+}
+
+impl From<Message> for Frame {
+    fn from(message: Message) -> Self {
+        Self::Message(message)
+    }
 }
 
 /// Why a frame could not be read or written.
@@ -94,6 +103,34 @@ pub fn encode_stream_bytes(stream: u64, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
+/// Encodes `frame` as a body without the length prefix: the kind byte, then the payload. Message transports such as
+/// WebSocket carry one body per message (decision 0040).
+pub fn encode_frame_body(frame: &Frame) -> Vec<u8> {
+    let mut bytes = match frame {
+        Frame::Message(message) => encode_frame(message),
+        Frame::StreamBytes { stream, payload } => encode_stream_bytes(*stream, payload),
+    };
+    bytes.drain(..LENGTH_PREFIX_LEN);
+    bytes
+}
+
+/// Decodes one frame body, kind byte included, as read from a stream or carried by one transport message.
+pub fn decode_frame_body(body: &[u8]) -> Result<Frame, FrameError> {
+    let (&kind, payload) = body.split_first().ok_or(FrameError::Truncated)?;
+    match FrameKind::try_from(kind)? {
+        FrameKind::Json => Ok(Frame::Message(serde_json::from_slice(payload)?)),
+        FrameKind::StreamBytes => {
+            let (stream, rest) = payload
+                .split_first_chunk::<8>()
+                .ok_or(FrameError::Truncated)?;
+            Ok(Frame::StreamBytes {
+                stream: u64::from_be_bytes(*stream),
+                payload: rest.to_vec(),
+            })
+        }
+    }
+}
+
 /// Reads one frame. `Ok(None)` means the peer closed the stream cleanly between frames.
 ///
 /// `max_len` bounds the body, kind byte included. A longer frame fails with
@@ -106,19 +143,7 @@ where
     let Some(body) = read_body(reader, max_len).await? else {
         return Ok(None);
     };
-    let (&kind, payload) = body.split_first().ok_or(FrameError::Truncated)?;
-    match FrameKind::try_from(kind)? {
-        FrameKind::Json => Ok(Some(Frame::Message(serde_json::from_slice(payload)?))),
-        FrameKind::StreamBytes => {
-            let (stream, rest) = payload
-                .split_first_chunk::<8>()
-                .ok_or(FrameError::Truncated)?;
-            Ok(Some(Frame::StreamBytes {
-                stream: u64::from_be_bytes(*stream),
-                payload: rest.to_vec(),
-            }))
-        }
-    }
+    decode_frame_body(&body).map(Some)
 }
 
 /// Reads one JSON frame. `Ok(None)` means the peer closed the stream cleanly between frames.
@@ -204,6 +229,14 @@ where
         return Err(FrameError::Truncated);
     }
     Ok(Some(body))
+}
+
+/// Whether `frame` fits in one frame of `max_len` bytes.
+pub fn fits(frame: &Frame, max_len: u32) -> bool {
+    match frame {
+        Frame::Message(message) => fits_frame(message, max_len),
+        Frame::StreamBytes { payload, .. } => fits_stream_bytes(payload, max_len),
+    }
 }
 
 /// Whether `message` fits in one frame of `max_len` bytes, the check [`write_message`] makes.

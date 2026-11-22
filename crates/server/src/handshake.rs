@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use massorca_core_store::new_id;
 use massorca_protocol::{
-    ErrorBody, Frame, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION,
-    ProtocolRange, codes, negotiate,
+    ErrorBody, Frame, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, ProtocolRange, codes,
+    negotiate,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -39,6 +39,7 @@ pub(crate) async fn accept(
     inbound: &mut mpsc::Receiver<Frame>,
     outbound: &mpsc::Sender<Frame>,
     state: &AppState,
+    max_frame_len: u32,
 ) -> Option<Negotiated> {
     let first = match timeout(HELLO_TIMEOUT, inbound.recv()).await {
         Ok(Some(first)) => first,
@@ -81,7 +82,7 @@ pub(crate) async fn accept(
         server: state.server.clone(),
         capabilities: capabilities.clone(),
         connection_id: connection_id.clone(),
-        max_frame_len: Some(MAX_FRAME_LEN_LOCAL),
+        max_frame_len: Some(max_frame_len),
     };
     outbound.send(Frame::Message(welcome)).await.ok()?;
     Some(Negotiated {

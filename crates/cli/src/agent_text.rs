@@ -1,7 +1,7 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivityState, AgentKind, AgentSession, Execution, Outcome,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, Execution, Outcome,
 };
 
 use crate::terminal;
@@ -97,7 +97,18 @@ pub fn execution_text(execution: &Execution) -> String {
     }
 }
 
-/// The reported activity, or `no status` when the agent has reported nothing.
+/// One `agent status --watch` line: the session, its execution and its activity.
+pub fn change_line(session: &AgentSession) -> String {
+    format!(
+        "{}  execution: {}  activity: {}",
+        session.id,
+        execution_text(&session.execution),
+        activity_text(session.activity.as_ref())
+    )
+}
+
+/// The reported activity with where it came from, for example `done (success) from hook`, or `no status` when the
+/// agent has reported nothing.
 pub fn activity_text(activity: Option<&Activity>) -> String {
     let Some(activity) = activity else {
         return "no status".to_owned();
@@ -118,8 +129,17 @@ pub fn activity_text(activity: Option<&Activity>) -> String {
                 Outcome::Interrupted => "interrupted",
                 Outcome::Unknown => "unknown",
             };
-            format!("{state} ({outcome})")
+            format!("{state} ({outcome}) from {}", source_text(activity.source))
         }
-        _ => state.to_owned(),
+        _ => format!("{state} from {}", source_text(activity.source)),
+    }
+}
+
+fn source_text(source: ActivitySource) -> &'static str {
+    match source {
+        ActivitySource::Hook => "hook",
+        ActivitySource::Process => "process",
+        ActivitySource::Output => "output",
+        ActivitySource::Unknown => "unknown",
     }
 }
