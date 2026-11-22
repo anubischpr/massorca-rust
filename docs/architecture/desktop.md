@@ -90,13 +90,14 @@ store follows a service through the bridge (0028).
   back and attaches again without an offset, which gives a snapshot. The Work
   panel's strip lists the selected workspace's terminals from the store, and the
   window keeps only which one is selected. Each shown terminal is a
-  `TerminalSurface` fed by `feed_events`. An attach that answers the program's
-  queries declares `answers_queries` (0036), and the pane does: its replies go
-  back as input through one function (0034). Closing the tab of a running
-  terminal asks in X-DLG-01: "Keep running" drops the view and the tab stays in
-  the strip, and "Stop process" calls `terminal.close`. An unverifiable terminal
-  shows a banner that says it may still run. The status bar counts the terminals
-  that may still run.
+  `TerminalSurface` fed by `feed_events`. Its replies go back as input through
+  one function (cursor reports, 0034); an attach that sends them declares
+  `answers_queries` (0036). The pane and the integration test both declare it
+  through `AttachRole::AnswersQueries`. Closing the tab of a running terminal
+  asks in X-DLG-01: "Keep running" drops the view and the tab stays in the
+  strip, and "Stop process" calls `terminal.close`. An unverifiable terminal
+  shows a banner that says it may still run. The status bar counts the
+  terminals that may still run.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.

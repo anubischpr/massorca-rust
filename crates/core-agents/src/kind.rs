@@ -167,6 +167,17 @@ impl KindDecl {
             })
     }
 
+    /// Whether the kind can report `idle`, the state a first prompt waits for (0054): it has a status mechanism and maps
+    /// an event to `idle`.
+    pub fn reports_idle(&self) -> bool {
+        self.status.mechanism != StatusMechanism::None
+            && self
+                .status
+                .events
+                .values()
+                .any(|target| *target == EventTarget::Idle)
+    }
+
     /// Whether `agent.credentials.import` works for the kind.
     pub fn credentials_supported(&self) -> bool {
         self.credentials
@@ -482,6 +493,21 @@ mod tests {
             });
         });
         assert!(fine.is_empty(), "{fine:?}");
+    }
+
+    #[test]
+    fn a_kind_reports_idle_only_through_a_mechanism_that_maps_idle() {
+        assert!(!parse(minimal()).reports_idle(), "no mechanism, no idle");
+        let mut mapped = minimal();
+        mapped["status"] =
+            serde_json::json!({ "mechanism": "env-command", "events": { "start": "idle" } });
+        assert!(parse(mapped.clone()).reports_idle());
+        mapped["status"] =
+            serde_json::json!({ "mechanism": "env-command", "events": { "stop": "done" } });
+        assert!(
+            !parse(mapped).reports_idle(),
+            "a mechanism that never maps idle"
+        );
     }
 
     #[test]

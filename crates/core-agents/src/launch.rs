@@ -91,17 +91,29 @@ pub enum LaunchError {
     PromptTooLong,
     #[error("the prompt contains a NUL character")]
     PromptHasNul,
+    #[error(
+        "the prompt contains a control character other than tab, line feed and carriage return"
+    )]
+    PromptHasControl,
     #[error("the kind declares no resume form")]
     NotResumable,
 }
 
-/// Refuses prompts over the size limit or with a NUL (0054). The text itself never appears in the error.
+/// Refuses prompts over the size limit, with a NUL, or with a control character other than tab, line feed and carriage
+/// return (0054, decision 0058): an escape sequence, DEL or a C1 control could make the terminal or the agent act on the
+/// text. The text itself never appears in the error.
 pub fn check_prompt(text: &str) -> Result<(), LaunchError> {
     if text.len() > MAX_PROMPT_BYTES {
         return Err(LaunchError::PromptTooLong);
     }
     if text.contains('\0') {
         return Err(LaunchError::PromptHasNul);
+    }
+    if text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Err(LaunchError::PromptHasControl);
     }
     Ok(())
 }
@@ -386,6 +398,38 @@ mod tests {
         let at_limit = "a".repeat(MAX_PROMPT_BYTES);
         assert!(check_prompt(&at_limit).is_ok());
         assert_eq!(check_prompt("a\0b"), Err(LaunchError::PromptHasNul));
+    }
+
+    /// Escape sequences, DEL and the C1 controls never reach an agent in a prompt: a spliced paste marker, a plain ESC and
+    /// a CSI (U+009B) are refused. Tabs and line breaks are allowed (decision 0058).
+    #[test]
+    fn controls_are_refused_except_tab_and_line_breaks() {
+        for refused in [
+            "\x1b[20\x1b[201~1~",
+            "\x1b",
+            "\u{9b}",
+            "\u{7f}",
+            "\u{85}",
+            "\u{9f}",
+            "\x07",
+        ] {
+            assert_eq!(
+                check_prompt(refused),
+                Err(LaunchError::PromptHasControl),
+                "{refused:?} must be refused"
+            );
+        }
+        for accepted in [
+            "a\tb",
+            "line one\nline two\r\n",
+            "héllo — 日本語 🙂",
+            "\u{a0}",
+        ] {
+            assert!(
+                check_prompt(accepted).is_ok(),
+                "{accepted:?} must be accepted"
+            );
+        }
     }
 
     #[test]

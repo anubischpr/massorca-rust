@@ -6,10 +6,9 @@ use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
-use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentSession, AgentSessionList, AgentStartParams, AgentWatchEvent,
-    AgentWatchParams,
+    ActivityState, AgentPromptParams, AgentSession, AgentSessionList, AgentStartParams,
+    AgentWatchEvent, AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
@@ -17,6 +16,7 @@ use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::target::Target;
 use crate::terminal_attach;
 
 #[derive(Debug, Subcommand)]
@@ -36,6 +36,13 @@ pub enum AgentCommand {
         /// Skip the grace period and end the agent's processes at once.
         #[arg(long)]
         force: bool,
+    },
+    /// Types a prompt into a session's terminal once its agent is idle or done, then submits it.
+    Prompt(AgentPromptArgs),
+    /// Starts a new run of an exited session with the agent's resume arguments; the session keeps its id.
+    Resume {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
     },
     /// Forgets a session whose run has ended.
     Forget {
@@ -136,15 +143,27 @@ pub struct AgentStartArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AgentPromptArgs {
+    /// Session id, or a unique prefix of at least 8 characters.
+    pub session: String,
+    /// The text to type, at most 8 KiB; the agent's submit key follows it.
+    #[arg(allow_hyphen_values = true)]
+    pub text: String,
+    /// Type the text even while the agent works or waits, for example to answer its question.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AgentListArgs {
     /// Only the sessions of this workspace (id, name or path).
     #[arg(long, value_name = "WORKSPACE")]
     pub workspace: Option<String>,
 }
 
-/// Runs one `agent` subcommand against the service of `profile`.
+/// Runs one `agent` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: AgentCommand,
     output: Output,
@@ -160,12 +179,12 @@ pub async fn execute(
         }
         // Checked before connecting, so a refused attach never starts the service.
         terminal_attach::require_terminal()?;
-        let client = connect(profile, autostart).await?;
+        let client = connect(target, autostart).await?;
         let terminal = live_terminal(&client, session).await?;
         return terminal_attach::attach(&client, &terminal).await;
     }
 
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         AgentCommand::Kinds => {
             let kinds = client.agent_kinds().await?;
@@ -220,6 +239,21 @@ pub async fn execute(
         AgentCommand::Stop { session, force } => {
             let stopped = client.agent_stop(&session, force).await?;
             output.success(&stopped, &agent_text::session_details(&stopped));
+        }
+        AgentCommand::Prompt(args) => {
+            let receipt = client
+                .agent_prompt(&AgentPromptParams {
+                    session: args.session,
+                    text: args.text,
+                    force: args.force,
+                })
+                .await?;
+            let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
+            output.success(&receipt, &lines);
+        }
+        AgentCommand::Resume { session } => {
+            let resumed = client.agent_resume(&session).await?;
+            output.success(&resumed, &agent_text::session_details(&resumed));
         }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;
