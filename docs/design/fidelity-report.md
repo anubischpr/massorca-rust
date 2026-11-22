@@ -62,6 +62,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
   - `ws-session`, `ws-start`, `sh-empty-app`: Sidebar toggle, Back and Forward icons, then the session title.
 - No artboard exists for Pairing, Memory, Files or the team project page. Pairing draws the icon Back. Memory, Files and the project page take the team pattern, `{team} · {page}`.
 - No keyboard shortcut for Back exists in `shell/actions.rs`, so none was added.
+- Owner decision: a page whose artboard draws Back keeps it. Full pages keep the Back that their artboards show, labelled or icon.
 
 **Cannot match yet**
 - A1 start frame: sample data and "not listed by the service" heading. Open (L4).
