@@ -28,7 +28,7 @@ use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::start_page::{
-    GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, WorkspaceStart,
+    GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, VOICE_LATER, WorkspaceStart,
 };
 use crate::model::workspace_flow::ProjectChoice;
 
@@ -300,6 +300,7 @@ impl Shell {
                     Composer::new(picker, Vec::new(), cx)
                         .leading_control(start_mode_switch())
                         .send_unavailable(SESSIONS_LATER)
+                        .voice_unavailable(VOICE_LATER)
                 });
                 let draft_log =
                     cx.subscribe(&entity, move |_, composer, event: &ComposerEvent, cx| {

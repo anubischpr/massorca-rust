@@ -128,6 +128,19 @@ fn enter_keeps_the_draft_while_agent_sessions_are_not_available(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn the_start_page_microphone_is_disabled_and_says_why(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    let composer = focused_start_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer
+            .voice_unavailable_reason()
+            .cloned()),
+        Some("Voice input comes later.".into())
+    );
+}
+
+#[gpui::test]
 fn a_workspace_opens_its_start_page_and_the_page_is_drawn(cx: &mut TestAppContext) {
     let (projects, workspaces) = two_projects();
     let (rig, cx) = rig(cx, projects, workspaces);

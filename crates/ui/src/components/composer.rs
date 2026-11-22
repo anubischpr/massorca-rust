@@ -112,6 +112,8 @@ pub struct Composer {
     leading: Option<LeadingControl>,
     /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
     send_unavailable: Option<SharedString>,
+    /// Why voice input is not possible yet: the microphone stays disabled with this reason.
+    voice_unavailable: Option<SharedString>,
     hint_shown: bool,
     /// Keeps the escape hint's timer alive; clearing the hint drops it and cancels the timer.
     _hint_timer: Option<Task<()>>,
@@ -170,6 +172,7 @@ impl Composer {
             enter_inserts_newline: false,
             leading: None,
             send_unavailable: None,
+            voice_unavailable: None,
             hint_shown: false,
             _hint_timer: None,
             history: SentHistory::default(),

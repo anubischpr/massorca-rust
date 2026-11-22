@@ -54,6 +54,17 @@ impl Composer {
         self
     }
 
+    /// Why voice input is not possible yet: the microphone stays disabled with this as its reason.
+    pub fn voice_unavailable(mut self, reason: impl Into<SharedString>) -> Self {
+        self.voice_unavailable = Some(reason.into());
+        self
+    }
+
+    /// The reason voice input is unavailable, or `None` when the microphone works.
+    pub fn voice_unavailable_reason(&self) -> Option<&SharedString> {
+        self.voice_unavailable.as_ref()
+    }
+
     pub fn set_attachments(&mut self, attachments: Vec<Attachment>, cx: &mut Context<Self>) {
         self.attachments = attachments;
         cx.notify();
@@ -488,13 +499,10 @@ impl Render for Composer {
             .child(div().flex_1())
             .child(self.picker.clone());
         if self.voice {
-            bottom = bottom.child(
-                IconButton::new("composer-dictate", IconName::Mic, "Dictate")
-                    .size(ButtonSize::Default)
-                    .on_click(move |_, cx| {
-                        composer.update(cx, |_, cx| cx.emit(ComposerEvent::Dictate));
-                    }),
-            );
+            let dictate = move |_: &mut Window, cx: &mut App| {
+                composer.update(cx, |_, cx| cx.emit(ComposerEvent::Dictate));
+            };
+            bottom = bottom.child(microphone(self.voice_unavailable.clone(), dictate));
         }
         bottom = bottom.child(self.primary_button(action, cx));
 
@@ -557,5 +565,36 @@ impl Render for Composer {
             root = root.child(menu_overlay(&menu, MenuOrigin::Below(bounds), cx));
         }
         root
+    }
+}
+
+/// The microphone of the bottom row: disabled with its reason while voice input is not there yet.
+fn microphone(
+    reason: Option<SharedString>,
+    on_dictate: impl Fn(&mut Window, &mut App) + 'static,
+) -> IconButton {
+    let mic =
+        IconButton::new("composer-dictate", IconName::Mic, "Dictate").size(ButtonSize::Default);
+    match reason {
+        Some(reason) => mic.disabled(true).disabled_reason(reason),
+        None => mic.on_click(on_dictate),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{RenderOnce, TestAppContext};
+
+    #[gpui::test]
+    fn a_microphone_without_voice_input_is_disabled_and_gives_its_reason(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            let mic = microphone(Some("Voice input comes later.".into()), |_, _| {});
+            reported(mic.render(window, cx))
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
+        assert_eq!(node.description(), Some("Voice input comes later."));
     }
 }
