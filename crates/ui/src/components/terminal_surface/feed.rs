@@ -193,8 +193,8 @@ impl TerminalFeed {
             .and_then(|reports| reports.title.clone())
     }
 
-    /// The bytes the emulator owes the program (cursor reports and the like), taken once.
-    /// The surface does not forward them: with several clients attached, each would answer.
+    /// The bytes the emulator owes the program (cursor reports and the like), taken once. An
+    /// attached client answers queries (decision 0034), so the owner sends these as input.
     pub fn take_replies(&mut self) -> Vec<u8> {
         self.reports
             .lock()
