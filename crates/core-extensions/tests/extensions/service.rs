@@ -12,6 +12,7 @@ use crate::fixture::{package_files, write_dir};
 
 pub struct Setup {
     pub home: tempfile::TempDir,
+    pub profile: Profile,
     pub host: Arc<FakeHost>,
     pub service: Extensions,
 }
@@ -28,6 +29,7 @@ pub fn setup(host: FakeHost) -> Setup {
     let service = Extensions::new(&profile, host.clone(), host.clone());
     Setup {
         home,
+        profile,
         host,
         service,
     }

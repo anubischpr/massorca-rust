@@ -147,12 +147,7 @@ impl Extensions {
 
     /// The manifest of an installed package, read from its unpacked folder.
     pub(crate) fn installed_manifest(&self, entry: &LockEntry) -> Result<Manifest, Error> {
-        let path = self
-            .layout
-            .resolve(&entry.path)
-            .join(manifest::MANIFEST_FILE);
-        let bytes = fs::read(&path).map_err(Error::io("cannot read", &path))?;
-        Ok(manifest::parse(&bytes)?)
+        installed_manifest(&self.layout, entry)
     }
 
     fn check_kind_conflicts(&self, lockfile: &Lockfile, manifest: &Manifest) -> Result<(), Error> {
@@ -271,6 +266,13 @@ impl Extensions {
         }
         Ok(out)
     }
+}
+
+/// The manifest of an installed package, read from its unpacked folder. It passed validation at install.
+pub(crate) fn installed_manifest(layout: &Layout, entry: &LockEntry) -> Result<Manifest, Error> {
+    let path = layout.resolve(&entry.path).join(manifest::MANIFEST_FILE);
+    let bytes = fs::read(&path).map_err(Error::io("cannot read", &path))?;
+    Ok(manifest::parse(&bytes)?)
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
