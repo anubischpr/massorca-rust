@@ -226,3 +226,5 @@ pub const EXTENSION_INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
 pub const EXTENSION_IO: &str = "extension.io";
 /// An installed package's files no longer match its lockfile hash; nothing they name runs.
 pub const EXTENSION_TAMPERED: &str = "extension.tampered";
+/// A package from outside the built-in catalogue claims publisher `massorca` or a `massorca.*` id.
+pub const EXTENSION_RESERVED_PUBLISHER: &str = "extension.reserved_publisher";

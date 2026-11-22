@@ -130,6 +130,8 @@ impl Lockfile {
 
     /// Writes the lockfile atomically: a temporary file in the same folder, flushed and synced, then renamed over it.
     pub fn write(&self, path: &Path) -> Result<(), Error> {
+        // Refused before anything is written: a lockfile that `read` would refuse must never reach the disk.
+        self.packages.iter().try_for_each(LockEntry::check)?;
         let dir = path.parent().unwrap_or(Path::new("."));
         fs::create_dir_all(dir).map_err(Error::io("cannot create", dir))?;
         let mut bytes = serde_json::to_vec_pretty(self)
@@ -167,7 +169,7 @@ impl Lockfile {
 impl LockEntry {
     /// The id and path are used to build paths that removal deletes, so an entry that names anything outside its own
     /// `pkgs/<id>/` folder is refused.
-    fn check(&self) -> Result<(), Error> {
+    pub(crate) fn check(&self) -> Result<(), Error> {
         if !is_extension_id(&self.id) {
             return Err(Error::InvalidLockfile(format!(
                 "{:?} is not an extension id",
@@ -280,6 +282,23 @@ mod tests {
         )
         .expect("seed");
         Lockfile::read(&path).expect("a valid entry reads");
+    }
+
+    #[test]
+    fn an_entry_read_would_refuse_is_never_written() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lock.json");
+        let entry = serde_json::json!({ "version": 1, "packages": [{
+            "id": "con.kit", "version": "1.0.0", "source": { "kind": "dir", "ref": "x" },
+            "sha256": "ab", "path": "pkgs/con.kit/1.0.0-ab", "enabled": true, "consent": "c",
+            "installed_at_ms": 0
+        }] });
+        let lockfile: Lockfile = serde_json::from_value(entry).expect("shape");
+        let error = lockfile
+            .write(&path)
+            .expect_err("a device-name publisher is refused");
+        assert_eq!(error.code(), crate::error::codes::INVALID_LOCKFILE);
+        assert!(!path.exists(), "nothing reached the disk");
     }
 
     #[test]

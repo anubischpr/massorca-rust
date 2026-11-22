@@ -21,6 +21,12 @@ pub const RESERVED_AGENT_IDS: [&str; 4] = ["claude", "codex", "antigravity", "ge
 /// The publisher allowed to use the reserved agent ids.
 pub const RESERVED_PUBLISHER: &str = "massorca";
 
+/// Whether an id or publisher is the first party's: publisher `massorca` or an id `massorca.*`. Only the built-in
+/// catalogue may ship these; a package from any other source that claims one is refused (0062).
+pub fn reserves_identity(id: &str, publisher: &str) -> bool {
+    publisher == RESERVED_PUBLISHER || crate::ids::publisher_of(id) == Some(RESERVED_PUBLISHER)
+}
+
 /// An agent CLI the package drives. `kind` points at the agent declaration file, `agents/<id>.json`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]

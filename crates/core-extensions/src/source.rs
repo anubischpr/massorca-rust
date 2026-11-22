@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use massorca_ext_package::archive::{self, ArchiveLimits};
+use massorca_ext_package::manifest::agent::reserves_identity;
 use massorca_ext_package::manifest::{self, Manifest, check_files_present};
 use massorca_ext_package::package_path;
 use sha2::{Digest, Sha256};
@@ -100,6 +101,14 @@ pub fn load(source: &Source, pinned: Option<&str>) -> Result<LoadedPackage, Erro
         }
         Source::Dir(path) => checked(read_dir(path)?, pinned)?,
     };
+    if !matches!(source, Source::Catalogue(_))
+        && reserves_identity(&manifest.id, &manifest.publisher)
+    {
+        return Err(Error::ReservedIdentity {
+            id: manifest.id.clone(),
+            reference: lock_source.reference.clone(),
+        });
+    }
     Ok(LoadedPackage {
         manifest,
         files,

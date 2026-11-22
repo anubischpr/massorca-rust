@@ -13,6 +13,7 @@ use massorca_ext_package::manifest::agent::CliOs;
 use massorca_ext_package::manifest::{self, Manifest};
 use massorca_profile::Profile;
 
+use crate::catalogue;
 use crate::error::Error;
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
@@ -98,10 +99,16 @@ impl Extensions {
         let package = source::load(source, sha256)?;
         let manifest = &package.manifest;
         let mut lockfile = self.read_lockfile()?;
-        if lockfile.get(&manifest.id).is_some() {
+        let builtin = matches!(source, Source::Catalogue(_));
+        // The built-in replaces a first-party entry the catalogue does not vouch for; it never blocks on one.
+        let replaced = lockfile
+            .get(&manifest.id)
+            .filter(|entry| builtin && catalogue::is_unvouched_first_party(entry))
+            .cloned();
+        if lockfile.get(&manifest.id).is_some() && replaced.is_none() {
             return Err(Error::AlreadyInstalled(manifest.id.clone()));
         }
-        self.check_kind_conflicts(&lockfile, manifest)?;
+        self.check_kind_conflicts(&lockfile, manifest, builtin)?;
 
         let plan = review::plan(manifest, &*self.resolver, self.os);
         let expected = review::fingerprint(manifest, &package.sha256, &plan, self.os);
@@ -122,6 +129,7 @@ impl Extensions {
         let dir = self.layout.resolve(&rel);
         let files_sha256 = source::canonical_sha256(&package.files);
         self.unpack(&manifest.id, &package.files, &dir)?;
+        let installed_path = rel.clone();
         let entry = check_unpacked(&manifest.id, &dir, &files_sha256)
             .and_then(|()| self.run_installers(manifest, &plan))
             .map(|cli| LockEntry {
@@ -144,12 +152,23 @@ impl Extensions {
                 extra: Default::default(),
             })
             .and_then(|entry| {
+                lockfile
+                    .packages
+                    .retain(|package| package.id != manifest.id);
                 lockfile.packages.push(entry.clone());
                 lockfile.write(&self.layout.lock_path())?;
                 Ok(entry)
             });
-        if entry.is_err() {
-            self.remove_unpacked(&manifest.id, &dir);
+        match &entry {
+            Ok(_) => {
+                if let Some(old) = &replaced
+                    && old.path != installed_path
+                {
+                    // The replaced entry left the lockfile with this install, so its folder is only litter now.
+                    let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+                }
+            }
+            Err(_) => self.remove_unpacked(&manifest.id, &dir),
         }
         entry
     }
@@ -159,8 +178,17 @@ impl Extensions {
         installed_manifest(&self.layout, entry)
     }
 
-    fn check_kind_conflicts(&self, lockfile: &Lockfile, manifest: &Manifest) -> Result<(), Error> {
+    fn check_kind_conflicts(
+        &self,
+        lockfile: &Lockfile,
+        manifest: &Manifest,
+        builtin: bool,
+    ) -> Result<(), Error> {
         for entry in &lockfile.packages {
+            // A built-in is checked against the built-ins only: no third-party entry can block it.
+            if builtin && !catalogue::is_builtin_install(entry) {
+                continue;
+            }
             // The ids recorded at install, so a package whose files changed never blocks installing another one.
             let installed: Vec<String> = if entry.agent_kinds.is_empty() {
                 self.installed_manifest(entry)?

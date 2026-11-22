@@ -22,6 +22,7 @@ pub mod codes {
     pub const INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
     pub const IO: &str = "extension.io";
     pub const TAMPERED: &str = "extension.tampered";
+    pub const RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -80,6 +81,10 @@ pub enum Error {
     AssetTooLarge { path: String, size: u64, limit: u64 },
     #[error("invalid lockfile: {0}")]
     InvalidLockfile(String),
+    #[error(
+        "{id} is reserved to the built-in catalogue: publisher massorca and massorca.* ids are refused from {reference}"
+    )]
+    ReservedIdentity { id: String, reference: String },
     #[error("the installed files of {0} differ from what was reviewed; reinstall it")]
     Tampered(String),
     #[error("{context} {}: {source}", .path.display())]
@@ -111,6 +116,7 @@ impl Error {
             Self::AssetTooLarge { .. } => codes::ASSET_TOO_LARGE,
             Self::InvalidLockfile(_) => codes::INVALID_LOCKFILE,
             Self::Tampered(_) => codes::TAMPERED,
+            Self::ReservedIdentity { .. } => codes::RESERVED_PUBLISHER,
             Self::Io { .. } => codes::IO,
         }
     }

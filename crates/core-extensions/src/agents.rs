@@ -47,6 +47,10 @@ pub fn installed_agent_kinds(profile: &Profile) -> Result<Vec<InstalledAgentKind
     let lockfile = Lockfile::read(&layout.lock_path())?;
     let mut out = Vec::new();
     for entry in &lockfile.packages {
+        // A first-party id the catalogue does not vouch for never contributes a kind: it could impersonate a built-in.
+        if catalogue::is_unvouched_first_party(entry) {
+            continue;
+        }
         let manifest = match installed_manifest(&layout, entry) {
             Ok(manifest) => manifest,
             Err(error) => {

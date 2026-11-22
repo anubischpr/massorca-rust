@@ -112,7 +112,11 @@ impl Extensions {
                 let bytes = entry
                     .file(manifest::MANIFEST_FILE)
                     .ok_or_else(|| Error::NotFound(entry.id.to_owned()))?;
-                Ok(self.item(&manifest::load(bytes)?, lockfile.get(entry.id)))
+                // Only the built-in's own install counts as installed; a lock entry under the same id does not.
+                let installed = lockfile
+                    .get(entry.id)
+                    .filter(|lock| catalogue::is_builtin_install(lock));
+                Ok(self.item(&manifest::load(bytes)?, installed))
             })
             .collect()
     }
@@ -143,6 +147,15 @@ impl Extensions {
     /// A listed image (logo or banner) of an item, at most [`MAX_ASSET_BYTES`].
     pub fn asset(&self, id: &str, path: &str) -> Result<Vec<u8>, Error> {
         let lockfile = self.read_lockfile()?;
+        if let Some(entry) = lockfile
+            .get(id)
+            .filter(|entry| catalogue::is_unvouched_first_party(entry))
+        {
+            return Err(Error::ReservedIdentity {
+                id: entry.id.clone(),
+                reference: entry.source.reference.clone(),
+            });
+        }
         // An installed package's files must be trusted before any of them is served.
         let item = match lockfile.get(id) {
             Some(entry) => self.installed_item(entry)?,
@@ -182,6 +195,13 @@ impl Extensions {
 
     /// An installed package from its manifest, or, when its files cannot be trusted, its lockfile record and problem.
     fn installed_item_or_problem(&self, entry: &LockEntry) -> Item {
+        if catalogue::is_unvouched_first_party(entry) {
+            let error = Error::ReservedIdentity {
+                id: entry.id.clone(),
+                reference: entry.source.reference.clone(),
+            };
+            return lockfile_item(entry, &error);
+        }
         self.installed_item(entry)
             .unwrap_or_else(|error| lockfile_item(entry, &error))
     }

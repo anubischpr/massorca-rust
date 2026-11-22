@@ -264,6 +264,10 @@ mod tests {
             (core_codes::IO, codes::EXTENSION_IO),
             (core_codes::TAMPERED, codes::EXTENSION_TAMPERED),
             (
+                core_codes::RESERVED_PUBLISHER,
+                codes::EXTENSION_RESERVED_PUBLISHER,
+            ),
+            (
                 package_codes::INVALID_MANIFEST,
                 codes::EXTENSION_INVALID_MANIFEST,
             ),

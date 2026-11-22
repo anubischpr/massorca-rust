@@ -6,6 +6,7 @@ mod fixture;
 mod install;
 mod item;
 mod remove;
+mod reserved;
 mod review;
 mod service;
 mod source;
