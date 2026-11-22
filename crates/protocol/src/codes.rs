@@ -113,6 +113,22 @@ pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
 pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
 pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
 pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
+/// The vault key will not open; the ciphertext is kept (decision 0071).
+pub const SECRET_VAULT_LOCKED: &str = "secret.vault_locked";
+pub const SECRET_NOT_FOUND: &str = "secret.not_found";
+/// The name is already owned or linked in this scope.
+pub const SECRET_NAME_IN_USE: &str = "secret.name_in_use";
+/// The name in this scope is a link; change it at its owning scope, named in the message.
+pub const SECRET_LINKED: &str = "secret.linked";
+/// Other scopes link to this secret; they are named in the message. `include_links` removes them too.
+pub const SECRET_HAS_LINKS: &str = "secret.has_links";
+pub const SECRET_INVALID_NAME: &str = "secret.invalid_name";
+pub const SECRET_INVALID_SCOPE: &str = "secret.invalid_scope";
+pub const SECRET_TOO_LARGE: &str = "secret.too_large";
+pub const SECRET_INVALID_REASON: &str = "secret.invalid_reason";
+pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
+/// The request is no longer pending.
+pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
 
 pub const AGENT_NOT_FOUND: &str = "agent.not_found";
 pub const AGENT_KIND_NOT_FOUND: &str = "agent.kind_not_found";

@@ -8,6 +8,7 @@ pub mod config;
 pub mod events;
 pub mod git;
 pub mod projects;
+pub mod secrets;
 pub mod service;
 pub mod terminals;
 pub mod workspaces;

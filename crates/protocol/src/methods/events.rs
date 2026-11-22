@@ -12,6 +12,12 @@ pub const TOPIC_PROJECT_ADDED: &str = "project.added";
 pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
 /// An agent session was started, changed, stopped or forgotten; the id is the session id.
 pub const TOPIC_AGENT_CHANGED: &str = "agent.changed";
+/// A secret was set, rotated, linked, unlinked or removed. The id is `<scope>/<name>`; never a value.
+pub const TOPIC_SECRET_CHANGED: &str = "secret.changed";
+/// A secret request opened. The id is the request id.
+pub const TOPIC_SECRET_REQUESTED: &str = "secret.requested";
+/// A secret request left pending. The id is the request id.
+pub const TOPIC_SECRET_REQUEST_CHANGED: &str = "secret.request_changed";
 
 /// Result of `events.subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
