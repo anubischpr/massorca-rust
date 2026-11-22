@@ -175,8 +175,9 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   and names the terminal whose last screen `terminal screen` can print.
 - `agent delegate --prompt TEXT` starts a child session of the `--from` session (decision
   0055). Inside an agent run `--from` defaults to the run's own session, and the run's
-  `MASSORCA_AGENT_TOKEN` goes with the call; a token that is not the parent run's fails with
-  `agent.hook_refused`. The kind is the parent's unless `--kind` names another. A writing
+  `MASSORCA_AGENT_TOKEN` always goes with the call, whatever session `--from` names; a token
+  that is not the parent run's fails with `agent.hook_refused`, so a child cannot delegate as
+  its parent. The kind is the parent's unless `--kind` names another. A writing
   child gets a new workspace in the parent's project, named `--name` or `<parent
   workspace>-<n>` with the first free `n`, on a branch of that name based on the parent
   workspace's branch; it starts from that branch's last commit, so uncommitted changes in the
@@ -188,10 +189,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.
 - `agent bring-back CHILD` needs a child whose run has exited, or whose last turn is `done`;
-  otherwise it fails with `agent.busy`. When the child has a workspace of its own, its branch
+  otherwise it fails with `agent.busy`. Inside an agent run the run's token goes with the call
+  and must be the child's parent's, so a child cannot bring itself back (`agent.hook_refused`). When the child has a workspace of its own, its branch
   is merged into the parent's worktree with `git merge --no-ff --no-edit`, unless
-  `--no-merge`: the parent must not be `working` (`agent.parent_busy`) and its worktree must
-  be clean (`agent.parent_dirty`). A merge that stops on conflicts is aborted, the parent is
+  `--no-merge`: the parent must not be `working` (`agent.parent_busy`), no other session may
+  write in its workspace (`agent.workspace_busy`), and its worktree must be clean with no
+  rebase or merge stopped in it (`agent.parent_dirty`). While the merge runs, a start in that
+  workspace and a prompt to its sessions without `--force` fail with `agent.busy`. A merge that stops on conflicts is aborted, the parent is
   left as it was, and the call fails with `agent.merge_conflict`, the conflicting paths in
   the error's `data.paths`. Unless `--no-prompt`, a live parent run then gets one prompt, by
   the `agent prompt` rules without `--force`, naming the child, the merge commit and the

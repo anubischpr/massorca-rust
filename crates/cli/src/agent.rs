@@ -317,7 +317,7 @@ pub async fn execute(
                 })?;
             let delegated = client
                 .agent_delegate(&AgentDelegateParams {
-                    token: token_for(inside.as_ref(), &parent),
+                    token: inside.as_ref().map(|(_, token)| token.clone()),
                     parent,
                     prompt: args.prompt,
                     kind: args.kind,
@@ -337,17 +337,8 @@ pub async fn execute(
             output.success(&tree, &agent_text::tree_lines(&tree));
         }
         AgentCommand::BringBack(args) => {
-            // Inside the parent's own run the run's token goes with the call, as for delegate (0055).
-            let inside = run_identity();
-            let token = match &inside {
-                Some(_) => {
-                    let child = client.agent_show(&args.child).await?;
-                    child
-                        .parent_id
-                        .and_then(|parent| token_for(inside.as_ref(), &parent))
-                }
-                None => None,
-            };
+            // Inside a run the run's own token always goes with the call; the service accepts only the parent's (0055).
+            let token = run_identity().map(|(_, token)| token);
             let brought = client
                 .agent_bring_back(&AgentBringBackParams {
                     child: args.child,
@@ -364,20 +355,15 @@ pub async fn execute(
     Ok(())
 }
 
-/// The session and token of the agent run this command runs in, from the environment the service gives a run.
+/// The session and token of the agent run this command runs in, from the environment the service gives a run. Inside a
+/// run every delegate and bring-back sends this token, whatever session it names, so the service can refuse a run that
+/// acts for a session other than its own.
 fn run_identity() -> Option<(String, String)> {
     let session = std::env::var(ENV_SESSION)
         .ok()
         .filter(|value| !value.is_empty())?;
     let token = std::env::var(ENV_TOKEN).unwrap_or_default();
     Some((session, token))
-}
-
-/// The run's token when the call acts for the run's own session, so an agent can act only from its own session.
-fn token_for(inside: Option<&(String, String)>, session: &str) -> Option<String> {
-    inside
-        .filter(|(own, _)| own == session)
-        .map(|(_, token)| token.clone())
 }
 
 /// Waits on the watch stream until the session reaches `until`; returns its record then.

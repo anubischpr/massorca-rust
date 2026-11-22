@@ -406,3 +406,108 @@ fn is_ancestor(dir: &Path, ancestor: &str, of: &str) -> bool {
         other => panic!("git merge-base --is-ancestor failed: {other:?}"),
     }
 }
+
+/// Runs `--json <args>` as an agent run would, with the run's session and token in the environment; it must fail.
+/// Returns the error code.
+fn error_inside_run(sandbox: &Sandbox, session: &str, token: &str, args: &[&str]) -> String {
+    let outcome = harness::execute(
+        sandbox
+            .command("default")
+            .env("MASSORCA_AGENT_SESSION", session)
+            .env("MASSORCA_AGENT_TOKEN", token)
+            .args(with_json(args)),
+    )
+    .failure();
+    single_document(&outcome)["error"]["code"]
+        .as_str()
+        .expect("an error code")
+        .to_owned()
+}
+
+#[test]
+fn a_child_cannot_act_for_its_parent_from_inside_its_run() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:result.txt");
+    let before = head(&lead);
+
+    // Inside its own run the child's token goes with every call, and it is not the parent's.
+    assert_eq!(
+        error_inside_run(
+            &sandbox,
+            &child,
+            "the-childs-token",
+            &["agent", "delegate", "--from", &parent, "--prompt", "sneaky"]
+        ),
+        "agent.hook_refused"
+    );
+    assert_eq!(
+        error_inside_run(
+            &sandbox,
+            &child,
+            "the-childs-token",
+            &["agent", "bring-back", &child]
+        ),
+        "agent.hook_refused"
+    );
+
+    assert_eq!(head(&lead), before);
+    let tree = sandbox.json_ok("default", &["agent", "tree", &parent]);
+    assert_eq!(tree["children"].as_array().map(Vec::len), Some(1), "{tree}");
+    let shown = sandbox.json_ok("default", &["agent", "status", &child]);
+    assert!(shown.get("brought_back_at_ms").is_none(), "{shown}");
+}
+
+#[test]
+fn bring_back_into_a_parent_with_a_stopped_rebase_is_refused() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:result.txt");
+    git(&lead, &["commit", "-q", "--allow-empty", "-m", "second"]);
+    // An exec that fails stops the rebase and leaves the work tree clean.
+    let stopped = std::process::Command::new("git")
+        .args([
+            "-c",
+            "core.editor=true",
+            "rebase",
+            "--exec",
+            "exit 1",
+            "HEAD~1",
+        ])
+        .current_dir(&lead)
+        .output()
+        .expect("spawn git");
+    assert!(!stopped.status.success());
+    assert!(git(&lead, &["status", "--porcelain"]).is_empty());
+    let before = head(&lead);
+
+    let error = error_of(&sandbox, &["agent", "bring-back", &child]);
+
+    assert_eq!(error["code"], "agent.parent_dirty", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("rebase")),
+        "{error}"
+    );
+    assert_eq!(head(&lead), before);
+    assert!(!lead.join("result.txt").exists());
+}
+
+#[test]
+fn bring_back_while_another_session_writes_in_the_parent_workspace_is_refused() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:result.txt");
+    sandbox.json_ok("default", &["agent", "stop", &parent, "--force"]);
+    // With the parent stopped, another writer takes the parent's workspace.
+    let (other, _) = start_parent(&sandbox, "lead");
+    let before = head(&lead);
+
+    let error = error_of(&sandbox, &["agent", "bring-back", &child]);
+
+    assert_eq!(error["code"], "agent.workspace_busy", "{error}");
+    assert_eq!(error["data"]["session"], other.as_str(), "{error}");
+    assert_eq!(head(&lead), before);
+    assert!(!lead.join("result.txt").exists());
+}
