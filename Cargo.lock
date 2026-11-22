@@ -3778,6 +3778,7 @@ dependencies = [
  "interprocess",
  "massorca-client",
  "massorca-core-agents",
+ "massorca-core-extensions",
  "massorca-core-git",
  "massorca-core-remote",
  "massorca-core-store",

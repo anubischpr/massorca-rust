@@ -13,6 +13,7 @@ directories.workspace = true
 dunce.workspace = true
 interprocess.workspace = true
 massorca-core-agents.workspace = true
+massorca-core-extensions.workspace = true
 massorca-core-git.workspace = true
 massorca-core-remote.workspace = true
 massorca-core-watch.workspace = true
