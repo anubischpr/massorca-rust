@@ -336,11 +336,26 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   is the person's, so the service never signs it out; its files are only deleted. Under the gate
   again, the home and the row are deleted.
 - **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
-  `migrated` row whose home is gone (a crash between recording the row and moving the home), moves
-  0056's home of each kind into an account, adopts an account directory that has no row as
-  `migrated` (active only when its kind has no active account), and decides each sign-in left open.
-  The row is recorded before the rename, and a rename that fails deletes it again. The reads
-  `agent.kinds`, `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a
+  `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
+  the row and moving the home); moves 0056's home of each kind into an account; adopts an account
+  directory that has no row as `migrated` (active only when its kind has no active account); and
+  decides each sign-in still open. Only a row marked pending (`sign_in_pending`, set when `add`
+  creates it, cleared when the sign-in is kept) is a sign-in still open. A `needs_sign_in` state on
+  an imported or migrated account is only a state: the sweep never discards it. The row is recorded
+  before the move, and its active mark too when the kind has none, so a crash after the move leaves
+  the kind on that account. A move that fails deletes the row again. The reads `agent.kinds`,
+  `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a resume still
+  moves it as a fallback.
+- **No silent fallback** (decision 0059): a kind that has ever had an account (the history record
+  `agent_account_history`, written by a trigger on every insert and kept when the accounts are
+  removed) and has no active account refuses to start with `agent.credentials_invalid`, until an
+  account is activated. Only a kind that never had an account uses the vendor's usual home.
+- **Terminals and restarts**: the service owns its terminals. A graceful stop kills every live
+  terminal (`TerminalManager::shutdown`, called from `service.rs`), and on Windows each terminal's
+  job object kills its processes when the service's handle closes. A restart therefore starts with
+  no sign-in terminal running from the previous service on those paths. On Unix, after a crash, a
+  login process can outlive the service; the sweep decides a sign-in by its files and check and
+  does not wait for that process.
   resume still moves it as a fallback.
 - **Labels**: at most 256 characters with no control character, refused with
   `request.invalid_params`. The CLI prints labels and identities without control characters.

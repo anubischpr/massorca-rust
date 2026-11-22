@@ -61,7 +61,7 @@ impl Agents {
             let gate = credentials::lock_homes();
             self.migrate_legacy(&gate, kind)?;
             let home = credentials::create_account_home(self.profile_dir(), kind, &account)?;
-            if let Err(error) = self.store().insert_agent_account(&row) {
+            if let Err(error) = self.store().insert_pending_sign_in(&row) {
                 let _ = std::fs::remove_dir_all(&home);
                 return Err(error.into());
             }
@@ -130,6 +130,11 @@ impl Agents {
     /// (`unknown`), or a kind with no check, keeps it only if its declared files exist, as `unknown`. A row that is already
     /// gone is left alone, with no event.
     pub(crate) fn decide_sign_in(&self, kind: &str, account: &str) {
+        // Only a sign-in the service made is decided, so no other row can be discarded from here (decision 0059).
+        match self.store().get_agent_account(account) {
+            Ok(Some(row)) if row.kind == kind && row.origin == ORIGIN_SIGN_IN => {}
+            _ => return,
+        }
         let files =
             credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
         let verdict = match self.startable_kind(kind) {
@@ -152,7 +157,12 @@ impl Agents {
             .store()
             .set_agent_account_check(account, state_name(state), identity.as_deref())
         {
-            Ok(true) => {}
+            Ok(true) => {
+                // Decided: the account is kept, so it is no longer an open sign-in (decision 0059).
+                if let Err(error) = self.store().set_agent_account_pending(account, false) {
+                    tracing::warn!(kind, code = %error, "a decided sign-in could not be cleared");
+                }
+            }
             Ok(false) => return,
             Err(error) => {
                 tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
