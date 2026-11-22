@@ -5,31 +5,45 @@
 //! workspace or the start page with no workspace.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, SharedString, WeakEntity, Window, div, px};
+use gpui::{
+    AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
+};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::kbd::Kbd;
+use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, SPACE_8,
-    TYPE_CAPTION, TYPE_HEADING,
+    LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_4, SPACE_6, SPACE_8, TYPE_CAPTION,
+    TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use std::io::Write;
 
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
+use crate::launch_options::DebugFocus;
 use crate::model::start_page::{
-    COMPOSER_PLACEHOLDER, GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, WorkspaceStart,
+    GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, VOICE_LATER, WorkspaceStart,
 };
 use crate::model::workspace_flow::ProjectChoice;
 
-/// What the start page draws: the workspace, and the shell to act through.
+/// What the start page draws: the workspace, its composer, and the shell to act through.
 pub(super) struct StartFrame {
     pub page: WorkspaceStart,
+    pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
+}
+
+/// A workspace's start page composer, with the subscription that logs its drafts in a debug launch.
+#[derive(Debug)]
+pub(super) struct StartComposer {
+    pub entity: Entity<Composer>,
+    _draft_log: Subscription,
 }
 
 /// The start page for one workspace, centred in the Canvas.
@@ -93,53 +107,14 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
             .tooltip(GIT_LATER),
         );
 
-    // The Chat / Terminal switch sits in the composer's bottom row, never in the placement row (A32).
-    let composer_box = div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(SPACE_3))
-        .p(px(SPACE_4))
-        .rounded(px(RADIUS_LG))
-        .border_1()
-        .border_color(p.border.default)
-        .bg(p.surface.raised)
-        .child(
-            div()
-                .text_body()
-                .text_color(p.text.tertiary)
-                .child(COMPOSER_PLACEHOLDER),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .child(
-                    SegmentedControl::new(
-                        "start-mode",
-                        "start-mode-group",
-                        vec![
-                            Segment::icon_text(IconName::MessageSquare, "Chat"),
-                            Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-                        ],
-                    )
-                    .disabled(true),
-                )
-                .child(
-                    Button::new("start-send", "Send")
-                        .variant(ButtonVariant::Primary)
-                        .disabled(true)
-                        .tooltip(SESSIONS_LATER),
-                ),
-        );
+    // The real composer: the Chat / Terminal switch sits in its bottom row (A32), and Send
+    // waits for sessions.
     let composer = div()
         .w_full()
         .flex()
         .flex_col()
         .gap(px(SPACE_2))
-        .child(composer_box)
+        .child(frame.composer.clone())
         .child(key_hints(&theme));
 
     let facts = SettingsSection::new("start-facts", "Workspace")
@@ -210,6 +185,22 @@ fn key_hints(theme: &Theme) -> impl IntoElement {
                 .child(Kbd::new(*key))
                 .child(*what)
         }))
+}
+
+/// The Chat / Terminal switch of the composer's bottom row, drawn disabled until sessions exist.
+fn start_mode_switch() -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
+    |_: &mut Window, _: &mut App| -> AnyElement {
+        SegmentedControl::new(
+            "start-mode",
+            "start-mode-group",
+            vec![
+                Segment::icon_text(IconName::MessageSquare, "Chat"),
+                Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+            ],
+        )
+        .disabled(true)
+        .into_any_element()
+    }
 }
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
@@ -286,5 +277,58 @@ impl Shell {
         };
         self.model.select_workspace(workspace);
         cx.notify();
+    }
+
+    /// The composer of a workspace's start page, created on first use and then kept, so the
+    /// draft stays while the page redraws or the workspace is shown again.
+    pub(super) fn start_composer(
+        &mut self,
+        workspace_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Entity<Composer> {
+        let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
+        self.start_composers
+            .entry(workspace_id.to_owned())
+            .or_insert_with(|| {
+                let picker = PickerState::new(
+                    Vec::new(),
+                    Choice {
+                        model: SharedString::default(),
+                        effort: None,
+                        fast: false,
+                    },
+                );
+                let entity = cx.new(|cx| {
+                    Composer::new(picker, Vec::new(), cx)
+                        .leading_control(start_mode_switch())
+                        .send_unavailable(SESSIONS_LATER)
+                        .voice_unavailable(VOICE_LATER)
+                });
+                let draft_log =
+                    cx.subscribe(&entity, move |_, composer, event: &ComposerEvent, cx| {
+                        if log_drafts && *event == ComposerEvent::DraftChanged {
+                            let draft = composer.read(cx).draft(cx);
+                            let _ = writeln!(
+                                std::io::stderr(),
+                                "massorca-desktop: debug composer draft={draft:?}"
+                            );
+                        }
+                    });
+                StartComposer {
+                    entity,
+                    _draft_log: draft_log,
+                }
+            })
+            .entity
+            .clone()
+    }
+
+    /// Puts the focus in the selected workspace's start page composer (the debug focus).
+    pub(super) fn focus_start_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.model.selected_workspace().map(str::to_owned) else {
+            return;
+        };
+        let composer = self.start_composer(&id, cx);
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
     }
 }

@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, KeyBinding, SharedString,
-    Subscription, Task, Window, actions,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, KeyBinding,
+    SharedString, Subscription, Task, Window, actions,
 };
 
 use crate::components::menu::MenuView;
@@ -32,6 +32,9 @@ actions!(composer, [OpenModelPicker]);
 const KEY_CONTEXT: &str = "Composer";
 const PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 const HINT_DURATION: Duration = Duration::from_secs(3);
+
+/// Builds the control shown first in the bottom row, on each render.
+pub type LeadingControl = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// Binds the composer's keys and those of the parts it holds; apps call this once at startup.
 pub fn bind_keys(cx: &mut App) {
@@ -105,6 +108,12 @@ pub struct Composer {
     sign_in: bool,
     error: Option<SharedString>,
     enter_inserts_newline: bool,
+    /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
+    leading: Option<LeadingControl>,
+    /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
+    send_unavailable: Option<SharedString>,
+    /// Why voice input is not possible yet: the microphone stays disabled with this reason.
+    voice_unavailable: Option<SharedString>,
     hint_shown: bool,
     /// Keeps the escape hint's timer alive; clearing the hint drops it and cancels the timer.
     _hint_timer: Option<Task<()>>,
@@ -161,6 +170,9 @@ impl Composer {
             sign_in: false,
             error: None,
             enter_inserts_newline: false,
+            leading: None,
+            send_unavailable: None,
+            voice_unavailable: None,
             hint_shown: false,
             _hint_timer: None,
             history: SentHistory::default(),
@@ -236,7 +248,7 @@ impl Composer {
         Situation {
             agent_busy: self.agent_busy,
             host_confirmed: self.host_confirmed,
-            disabled: self.disabled_reason.is_some(),
+            disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
             text_empty: area.text().is_empty(),
             composing: area.is_composing(),
         }
@@ -452,6 +464,21 @@ mod tests {
         cx.simulate_input("later");
         cx.simulate_keystrokes("enter");
         assert_eq!(*events.borrow(), vec![ComposerEvent::Queue("later".into())]);
+    }
+
+    #[gpui::test]
+    fn enter_keeps_the_draft_when_sending_is_unavailable(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) = cx.add_window_view(|_, cx| {
+            Composer::new(picker_state(), access(), cx)
+                .send_unavailable("Agent sessions come later.")
+        });
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hi");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(draft_of(&composer, cx), "hi");
+        assert!(events.borrow().is_empty());
     }
 
     #[gpui::test]

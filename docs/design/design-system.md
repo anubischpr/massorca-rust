@@ -687,12 +687,12 @@ Collapse order when the window narrows (the Canvas width cannot satisfy the mini
 
 | Step | Region that gives way | Window width at which it happens (all regions open) | Becomes |
 |---|---|---|---|
-| 1 | Session summary | below 1528 | Hidden; the title bar toggle opens it as an overlay (`z.region-overlay`, `shadow.e2`) |
-| 2 | Project sidebar | below 1288 | Same: hidden, opens as an overlay |
-| 3 | Sidebar | below 1048 | Same: hidden, opens as an overlay over the Canvas |
-| 4 | Work panel | below 848 | Hidden; the Conversation fills the Canvas; the Work panel opens as an overlay |
+| 1 | Session summary | below 1408 | Hidden; the title bar toggle opens it as an overlay (`z.region-overlay`, `shadow.e2`) |
+| 2 | Project sidebar | below 1168 | Same: hidden, opens as an overlay |
+| 3 | Sidebar | below 928 | Same: hidden, opens as an overlay over the Canvas |
+| 4 | Work panel | below 728 | Hidden; the Conversation fills the Canvas; the Work panel opens as an overlay |
 
-(Each threshold is the sum of the minimums of the regions still open, with the Conversation at 480 px, the narrowest width at which the message minimap shows (pending-owner-review item 8). Six regions: 48 + 200 + 480 + 320 + 240 + 240 = 1528. Without Session summary: 1288. Without Session summary and Project sidebar: 1048. Without those and the Sidebar: 848 (rail 48 + Conversation 480 + Work panel 320). They are logical widths after UI zoom, so a zoomed UI hits them in a wider window. At the 800 px window minimum with zoom 100 percent, all four steps occur and the Work panel opens as an overlay.) Regions the user opened stay "open" in their state; the app restores them when the window grows again. An overlay region closes on Escape, on a click outside, and when focus leaves it. Only one overlay region is open at a time.
+(The thresholds are the widths drawn on the owner's artboard `ws-narrow`, Steps 1 to 4. They replace the earlier 1528, 1288, 1048 and 848 px, which were sums of minimums derived before the artboards existed (decision 0027). They are logical widths after UI zoom, so a zoomed UI hits them in a wider window. At the 800 px window minimum with zoom 100 percent, steps 1 to 3 occur; step 4 needs UI zoom above about 110 percent.) Regions the user opened stay "open" in their state; the app restores them when the window grows again. An overlay region closes on Escape, on a click outside, and when focus leaves it. Only one overlay region is open at a time.
 
 Full-canvas pages: Tasks, Calendar, Marketplace, Settings and the Bot Teams pages open as **full pages over the whole Canvas**. The Conversation, Session summary, Work panel and Project sidebar give way, the Sidebar is hidden except on Bot Teams pages, which keep it (pending-owner-review item 16), and the Title bar shows a Back button and the page title. Back returns to the session in the state it was left. Content maximum widths: Settings 880, Tasks and Marketplace 1120 (`layout.page.*`); Calendar and Board are fluid. Pages use `heading` for the title, `space.6` gutters, and section spacing of `space.8`.
 
@@ -740,7 +740,7 @@ Fixed widths and heights of overlays and panels. Values are logical pixels (dp o
 | `layout.menu.min-width` / `max-width` | 180 / 280 | Menu |
 | `layout.tooltip.max-width` | 240 | Tooltip |
 | `layout.toast.width.min` / `default` / `max` | 320 / 360 / 400 | Toast and Notification card, one set of widths |
-| `layout.palette.width` / `max-height` / `top` | 560 / 480 / 96 | Command palette; the dialog width `lg` |
+| `layout.palette.width` / `input-height` / `max-height` / `top` | 600 / 44 / 480 / 96 | Command palette, as drawn on artboard `ws-palette`; not a dialog size |
 | `layout.findbar.width` | 360 | Find bar |
 | `layout.tab.max-width` | 200 | Work panel tab |
 | `layout.calendar.column.min` / `layout.calendar.hour` | 96 / 48 | Calendar day column; one hour |
