@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use massorca_client::{Client, ConnectOptions};
 use massorca_desktop::service::{
-    Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
+    ConnectionState, GitUpdate, Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate,
+    connect_options,
 };
 use massorca_profile::Profile;
 use massorca_protocol::methods::git::commit::GitCommitParams;
@@ -156,7 +157,7 @@ fn status(state: &StoreState, workspace: &str) -> Option<GitStatus> {
 
 /// A running service, a bridge following it, and the workspace the panel would show.
 struct Session {
-    service: RunningService,
+    service: Option<RunningService>,
     bridge: ServiceBridge,
     handle: ServiceHandle,
     updates: UnboundedReceiver<StoreUpdate>,
@@ -184,7 +185,7 @@ impl Session {
         let worktree = PathBuf::from(&workspace.path);
         (
             Self {
-                service,
+                service: Some(service),
                 bridge,
                 handle,
                 updates,
@@ -208,7 +209,9 @@ impl Session {
         } = self;
         drop(handle);
         drop(bridge);
-        stop_service(service).await;
+        if let Some(service) = service {
+            stop_service(service).await;
+        }
     }
 }
 
@@ -402,6 +405,126 @@ async fn an_outside_change_reaches_the_store_and_a_discard_waits_for_its_waiver(
         |s| status(s, &id).is_some_and(|st| st.entries.is_empty()),
     )
     .await;
+
+    session.stop().await;
+}
+
+/// Folds the bridge's updates into `state` until `done` holds, and counts the watch updates on the way.
+async fn until_counting_watch(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    what: &str,
+    done: impl Fn(&StoreState, usize) -> bool,
+) -> usize {
+    async fn fold(
+        updates: &mut UnboundedReceiver<StoreUpdate>,
+        state: &mut StoreState,
+        watch: &mut usize,
+        done: &impl Fn(&StoreState, usize) -> bool,
+    ) {
+        while !done(state, *watch) {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if matches!(update, StoreUpdate::Git(GitUpdate::Watch { .. })) {
+                *watch += 1;
+            }
+            state.apply(update, std::time::Instant::now());
+        }
+    }
+    let mut watch = 0;
+    let folded = timeout(WAIT, fold(updates, state, &mut watch, &done)).await;
+    assert!(folded.is_ok(), "timed out waiting for {what}");
+    watch
+}
+
+/// Folds the bridge's updates into `state` for `window`, and counts the watch updates among them.
+async fn watch_updates_during(
+    updates: &mut UnboundedReceiver<StoreUpdate>,
+    state: &mut StoreState,
+    window: Duration,
+) -> usize {
+    async fn fold(
+        updates: &mut UnboundedReceiver<StoreUpdate>,
+        state: &mut StoreState,
+        watch: &mut usize,
+    ) {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if matches!(update, StoreUpdate::Git(GitUpdate::Watch { .. })) {
+                *watch += 1;
+            }
+            state.apply(update, std::time::Instant::now());
+        }
+    }
+    let mut watch = 0;
+    let _ = timeout(window, fold(updates, state, &mut watch)).await;
+    watch
+}
+
+#[tokio::test]
+async fn a_reconnect_re_establishes_the_watch_with_one_subscription_per_workspace() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let (mut session, worktree) = Session::start(&home).await;
+    let id = session.id().to_owned();
+    session.handle.git_watch(&id);
+    until(
+        &mut session.updates,
+        &mut session.state,
+        "the first status",
+        |s| status(s, &id).is_some(),
+    )
+    .await;
+
+    // The link drops and comes back. The watch the panel asked for starts again on the new connection.
+    let service = session.service.take().expect("the service runs");
+    stop_service(service).await;
+    until(
+        &mut session.updates,
+        &mut session.state,
+        "the lost link",
+        |s| matches!(s.connection, ConnectionState::Reconnecting { .. }),
+    )
+    .await;
+    session.service = Some(start_service(home.path()).await);
+
+    // One subscription answers after the reconnection: its first item, and nothing from a second one.
+    let ready = until_counting_watch(
+        &mut session.updates,
+        &mut session.state,
+        "the watch after the reconnection",
+        |s, watch| s.connection.is_connected() && watch >= 1,
+    )
+    .await;
+    assert_eq!(ready, 1, "one subscription sends its first item");
+    let quiet = watch_updates_during(
+        &mut session.updates,
+        &mut session.state,
+        Duration::from_millis(600),
+    )
+    .await;
+    assert_eq!(quiet, 0, "no second subscription sends a first item");
+
+    // A change made outside the desktop reaches the store, and one subscription reports it once.
+    std::fs::write(worktree.join("notes.txt"), "draft\n").expect("an untracked file");
+    let mut changes = until_counting_watch(
+        &mut session.updates,
+        &mut session.state,
+        "the change after the reconnection",
+        |s, _| {
+            status(s, &id).is_some_and(|st| {
+                st.entries
+                    .iter()
+                    .any(|e| e.path == "notes.txt" && e.untracked)
+            })
+        },
+    )
+    .await;
+    changes += watch_updates_during(
+        &mut session.updates,
+        &mut session.state,
+        Duration::from_millis(600),
+    )
+    .await;
+    assert_eq!(changes, 1, "one subscription reports the change once");
 
     session.stop().await;
 }
