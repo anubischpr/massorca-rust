@@ -61,7 +61,7 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
                 ServiceCommand::Restart => block_on(control::restart(&profile, output)),
             }
         }
-        Commands::Config { command } => {
+        Commands::Settings { command } => {
             let profile = Profile::resolve(home, profile)?;
             block_on(config::execute(&profile, autostart, command, output))
         }

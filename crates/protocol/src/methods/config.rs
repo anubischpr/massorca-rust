@@ -9,6 +9,8 @@ pub const GET: &str = "config.get";
 pub const SET: &str = "config.set";
 /// Params: none. Result: [`ConfigList`].
 pub const LIST: &str = "config.list";
+/// Params: [`ConfigKey`]. Result: [`ConfigValue`], the default that now applies.
+pub const RESET: &str = "config.reset";
 
 /// Owner the service assumes when a request leaves `owner` unset.
 pub const DEFAULT_OWNER: &str = "core";

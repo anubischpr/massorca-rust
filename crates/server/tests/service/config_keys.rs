@@ -1,8 +1,13 @@
-//! The core settings of decision 0070: their kinds on the wire and typed validation.
+//! The core settings of decision 0070: their kinds on the wire, typed validation, reset, and `config.changed`.
 
+use std::time::Duration;
+
+use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigKey, ConfigSet};
+use massorca_protocol::methods::events::{self, ChangeEvent};
 use serde_json::{Value, json};
+use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
 
@@ -19,6 +24,17 @@ fn set(key: &str, value: Value) -> ConfigSet {
         key: key.to_owned(),
         value,
     }
+}
+
+async fn next_event(subscription: &mut Subscription) -> ChangeEvent {
+    timeout(
+        Duration::from_secs(5),
+        subscription.next_as::<ChangeEvent>(),
+    )
+    .await
+    .expect("an event arrives")
+    .expect("the stream is open")
+    .expect("the event decodes")
 }
 
 #[tokio::test]
@@ -124,5 +140,71 @@ async fn typed_values_are_checked() {
         .await
         .expect("a custom colour is accepted");
     assert_eq!(accent.value, json!("#7461d8"));
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn changes_and_resets_publish_config_changed_only_when_the_value_moves() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut subscription = client
+        .subscribe_events()
+        .await
+        .expect("events.subscribe answers");
+    let changed = |id: &str| ChangeEvent {
+        topic: events::TOPIC_CONFIG_CHANGED.to_owned(),
+        id: id.to_owned(),
+    };
+
+    // Writing the default that already applies changes nothing.
+    client
+        .config_set(&set("appearance.theme", json!("system")))
+        .await
+        .expect("config.set answers");
+    client
+        .config_set(&set("appearance.theme", json!("dark")))
+        .await
+        .expect("config.set answers");
+    assert_eq!(
+        next_event(&mut subscription).await,
+        changed("core/appearance.theme")
+    );
+
+    client
+        .config_set(&set("appearance.theme", json!("dark")))
+        .await
+        .expect("the same value again");
+    let reset = client
+        .config_reset(&key("appearance.theme"))
+        .await
+        .expect("config.reset answers");
+    assert!(reset.is_default);
+    assert_eq!(reset.value, json!("system"));
+    assert_eq!(
+        next_event(&mut subscription).await,
+        changed("core/appearance.theme"),
+        "the repeated set published nothing; this is the reset"
+    );
+
+    client
+        .config_reset(&key("appearance.theme"))
+        .await
+        .expect("resetting a default succeeds");
+    client
+        .config_set(&set("editor.tab_width", json!(2)))
+        .await
+        .expect("config.set answers");
+    assert_eq!(
+        next_event(&mut subscription).await,
+        changed("core/editor.tab_width"),
+        "the second reset published nothing"
+    );
+
+    let unknown = client
+        .config_reset(&key("no.such.key"))
+        .await
+        .expect_err("an unknown key cannot be reset");
+    assert_eq!(remote_code(&unknown), codes::CONFIG_UNKNOWN_KEY);
     stop(running).await;
 }

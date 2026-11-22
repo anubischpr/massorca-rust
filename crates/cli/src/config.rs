@@ -1,4 +1,4 @@
-//! `massorca config get|set|list`: reading and changing settings through the service.
+//! `massorca settings get|set|list|reset` (also `massorca config`): reading and changing settings through the service.
 
 use massorca_profile::Profile;
 use massorca_protocol::methods::config::{ConfigKey, ConfigSet, ConfigValue};
@@ -20,7 +20,32 @@ pub async fn execute(
         ConfigCommand::Get(args) => get(profile, autostart, args, output).await,
         ConfigCommand::Set(args) => set(profile, autostart, args, output).await,
         ConfigCommand::List => list(profile, autostart, output).await,
+        ConfigCommand::Reset(args) => reset(profile, autostart, args, output).await,
     }
+}
+
+async fn reset(
+    profile: &Profile,
+    autostart: bool,
+    args: ConfigGetArgs,
+    output: Output,
+) -> Result<(), CliError> {
+    let client = connect(profile, autostart).await?;
+    let value = client
+        .config_reset(&ConfigKey {
+            owner: args.owner,
+            key: args.key,
+        })
+        .await?;
+    output.success(
+        &value,
+        &[format!(
+            "{} = {} (default)",
+            value.key,
+            render(&value.value)
+        )],
+    );
+    Ok(())
 }
 
 async fn get(

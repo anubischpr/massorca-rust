@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
+use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde_json::Value;
 
@@ -56,6 +57,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             list,
         )?,
+        registries.methods.register(
+            Owner::Core,
+            config::RESET,
+            capabilities::CONFIG,
+            Permission::HostAdmin,
+            reset,
+        )?,
     ]);
     Ok(handles)
 }
@@ -102,11 +110,50 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     let json = serde_json::to_string(&params.value)
         .map_err(|error| ErrorBody::new(codes::INTERNAL, error.to_string()))?;
     let (owner, key) = (decl.owner.to_string(), decl.key.clone());
-    store_blocking::run(&ctx.state, move |store| {
-        store.set_setting(&owner, &key, &json)
+    let before = store_blocking::run(&ctx.state, move |store| {
+        let before = store.get_setting(&owner, &key)?;
+        store.set_setting(&owner, &key, &json)?;
+        Ok(before)
     })
     .await?;
-    Ok(view(&decl, Some(params.value)))
+    let before = before.as_deref().map(stored_json).transpose()?;
+    let after = view(&decl, Some(params.value));
+    publish_if_changed(&ctx, &decl, before, &after);
+    Ok(after)
+}
+
+async fn reset(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorBody> {
+    let decl = find(
+        &ctx.state.registries.settings,
+        params.owner.as_deref(),
+        &params.key,
+    )?;
+    let (owner, key) = (decl.owner.to_string(), decl.key.clone());
+    let before = store_blocking::run(&ctx.state, move |store| {
+        let before = store.get_setting(&owner, &key)?;
+        store.delete_setting(&owner, &key)?;
+        Ok(before)
+    })
+    .await?;
+    let before = before.as_deref().map(stored_json).transpose()?;
+    let after = view(&decl, None);
+    publish_if_changed(&ctx, &decl, before, &after);
+    Ok(after)
+}
+
+/// Publishes `config.changed` when the value in effect before differs from the one now.
+fn publish_if_changed(
+    ctx: &RequestCtx,
+    decl: &SettingDecl,
+    before: Option<Value>,
+    after: &ConfigValue,
+) {
+    if before.unwrap_or_else(|| decl.default.clone()) != after.value {
+        ctx.state.events.publish(ChangeEvent {
+            topic: events::TOPIC_CONFIG_CHANGED.to_owned(),
+            id: format!("{}/{}", decl.owner, decl.key),
+        });
+    }
 }
 
 async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ConfigList, ErrorBody> {

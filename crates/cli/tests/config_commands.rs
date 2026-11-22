@@ -89,3 +89,45 @@ fn config_get_of_an_unknown_key_exits_1_with_its_code() {
         .code(1)
         .stderr(contains("config.unknown_key"));
 }
+
+#[test]
+fn settings_set_reset_and_list_a_choice_setting() {
+    let sandbox = Sandbox::new();
+
+    sandbox
+        .run("default", &["settings", "set", "appearance.theme", "dark"])
+        .success()
+        .stdout(contains("appearance.theme = dark"));
+    let got = sandbox.json_ok("default", &["settings", "get", "appearance.theme"]);
+    assert_eq!(got["value"], "dark");
+    assert_eq!(got["kind"], "choice");
+    assert_eq!(
+        got["choices"],
+        serde_json::json!(["system", "dark", "light"])
+    );
+
+    sandbox
+        .run(
+            "default",
+            &["settings", "set", "appearance.theme", "purple"],
+        )
+        .code(1)
+        .stderr(contains("config.invalid_value"))
+        .stderr(contains("system, dark, light"));
+
+    sandbox
+        .run("default", &["settings", "reset", "appearance.theme"])
+        .success()
+        .stdout(contains("appearance.theme = system (default)"));
+    let listed = sandbox.json_ok("default", &["settings", "list"]);
+    let theme = listed["values"]
+        .as_array()
+        .and_then(|values| {
+            values
+                .iter()
+                .find(|value| value["key"] == "appearance.theme")
+        })
+        .expect("the theme is listed");
+    assert_eq!(theme["value"], "system");
+    assert_eq!(theme["is_default"], true);
+}
