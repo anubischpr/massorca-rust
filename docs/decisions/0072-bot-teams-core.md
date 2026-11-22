@@ -93,8 +93,9 @@ means "cannot tell", never "dead" (AGENTS.md, SSH use case).
      leaves the task Not started, with `error` set (AUTO-14).
 - `task.done` marks a task done by hand, for work that finished outside an
   agent.
-- `task.reopen` clears `outcome` and `error`. It refuses while a session is
-  still running.
+- `task.reopen` clears `outcome`, `error` and the session link, so the task
+  returns to Open and can be started again. It refuses while the linked session
+  is still running.
 
 ### Methods and events
 
