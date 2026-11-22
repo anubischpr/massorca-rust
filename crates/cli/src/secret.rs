@@ -153,6 +153,11 @@ async fn status(client: &Client, output: Output) -> Result<(), CliError> {
         format!("state: {}", status.state),
         format!("secrets: {}", status.count),
     ];
+    for clash in &status.name_clashes {
+        lines.push(format!(
+            "names that differ only by case, refused at agent start until one is renamed: {clash}"
+        ));
+    }
     if status.protection == "file" {
         lines.push(
             "the vault key is stored on disk next to the data: anyone who can read the profile directory can read the secrets"

@@ -8,7 +8,7 @@ use std::sync::MutexGuard;
 
 use massorca_core_store::{SecretKeyCheck, now_ms};
 
-use super::{Vault, VaultError};
+use super::{ScopedName, Vault, VaultError};
 use crate::cipher::{self, Aad};
 use crate::key::{KeyError, KeyStore, LockReason, MasterKey, Protection};
 use crate::names::Scope;
@@ -114,6 +114,7 @@ impl Vault {
                 Err(VaultError::Locked(LockReason::KeyMismatch))
             };
         }
+        let mut unreadable = Vec::new();
         for meta in self.store.list_secrets()? {
             let opens = self.store.secret_by_id(&meta.id)?.is_some_and(|row| {
                 row.scope.parse::<Scope>().ok().is_some_and(|scope| {
@@ -123,8 +124,14 @@ impl Vault {
                 })
             });
             if !opens {
-                return Err(VaultError::Locked(LockReason::KeyMismatch));
+                unreadable.push(ScopedName {
+                    scope: meta.scope,
+                    name: meta.name,
+                });
             }
+        }
+        if !unreadable.is_empty() {
+            return Err(VaultError::KeyMismatch { unreadable });
         }
         let sealed = cipher::seal_key_check(key).map_err(|_| VaultError::Cipher)?;
         self.store.set_secret_key_check(

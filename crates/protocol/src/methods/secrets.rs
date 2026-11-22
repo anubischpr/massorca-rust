@@ -34,6 +34,10 @@ pub struct SecretStatus {
     pub state: String,
     /// Owned secrets.
     pub count: u64,
+    /// Stored names that differ only by case and that one process would receive together, as
+    /// `<name> in <scope>, <name> in <scope>`; injection refuses them with `secret.name_clash`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_clashes: Vec<String>,
 }
 
 /// Params of `secret.list`.

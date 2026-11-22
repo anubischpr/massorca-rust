@@ -14,5 +14,5 @@ pub use names::{Scope, ScopeError, is_valid_name, is_valid_reason, is_valid_sess
 pub use value::{MAX_VALUE_BYTES, SecretValue, ValueTooLarge};
 pub use vault::{
     ANSWERED_RETENTION_DAYS, MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, PENDING_EXPIRY_DAYS,
-    Vault, VaultEntry, VaultError, VaultStatus, Written,
+    ScopedName, Vault, VaultEntry, VaultError, VaultStatus, Written,
 };

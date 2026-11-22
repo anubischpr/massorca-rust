@@ -199,3 +199,57 @@ fn answered_requests_after_7_days_and_pending_after_30_are_pruned() {
     left.sort();
     assert_eq!(left, ["answered-6d", "pending-29d"]);
 }
+
+fn stored_row(id: &str, scope: &str, name: &str) -> massorca_core_store::SecretRow {
+    massorca_core_store::SecretRow {
+        id: id.to_owned(),
+        scope: scope.to_owned(),
+        name: name.to_owned(),
+        nonce: vec![0; 24],
+        ciphertext: vec![0; 32],
+        created_at: 1,
+        rotated_at: 1,
+        used_at: None,
+    }
+}
+
+#[test]
+fn a_case_clash_stored_by_an_older_build_is_reported_and_refused_at_injection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::open_in_memory().expect("store");
+    let vault = Vault::new(store.clone(), dir.path().join("vault"), true);
+    store
+        .insert_secret(&stored_row("a", "global", "TOKEN"))
+        .expect("row");
+    store
+        .insert_secret(&stored_row("b", "project:p1", "token"))
+        .expect("row");
+    store
+        .insert_secret(&stored_row("c", "project:p2", "Other"))
+        .expect("row");
+    store
+        .insert_secret(&stored_row("d", "project:p3", "OTHER"))
+        .expect("row");
+
+    let clashes = vault.name_clashes().expect("clashes");
+    assert_eq!(
+        clashes.len(),
+        1,
+        "projects never share a process: {clashes:?}"
+    );
+    let error = vault.environment_for("p1").unwrap_err();
+    match &error {
+        VaultError::NameClash { clash } => {
+            let named: Vec<(&str, &str)> = clash
+                .iter()
+                .map(|entry| (entry.scope.as_str(), entry.name.as_str()))
+                .collect();
+            assert_eq!(named, [("global", "TOKEN"), ("project:p1", "token")]);
+        }
+        other => panic!("expected NameClash, got {other:?}"),
+    }
+    assert!(error.to_string().contains("differ only by case"));
+    for meta in store.list_secrets().expect("rows") {
+        assert_eq!(meta.used_at, None, "{} was not handed out", meta.name);
+    }
+}

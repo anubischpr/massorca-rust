@@ -92,6 +92,7 @@ async fn reset_key(ctx: RequestCtx, _params: NoParams) -> Result<SecretStatus, E
 
 async fn status(ctx: RequestCtx, _params: NoParams) -> Result<SecretStatus, ErrorBody> {
     let status = blocking(&ctx, Vault::status).await?;
+    let clashes = blocking(&ctx, Vault::name_clashes).await?;
     let protection = match status.protection {
         None => "none",
         Some(Protection::Dpapi) => "dpapi",
@@ -102,6 +103,15 @@ async fn status(ctx: RequestCtx, _params: NoParams) -> Result<SecretStatus, Erro
         protection: protection.to_owned(),
         state: if status.locked { "locked" } else { "ready" }.to_owned(),
         count: status.count,
+        name_clashes: clashes
+            .iter()
+            .map(|pair| {
+                pair.iter()
+                    .map(|entry| format!("{} in {}", entry.name, entry.scope))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect(),
     })
 }
 
