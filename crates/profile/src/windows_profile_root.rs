@@ -254,6 +254,8 @@ fn scan_entries(
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if dir == root => return Err(error),
+            // Removed since its parent was listed, for example by a service starting at the same time: nothing is hidden.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             // A folder that cannot be listed may hide planted content.
             Err(_) => {
                 findings.add_foreign(dir);
@@ -291,6 +293,8 @@ fn scan_entries(
                         pending.push(path);
                     }
                 }
+                // Removed since it was listed, as a concurrent start does with the store's journal.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => {
                     clean = false;
                     findings.add_foreign(path);

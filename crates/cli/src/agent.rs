@@ -12,6 +12,7 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
+use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
@@ -72,6 +73,11 @@ pub enum AgentCommand {
         #[command(subcommand)]
         command: CredentialsCommand,
     },
+    /// A kind's accounts: sign in, import, activate for the kind or a project, check and remove (decision 0059).
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -91,6 +97,9 @@ pub struct AgentDelegateArgs {
     /// Run the child in the parent's workspace; it declares that it does not write.
     #[arg(long, conflicts_with = "name")]
     pub read_only: bool,
+    /// The child session's title; the first line of the prompt by default.
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -309,6 +318,9 @@ pub async fn execute(
                 &[format!("forgot agent session {}", forgotten.id)],
             );
         }
+        AgentCommand::Accounts { command } => {
+            agent_accounts::execute(&client, command, output, json).await?;
+        }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();
             let parent = args
@@ -328,6 +340,7 @@ pub async fn execute(
                     prompt: args.prompt,
                     kind: args.kind,
                     name: args.name,
+                    title: args.title,
                     read_only: args.read_only,
                     request_id: None,
                 })
