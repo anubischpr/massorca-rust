@@ -13,10 +13,10 @@ use massorca_protocol::methods::workspaces::WorkspaceRemoved;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
-struct Rig {
-    shell: Entity<Shell>,
-    updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
 fn setup(cx: &mut TestAppContext) {
@@ -26,7 +26,7 @@ fn setup(cx: &mut TestAppContext) {
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
@@ -38,7 +38,7 @@ fn connected() -> ConnectionState {
 }
 
 /// A shell on a service store with these projects and one workspace, connected.
-fn rig<'a>(
+pub(super) fn rig<'a>(
     cx: &'a mut TestAppContext,
     projects: &[(&str, &str)],
 ) -> (Rig, &'a mut VisualTestContext) {

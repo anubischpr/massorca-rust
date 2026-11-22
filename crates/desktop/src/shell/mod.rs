@@ -3,7 +3,9 @@
 mod actions;
 mod canvas;
 mod debug_focus;
+mod diff_page;
 mod palette;
+mod project_sidebar;
 mod rail;
 mod resize_edges;
 mod service_banner;
@@ -11,6 +13,8 @@ mod settings;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
+mod source_control;
+mod source_control_dialogs;
 mod start_page;
 mod status_bar;
 mod teams;
@@ -25,6 +29,7 @@ use crate::launch_options::DebugFocus;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -43,6 +48,7 @@ use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use source_control::SourceControl;
 use std::collections::HashMap;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
@@ -54,6 +60,8 @@ mod debug_focus_tests;
 mod service_tests;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod source_control_tests;
 #[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
@@ -99,6 +107,8 @@ pub struct Shell {
     /// Each workspace's start page composer, kept so its draft survives redraws.
     start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
+    /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
+    source_control: SourceControl,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
@@ -189,6 +199,16 @@ impl Shell {
                 }
             },
         );
+        let commit_field = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Message")
+                .placeholder("Commit message")
+        });
+        let commit_changes = cx.subscribe(&commit_field, |shell, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                shell.read_commit_message(cx);
+            }
+        });
         Self {
             model,
             focus,
@@ -213,6 +233,7 @@ impl Shell {
             debug_focus: None,
             start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
+            source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
         }
@@ -364,6 +385,7 @@ impl Render for Shell {
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        self.sync_source_control(window, cx);
         // The start page's composer is created before the frames below borrow the Shell's fields.
         let start = self.model.selected_workspace().and_then(|id| {
             crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
@@ -389,6 +411,15 @@ impl Render for Shell {
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
         );
+        let diff = self
+            .source_control
+            .open
+            .is_some()
+            .then(|| diff_page::diff_page(self, &shell, cx));
+        let project = self
+            .model
+            .region_visible(Region::ProjectSidebar)
+            .then(|| project_sidebar::project_body(self, &shell, cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -396,6 +427,8 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                project,
+                diff,
             },
             window,
             cx,
@@ -493,6 +526,11 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let discard = self
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| source_control_dialogs::discard_dialog(flow, &shell, cx));
         let team_dialog = self
             .team_dialog
             .as_ref()
@@ -559,6 +597,7 @@ impl Render for Shell {
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))

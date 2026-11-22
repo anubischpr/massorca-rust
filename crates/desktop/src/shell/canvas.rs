@@ -32,18 +32,23 @@ pub(super) struct PageFrames<'a> {
     pub settings: SettingsFrame<'a>,
     pub start: Option<StartFrame>,
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
+    /// The body of the Project sidebar, when it is on screen.
+    pub project: Option<AnyElement>,
+    /// The diff of the file open from Source control, which takes the Canvas over the start page.
+    pub diff: Option<AnyElement>,
 }
 
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
-    pages: PageFrames<'_>,
+    mut pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let shell = cx.entity().downgrade();
+    let mut project = pages.project.take();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
@@ -59,13 +64,32 @@ pub(super) fn canvas(
         .overflow_hidden()
         .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
-            region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
+            let body = body_of(region, &mut project);
+            region_column(
+                region,
+                zones.get(Zone::of_region(region)).clone(),
+                &theme,
+                body,
+            )
         }));
-    surface.children(
-        overlay.map(|region| {
-            overlay_panel(region, zones.get(Zone::of_region(region)).clone(), &theme)
-        }),
-    )
+    surface.children(overlay.map(|region| {
+        let body = body_of(region, &mut project);
+        overlay_panel(
+            region,
+            zones.get(Zone::of_region(region)).clone(),
+            &theme,
+            body,
+        )
+    }))
+}
+
+/// The Project sidebar's body goes into its own column or overlay, once.
+fn body_of(region: Region, project: &mut Option<AnyElement>) -> Option<AnyElement> {
+    if region == Region::ProjectSidebar {
+        project.take()
+    } else {
+        None
+    }
 }
 
 fn conversation(
@@ -94,6 +118,9 @@ fn conversation(
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
+        if let Some(diff) = pages.diff {
+            return diff;
+        }
         return match pages.start {
             Some(frame) => start_page::start_page(frame, cx),
             None => placeholder(
@@ -217,7 +244,12 @@ fn service_down_page(notice: &ServiceNotice, shell: &WeakEntity<Shell>) -> AnyEl
 }
 
 /// A region docked beside the Conversation, at its default width (D-SH-01).
-fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
+fn region_column(
+    region: Region,
+    focus: FocusHandle,
+    theme: &Theme,
+    body: Option<AnyElement>,
+) -> impl IntoElement {
     div()
         .track_focus(&focus)
         .focus_visible(|style| style.shadow(region_focus_ring(theme)))
@@ -230,10 +262,16 @@ fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
         .border_l_1()
         .border_color(theme.palette.border.subtle)
         .child(region_header(region, theme))
+        .children(body)
 }
 
 /// A region open over the Canvas when the window is too narrow to fit it inline (X1).
-fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
+fn overlay_panel(
+    region: Region,
+    focus: FocusHandle,
+    theme: &Theme,
+    body: Option<AnyElement>,
+) -> impl IntoElement {
     div()
         .track_focus(&focus)
         .focus_visible(|style| {
@@ -253,6 +291,7 @@ fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
         .shadow(box_shadows(theme.shadows.e2))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(region_header(region, theme))
+        .children(body)
 }
 
 fn region_header(region: Region, theme: &Theme) -> impl IntoElement {
