@@ -8,7 +8,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::process::excerpt;
-use crate::ssh::{RemoteOutput, RemoteShell, SshError, shell_quote};
+use crate::ssh::{RemoteOutput, RemoteShell, SshError};
 
 /// Install directory on the host unless the plan says otherwise.
 pub const DEFAULT_REMOTE_DIR: &str = "~/.massorca";
@@ -39,7 +39,7 @@ pub struct BootstrapPlan {
     pub listen: Vec<String>,
     /// Install directory on the host, `~/<path>`.
     pub remote_dir: String,
-    /// Name the pairing device gets on the host.
+    /// Name the pairing device gets on the host, given when the caller accepts the offer.
     pub device_name: String,
     /// Validity of the pairing offer, in seconds.
     pub offer_ttl_secs: u32,
@@ -192,11 +192,7 @@ pub fn bootstrap(
     progress("Creating a pairing offer");
     let offer_command = service_command(
         rest,
-        &format!(
-            "--json pair offer --admin --ttl {} --device-name {}",
-            plan.offer_ttl_secs,
-            shell_quote(&plan.device_name)
-        ),
+        &format!("--json pair offer --admin --ttl {}", plan.offer_ttl_secs),
     );
     let offer = offer_from(&shell.run(&offer_command, None)?)?;
 
@@ -368,6 +364,22 @@ struct StatusReply {
     version: Option<String>,
 }
 
+/// `massorca --json` wraps its result as `{"ok": true, "result": ...}`; a bare object is read as is.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Reply<T> {
+    Envelope { result: T },
+    Bare(T),
+}
+
+impl<T> Reply<T> {
+    fn into_inner(self) -> T {
+        match self {
+            Self::Envelope { result } | Self::Bare(result) => result,
+        }
+    }
+}
+
 /// Reads the offer from a `pair offer` reply. The reply holds the secret, so no part of it,
 /// stderr included, goes into an error.
 fn offer_from(reply: &RemoteOutput) -> Result<SecretOffer, BootstrapError> {
@@ -377,7 +389,8 @@ fn offer_from(reply: &RemoteOutput) -> Result<SecretOffer, BootstrapError> {
             reply.status
         )));
     }
-    let parsed: OfferReply = serde_json::from_slice(&reply.stdout)
+    let parsed: OfferReply = serde_json::from_slice::<Reply<OfferReply>>(&reply.stdout)
+        .map(Reply::into_inner)
         .map_err(|_| BootstrapError::Remote("the pairing offer reply is not JSON".to_owned()))?;
     match parsed.offer {
         Some(offer)
@@ -392,9 +405,9 @@ fn offer_from(reply: &RemoteOutput) -> Result<SecretOffer, BootstrapError> {
 }
 
 fn version_of(stdout: &[u8]) -> String {
-    serde_json::from_slice::<StatusReply>(stdout)
+    serde_json::from_slice::<Reply<StatusReply>>(stdout)
         .ok()
-        .and_then(|reply| reply.version)
+        .and_then(|reply| reply.into_inner().version)
         .unwrap_or_default()
 }
 
