@@ -13,8 +13,8 @@ use massorca_protocol::methods::git::GitWorkspaceRef;
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
-use massorca_protocol::methods::git::log::{DEFAULT_LOG_LIMIT, GitLogParams};
-use massorca_protocol::methods::git::status::GitStatusParams;
+use massorca_protocol::methods::git::log::{DEFAULT_LOG_LIMIT, GitLog, GitLogParams};
+use massorca_protocol::methods::git::status::{GitStatus, GitStatusParams};
 use massorca_protocol::methods::git::watch::{GitWatchEvent, WatchKind};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -186,6 +186,80 @@ fn mutate<T, Fut>(
     });
 }
 
+/// The service calls a watch and its reads make. The client is the real one; a test scripts the service.
+pub(super) trait GitPeer: Clone + Send + Sync + 'static {
+    type Events: GitEvents;
+
+    fn subscribe(
+        &self,
+        workspace: &str,
+    ) -> impl Future<Output = Result<Self::Events, ClientError>> + Send;
+    fn status(
+        &self,
+        workspace: &str,
+    ) -> impl Future<Output = Result<GitStatus, ClientError>> + Send;
+    fn log(&self, workspace: &str) -> impl Future<Output = Result<GitLog, ClientError>> + Send;
+}
+
+/// The items of one watch, in order; None once it has ended.
+pub(super) trait GitEvents: Send + 'static {
+    fn next_event(
+        &mut self,
+    ) -> impl Future<Output = Option<Result<GitWatchEvent, ClientError>>> + Send;
+}
+
+impl GitPeer for Client {
+    type Events = Subscription;
+
+    fn subscribe(
+        &self,
+        workspace: &str,
+    ) -> impl Future<Output = Result<Subscription, ClientError>> + Send {
+        let client = self.clone();
+        let workspace = workspace.to_owned();
+        async move { client.git_watch(&GitWorkspaceRef { workspace }).await }
+    }
+
+    fn status(
+        &self,
+        workspace: &str,
+    ) -> impl Future<Output = Result<GitStatus, ClientError>> + Send {
+        let client = self.clone();
+        let workspace = workspace.to_owned();
+        async move {
+            client
+                .git_status(&GitStatusParams {
+                    workspace,
+                    limit: None,
+                })
+                .await
+        }
+    }
+
+    fn log(&self, workspace: &str) -> impl Future<Output = Result<GitLog, ClientError>> + Send {
+        let client = self.clone();
+        let workspace = workspace.to_owned();
+        async move {
+            client
+                .git_log(&GitLogParams {
+                    workspace,
+                    revision: None,
+                    limit: Some(DEFAULT_LOG_LIMIT),
+                    cursor: None,
+                })
+                .await
+        }
+    }
+}
+
+impl GitEvents for Subscription {
+    fn next_event(
+        &mut self,
+    ) -> impl Future<Output = Option<Result<GitWatchEvent, ClientError>>> + Send {
+        self.next_as::<GitWatchEvent>()
+    }
+}
+
 /// The watch tasks of one connection, one per followed workspace. Dropping the set aborts them, so
 /// they end with the connection that started them.
 #[derive(Debug, Default)]
@@ -261,17 +335,17 @@ impl WatchRestarts {
 
 /// Follows one workspace until its watch ends for good. A subscription lost while the link is up is reported
 /// stale, then started again within the restart budget. Lost events (an overflow) are read again at once.
-async fn watch(client: Client, workspace: String, updates: mpsc::UnboundedSender<StoreUpdate>) {
+pub(super) async fn watch<P: GitPeer>(
+    peer: P,
+    workspace: String,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
     let mut restarts = WatchRestarts::new();
     loop {
-        let subscription = client
-            .git_watch(&GitWorkspaceRef {
-                workspace: workspace.clone(),
-            })
-            .await;
-        refresh(&client, &updates, &workspace, true).await;
+        let subscription = peer.subscribe(&workspace).await;
+        refresh(&peer, &updates, &workspace, true).await;
         let ending = match subscription {
-            Ok(mut events) => follow(&client, &updates, &workspace, &mut events).await,
+            Ok(mut events) => follow(&peer, &updates, &workspace, &mut events).await,
             Err(_) => Ending::Lost { healthy: false },
         };
         let Ending::Lost { healthy } = ending else {
@@ -305,15 +379,15 @@ enum Ending {
 }
 
 /// Serves one subscription until it ends.
-async fn follow(
-    client: &Client,
+async fn follow<P: GitPeer>(
+    peer: &P,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
     workspace: &str,
-    events: &mut Subscription,
+    events: &mut P::Events,
 ) -> Ending {
     let mut healthy = false;
     loop {
-        match events.next_as::<GitWatchEvent>().await {
+        match events.next_event().await {
             Some(Ok(event)) => {
                 healthy |= event.ready;
                 let history = event
@@ -331,7 +405,7 @@ async fn follow(
                     },
                 );
                 if !event.ready {
-                    refresh(client, updates, workspace, history).await;
+                    refresh(peer, updates, workspace, history).await;
                 }
             }
             // An item this build cannot read changes nothing it shows (decision 0002).
@@ -345,18 +419,13 @@ async fn follow(
 }
 
 /// Reads the status, and the first page of history when `history` is set, and sends each answer.
-async fn refresh(
-    client: &Client,
+async fn refresh<P: GitPeer>(
+    peer: &P,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
     workspace: &str,
     history: bool,
 ) {
-    let status = client
-        .git_status(&GitStatusParams {
-            workspace: workspace.to_owned(),
-            limit: None,
-        })
-        .await;
+    let status = peer.status(workspace).await;
     send(
         updates,
         GitUpdate::Status {
@@ -365,14 +434,7 @@ async fn refresh(
         },
     );
     if history {
-        let log = client
-            .git_log(&GitLogParams {
-                workspace: workspace.to_owned(),
-                revision: None,
-                limit: Some(DEFAULT_LOG_LIMIT),
-                cursor: None,
-            })
-            .await;
+        let log = peer.log(workspace).await;
         send(
             updates,
             GitUpdate::Log {
