@@ -20,6 +20,7 @@ pub mod host;
 pub mod logging;
 pub mod output;
 pub mod pair;
+pub mod profile_secure;
 pub mod project;
 pub mod secret;
 pub mod secret_input;

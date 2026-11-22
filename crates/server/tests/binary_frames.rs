@@ -1,7 +1,7 @@
 //! Binary frames: the welcome offers `binary-frames/1`, byte items interleave with events in order on the raw socket,
 //! and a handler sees the capabilities its client's `hello` named.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -27,8 +27,23 @@ use tokio::time::timeout;
 const SERVER_NAME: &str = "massorca-test";
 const SERVER_VERSION: &str = "0.0.0-test";
 
-fn temp_home() -> TempDir {
-    tempfile::tempdir().expect("a temporary home")
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
 }
 
 fn profile(home: &Path) -> Profile {

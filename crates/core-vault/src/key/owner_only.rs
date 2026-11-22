@@ -13,7 +13,9 @@ use std::path::Path;
 use std::ptr;
 
 use interprocess::os::windows::security_descriptor::AsSecurityDescriptor;
-use massorca_profile::owner_only_security_descriptor;
+use massorca_profile::{
+    has_owner_only_dacl, owner_only_security_descriptor, restrict_dir_to_owner,
+};
 use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::{
@@ -24,7 +26,8 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
-/// Creates `dir` with an owner-only DACL; an existing directory is kept as it is.
+/// Creates `dir` with an owner-only DACL. A directory that appeared meanwhile is left to [`tighten`], which the caller
+/// runs on any existing vault directory.
 pub(super) fn create_dir(dir: &Path) -> io::Result<()> {
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
@@ -45,6 +48,32 @@ pub(super) fn create_dir(dir: &Path) -> io::Result<()> {
         return Ok(());
     }
     Err(error)
+}
+
+/// Gives an existing vault directory, and each of `files` in it, an owner-only DACL when it lacks one: an earlier build
+/// created them with the permissions they inherited. A file that is a link or a directory is refused.
+pub(super) fn tighten(dir: &Path, files: &[&str]) -> io::Result<()> {
+    if !has_owner_only_dacl(dir)? {
+        restrict_dir_to_owner(dir)?;
+    }
+    for name in files {
+        let path = dir.join(name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_file() => {
+                if !has_owner_only_dacl(&path)? {
+                    restrict_dir_to_owner(&path)?;
+                }
+            }
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "a vault file is a link or a directory, not a file",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Creates `path`, which must not exist, with an owner-only DACL, open for writing. A link is never followed.

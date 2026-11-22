@@ -100,7 +100,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.resume` | workspace | `session` | `AgentSession` |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child) |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -194,6 +194,47 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+## Delegation
+
+`agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
+
+- The result of `agent.delegate` is the child's `AgentSession` with an optional `note` beside its fields
+  (`AgentDelegated`), so a reader that expects a session reads it unchanged. A writing child's note says that the
+  parent's uncommitted changes were not carried over.
+- The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
+  workspace whose run then fails to start is kept, and the error names it (`data.workspace`). A retry with the same
+  `request_id` finds the workspace its first call created, by that request id, and reuses it whatever its name.
+- A `request_id` is unique across sessions: a retry returns its first child only to the same parent. One that belongs
+  to a call for another session is `request.invalid_params`. The parent and its token are checked before the retry is
+  answered.
+- `<parent workspace>-<n>` skips a number whose workspace name, branch or directory is already taken.
+- Authorization: inside a run (`MASSORCA_AGENT_SESSION` set) the CLI always sends the run's own token, whatever
+  session the call names. The service accepts a token only when it is the live run token of the parent: the named
+  parent for `agent.delegate`, the child's parent for `agent.bring_back`. Anything else is `agent.hook_refused`, so a
+  child cannot delegate as its parent or bring itself back. Residual risk: a caller outside any run sends no token and
+  is treated as a person, and an agent that clears its environment can do the same. That gives it nothing new, since it
+  can already run any command as the service's user.
+- `agent.tree` of a child returns its parent as the root.
+- `agent.bring_back` of a session that was not delegated is `request.invalid_params`. A child is finished when its run
+  has exited, or its activity is `done` and no prompt was typed since. Bring-backs are serialised. The git work goes
+  through a `RepoOps` port that the service implements with `core-git`.
+- A merge never runs unlocked. The service takes the parent workspace's git mutation lock (0010) for the whole call; a
+  parent workspace that is not a git worktree, is missing or is being removed refuses the bring-back before anything
+  runs.
+- Just before the merge, under the start gate, the parent workspace is checked again: another live writing session
+  there is `agent.workspace_busy` (its id in `data.session`). Under the status lock the parent's activity is read again:
+  `working`, or a prompt it has not answered yet, is `agent.parent_busy`. The workspace is then listed as merging until
+  the merge ends. Meanwhile a start or resume there, and any prompt to a session there (even with `force`), are `agent.busy`.
+- The parent's worktree must be clean and have no rebase, merge, cherry-pick, revert or mailbox apply stopped in it,
+  read from git's own state files in that worktree's git directory; otherwise `agent.parent_dirty` says which.
+- The merge takes `refs/heads/<child branch>`, so a tag of the same name is never merged instead. A merge that fails
+  for any reason other than a conflict (a refusing hook, a missing identity) is aborted too when it left a merge in
+  progress, and HEAD is checked to be where it was.
+- The child is marked brought back after the merge. If the mark fails after a merge, the error carries the merge commit
+  (`data.merge_commit`), so a retry that is refused does not hide that the merge happened.
+- The prompt to the parent is one line: control characters in the child's result, line breaks included, become spaces,
+  and at most 4 KiB of it is quoted, so it passes the prompt rules (0058).
 
 ## Status store
 

@@ -3,18 +3,25 @@
 #![allow(unsafe_code)]
 
 use std::io;
+use std::path::Path;
 use std::ptr;
 
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    DACL_SECURITY_INFORMATION, GetTokenInformation, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SetFileSecurityW, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER,
+    TokenUser, UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+use crate::windows_dir_access::wide_path;
 
 /// The SDDL of a descriptor that grants full access to the current user and nobody else. `P` stops inheritance from the parent directory.
 pub fn owner_only_sddl() -> io::Result<String> {
@@ -26,6 +33,54 @@ pub fn owner_only_security_descriptor() -> io::Result<SecurityDescriptor> {
     let sddl = U16CString::from_str(owner_only_sddl()?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     SecurityDescriptor::deserialize(&sddl)
+}
+/// Replaces the DACL of an existing file or directory with the owner-only one, protected from inheritance, so wider
+/// ACLs on the parent directory never reach it.
+pub fn restrict_to_owner(path: &Path) -> io::Result<()> {
+    set_dacl_sddl(path, &owner_only_sddl()?)
+}
+
+/// Replaces the DACL of an existing file or directory with the one in `sddl`. A `D:P` DACL is stored protected; any
+/// other is stored unprotected, so its inheritable entries apply to new children.
+pub fn set_dacl_sddl(path: &Path, sddl: &str) -> io::Result<()> {
+    let wide_sddl = U16CString::from_str(sddl)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let wide_path = wide_path(path)?;
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `wide_sddl` is NUL-terminated and outlives the call; `descriptor` is a valid out-pointer and the size
+    // out-pointer may be null.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide_sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let protection = if sddl.starts_with("D:P") {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
+    // SAFETY: `wide_path` is NUL-terminated and `descriptor` is the valid descriptor converted above.
+    let set = unsafe {
+        SetFileSecurityW(
+            wide_path.as_ptr(),
+            DACL_SECURITY_INFORMATION | protection,
+            descriptor,
+        )
+    };
+    let result = if set == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    };
+    // SAFETY: the conversion allocated `descriptor` with LocalAlloc, so LocalFree releases it exactly once.
+    unsafe { LocalFree(descriptor) };
+    result
 }
 
 /// Whether the process `pid` runs as the current user. A process whose token cannot be read is an error, never a match.
@@ -154,8 +209,27 @@ mod tests {
 
     use super::{
         SecurityDescriptor, current_user_sid, owner_only_sddl, owner_only_security_descriptor,
-        process_belongs_to_current_user, wide_to_string,
+        process_belongs_to_current_user, restrict_to_owner, set_dacl_sddl, wide_to_string,
     };
+    use crate::windows_dir_access::{dacl_sddl, has_owner_only_dacl};
+
+    #[test]
+    fn restrict_to_owner_replaces_an_inherited_wide_dacl_with_a_protected_owner_only_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        set_dacl_sddl(dir.path(), "D:(A;OICI;GA;;;WD)").expect("widen the directory");
+        let file = dir.path().join("secret");
+        std::fs::write(&file, b"x").expect("write");
+        assert!(
+            dacl_sddl(&file).expect("the file DACL").contains(";WD)"),
+            "the file inherits the wide entry before the fix"
+        );
+
+        assert!(!has_owner_only_dacl(&file).expect("read the DACL"));
+
+        restrict_to_owner(&file).expect("restrict");
+
+        assert!(has_owner_only_dacl(&file).expect("read the DACL"));
+    }
 
     #[test]
     fn the_pipe_descriptor_grants_exactly_one_allowed_ace_to_the_current_user() {

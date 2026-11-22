@@ -65,7 +65,7 @@ content of terminals and repositories; device credentials; the server key.
 |---|---|
 | A network attacker who reads, changes or injects traffic, including on the first pairing | TLS 1.3 with the server pinned from the offer: no unpinned connection is ever made, so there is no first-use window |
 | Someone who replays a recorded connection or a pairing | TLS session keys are fresh per connection; device authentication is a signature over the handshake; offers are single use and expire |
-| A client that was never paired, or sends random secrets | `auth.unknown_device`, `pairing.invalid`; pairing attempts are rate limited per address and overall; unauthenticated connections are cut after 10 seconds and capped in number |
+| A client that was never paired, or sends random secrets | `auth.unknown_device`, `pairing.invalid`; pairing attempts are rate limited per address, and the overall limit never locks out an address that has not failed; unauthenticated connections are cut after 10 seconds, capped overall and per address, and read one small frame |
 | A lost or stolen device | `device revoke` closes its connections at once and refuses it afterwards |
 | A paired device that should do less | scopes chosen at pairing, never widened; each request is authorized |
 | Other users on the server machine | the local socket is owner-only (0003); key files are owner-only; a device key never leaves its client |
@@ -100,10 +100,12 @@ Tailscale coordination server beyond what TLS pinning already covers.
 | Limit | Value |
 |---|---|
 | Network frame | 1 MiB |
-| Network connections | 128 |
+| Network connections | 128 (closed before TLS over that) |
+| Unauthenticated connections | 32, and 4 per address |
+| Frame read before `welcome` | one, at most 64 KiB |
 | Time to complete TLS, upgrade and `hello` | 10 s |
 | Ping interval, silence before close | 20 s, 60 s |
 | Pairing offer lifetime | 10 min default, 1 h maximum |
 | Pending offers | 16 |
-| Failed pairing attempts | 5 per address and 30 overall per 5 minutes |
+| Failed pairing attempts | 5 per address (IPv6: per /64) in 5 minutes; past 30 overall, addresses that failed are limited too |
 | Default port | 7347 |

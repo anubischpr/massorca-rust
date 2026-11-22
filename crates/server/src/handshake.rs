@@ -13,7 +13,7 @@ use tokio::time::timeout;
 
 use crate::connection::Origin;
 use crate::context::AppState;
-use crate::network;
+use crate::network::{self, LiveGuard};
 use crate::permission::Principal;
 
 /// How long a client may take to send its first frame.
@@ -34,6 +34,8 @@ pub(crate) struct Negotiated {
     pub(crate) client_capabilities: HashSet<String>,
     /// Who the connection acts as. A local connection acts as the owner of the profile.
     pub(crate) principal: Principal,
+    /// A device connection's place in the live list, registered before `welcome` so a revocation cannot miss it.
+    pub(crate) live: Option<LiveGuard>,
 }
 
 /// Answers the first frame. `None` closes the connection; a refusal, when one is due, is already queued.
@@ -79,11 +81,11 @@ pub(crate) async fn accept(
         }
     };
 
-    let principal = match origin {
-        Origin::Local => Principal::Owner,
+    let (principal, live) = match origin {
+        Origin::Local => (Principal::Owner, None),
         Origin::Network { client_pin, peer } => {
             match network::authenticate(state, *client_pin, *peer, auth.as_ref()).await {
-                Ok(principal) => principal,
+                Ok(network::Authenticated { principal, live }) => (principal, Some(live)),
                 Err(error) => {
                     tracing::info!(%peer, code = %error.code, "a network connection was refused");
                     refuse(outbound, error).await;
@@ -108,6 +110,7 @@ pub(crate) async fn accept(
         capabilities: capabilities.into_iter().collect(),
         client_capabilities: offered.into_iter().collect(),
         principal,
+        live,
     })
 }
 

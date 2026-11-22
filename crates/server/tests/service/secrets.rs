@@ -242,6 +242,7 @@ async fn a_set_resolves_the_request_and_publishes_the_events() {
                 name: "DB_PASSWORD".to_owned(),
                 reason: "the migrations need it".to_owned(),
                 session: Some("session-1".to_owned()),
+                agent_token: None,
             },
         )
         .await
@@ -291,6 +292,7 @@ async fn declining_twice_is_request_resolved() {
                 name: "TOKEN".to_owned(),
                 reason: "deploy".to_owned(),
                 session: None,
+                agent_token: None,
             },
         )
         .await
@@ -354,6 +356,7 @@ async fn invalid_names_scopes_reasons_and_values_have_typed_codes() {
             name: "TOKEN".to_owned(),
             reason: "line\nbreak".to_owned(),
             session: None,
+            agent_token: None,
         },
     )
     .await;

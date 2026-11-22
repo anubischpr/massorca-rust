@@ -115,3 +115,86 @@ fn the_handles_can_move_between_threads() {
     assert_send::<PtyReader>();
     assert_send::<PtyChild>();
 }
+
+/// A file in `dir` with `body` and the given Unix mode.
+#[cfg(unix)]
+fn program_file(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, body).expect("write the program");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    path
+}
+
+#[cfg(unix)]
+fn spawn_refusal(program: PathBuf, cwd: &Path) -> String {
+    match spawn(&spec(program, &[], cwd, terminal_env())) {
+        Err(PtyError::Spawn(message)) => message,
+        Err(other) => panic!("expected a spawn error, got {other:?}"),
+        Ok(_) => panic!("a program that cannot be executed was reported as started"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_script_whose_interpreter_is_missing_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let script = program_file(
+        dir.path(),
+        "agent",
+        "#!/nonexistent/massorca-interpreter --flag\nexit 0\n",
+        0o755,
+    );
+    let message = spawn_refusal(script, dir.path());
+    assert!(
+        message.contains("/nonexistent/massorca-interpreter"),
+        "the error names the interpreter: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_without_the_execute_bit_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let script = program_file(dir.path(), "agent", "#!/bin/sh\nexit 0\n", 0o644);
+    let message = spawn_refusal(script.clone(), dir.path());
+    assert!(message.contains(&script.display().to_string()), "{message}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_missing_program_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("not-created");
+    let message = spawn_refusal(missing.clone(), dir.path());
+    assert!(
+        message.contains(&missing.display().to_string()),
+        "{message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_is_refused_as_a_program() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let message = spawn_refusal(dir.path().to_path_buf(), dir.path());
+    assert!(message.contains("not a regular file"), "{message}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_executable_script_with_a_real_interpreter_still_runs() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let script = program_file(dir.path(), "agent", "#!/bin/sh\nexit 4\n", 0o755);
+    let running = start(&spec(script, &[], dir.path(), terminal_env()));
+    let exit = exit_within(&running.exit);
+    running.master.close();
+    running.output.finish();
+    assert_eq!(
+        exit,
+        ExitInfo {
+            code: Some(4),
+            signal: None
+        }
+    );
+}

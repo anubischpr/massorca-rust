@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::common::TempHome;
 use massorca_client::{Client, ClientError, HostRecord, Hosts};
 use massorca_core_store::Store;
 use massorca_net::TlsIdentity;
@@ -15,7 +16,6 @@ use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{ListenSpec, NetworkConfig, RunningService, Scopes, Service};
-use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
 use crate::common::{connect, profile, remote_code, service_config, stop, temp_home};
@@ -67,7 +67,7 @@ async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
 }
 
 /// A client profile with its own hosts list.
-fn client_side() -> (TempDir, Hosts) {
+fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)

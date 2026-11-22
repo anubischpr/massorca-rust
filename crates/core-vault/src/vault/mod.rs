@@ -21,7 +21,9 @@ mod keys;
 mod links;
 mod requests;
 
-pub use requests::{MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE};
+pub use requests::{
+    ANSWERED_RETENTION_DAYS, MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, PENDING_EXPIRY_DAYS,
+};
 
 use keys::{Recorded, recorded};
 
@@ -30,6 +32,12 @@ use keys::{Recorded, recorded};
 pub enum VaultError {
     #[error("the vault is locked: its key will not open ({0:?})")]
     Locked(LockReason),
+    /// A vault from before the key check whose key does not open these secrets; it stays locked.
+    #[error("the vault is locked: its key does not open {}", names(.unreadable))]
+    KeyMismatch { unreadable: Vec<ScopedName> },
+    /// Names stored before case clashes were refused, that one process would receive together.
+    #[error("{} differ only by case; rename one before an agent can start", names(.clash))]
+    NameClash { clash: Vec<ScopedName> },
     #[error("there is no secret {name} in {scope}")]
     NotFound { scope: String, name: String },
     #[error("{name} already exists in {scope}")]
@@ -81,6 +89,20 @@ pub enum VaultError {
     Cipher,
     #[error(transparent)]
     Store(#[from] StoreError),
+}
+
+/// A secret's scope and name, never its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedName {
+    pub scope: String,
+    pub name: String,
+}
+
+fn names(list: &[ScopedName]) -> String {
+    list.iter()
+        .map(|entry| format!("{} in {}", entry.name, entry.scope))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The vault's key protection and whether it opens.
