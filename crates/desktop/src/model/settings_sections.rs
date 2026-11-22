@@ -133,6 +133,8 @@ pub enum RowBody {
     PairedHosts,
     /// A link to the setup checklist.
     SetupChecklist,
+    /// A link to the Pairing page: phones and other hosts, and the devices paired with this PC.
+    PairingLink,
     Planned(Planned),
 }
 
@@ -438,8 +440,8 @@ const HOSTS: &[RowSpec] = &[
     },
     RowSpec {
         label: "Paired phones",
-        helper: "Phone pairing over the local network comes later.",
-        body: RowBody::Planned(Planned::Link),
+        helper: "Pair a phone or another computer, and see the devices paired with this PC.",
+        body: RowBody::PairingLink,
     },
 ];
 

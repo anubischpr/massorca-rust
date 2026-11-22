@@ -326,7 +326,24 @@ fn row(
         RowBody::ThisPc => (row, Some(value_box(host_word(&frame.connection), &theme))),
         // group() draws one row per paired host in place of this marker.
         RowBody::PairedHosts => (row, None),
-        RowBody::SetupChecklist => (row, Some(setup_link(id.clone(), frame))),
+        RowBody::SetupChecklist => (
+            row,
+            Some(page_link(
+                id.clone(),
+                Page::Setup,
+                "settings-setup-open",
+                frame,
+            )),
+        ),
+        RowBody::PairingLink => (
+            row,
+            Some(page_link(
+                id.clone(),
+                Page::Pairing,
+                "settings-pairing-open",
+                frame,
+            )),
+        ),
     };
     match control {
         Some(control) => row.control(control).into_any_element(),
@@ -334,20 +351,25 @@ fn row(
     }
 }
 
-/// Opens the setup checklist, a full page (D-OB-12).
-fn setup_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+/// A row that opens a full page (the setup checklist, D-OB-12, or Pairing, D-PR-01) with an "Open" button.
+fn page_link(
+    id: SharedString,
+    page: Page,
+    selector: &'static str,
+    frame: &SettingsFrame<'_>,
+) -> AnyElement {
     let shell = frame.shell.clone();
     let button = Button::new(id, "Open")
         .variant(ButtonVariant::Ghost)
         .trailing_icon(IconName::ChevronRight)
         .on_click(move |_, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                shell.model.open_page(Page::Setup);
+                shell.model.open_page(page);
                 cx.notify();
             });
         });
     div()
-        .debug_selector(|| "settings-setup-open".to_owned())
+        .debug_selector(move || selector.to_owned())
         .child(button)
         .into_any_element()
 }

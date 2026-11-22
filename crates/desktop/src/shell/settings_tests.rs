@@ -44,24 +44,24 @@ const ABANDONED: &str = if cfg!(windows) {
     "/srv/abandoned"
 };
 
-struct Rig {
-    shell: Entity<Shell>,
-    _updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) _updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
     let bounds = cx
         .debug_bounds(selector)
@@ -70,7 +70,7 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// A connected shell on a scripted service with one project, opened on the Settings page.
-fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
+pub(super) fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
@@ -332,7 +332,7 @@ fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
     );
 }
 
-fn paired_host(name: &str) -> HostRecord {
+pub(super) fn paired_host(name: &str) -> HostRecord {
     HostRecord {
         name: name.into(),
         server: "vps-server".into(),

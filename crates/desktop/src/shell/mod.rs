@@ -5,6 +5,7 @@ mod canvas;
 mod debug_focus;
 mod diff_page;
 mod marketplace;
+mod pairing;
 mod palette;
 mod project_sidebar;
 mod rail;
@@ -33,6 +34,7 @@ use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
 };
 use crate::model::navigation::Page;
+use crate::model::pairing::PairingState;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
@@ -62,6 +64,8 @@ use zones::ZoneFocus;
 
 #[cfg(test)]
 mod debug_focus_tests;
+#[cfg(test)]
+mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -98,6 +102,12 @@ pub struct Shell {
     settings_hosts_asked: bool,
     /// Whether the service link was connected at the last store update, to see a reconnect.
     service_connected: bool,
+    /// The Pairing page's state: the offer this computer makes and the pairing it accepts (D-PR-01).
+    pairing: PairingState,
+    /// The offer another host shows, typed or pasted, and the optional name for that host.
+    pairing_offer: Entity<TextField>,
+    pairing_name: Entity<TextField>,
+    _pairing_changes: Subscription,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -229,6 +239,11 @@ impl Shell {
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
+        let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
+        let pairing_name = cx.new(|cx| TextField::new(cx).placeholder("Name"));
+        // Typing in the offer field redraws the page, which enables Pair once there is an offer.
+        let pairing_changes =
+            cx.subscribe(&pairing_offer, |_, _, _: &TextFieldEvent, cx| cx.notify());
         let folder_changes = cx.subscribe(
             &settings_folder,
             |shell, field, event: &TextFieldEvent, cx| match event {
@@ -276,6 +291,10 @@ impl Shell {
             settings_folder_disabled: false,
             settings_hosts_asked: false,
             service_connected: false,
+            pairing: PairingState::default(),
+            pairing_offer,
+            pairing_name,
+            _pairing_changes: pairing_changes,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -451,6 +470,7 @@ impl Render for Shell {
         self.refresh_folder(cx);
         self.refresh_settings_hosts();
         self.sync_folder_field(window, cx);
+        self.sync_pairing_field(window, cx);
         self.sync_source_control(window, cx);
         let connected = self.store.read(cx).state().connection.is_connected();
         // The start page's composer is created before the frames below borrow the Shell's fields.
@@ -490,6 +510,12 @@ impl Render for Shell {
             folder_field: &self.settings_folder,
             agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
         };
+        let pairing = pairing::PairingFrame {
+            state: self.pairing.clone(),
+            offer_field: self.pairing_offer.clone(),
+            name_field: self.pairing_name.clone(),
+            shell: shell.clone(),
+        };
         let setup_rows = crate::model::setup::checklist(
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
@@ -524,6 +550,7 @@ impl Render for Shell {
                 project,
                 diff,
                 marketplace,
+                pairing,
             },
             window,
             cx,
