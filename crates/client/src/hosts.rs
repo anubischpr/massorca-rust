@@ -35,12 +35,14 @@ pub struct HostRecord {
 /// The hosts of one client profile.
 #[derive(Debug, Clone)]
 pub struct Hosts {
+    profile: Profile,
     dir: PathBuf,
 }
 
 impl Hosts {
     pub fn of(profile: &Profile) -> Self {
         Self {
+            profile: profile.clone(),
             dir: profile.dir().join("hosts"),
         }
     }
@@ -88,15 +90,26 @@ impl Hosts {
         self.dir.join(name).join(HOST_FILE).is_file()
     }
 
-    /// Stores a new host with its device identity. Refuses to replace an existing host.
+    /// Checks the profile as a service start does and opens `hosts` without following links, so a pairing is refused
+    /// before it uses up an offer when nothing could be saved. Refuses a profile others could change (ADR 0073).
+    pub fn ensure_writable(&self) -> Result<(), ClientError> {
+        massorca_profile::secure_root(&self.profile)?;
+        massorca_profile::open_private_dir(&self.dir)?;
+        Ok(())
+    }
+
+    /// Stores a new host with its device identity. Refuses to replace an existing host, and to write into a profile
+    /// others could change. `hosts` and the host's folder are held open without following links while the files are
+    /// written, so neither can be swapped for a link.
     pub fn add(&self, record: &HostRecord, identity: &TlsIdentity) -> Result<(), ClientError> {
         validate_host_name(&record.name)?;
         let dir = self.dir.join(&record.name);
         if dir.join(HOST_FILE).exists() {
             return Err(ClientError::HostExists(record.name.clone()));
         }
-        create_private_dir(&self.dir)?;
-        create_private_dir(&dir)?;
+        massorca_profile::secure_root(&self.profile)?;
+        let _hosts = massorca_profile::open_private_dir(&self.dir)?;
+        let _host = massorca_profile::open_private_dir(&dir)?;
         identity
             .save(&dir.join(KEY_FILE), &dir.join(CERT_FILE))
             .map_err(|error| {
@@ -110,13 +123,17 @@ impl Hosts {
         Ok(())
     }
 
-    /// Forgets a host and deletes its device key.
+    /// Forgets a host and deletes its device key. Refuses a profile others could change, and a host folder that is a
+    /// link, so nothing outside the profile is deleted.
     pub fn remove(&self, name: &str) -> Result<(), ClientError> {
         validate_host_name(name)?;
         let dir = self.dir.join(name);
         if !dir.join(HOST_FILE).exists() {
             return Err(ClientError::HostNotFound(name.to_owned()));
         }
+        massorca_profile::secure_root(&self.profile)?;
+        let _hosts = massorca_profile::open_private_dir(&self.dir)?;
+        drop(massorca_profile::open_private_dir(&dir)?);
         fs::remove_dir_all(dir)?;
         Ok(())
     }
@@ -148,15 +165,156 @@ fn read_record(path: &Path) -> Result<Option<HostRecord>, ClientError> {
     }
 }
 
-/// Creates a directory only the user can enter (0700 on Unix; a protected owner-only DACL on Windows).
-fn create_private_dir(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+#[cfg(test)]
+mod tests {
+    use massorca_net::TlsIdentity;
+    use massorca_profile::Profile;
+
+    use super::{HostRecord, Hosts};
+
+    #[test]
+    fn a_new_host_folder_is_private_before_the_device_key_is_written() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = Profile::resolve_with(
+            Some(temp.path().join("home")),
+            Some("default".to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+        let record = HostRecord {
+            name: "office".to_owned(),
+            server: "office".to_owned(),
+            addresses: vec!["127.0.0.1:1".to_owned()],
+            pin: "sha256:pin".to_owned(),
+            device_id: "device".to_owned(),
+            device_name: "laptop".to_owned(),
+            scopes: Vec::new(),
+            paired_at_ms: 0,
+        };
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+
+        Hosts::of(&profile)
+            .add(&record, &identity)
+            .expect("the host is stored");
+
+        let folders = [
+            profile.dir().join("hosts"),
+            profile.dir().join("hosts").join("office"),
+        ];
+        for folder in &folders {
+            #[cfg(windows)]
+            assert!(
+                massorca_profile::has_owner_only_dacl(folder).expect("its DACL"),
+                "{}: {}",
+                folder.display(),
+                massorca_profile::dacl_sddl(folder).expect("its DACL")
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(folder)
+                    .expect("metadata")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o700, "{}", folder.display());
+            }
+        }
+        assert_eq!(
+            massorca_profile::secure_root(&profile).expect("checked"),
+            massorca_profile::RootAccess::Private
+        );
     }
-    #[cfg(windows)]
-    massorca_profile::restrict_to_owner(dir)?;
-    Ok(())
+
+    fn office() -> HostRecord {
+        HostRecord {
+            name: "office".to_owned(),
+            server: "office".to_owned(),
+            addresses: vec!["127.0.0.1:1".to_owned()],
+            pin: "sha256:pin".to_owned(),
+            device_id: "device".to_owned(),
+            device_name: "laptop".to_owned(),
+            scopes: Vec::new(),
+            paired_at_ms: 0,
+        }
+    }
+
+    /// A link at `link` to `target`: a junction on Windows, a symlink on Unix.
+    fn plant_link(link: &std::path::Path, target: &std::path::Path) {
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("mklink runs");
+            assert!(
+                made.status.success(),
+                "{}",
+                String::from_utf8_lossy(&made.stderr)
+            );
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("a symlink");
+    }
+
+    fn refused_unsafe(result: Result<(), crate::ClientError>, link: &std::path::Path) {
+        match result {
+            Err(crate::ClientError::ProfileRefused(body)) => {
+                assert_eq!(body.code, "profile.unsafe_location", "{body:?}");
+                assert_eq!(
+                    body.data,
+                    Some(serde_json::json!({ "path": link.display().to_string() }))
+                );
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_link_planted_at_hosts_is_refused_and_nothing_is_written_through_it() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = Profile::resolve_with(
+            Some(temp.path().join("home")),
+            Some("default".to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+        massorca_profile::secure_root(&profile).expect("a private profile");
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("a folder");
+        let hosts = profile.dir().join("hosts");
+        plant_link(&hosts, &elsewhere);
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+
+        refused_unsafe(Hosts::of(&profile).add(&office(), &identity), &hosts);
+        refused_unsafe(Hosts::of(&profile).ensure_writable(), &hosts);
+
+        let written: Vec<_> = std::fs::read_dir(&elsewhere).expect("listed").collect();
+        assert!(written.is_empty(), "{written:?}");
+    }
+
+    #[test]
+    fn a_link_planted_at_the_host_folder_is_refused_and_nothing_is_written_through_it() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = Profile::resolve_with(
+            Some(temp.path().join("home")),
+            Some("default".to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+        massorca_profile::secure_root(&profile).expect("a private profile");
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("a folder");
+        let hosts = profile.dir().join("hosts");
+        massorca_profile::open_private_dir(&hosts).expect("hosts");
+        let office_dir = hosts.join("office");
+        plant_link(&office_dir, &elsewhere);
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+
+        refused_unsafe(Hosts::of(&profile).add(&office(), &identity), &office_dir);
+
+        let written: Vec<_> = std::fs::read_dir(&elsewhere).expect("listed").collect();
+        assert!(written.is_empty(), "{written:?}");
+    }
 }

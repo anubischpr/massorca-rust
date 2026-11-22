@@ -59,14 +59,17 @@ async fn establish(
         Ok(stream) => Ok(stream),
         Err(error) if nobody_listens(&error) => match &options.autostart {
             Some(autostart) => {
-                spawn::service_run(profile, autostart)?;
-                wait_for_listener(name, options.connect_timeout).await
+                let mut starting = spawn::service_run(profile, autostart)?;
+                let reached =
+                    wait_for_listener(name, options.connect_timeout, Some(&mut starting)).await;
+                starting.release();
+                reached
             }
             None => Err(ClientError::Unavailable(error)),
         },
         // The endpoint is still held by a service that is letting go of it, so wait for it as a start would.
         Err(error) if options.autostart.is_some() && is_busy(&error) => {
-            wait_for_listener(name, options.connect_timeout).await
+            wait_for_listener(name, options.connect_timeout, None).await
         }
         Err(error) => Err(ClientError::Unavailable(error)),
     }
@@ -106,8 +109,13 @@ fn peer_is_this_user(stream: &Stream) -> io::Result<bool> {
     Ok(uid == massorca_profile::current_uid())
 }
 
-/// Retries until the started service accepts a connection, or the timeout passes.
-async fn wait_for_listener(name: Name<'static>, timeout: Duration) -> Result<Stream, ClientError> {
+/// Retries until the started service accepts a connection, or the timeout passes. A service this client started that
+/// exits first is reported with the refusal it left, so the user sees why instead of a timeout.
+async fn wait_for_listener(
+    name: Name<'static>,
+    timeout: Duration,
+    mut starting: Option<&mut spawn::Starting>,
+) -> Result<Stream, ClientError> {
     let deadline = Instant::now() + timeout;
     let mut pause = INITIAL_PAUSE;
     loop {
@@ -115,6 +123,9 @@ async fn wait_for_listener(name: Name<'static>, timeout: Duration) -> Result<Str
             Ok(stream) => return Ok(stream),
             Err(error) if nobody_listens(&error) || is_busy(&error) => {}
             Err(error) => return Err(ClientError::Unavailable(error)),
+        }
+        if let Some(refusal) = starting.as_deref_mut().and_then(spawn::Starting::refusal) {
+            return Err(refusal);
         }
         if Instant::now() >= deadline {
             return Err(ClientError::StartFailed(format!(

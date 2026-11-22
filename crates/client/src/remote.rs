@@ -50,6 +50,8 @@ impl Client {
         if hosts.exists(name) {
             return Err(ClientError::HostExists(name.to_owned()));
         }
+        // Before the offer is used: it works once, and a refused profile could not keep the pairing.
+        hosts.ensure_writable()?;
         let pin = parse_pin(&offer.pin)?;
         let identity = TlsIdentity::generate(device_name).map_err(|error| {
             ClientError::Protocol(format!("cannot create a device key: {error}"))

@@ -1,6 +1,8 @@
 //! Binary frames on the client, against a stand-in service: `hello` lists `binary-frames/1`, a subscription yields events and
 //! bytes in order, `next` skips bytes, and bytes for a stream nobody holds are dropped.
 
+mod support;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -135,7 +137,7 @@ async fn next_event(subscription: &mut Subscription) -> Option<Result<Value, Err
 
 #[tokio::test]
 async fn hello_lists_binary_frames_and_items_arrive_in_order() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let (profile, stand_in) = stand_in(home.path()).await;
     let client = Client::connect(&profile, options())
         .await
@@ -174,7 +176,7 @@ async fn hello_lists_binary_frames_and_items_arrive_in_order() {
 
 #[tokio::test]
 async fn next_skips_bytes_and_unknown_stream_bytes_never_arrive() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = support::temp_home();
     let (profile, stand_in) = stand_in(home.path()).await;
     let client = Client::connect(&profile, options())
         .await
