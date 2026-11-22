@@ -253,6 +253,11 @@ impl RunningService {
         &self.state.events
     }
 
+    /// The installed extensions of the profile. Other features register remove guards and cleanups on it.
+    pub fn extensions(&self) -> &Arc<Extensions> {
+        &self.state.extensions
+    }
+
     /// Waits until the service has stopped: the listener is closed, connections are gone and the profile lock is released.
     pub async fn wait(mut self) -> Result<(), ServiceError> {
         if let Some(task) = self.task.take() {

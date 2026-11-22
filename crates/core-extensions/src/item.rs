@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::catalogue;
 use crate::error::Error;
-use crate::lockfile::{LockEntry, LockSource};
+use crate::lockfile::{LockCli, LockEntry, LockSource};
 use crate::service::{Extensions, installed_manifest};
 use crate::views::{CliSpec, ListingView, PermissionView, RiskView};
 
@@ -51,12 +51,14 @@ pub enum ItemState {
     Disabled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InstalledInfo {
     pub version: String,
     pub source: LockSource,
     pub sha256: String,
     pub installed_at_ms: u64,
+    /// What the install did about each agent CLI, including the vendor command that ran.
+    pub cli: Vec<LockCli>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -206,6 +208,7 @@ impl Extensions {
                 source: entry.source.clone(),
                 sha256: entry.sha256.clone(),
                 installed_at_ms: entry.installed_at_ms,
+                cli: entry.cli.clone(),
             }),
             listing: ListingView::of(manifest),
             permissions: manifest

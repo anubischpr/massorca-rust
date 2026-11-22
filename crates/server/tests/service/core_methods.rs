@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use massorca_protocol::methods::config::ConfigList;
-use massorca_protocol::methods::{config, events, projects, service, workspaces};
+use massorca_protocol::methods::{config, events, extensions, projects, service, workspaces};
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
     MethodError, MethodInfo, Owner, Permission, RegistrationError, RequestCtx, core_commands,
@@ -89,6 +89,18 @@ const TEAM_METHODS: [&str; 19] = [
     "task.done",
     "task.reopen",
     "task.rm",
+];
+
+/// The extension methods this build registers (capability `extensions/1`).
+const EXTENSION_METHODS: [(&str, Permission); 8] = [
+    (extensions::LIST, Permission::Read),
+    (extensions::GET, Permission::Read),
+    (extensions::CATALOGUE, Permission::Read),
+    (extensions::INSPECT, Permission::Read),
+    (extensions::ASSET, Permission::Read),
+    (extensions::INSTALL, Permission::HostAdmin),
+    (extensions::SET_ENABLED, Permission::HostAdmin),
+    (extensions::REMOVE, Permission::HostAdmin),
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
@@ -223,6 +235,48 @@ async fn core_may_not_define_extension_methods_and_extensions_must_use_the_prefi
     stop(running).await;
 }
 
+/// `extension.` and `extensions.` are core's own names: only the exact prefix `ext.` is reserved.
+#[tokio::test]
+async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let methods = &running.registries().methods;
+
+    let _core = methods
+        .register(
+            Owner::Core,
+            "extension.probe",
+            capabilities::SERVICE,
+            Permission::Read,
+            echo,
+        )
+        .expect("core may use the extension. name");
+    let wrong_owner = methods
+        .register(
+            Owner::Extension("demo".to_owned()),
+            "extensions.thing",
+            "demo/1",
+            Permission::Read,
+            echo,
+        )
+        .expect_err("an extension still needs ext.");
+    assert!(
+        matches!(wrong_owner, MethodError::ExtensionPrefixMissing { .. }),
+        "got {wrong_owner:?}"
+    );
+    for (method, permission) in EXTENSION_METHODS {
+        let info = methods
+            .methods()
+            .into_iter()
+            .find(|info| info.method == method)
+            .unwrap_or_else(|| panic!("{method} is registered"));
+        assert_eq!(info.owner, Owner::Core, "{method}");
+        assert_eq!(info.capability, capabilities::EXTENSIONS, "{method}");
+        assert_eq!(info.permission, permission, "{method}");
+    }
+    stop(running).await;
+}
+
 #[tokio::test]
 async fn a_method_name_can_be_registered_only_once() {
     let home = temp_home();
@@ -269,6 +323,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
         .chain(&TEAM_METHODS)
+        .chain(EXTENSION_METHODS.iter().map(|(method, _)| method))
     {
         assert!(
             commands.iter().any(|command| command.method == *method),
