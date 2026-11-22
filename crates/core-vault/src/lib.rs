@@ -12,4 +12,7 @@ pub use cipher::{Aad, AadError, NONCE_LEN, OpenError, SealError, Sealed, open, s
 pub use key::{KeyError, KeyStore, LockReason, MasterKey, Protection, UnknownProtection};
 pub use names::{Scope, ScopeError, is_valid_name, is_valid_reason, is_valid_session};
 pub use value::{MAX_VALUE_BYTES, SecretValue, ValueTooLarge};
-pub use vault::{Vault, VaultEntry, VaultError, VaultStatus, Written};
+pub use vault::{
+    MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE, Vault, VaultEntry, VaultError, VaultStatus,
+    Written,
+};

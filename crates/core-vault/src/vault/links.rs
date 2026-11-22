@@ -32,6 +32,7 @@ impl Vault {
                 name: name.to_owned(),
             });
         }
+        self.check_case_clash(scope, name)?;
         self.store.insert_secret_link(&SecretLinkRow {
             scope: scope_text.clone(),
             name: name.to_owned(),

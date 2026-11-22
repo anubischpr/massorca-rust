@@ -158,8 +158,12 @@ async fn request(ctx: RequestCtx, params: SecretRequestParams) -> Result<SecretR
         session,
         ..
     } = params;
+    let requester = ctx
+        .principal
+        .device_id()
+        .map_or_else(|| "owner".to_owned(), |id| format!("device:{id}"));
     let row = blocking(&ctx, move |vault| {
-        vault.request(&scope, &name, &reason, session)
+        vault.request(&scope, &name, &reason, session, &requester)
     })
     .await?;
     publish(&ctx, TOPIC_SECRET_REQUESTED, &row.id);

@@ -120,7 +120,7 @@ fn a_request_session_is_short_plain_text() {
     );
     let ok = "s".repeat(128);
     vault
-        .request(&scope("global"), "TOKEN", "needed", Some(ok))
+        .request(&scope("global"), "TOKEN", "needed", Some(ok), "owner")
         .expect("a 128-character session");
     for bad in [
         "s".repeat(129),
@@ -129,7 +129,13 @@ fn a_request_session_is_short_plain_text() {
         "a\u{200B}".to_owned(),
     ] {
         let error = vault
-            .request(&scope("global"), "TOKEN", "needed", Some(bad.clone()))
+            .request(
+                &scope("global"),
+                "TOKEN",
+                "needed",
+                Some(bad.clone()),
+                "owner",
+            )
             .unwrap_err();
         assert!(matches!(error, VaultError::InvalidSession), "{bad:?}");
         assert!(!error.to_string().contains(&bad));

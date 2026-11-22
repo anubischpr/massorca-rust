@@ -15,10 +15,13 @@ use crate::key::{KeyError, LockReason, MasterKey, Protection};
 use crate::names::{Scope, is_valid_name};
 use crate::value::SecretValue;
 
+mod case_clash;
 mod environment;
 mod keys;
 mod links;
 mod requests;
+
+pub use requests::{MAX_PENDING_REQUESTS, MAX_REQUESTS_PER_MINUTE};
 
 use keys::{Recorded, recorded};
 
@@ -55,8 +58,17 @@ pub enum VaultError {
     InvalidReason,
     #[error("the session must be plain text of at most 128 characters")]
     InvalidSession,
+    #[error("{name} in {scope} differs only by case from {other} in {other_scope}")]
+    NameCaseClash {
+        scope: String,
+        name: String,
+        other_scope: String,
+        other: String,
+    },
     #[error("the vault holds {count} secrets; remove them before resetting its key")]
     VaultNotEmpty { count: u64 },
+    #[error("too many secret requests: {0}")]
+    RequestLimit(&'static str),
     #[error("{name} in {scope} could not be opened; set it again with replace")]
     Unreadable { scope: String, name: String },
     #[error("there is no secret request {0}")]
@@ -177,7 +189,8 @@ impl Vault {
     /// Creates `name` in `scope`, or rotates it with `replace`. Resolves pending requests for it as stored.
     ///
     /// # Errors
-    /// `NameInUse`, `Linked`, `NotFound` (replace of a missing name), `Locked`, or a store or key failure.
+    /// `NameInUse`, `NameCaseClash`, `Linked`, `NotFound` (replace of a missing name), `Locked`, or a store or key
+    /// failure.
     pub fn set(
         &self,
         scope: &Scope,
@@ -217,6 +230,7 @@ impl Vault {
                     .update_secret_value(&row.id, &sealed.nonce, &sealed.ciphertext, now)?;
             }
             (None, false) => {
+                self.check_case_clash(scope, name)?;
                 let key = self.key_or_create(&mut guard)?;
                 let id = new_id();
                 let sealed = seal_row(key, &id, scope, name, value)?;

@@ -145,6 +145,8 @@ pub const SECRET_INVALID_SESSION: &str = "secret.invalid_session";
 pub const SECRET_UNREADABLE: &str = "secret.unreadable";
 /// `secret.reset_key` while the vault still holds secrets; the count is in the data.
 pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
+/// Too many pending or recent requests from one requester; see decision 0071 for the limits.
+pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";

@@ -101,20 +101,21 @@ fn requests_resolve_when_the_name_is_stored_or_declined() {
             "KEY",
             "Needed for the summary step.",
             Some("s1".to_owned()),
+            "owner",
         )
         .expect("request");
     let other = vault
-        .request(&scope("global"), "OTHER", "Why", None)
+        .request(&scope("global"), "OTHER", "Why", None, "owner")
         .expect("request");
     assert!(matches!(
         vault
-            .request(&scope("global"), "1BAD", "x", None)
+            .request(&scope("global"), "1BAD", "x", None, "owner")
             .unwrap_err(),
         VaultError::InvalidName
     ));
     assert!(matches!(
         vault
-            .request(&scope("global"), "OK", "line\u{7}bell", None)
+            .request(&scope("global"), "OK", "line\u{7}bell", None, "owner")
             .unwrap_err(),
         VaultError::InvalidReason
     ));
