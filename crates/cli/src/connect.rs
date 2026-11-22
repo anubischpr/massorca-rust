@@ -25,6 +25,15 @@ pub async fn connect(target: &Target, autostart: bool) -> Result<Client, CliErro
     }
 }
 
+/// Connects again to the service `target` names, for a stream that lost it. A local service is never started: it may
+/// have been stopped on purpose.
+pub async fn reconnect(target: &Target) -> Result<Client, ClientError> {
+    match &target.host {
+        Some(name) => Client::connect_host(&Hosts::of(&target.profile), name, &peer()).await,
+        None => Client::connect(&target.profile, ConnectOptions::new(peer())).await,
+    }
+}
+
 /// Connects to the local service of `profile`, starting it first when nothing listens and `autostart` is set.
 pub async fn connect_local(profile: &Profile, autostart: bool) -> Result<Client, CliError> {
     let mut options = ConnectOptions::new(peer());
