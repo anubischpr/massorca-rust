@@ -58,6 +58,7 @@ fn task_row(team_id: &str, title: &str, created_at: i64) -> TaskRow {
         session_id: None,
         outcome: None,
         error: None,
+        error_code: None,
         created_at,
         updated_at: created_at,
     }
@@ -269,24 +270,26 @@ fn a_start_error_is_recorded_and_a_session_link_clears_it_once() {
 
     assert!(
         store
-            .set_task_start_error(&row.id, "no such agent kind", 20)
+            .set_task_start_error(&row.id, "agent.kind_not_found", "no such agent kind", 20)
             .unwrap()
     );
     let failed = store.get_task(&row.id).unwrap().expect("task");
     assert_eq!(failed.error.as_deref(), Some("no such agent kind"));
+    assert_eq!(failed.error_code.as_deref(), Some("agent.kind_not_found"));
     assert_eq!(failed.updated_at, 20);
 
     assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
     let linked = store.get_task(&row.id).unwrap().expect("task");
     assert_eq!(linked.session_id.as_deref(), Some("session-1"));
     assert_eq!(linked.error, None);
+    assert_eq!(linked.error_code, None);
     assert_eq!(linked.updated_at, 30);
 
     // A second start finds the task linked: neither the link nor an error replaces it.
     assert!(!store.link_task_session(&row.id, "session-2", 40).unwrap());
     assert!(
         !store
-            .set_task_start_error(&row.id, "late failure", 40)
+            .set_task_start_error(&row.id, "bot.busy", "late failure", 40)
             .unwrap()
     );
     let kept = store.get_task(&row.id).unwrap().expect("task");

@@ -106,7 +106,7 @@ fn start_task(
         Ok(session) => link(store, agents, &row, &session, changes),
         Err(error) => {
             if store
-                .set_task_start_error(&row.id, &error.message, now_ms())
+                .set_task_start_error(&row.id, &error.code, &error.message, now_ms())
                 .map_err(store_error)?
             {
                 changes.task = Some(row.id.clone());

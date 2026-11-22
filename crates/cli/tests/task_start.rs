@@ -165,6 +165,15 @@ fn a_task_starts_its_bot_in_the_team_folder_with_the_task_as_its_prompt() {
     let second = create_task(&sandbox, "Write the docs", &["--bot", "mara"]);
     let busy = error_of(&sandbox, &["task", "start", second.as_str()]);
     assert_eq!(busy["code"], "bot.busy");
+    let board = sandbox.json_ok("default", &["team", "board", "alpha"]);
+    let card = board["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .flat_map(|column| column["cards"].as_array().cloned().unwrap_or_default())
+        .find(|card| card["id"] == second.as_str())
+        .expect("the refused task is on the Board");
+    assert_eq!(card["error_code"], "bot.busy");
     let waiting = sandbox.json_ok("default", &["task", "show", second.as_str()]);
     assert_eq!(waiting["column"], "open");
     assert_eq!(waiting["session_id"], Value::Null);
@@ -202,6 +211,7 @@ fn a_start_that_fails_keeps_the_task_open_with_the_reason_and_can_be_retried() {
     let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
     assert_eq!(shown["column"], "open");
     assert_eq!(shown["session_id"], Value::Null);
+    assert_eq!(shown["error_code"], "agent.kind_not_found");
     let reason = shown["error"].as_str().expect("the reason is kept");
     assert!(reason.contains("no-such-agent"), "{reason}");
 

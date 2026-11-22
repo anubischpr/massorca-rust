@@ -91,11 +91,13 @@ pub struct TaskRow {
     pub session_id: Option<String>,
     pub outcome: Option<TaskOutcome>,
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed`.
+    pub error_code: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-const SELECT_TASKS: &str = "SELECT id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, created_at, updated_at FROM tasks";
+const SELECT_TASKS: &str = "SELECT id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, created_at, updated_at FROM tasks";
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
@@ -109,6 +111,7 @@ fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
         session_id: row.get("session_id")?,
         outcome: row.get("outcome")?,
         error: row.get("error")?,
+        error_code: row.get("error_code")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -118,7 +121,7 @@ impl Store {
     /// Inserts a task. Its team, bot and project must exist; a missing one is `StoreError::Constraint`.
     pub fn insert_task(&self, row: &TaskRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 row.id,
                 row.team_id,
@@ -130,6 +133,7 @@ impl Store {
                 row.session_id,
                 row.outcome,
                 row.error,
+                row.error_code,
                 row.created_at,
                 row.updated_at
             ],
@@ -182,7 +186,7 @@ impl Store {
     /// Changes a task's project, bot, title, body, session, outcome, error and update time. Returns whether a row changed.
     pub fn update_task(&self, row: &TaskRow) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET project_id = ?2, bot_id = ?3, title = ?4, body = ?5, session_id = ?6, outcome = ?7, error = ?8, updated_at = ?9 WHERE id = ?1",
+            "UPDATE tasks SET project_id = ?2, bot_id = ?3, title = ?4, body = ?5, session_id = ?6, outcome = ?7, error = ?8, error_code = ?10, updated_at = ?9 WHERE id = ?1",
             params![
                 row.id,
                 row.project_id,
@@ -192,7 +196,8 @@ impl Store {
                 row.session_id,
                 row.outcome,
                 row.error,
-                row.updated_at
+                row.updated_at,
+                row.error_code
             ],
         )?;
         Ok(changed > 0)
@@ -207,22 +212,24 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET session_id = ?2, error = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
+            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
             params![id, session_id, updated_at],
         )?;
         Ok(changed > 0)
     }
 
-    /// Records why a start failed on a task that has no session. Returns false when the task is gone or was linked.
+    /// Records why a start failed, with its protocol code, on a task that has no session. Returns false when the task is
+    /// gone or was linked.
     pub fn set_task_start_error(
         &self,
         id: &str,
+        code: &str,
         error: &str,
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET error = ?2, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
-            params![id, error, updated_at],
+            "UPDATE tasks SET error = ?2, error_code = ?3, updated_at = ?4 WHERE id = ?1 AND session_id IS NULL",
+            params![id, error, code, updated_at],
         )?;
         Ok(changed > 0)
     }

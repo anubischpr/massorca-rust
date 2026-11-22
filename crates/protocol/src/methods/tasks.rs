@@ -175,6 +175,9 @@ pub struct Task {
     /// Why the last start failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`, for the sentence a client shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     pub column: Column,
     pub state: CardState,
     /// The session's terminal cannot be reached, so the state is the last one the agent reported.

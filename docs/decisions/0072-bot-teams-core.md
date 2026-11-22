@@ -192,5 +192,10 @@ The workspace domain lets one agent write in a workspace at a time
   linked. A kind whose prompt mode is `none` gets its prompt at its first idle,
   and the agents domain drops that prompt after 120 s. Such a kind's task can
   show Running with a prompt it never received.
+- **Error code:** a task and a Board card carry `error_code` next to `error`.
+  It is the protocol code of the failed start, such as `agent.not_installed`,
+  `bot.busy` or `agent.credentials_invalid`, so a client can show its own
+  sentence. The field is optional and additive. A start that links a session
+  clears it, and so does `task.reopen`.
 - The bot's model and effort are not passed yet, because `agent.start` has no
   field for them.

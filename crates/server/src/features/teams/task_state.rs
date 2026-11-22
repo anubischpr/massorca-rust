@@ -138,6 +138,7 @@ mod tests {
             session_id: Some("s1".to_owned()),
             outcome,
             error: None,
+            error_code: None,
             created_at: 1,
             updated_at: 2,
         }

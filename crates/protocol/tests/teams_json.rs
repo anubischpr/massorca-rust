@@ -116,6 +116,7 @@ fn a_board_lists_four_columns_in_order_and_each_card_names_its_bot_and_time() {
         state: CardState::Working,
         last_known: false,
         error: None,
+        error_code: None,
         at_ms: 9,
     };
     assert_eq!(

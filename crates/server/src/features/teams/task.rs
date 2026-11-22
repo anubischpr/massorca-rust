@@ -161,6 +161,7 @@ fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBod
         session_id: None,
         outcome: None,
         error: None,
+        error_code: None,
         created_at: now,
         updated_at: now,
     };
@@ -265,6 +266,7 @@ fn reopen_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, E
     refuse_while_running(&row, &session)?;
     row.outcome = None;
     row.error = None;
+    row.error_code = None;
     row.session_id = None;
     row.updated_at = now_ms();
     save(store, &row)?;
@@ -322,6 +324,7 @@ pub(crate) fn view_of(row: &TaskRow, session: &Session) -> Task {
         session_id: row.session_id.clone(),
         outcome: row.outcome.map(outcome_of),
         error: row.error.clone(),
+        error_code: row.error_code.clone(),
         column: standing.column,
         state: standing.state,
         last_known: standing.last_known,
