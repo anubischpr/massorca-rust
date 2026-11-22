@@ -216,7 +216,7 @@ workspace.
 - Just before the merge, under the start gate, the parent workspace is checked again: another live writing session
   there is `agent.workspace_busy` (its id in `data.session`). Under the status lock the parent's activity is read again:
   `working`, or a prompt it has not answered yet, is `agent.parent_busy`. The workspace is then listed as merging until
-  the merge ends. Meanwhile a start or resume there, and a prompt without `force` to a session there, are `agent.busy`.
+  the merge ends. Meanwhile a start or resume there, and any prompt to a session there (even with `force`), are `agent.busy`.
 - The parent's worktree must be clean and have no rebase, merge, cherry-pick, revert or mailbox apply stopped in it,
   read from git's own state files in that worktree's git directory; otherwise `agent.parent_dirty` says which.
 - The merge takes `refs/heads/<child branch>`, so a tag of the same name is never merged instead. A merge that fails

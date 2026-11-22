@@ -195,7 +195,7 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   `--no-merge`: the parent must not be `working` (`agent.parent_busy`), no other session may
   write in its workspace (`agent.workspace_busy`), and its worktree must be clean with no
   rebase or merge stopped in it (`agent.parent_dirty`). While the merge runs, a start in that
-  workspace and a prompt to its sessions without `--force` fail with `agent.busy`. A merge that stops on conflicts is aborted, the parent is
+  workspace and any prompt to its sessions, even with `--force`, fail with `agent.busy`. A merge that stops on conflicts is aborted, the parent is
   left as it was, and the call fails with `agent.merge_conflict`, the conflicting paths in
   the error's `data.paths`. Unless `--no-prompt`, a live parent run then gets one prompt, by
   the `agent prompt` rules without `--force`, naming the child, the merge commit and the

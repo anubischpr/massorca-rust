@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_being_merged_into_refuses_starts_and_unforced_prompts() {
+    fn a_workspace_being_merged_into_refuses_starts_and_every_prompt() {
         let (agents, workspace_id, _profile) = service();
         let row = session_row(&workspace_id, None);
         agents.store().insert_agent_session(&row).unwrap();
@@ -752,10 +752,10 @@ mod tests {
             agents.prompt(&row.id, "hello", false).unwrap_err().code,
             codes::AGENT_BUSY
         );
-        // A forced prompt is not held by the merge; this run has ended, so it is refused for that.
+        // `force` does not override the merge: the agent could write into the worktree while git merges into it.
         assert_eq!(
             agents.prompt(&row.id, "hello", true).unwrap_err().code,
-            codes::AGENT_NOT_LIVE
+            codes::AGENT_BUSY
         );
 
         lock(&agents.inner.merging).remove(&workspace_id);

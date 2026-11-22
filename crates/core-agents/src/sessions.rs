@@ -694,10 +694,9 @@ impl Agents {
             let mut live = lock(&self.inner.status);
             let row = self.reload(&row.id)?;
             let session = self.view_with(&mut live, row)?;
-            // A bring-back merging into the workspace holds it until the merge ends (0055).
-            if !force {
-                self.refuse_while_merging(&session.workspace_id)?;
-            }
+            // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
+            // this, because a prompt could make the agent write into the worktree while git merges into it.
+            self.refuse_while_merging(&session.workspace_id)?;
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
