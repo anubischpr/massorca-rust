@@ -1,7 +1,7 @@
 //! The secret vault through the bridge, against a real service whose vault key is a file in a temporary
 //! profile, so no keyring is touched. The store holds names and metadata only: no value reaches it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -12,8 +12,28 @@ use massorca_profile::Profile;
 use massorca_protocol::methods::secrets::{SecretLink, SecretRemove, SecretSet};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig, VaultOptions};
+use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
 
 const WAIT: Duration = Duration::from_secs(30);
 /// An obviously fake value: the tests check that it never comes back out of the bridge.
@@ -94,7 +114,7 @@ async fn client_for(home: &Path) -> Client {
 
 #[tokio::test]
 async fn the_store_follows_the_vault_by_name_and_never_holds_a_value() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let (bridge, _handle, mut updates) = bridge_for(home.path());
     let mut state = StoreState::default();
@@ -160,7 +180,7 @@ async fn the_store_follows_the_vault_by_name_and_never_holds_a_value() {
 
 #[tokio::test]
 async fn a_secret_with_links_is_removed_with_them_only_when_asked() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let (bridge, handle, mut updates) = bridge_for(home.path());
     let mut state = StoreState::default();
@@ -238,7 +258,7 @@ async fn a_secret_with_links_is_removed_with_them_only_when_asked() {
 
 #[tokio::test]
 async fn a_secret_is_added_and_replaced_only_as_asked_and_each_refusal_keeps_its_code() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let (bridge, handle, mut updates) = bridge_for(home.path());
     let mut state = StoreState::default();
