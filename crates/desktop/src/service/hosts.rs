@@ -2,11 +2,12 @@
 //! server of an offer (decision 0041). Each call opens its own connection, so the hosts work while this computer's
 //! service is down.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use massorca_client::{Client, ClientError, HostRecord, Hosts, default_device_name};
 use massorca_core_remote::bootstrap::{
-    BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_LISTEN, install_over_ssh,
+    BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_LISTEN, RemoteMachine,
+    install_over_ssh, probe_over_ssh,
 };
 use massorca_core_remote::ssh::SshError;
 use massorca_profile::Profile;
@@ -77,6 +78,16 @@ pub(super) fn spawn(
                 let _ = reply.send(result);
             });
         }
+        Command::ProbeSshHost {
+            target,
+            ssh_args,
+            reply,
+        } => {
+            tokio::spawn(async move {
+                let result = probe_ssh(target, ssh_args).await;
+                let _ = reply.send(result);
+            });
+        }
         _ => {}
     }
 }
@@ -96,6 +107,27 @@ impl ServiceHandle {
         let (reply, answer) = oneshot::channel();
         self.commands
             .send(Command::AddSshHost { host, reply })
+            .map_err(|_| stopped())?;
+        answer.await.unwrap_or_else(|_| Err(stopped()))
+    }
+
+    /// Checks an SSH host's machine with `uname -sm`, installing nothing: the Add host dialog's test.
+    pub async fn probe_ssh_host(
+        &self,
+        target: String,
+        ssh_args: Vec<String>,
+    ) -> Result<RemoteMachine, SshFailed> {
+        let stopped = || SshFailed {
+            refusal: Refusal::unavailable(BRIDGE_STOPPED),
+            log: Vec::new(),
+        };
+        let (reply, answer) = oneshot::channel();
+        self.commands
+            .send(Command::ProbeSshHost {
+                target,
+                ssh_args,
+                reply,
+            })
             .map_err(|_| stopped())?;
         answer.await.unwrap_or_else(|_| Err(stopped()))
     }
@@ -245,6 +277,41 @@ async fn add_ssh(
     Ok(SshAdded::Paired(record))
 }
 
+/// Checks an SSH host over ssh with `uname -sm`, installing nothing. Failures keep the step's own code and sentence.
+async fn probe_ssh(target: String, ssh_args: Vec<String>) -> Result<RemoteMachine, SshFailed> {
+    let named = target.clone();
+    tokio::task::spawn_blocking(move || probe_over_ssh(&target, ssh_args))
+        .await
+        .map_err(|error| SshFailed {
+            refusal: Refusal::Failed {
+                code: "client.failed".to_owned(),
+                message: error.to_string(),
+            },
+            log: Vec::new(),
+        })?
+        .map_err(|error| SshFailed {
+            refusal: bootstrap_refusal(&error),
+            log: vec![format!("could not check {named}"), error.to_string()],
+        })
+}
+
+/// The Linux `massorca` program packaged for `arch`: `resources/massorca-linux-<arch>` next to this executable
+/// (decision 0075). None when the app has no program for that machine.
+pub fn bundled_program(arch: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_program_in(exe.parent()?, arch)
+}
+
+fn bundled_program_in(folder: &Path, arch: &str) -> Option<PathBuf> {
+    if !matches!(arch, "x86_64" | "aarch64") {
+        return None;
+    }
+    let program = folder
+        .join("resources")
+        .join(format!("massorca-linux-{arch}"));
+    program.is_file().then_some(program)
+}
+
 /// The CLI's lines about an installed service, in the same words.
 fn install_lines(installed: &BootstrapReport, target: &str) -> Vec<String> {
     let version = if installed.server_version.is_empty() {
@@ -292,5 +359,33 @@ fn after_install(target: &str, error: &ClientError) -> Refusal {
             "massorca was installed on {target}, but pairing failed: {}",
             refusal.message()
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundled_program_is_the_one_packaged_for_the_machine() {
+        let folder = tempfile::tempdir().expect("a temporary folder");
+        let resources = folder.path().join("resources");
+        std::fs::create_dir(&resources).expect("a resources folder");
+        std::fs::write(resources.join("massorca-linux-x86_64"), b"program").expect("a program");
+        assert_eq!(
+            bundled_program_in(folder.path(), "x86_64"),
+            Some(resources.join("massorca-linux-x86_64"))
+        );
+        assert_eq!(
+            bundled_program_in(folder.path(), "aarch64"),
+            None,
+            "a program for one machine is not offered for another"
+        );
+    }
+
+    #[test]
+    fn no_bundled_program_is_offered_for_a_machine_massorca_does_not_run_on() {
+        let folder = tempfile::tempdir().expect("a temporary folder");
+        assert_eq!(bundled_program_in(folder.path(), "armv7l"), None);
     }
 }
