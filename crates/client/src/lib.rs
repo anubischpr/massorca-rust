@@ -3,6 +3,7 @@
 
 mod client;
 mod connect;
+mod device_calls;
 mod error;
 mod git_calls;
 mod handshake;
