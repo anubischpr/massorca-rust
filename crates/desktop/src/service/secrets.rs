@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use massorca_client::Client;
-use massorca_protocol::methods::secrets::SecretListParams;
-use tokio::sync::mpsc;
+use massorca_protocol::methods::secrets::{SecretEntry, SecretListParams, SecretSet};
+use tokio::sync::{mpsc, oneshot};
 
+use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::update::{SecretsUpdate, StoreUpdate};
 
@@ -77,4 +78,54 @@ pub(super) fn refresh_in_background(
             ],
         );
     });
+}
+
+/// A vault write from the UI. Its answer goes back on the oneshot; the store changes through the refetch that
+/// follows, never from the answer. `Debug` prints no value, because `SecretSet` redacts its own.
+#[derive(Debug)]
+pub(crate) enum SecretCommand {
+    Set {
+        params: SecretSet,
+        reply: oneshot::Sender<Result<SecretEntry, Refusal>>,
+    },
+}
+
+impl ServiceHandle {
+    /// `secret.set`: stores a secret, or rotates the owned one of that name with `replace`. Nothing is shown
+    /// optimistically; the list follows the refetch that the answer triggers.
+    pub async fn secret_set(&self, params: SecretSet) -> Result<SecretEntry, Refusal> {
+        self.ask(|reply| Command::Secret(SecretCommand::Set { params, reply }))
+            .await
+    }
+}
+
+/// Runs a vault write on its own task. The caller is answered first, then the vault is read again whatever the
+/// answer was, so the store follows the vault even after a refusal.
+pub(super) fn spawn_call(
+    client: &Client,
+    command: SecretCommand,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    order: &Arc<SecretsFreshness>,
+) {
+    match command {
+        SecretCommand::Set { params, reply } => {
+            let client = client.clone();
+            let updates = updates.clone();
+            let order = Arc::clone(order);
+            tokio::spawn(async move {
+                let result = client.secret_set(&params).await;
+                let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+                refresh_in_background(&client, &updates, &order);
+            });
+        }
+    }
+}
+
+/// Answers a vault write with `refusal`, while there is no connection to ask.
+pub(super) fn refuse_while_down(command: SecretCommand, refusal: Refusal) {
+    match command {
+        SecretCommand::Set { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+    }
 }

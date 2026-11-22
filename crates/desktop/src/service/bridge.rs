@@ -31,7 +31,7 @@ use tokio::time::sleep;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
-use super::secrets::{self, SecretsFreshness};
+use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -65,6 +65,7 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
+    Secret(SecretCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
@@ -436,6 +437,9 @@ impl Link {
                         Some(Command::Terminal(command)) => {
                             terminals::spawn_call(client, &writes, &self.updates, command);
                         }
+                        Some(Command::Secret(command)) => {
+                            secrets::spawn_call(client, command, &self.updates, &self.secrets_order);
+                        }
                         Some(Command::GitWatch { workspace }) => {
                             watches.start(client, &workspace, &self.updates, &self.freshness);
                             self.watching.insert(workspace);
@@ -575,7 +579,7 @@ fn spawn_call(
             });
         }
         // Routed by the session, which owns the terminal writes and store updates.
-        Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
+        Command::Terminal(_) | Command::Secret(_) | Command::RetryNow | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -613,6 +617,7 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
+        Command::Secret(command) => secrets::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }

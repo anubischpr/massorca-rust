@@ -1,8 +1,25 @@
-use massorca_protocol::methods::secrets::SecretStatus;
+use massorca_protocol::methods::secrets::{SecretSet, SecretStatus};
 use tokio::sync::mpsc;
 
-use super::secrets::SecretsFreshness;
+use super::secrets::{SecretCommand, SecretsFreshness};
 use super::update::{SecretsUpdate, StoreUpdate};
+
+#[test]
+fn a_command_that_stores_a_value_never_prints_it() {
+    let (reply, _answer) = tokio::sync::oneshot::channel();
+    let command = SecretCommand::Set {
+        params: SecretSet {
+            scope: "global".to_owned(),
+            name: "TOKEN".to_owned(),
+            value: "hidden-test-value".to_owned(),
+            replace: false,
+        },
+        reply,
+    };
+    let printed = format!("{command:?}");
+    assert!(!printed.contains("hidden-test-value"), "{printed}");
+    assert!(printed.contains("[redacted]"), "{printed}");
+}
 
 fn status(count: u64) -> SecretsUpdate {
     SecretsUpdate::Status(Ok(SecretStatus {

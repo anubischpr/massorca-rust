@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
 use massorca_desktop::service::{
-    ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
+    Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
-use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::secrets::SecretSet;
+use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig, VaultOptions};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -154,6 +154,94 @@ async fn the_store_follows_the_vault_by_name_and_never_holds_a_value() {
     assert!(!shown.contains(VALUE), "the store holds a value: {shown}");
 
     drop(client);
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_secret_is_added_and_replaced_only_as_asked_and_each_refusal_keeps_its_code() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the connection and the list",
+        |s| s.connection.is_connected() && matches!(s.secrets.list, Some(Ok(_))),
+    )
+    .await;
+
+    let add = SecretSet {
+        scope: "global".to_owned(),
+        name: "ADDED_TOKEN".to_owned(),
+        value: VALUE.to_owned(),
+        replace: false,
+    };
+    let entry = handle
+        .secret_set(add.clone())
+        .await
+        .expect("the secret is added");
+    assert_eq!(
+        (entry.scope.as_str(), entry.name.as_str()),
+        ("global", "ADDED_TOKEN")
+    );
+    assert!(
+        !format!("{entry:?}").contains(VALUE),
+        "the answer carries no value"
+    );
+    until(&mut updates, &mut state, "the added name", |s| {
+        names(s) == ["ADDED_TOKEN"]
+    })
+    .await;
+
+    // A name already in use is refused with its code, and the store is left as it was.
+    let taken = handle
+        .secret_set(add.clone())
+        .await
+        .expect_err("the name is in use");
+    assert!(
+        matches!(&taken, Refusal::Failed { code, .. } if code == codes::SECRET_NAME_IN_USE),
+        "{taken:?}"
+    );
+
+    // Replace rotates the owned secret; replacing a name that is not stored is refused.
+    let rotated = handle
+        .secret_set(SecretSet {
+            replace: true,
+            ..add.clone()
+        })
+        .await
+        .expect("the secret is rotated");
+    assert!(rotated.rotated_at_ms >= entry.rotated_at_ms);
+    let missing = handle
+        .secret_set(SecretSet {
+            name: "NOT_STORED".to_owned(),
+            replace: true,
+            ..add.clone()
+        })
+        .await
+        .expect_err("there is nothing to replace");
+    assert!(
+        matches!(&missing, Refusal::Failed { code, .. } if code == codes::SECRET_NOT_FOUND),
+        "{missing:?}"
+    );
+
+    // A name that is not a variable name is refused before anything is stored.
+    let invalid = handle
+        .secret_set(SecretSet {
+            name: "1ST".to_owned(),
+            ..add
+        })
+        .await
+        .expect_err("the name is not a variable name");
+    assert!(
+        matches!(&invalid, Refusal::Failed { code, .. } if code == codes::SECRET_INVALID_NAME),
+        "{invalid:?}"
+    );
+    assert_eq!(names(&state), ["ADDED_TOKEN"], "refusals change nothing");
+
+    drop(handle);
     drop(bridge);
     stop_service(service).await;
 }
