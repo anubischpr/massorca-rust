@@ -53,7 +53,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
             waiting: 0,
             running: 0,
             memory: "-".to_owned(),
-            terminals: 0,
+            terminals: super::terminals::running_count(state),
             ports: 0,
             hosts_total: 1,
             hosts_unreachable: u32::from(!state.connection.is_connected()),
