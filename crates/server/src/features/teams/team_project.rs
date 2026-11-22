@@ -1,9 +1,10 @@
-//! `team.project_add`, `team.project_update` and `team.project_rm` (capability `teams/1`, decision 0072).
+//! `team.project_list`, `team.project_add`, `team.project_update` and `team.project_rm` (capability `teams/1`, decision 0072).
 
 use massorca_core_store::{Store, TeamProjectRow, new_id, now_ms};
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::teams::{
-    self, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams, TeamProjectUpdateParams,
+    self, TeamProject, TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams,
+    TeamProjectUpdateParams, TeamRef,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -19,6 +20,13 @@ use super::{blocking, non_blank, selectors, store_error};
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
     Ok(vec![
+        methods.register(
+            Owner::Core,
+            teams::PROJECT_LIST,
+            capabilities::TEAMS,
+            Permission::Read,
+            list,
+        )?,
         methods.register(
             Owner::Core,
             teams::PROJECT_ADD,
@@ -41,6 +49,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             remove,
         )?,
     ])
+}
+
+async fn list(ctx: RequestCtx, params: TeamRef) -> Result<TeamProjectList, ErrorBody> {
+    blocking(&ctx, move |store, _agents| {
+        let team = selectors::team(store, &params.team)?;
+        let rows = store.list_team_projects(&team.id).map_err(store_error)?;
+        Ok(TeamProjectList {
+            projects: rows.iter().map(project_view).collect(),
+        })
+    })
+    .await
 }
 
 async fn add(ctx: RequestCtx, params: TeamProjectAddParams) -> Result<TeamProject, ErrorBody> {
