@@ -46,6 +46,7 @@ pub(crate) fn is_running(session: &Session) -> bool {
 
 /// The standing of a task: its own latched outcome decides first, then its session.
 pub(crate) fn standing(task: &TaskRow, session: &Session) -> Standing {
+    // Later slice: the agent.changed listener latches a Done outcome into `task.outcome`.
     if let Some(outcome) = task.outcome {
         return of_outcome(outcome_of(outcome));
     }

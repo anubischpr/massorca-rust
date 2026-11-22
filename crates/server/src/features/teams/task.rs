@@ -140,6 +140,7 @@ pub(crate) fn any_running(agents: &Agents, rows: &[TaskRow]) -> Result<bool, Err
     Ok(false)
 }
 
+// Later slice: task.start plugs in beside this create, and records `session_id` once the prompt is delivered.
 fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let bot_id = optional_text(params.bot)
