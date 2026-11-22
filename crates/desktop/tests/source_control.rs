@@ -78,6 +78,9 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("the repository directory");
     git(dir, &["init", "-q"]);
+    // The app's own commits read this identity; CI runners have none.
+    git(dir, &["config", "user.name", "MassOrca Test"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
     std::fs::write(dir.join("README.md"), "hello\n").expect("a readme");
     std::fs::write(dir.join(".gitignore"), "*.log\n").expect("a gitignore");
     git(dir, &["add", "."]);
