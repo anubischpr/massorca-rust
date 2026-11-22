@@ -8,7 +8,6 @@ use super::tooltip::with_tooltip;
 use crate::model::morph::ease;
 use crate::model::shell_state::ShellModel;
 use crate::model::sidebar::{NavRow, SidebarContent, TreeRow};
-use crate::model::workspace_flow::SERVICE_OFFLINE;
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Context, Div, Entity, FocusHandle, IntoElement,
     MouseButton, SharedString, Stateful, Window, div, prelude::*, px,
@@ -72,10 +71,9 @@ pub(super) fn sidebar(
         SidebarContent::Workspaces { nav, tree } => {
             let content = content.child(create_button(&shell)).child(search.clone());
             let content = nav_rows(content, &nav, "nav", &shell, window, cx);
-            let offline = model.snapshot().service_notice.is_some();
             content
                 .child(projects_header(&theme))
-                .child(tree_list(&tree, &shell, window, cx, &theme, offline))
+                .child(tree_list(&tree, &shell, window, cx, &theme))
                 .child(footer())
         }
         SidebarContent::BotTeams => {
@@ -188,14 +186,13 @@ fn header_button(id: &'static str, icon: IconName, label: &'static str) -> impl 
     )
 }
 
-/// The project tree, scrollable on its own. Empty, it says so and offers a new project (A10).
+/// The project tree, scrollable on its own. Empty, it says so (A10).
 fn tree_list(
     tree: &[TreeRow],
     shell: &gpui::WeakEntity<Shell>,
     window: &mut Window,
     cx: &mut App,
     theme: &Theme,
-    offline: bool,
 ) -> Stateful<Div> {
     let mut list = div()
         .id("sidebar-tree")
@@ -206,48 +203,20 @@ fn tree_list(
         .gap(px(SPACE_HALF))
         .overflow_y_scroll();
     if tree.is_empty() {
-        list = list.child(empty_projects(shell, offline, theme));
+        list = list.child(
+            div()
+                .px(px(SPACE_2))
+                .py(px(SPACE_1))
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.tertiary)
+                .child("No projects yet"),
+        );
     }
     for (index, row) in tree.iter().enumerate() {
         let focus = row_focus(window, cx, format!("tree-{index}"));
         list = list.child(tree_row(row, index, &focus, shell));
     }
     list
-}
-
-/// The empty tree: "No projects yet" and a New project button (D-WS-01). Without the service the
-/// button is off, with its reason.
-fn empty_projects(
-    shell: &gpui::WeakEntity<Shell>,
-    offline: bool,
-    theme: &Theme,
-) -> impl IntoElement {
-    let shell = shell.clone();
-    let mut button = Button::new("sidebar-empty-new-project", "New project")
-        .variant(ButtonVariant::Secondary)
-        .size(ButtonSize::Default)
-        .leading_icon(IconName::Plus)
-        .disabled(offline)
-        .on_click(move |window, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.open_add_project(window, cx));
-        });
-    if offline {
-        button = button.tooltip(SERVICE_OFFLINE);
-    }
-    div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(SPACE_1))
-        .px(px(SPACE_2))
-        .py(px(SPACE_1))
-        .child(
-            div()
-                .text_style(TYPE_BODY_SM)
-                .text_color(theme.palette.text.tertiary)
-                .child("No projects yet"),
-        )
-        .child(button)
 }
 
 /// The footer row: Help, Locate and the panel toggle. They are placeholders until their

@@ -25,8 +25,6 @@ pub const TOOLS_LATER: &str = "Opening in other tools comes later.";
 pub const WORK_PANEL_LATER: &str = "The Work panel comes later.";
 /// Why a Git row is off in a folder that is not a Git repository (D-WS-14).
 pub const NEEDS_GIT: &str = "Needs Git";
-/// Why an action that needs the service is off while it is not connected.
-pub const SERVICE_OFFLINE: &str = "The service is not connected.";
 /// Why "Copy branch name" is off for a workspace with no branch.
 pub const NO_BRANCH: &str = "This workspace has no branch.";
 
