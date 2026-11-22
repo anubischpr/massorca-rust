@@ -15,13 +15,14 @@ use tokio::time::timeout;
 use super::common::{SERVER_VERSION, connect, echo, remote_code, start, stop, temp_home};
 
 /// Every method of the Phase 1 surface.
-const PHASE1_METHODS: [&str; 14] = [
+const PHASE1_METHODS: [&str; 15] = [
     service::INFO,
     service::SHUTDOWN,
     events::SUBSCRIBE,
     config::GET,
     config::SET,
     config::LIST,
+    config::RESET,
     projects::ADD,
     projects::LIST,
     projects::SHOW,
@@ -65,14 +66,15 @@ const AGENT_METHODS: [&str; 8] = [
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 15] = [
+const CLI_COMMAND_IDS: [&str; 16] = [
     "service.info",
     "service.status",
     "service.stop",
     "service.restart",
-    "config.get",
-    "config.set",
-    "config.list",
+    "settings.get",
+    "settings.set",
+    "settings.list",
+    "settings.reset",
     "project.add",
     "project.list",
     "project.show",
