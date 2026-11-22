@@ -468,6 +468,106 @@ async fn task_changes_publish_task_changed_and_a_removed_task_is_gone() {
 }
 
 #[tokio::test]
+async fn removing_a_bot_with_open_tasks_needs_unassign_and_its_tasks_lose_it() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &team_params("alpha"))
+        .await
+        .expect("team.create");
+    let mara: Bot = client
+        .call(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect("team.bot_add");
+    let open: Task = client
+        .call(
+            tasks::CREATE,
+            &TaskCreateParams {
+                bot: Some("mara".to_owned()),
+                ..task_params("alpha", "open work")
+            },
+        )
+        .await
+        .expect("open task");
+    let finished: Task = client
+        .call(
+            tasks::CREATE,
+            &TaskCreateParams {
+                bot: Some("mara".to_owned()),
+                ..task_params("alpha", "finished work")
+            },
+        )
+        .await
+        .expect("finished task");
+    client
+        .call::<_, Task>(
+            tasks::DONE,
+            &TaskRef {
+                task: finished.id.clone(),
+            },
+        )
+        .await
+        .expect("task.done");
+
+    let refused = client
+        .call::<_, Bot>(
+            teams::BOT_REMOVE,
+            &BotRemoveParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                unassign: false,
+            },
+        )
+        .await
+        .expect_err("a bot with an open task");
+    assert_eq!(remote_code(&refused), codes::BOT_HAS_TASKS);
+
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let removed: Bot = client
+        .call(
+            teams::BOT_REMOVE,
+            &BotRemoveParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                unassign: true,
+            },
+        )
+        .await
+        .expect("team.bot_rm with unassign");
+    assert_eq!(removed.id, mara.id);
+    let mut changed = Vec::new();
+    for _ in 0..3 {
+        changed.push(next_event(&mut events).await);
+    }
+    assert!(
+        changed
+            .iter()
+            .any(|event| event.topic == TOPIC_TEAM_CHANGED)
+    );
+    for task in [&open, &finished] {
+        assert!(
+            changed
+                .iter()
+                .any(|event| event.topic == TOPIC_TASK_CHANGED && event.id == task.id),
+            "task.changed for {}",
+            task.id
+        );
+        let after: Task = client
+            .call(
+                tasks::SHOW,
+                &TaskRef {
+                    task: task.id.clone(),
+                },
+            )
+            .await
+            .expect("the task is kept");
+        assert_eq!(after.bot_id, None);
+    }
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn removing_a_project_leaves_its_tasks_on_the_board_without_it() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
@@ -521,5 +621,69 @@ async fn removing_a_project_leaves_its_tasks_on_the_board_without_it() {
         .expect("the task is kept");
     assert_eq!(after.project_id, None);
     assert_eq!(after.column, Column::Open);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn removing_a_team_removes_its_tasks_and_publishes_task_changed_for_each() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let alpha: Team = client
+        .call(teams::CREATE, &team_params("alpha"))
+        .await
+        .expect("team.create");
+    let first: Task = client
+        .call(tasks::CREATE, &task_params("alpha", "first"))
+        .await
+        .expect("first task");
+    let second: Task = client
+        .call(tasks::CREATE, &task_params("alpha", "second"))
+        .await
+        .expect("second task");
+    let mut events = client.subscribe_events().await.expect("subscribe");
+
+    client
+        .call::<_, Team>(
+            teams::REMOVE,
+            &TeamRemoveParams {
+                team: alpha.id.clone(),
+                force: false,
+            },
+        )
+        .await
+        .expect("team.rm");
+
+    let mut removed_tasks = Vec::new();
+    for _ in 0..3 {
+        let event = next_event(&mut events).await;
+        if event.topic == TOPIC_TASK_CHANGED {
+            removed_tasks.push(event.id);
+        }
+    }
+    removed_tasks.sort();
+    let mut expected = vec![first.id.clone(), second.id.clone()];
+    expected.sort();
+    assert_eq!(removed_tasks, expected);
+    let gone = client
+        .call::<_, Team>(
+            teams::SHOW,
+            &TeamRef {
+                team: alpha.id.clone(),
+            },
+        )
+        .await
+        .expect_err("the team is gone");
+    assert_eq!(remote_code(&gone), codes::TEAM_NOT_FOUND);
+    let task_gone = client
+        .call::<_, Task>(
+            tasks::SHOW,
+            &TaskRef {
+                task: first.id.clone(),
+            },
+        )
+        .await
+        .expect_err("its tasks are gone");
+    assert_eq!(remote_code(&task_gone), codes::TASK_NOT_FOUND);
     stop(running).await;
 }
