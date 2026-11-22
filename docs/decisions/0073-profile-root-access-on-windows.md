@@ -135,9 +135,19 @@ owner then makes the home private once with `massorca profile secure`.
   `hosts` and the host folder open with `open_private_dir`, without
   following links: a pinned handle on Windows, an
   `O_NOFOLLOW | O_DIRECTORY` descriptor on Unix. An existing link at
-  either is refused, and the files are written while the folders are held.
-  `Client::pair` checks before it uses the offer, which works only once.
-  Autostart only creates missing folders, private, and leaves the check to
+  either is refused, and so is an existing folder whose access lets others
+  change it (`profile.writable_by_others`). That check is made on the folder
+  itself, because the scan cache can skip it. Such a folder is refused, not
+  tightened: as with the root, its content could have been changed.
+  Files are written through the open folder, on Unix relative to its
+  descriptor (`openat` with `O_CREAT | O_EXCL | O_NOFOLLOW`, then
+  `renameat`). `remove` moves the host folder aside under a unique name
+  through its open handle (`FileRenameInfo` on Windows, `renameat` on Unix),
+  and deletes only the moved folder. `Client::pair` checks before it uses
+  the offer, which works only once. Autostart first checks the location
+  without creating anything (a link home needs a safe parent, an existing
+  home and `profiles` pass the ancestor check, the root is not a link),
+  then creates missing folders private and leaves the rest of the check to
   the service.
 - **Accepted owners.** An owner is accepted when it equals the token's user
   (`TokenUser`), the token's default owner (`TokenOwner`), or SYSTEM. An

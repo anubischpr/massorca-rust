@@ -112,9 +112,11 @@ fn read_refusal(path: &Path, status: ExitStatus) -> ClientError {
     }
 }
 
-/// The service starts in its profile directory, so it must exist. Missing folders are created private to their owner in
-/// one step, never with inherited access the service would only repair later (ADR 0073); the service checks the rest.
+/// The service starts in its profile directory, so it must exist. The location is checked first, without creating
+/// anything, so a link at the home or `profiles` cannot redirect where folders are made; then missing folders are
+/// created private to their owner in one step (ADR 0073). The service checks the rest.
 fn create_profile_dir(profile: &Profile) -> Result<(), ClientError> {
+    massorca_profile::check_location(profile)?;
     massorca_profile::create_root(profile)
         .map(drop)
         .map_err(|error| ClientError::StartFailed(format!("{}: {error}", profile.dir().display())))
@@ -269,5 +271,42 @@ mod tests {
             read_refusal(&status, exit_status(1)),
             ClientError::StartFailed(_)
         ));
+    }
+
+    #[test]
+    fn the_autostart_path_creates_nothing_through_a_link_at_profiles() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let home = temp.path().join("home");
+        massorca_profile::create_home(&home).expect("a private home");
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("a folder");
+        let profiles = home.join("profiles");
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&profiles)
+                .arg(&elsewhere)
+                .output()
+                .expect("mklink runs");
+            assert!(
+                made.status.success(),
+                "{}",
+                String::from_utf8_lossy(&made.stderr)
+            );
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&elsewhere, &profiles).expect("a symlink");
+        let profile = Profile::resolve_with(Some(home), Some("default".to_owned()), |_| None)
+            .expect("the profile resolves");
+
+        match create_profile_dir(&profile) {
+            Err(crate::ClientError::ProfileRefused(body)) => {
+                assert_eq!(body.code, "profile.unsafe_location", "{body:?}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        let created: Vec<_> = std::fs::read_dir(&elsewhere).expect("listed").collect();
+        assert!(created.is_empty(), "{created:?}");
     }
 }
