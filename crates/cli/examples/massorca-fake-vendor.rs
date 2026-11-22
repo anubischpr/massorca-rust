@@ -13,7 +13,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const PACKAGE_MANAGERS: [&str; 5] = ["npm", "winget", "brew", "powershell", "bash"];
@@ -63,7 +63,7 @@ fn cli_named_by(words: &[&str]) -> Option<&'static str> {
         .map(|(_, cli)| *cli)
 }
 
-fn package_manager(folder: &PathBuf, words: &[&str]) -> ExitCode {
+fn package_manager(folder: &Path, words: &[&str]) -> ExitCode {
     let Some(cli) = cli_named_by(words) else {
         complain(&format!("fake-vendor: no CLI is named by {words:?}"));
         return ExitCode::from(2);
