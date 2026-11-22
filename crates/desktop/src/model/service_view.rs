@@ -379,6 +379,46 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_indents_children_under_their_parent_and_names_where_they_run() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        let mut plan = agent("p", "w1", 10);
+        plan.title = Some("Plan".into());
+        let mut child = agent("c", "w2", 20);
+        child.parent_id = Some("p".into());
+        let mut check = agent("g", "w2", 30);
+        check.parent_id = Some("c".into());
+        check.title = Some("Check".into());
+        state.apply(StoreUpdate::AgentsResync(vec![plan, child, check]), now);
+
+        let snapshot = service_snapshot(&state, now);
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        let sessions: Vec<(&str, usize, Option<&str>)> = tree
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Session {
+                    title,
+                    depth,
+                    place,
+                    ..
+                } => Some((title.as_str(), *depth, place.as_deref())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sessions,
+            vec![
+                ("Plan", 0, None),
+                ("Child session", 1, Some("feat/two")),
+                ("Check", 2, Some("Current worktree")),
+            ]
+        );
+    }
+
+    #[test]
     fn a_lost_link_keeps_the_last_known_tree_with_its_age() {
         let t0 = Instant::now();
         let mut state = loaded(t0);

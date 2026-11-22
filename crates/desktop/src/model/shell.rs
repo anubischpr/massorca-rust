@@ -42,6 +42,8 @@ pub struct SessionRow {
     pub title: String,
     pub agent: Agent,
     pub state: AgentState,
+    /// Where a child session runs: "Current worktree", or the branch of its own worktree. None for a top session.
+    pub place: Option<String>,
     /// Child sessions, shown indented under the parent (A83 to A85).
     pub children: Vec<SessionRow>,
 }

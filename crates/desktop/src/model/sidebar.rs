@@ -50,6 +50,8 @@ pub enum TreeRow {
         state: AgentState,
         depth: usize,
         selected: bool,
+        /// Where a child session runs, shown after its title.
+        place: Option<String>,
     },
 }
 
@@ -138,6 +140,7 @@ fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, act
         state: session.state,
         depth,
         selected: active == Some(session.id.as_str()),
+        place: session.place.clone(),
     });
     for child in &session.children {
         push_session(rows, child, depth + 1, active);

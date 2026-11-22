@@ -22,6 +22,7 @@ fn session(id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow
         title: title.into(),
         agent,
         state,
+        place: None,
         children: Vec::new(),
     }
 }

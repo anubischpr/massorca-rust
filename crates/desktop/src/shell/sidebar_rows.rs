@@ -85,7 +85,16 @@ pub(super) fn tree_row(
             state,
             depth,
             selected,
-        } => session_row(id, title, *agent, *state, *depth, *selected),
+            place,
+        } => session_row(
+            id,
+            title,
+            *agent,
+            *state,
+            *depth,
+            *selected,
+            place.as_deref(),
+        ),
     };
     item.focus_handle(focus.clone()).tab_stop(true)
 }
@@ -111,10 +120,14 @@ fn session_row(
     state: AgentState,
     depth: usize,
     selected: bool,
+    place: Option<&str>,
 ) -> SidebarRow {
-    let row = SidebarRow::session(id, title.to_owned(), glyph_state(state), agent_kind(agent))
+    let mut row = SidebarRow::session(id, title.to_owned(), glyph_state(state), agent_kind(agent))
         .level(SESSION_LEVEL + depth)
         .selected(selected);
+    if let Some(place) = place {
+        row = row.secondary(place.to_owned());
+    }
     if depth == 0 {
         row
     } else {

@@ -1,8 +1,9 @@
 //! What the Sidebar shows for the agent sessions the service reported: each session's status, read from
-//! its run and from the activity its agent reported last, and the workspace it is listed under. Plain
-//! functions over the store, so tests call them without GPUI (decision 0028).
+//! its run and from the activity its agent reported last, and where it is listed. A child sits under its
+//! parent run, wherever it runs (A83). Plain functions over the store, so tests call them without GPUI
+//! (decision 0028).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use massorca_protocol::methods::agents::{Activity, ActivityState, AgentSession, Outcome};
 use massorca_protocol::methods::terminals::TerminalState;
@@ -10,29 +11,81 @@ use massorca_protocol::methods::terminals::TerminalState;
 use super::shell::{Agent, AgentState, SessionRow};
 use crate::service::StoreState;
 
-/// The title of a session the service has no title for, such as a delegated child.
+/// The title of a top session the service has no title for.
 const UNTITLED: &str = "Untitled session";
+/// The title of a child session the service has no title for, such as a delegated one.
+const CHILD_UNTITLED: &str = "Child session";
+/// Where a child runs when it shares its parent's worktree.
+const CURRENT_WORKTREE: &str = "Current worktree";
+/// Where a child runs in its own worktree whose branch is not known.
+const OWN_WORKTREE: &str = "Own worktree";
 
-/// The sessions of each workspace as rows, oldest first. A session is listed under its own workspace.
+/// The sessions of each workspace as rows, oldest first. A top session is listed under its own workspace; a
+/// child hangs under its parent's row. A session whose parent is not listed is a top session of its own
+/// workspace, and sessions that name each other as parents hang from nothing, so they are not listed.
 pub fn sessions_by_workspace(state: &StoreState) -> BTreeMap<String, Vec<SessionRow>> {
-    let mut by_workspace: BTreeMap<String, Vec<SessionRow>> = BTreeMap::new();
+    let listed: HashSet<&str> = state.agents.iter().map(|s| s.id.as_str()).collect();
+    let mut children: HashMap<&str, Vec<&AgentSession>> = HashMap::new();
+    let mut tops: Vec<&AgentSession> = Vec::new();
     for session in &state.agents {
+        match session.parent_id.as_deref() {
+            Some(parent) if listed.contains(parent) => {
+                children.entry(parent).or_default().push(session);
+            }
+            _ => tops.push(session),
+        }
+    }
+    let mut by_workspace: BTreeMap<String, Vec<SessionRow>> = BTreeMap::new();
+    for session in tops {
         by_workspace
             .entry(session.workspace_id.clone())
             .or_default()
-            .push(session_row(session));
+            .push(session_row(session, None, &children, state));
     }
     by_workspace
 }
 
-fn session_row(session: &AgentSession) -> SessionRow {
+/// A session as a row, with its place when `parent` is given and its children below it, oldest first. Each
+/// session hangs from exactly one parent, so the recursion ends at the top sessions' descendants.
+fn session_row(
+    session: &AgentSession,
+    parent: Option<&AgentSession>,
+    children: &HashMap<&str, Vec<&AgentSession>>,
+    state: &StoreState,
+) -> SessionRow {
     SessionRow {
         id: session.id.clone(),
-        title: session.title.clone().unwrap_or_else(|| UNTITLED.to_owned()),
+        title: title_of(session),
         agent: agent_of_kind(&session.kind),
         state: session_state(session),
-        children: Vec::new(),
+        place: parent.map(|parent| place_of(session, parent, state)),
+        children: children
+            .get(session.id.as_str())
+            .into_iter()
+            .flatten()
+            .map(|child| session_row(child, Some(session), children, state))
+            .collect(),
     }
+}
+
+/// The title a row shows: the service's, or a name that says what kind of session it is.
+fn title_of(session: &AgentSession) -> String {
+    match (&session.title, session.parent_id.is_some()) {
+        (Some(title), _) => title.clone(),
+        (None, true) => CHILD_UNTITLED.to_owned(),
+        (None, false) => UNTITLED.to_owned(),
+    }
+}
+
+/// Where a child runs: its parent's worktree, or its own worktree by the branch it is on (DelegationTree).
+fn place_of(child: &AgentSession, parent: &AgentSession, state: &StoreState) -> String {
+    if child.workspace_id == parent.workspace_id {
+        return CURRENT_WORKTREE.to_owned();
+    }
+    state
+        .workspace(&child.workspace_id)
+        .and_then(|workspace| workspace.branch.clone())
+        .unwrap_or_else(|| OWN_WORKTREE.to_owned())
 }
 
 /// The status a session shows: how its run stands, and what its agent reported last (DelegationTree).
@@ -95,7 +148,7 @@ mod tests {
 
     use super::*;
     use crate::service::StoreUpdate;
-    use crate::service::fixtures::agent;
+    use crate::service::fixtures::{agent, project, workspace};
 
     fn reporting(state: ActivityState, outcome: Option<Outcome>) -> Activity {
         Activity {
@@ -205,5 +258,116 @@ mod tests {
         };
         assert_eq!(titles("w1"), vec!["First", "Second"]);
         assert_eq!(titles("w2"), vec![UNTITLED]);
+    }
+
+    /// A session that `parent` started, in workspace `workspace_id`.
+    fn child_of(parent: &str, id: &str, workspace_id: &str, created: i64) -> AgentSession {
+        let mut session = agent(id, workspace_id, created);
+        session.parent_id = Some(parent.into());
+        session
+    }
+
+    /// A store with two workspaces: `w1` ("one", on `feat/one`) and `w2` ("two", on `feat/two`).
+    fn store_with(sessions: Vec<AgentSession>) -> StoreState {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::Resync {
+                projects: vec![project("p1", "alpha")],
+                workspaces: vec![
+                    workspace("w1", "p1", "one", 1),
+                    workspace("w2", "p1", "two", 2),
+                ],
+            },
+            now,
+        );
+        state.apply(StoreUpdate::AgentsResync(sessions), now);
+        state
+    }
+
+    #[test]
+    fn a_child_nests_under_its_parent_run_in_creation_order_and_names_where_it_runs() {
+        let mut parent = agent("p", "w1", 10);
+        parent.title = Some("Plan".into());
+        let state = store_with(vec![
+            child_of("p", "c2", "w1", 30),
+            child_of("p", "c1", "w2", 20),
+            parent,
+        ]);
+        let by_workspace = sessions_by_workspace(&state);
+        let top = &by_workspace["w1"];
+        assert_eq!(top.len(), 1, "a child is nested, not listed on its own");
+        assert_eq!(top[0].place, None, "a top session names no place");
+        let children: Vec<(&str, Option<&str>)> = top[0]
+            .children
+            .iter()
+            .map(|child| (child.id.as_str(), child.place.as_deref()))
+            .collect();
+        assert_eq!(
+            children,
+            vec![("c1", Some("feat/two")), ("c2", Some("Current worktree"))]
+        );
+        assert!(
+            !by_workspace.contains_key("w2"),
+            "the child's own workspace lists no top session"
+        );
+    }
+
+    #[test]
+    fn a_grandchild_nests_one_level_deeper_and_an_untitled_child_says_what_it_is() {
+        let mut parent = agent("p", "w1", 10);
+        parent.title = Some("Plan".into());
+        let state = store_with(vec![
+            parent,
+            child_of("p", "c", "w2", 20),
+            child_of("c", "g", "w2", 30),
+        ]);
+        let by_workspace = sessions_by_workspace(&state);
+        let child = &by_workspace["w1"][0].children[0];
+        assert_eq!(child.title, "Child session");
+        let grandchild = &child.children[0];
+        assert_eq!(grandchild.id, "g");
+        assert_eq!(grandchild.title, "Child session");
+        assert_eq!(
+            grandchild.place.as_deref(),
+            Some("Current worktree"),
+            "the grandchild runs in its parent's worktree"
+        );
+    }
+
+    #[test]
+    fn a_child_whose_parent_is_gone_is_listed_as_a_top_session_of_its_own_workspace() {
+        let state = store_with(vec![child_of("forgotten", "c", "w2", 20)]);
+        let by_workspace = sessions_by_workspace(&state);
+        let rows = &by_workspace["w2"];
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "c");
+        assert_eq!(rows[0].place, None);
+        assert_eq!(rows[0].title, "Child session");
+    }
+
+    #[test]
+    fn sessions_that_name_each_other_as_parents_are_not_listed_and_folding_ends() {
+        let state = store_with(vec![
+            child_of("b", "a", "w1", 10),
+            child_of("a", "b", "w1", 20),
+            agent("root", "w1", 30),
+        ]);
+        let by_workspace = sessions_by_workspace(&state);
+        let ids: Vec<&str> = by_workspace["w1"]
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["root"], "a loop has no top session to hang from");
+    }
+
+    #[test]
+    fn a_child_in_a_workspace_the_store_does_not_know_says_it_has_its_own_worktree() {
+        let state = store_with(vec![agent("p", "w1", 10), child_of("p", "c", "w9", 20)]);
+        let by_workspace = sessions_by_workspace(&state);
+        assert_eq!(
+            by_workspace["w1"][0].children[0].place.as_deref(),
+            Some("Own worktree")
+        );
     }
 }
