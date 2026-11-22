@@ -4,6 +4,8 @@
 //! the output pipe open after the child exits, so the exit comes from `PtyChild::wait`.
 
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -78,6 +80,8 @@ pub fn spawn(spec: &SpawnSpec) -> Result<Spawned, PtyError> {
     if !spec.cwd.is_dir() {
         return Err(PtyError::CwdNotFound(spec.cwd.clone()));
     }
+    #[cfg(unix)]
+    check_executable(&spec.program, &spec.cwd)?;
     let pair = native_pty_system()
         .openpty(to_pty_size(spec.size))
         .map_err(|error| PtyError::Open(error.to_string()))?;
@@ -135,6 +139,49 @@ fn to_pty_size(size: PtySize) -> portable_pty::PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+/// portable-pty closes every descriptor above 2 before `execve`, std's error pipe
+/// included, so a failed exec shows up as a SIGABRT death instead of an error. Check
+/// what `execve` needs first: the program, and the interpreter a `#!` line names.
+#[cfg(unix)]
+fn check_executable(program: &Path, cwd: &Path) -> Result<(), PtyError> {
+    check_executable_file(program)?;
+    let Some(interpreter) = shebang_interpreter(program) else {
+        return Ok(());
+    };
+    // The kernel resolves a relative interpreter against the child's working directory.
+    check_executable_file(&cwd.join(interpreter))
+}
+
+#[cfg(unix)]
+fn check_executable_file(path: &Path) -> Result<(), PtyError> {
+    let refused = |reason: String| PtyError::Spawn(format!("{}: {reason}", path.display()));
+    let metadata = std::fs::metadata(path).map_err(|error| refused(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(refused("not a regular file".to_owned()));
+    }
+    rustix::fs::access(path, rustix::fs::Access::EXEC_OK)
+        .map_err(|error| refused(format!("not executable ({error})")))
+}
+
+/// The interpreter of a `#!` line, read the way Linux does (its first 256 bytes).
+/// An unreadable file is left to `execve`: a binary needs only the execute bit.
+#[cfg(unix)]
+fn shebang_interpreter(program: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut head = Vec::with_capacity(256);
+    std::fs::File::open(program)
+        .ok()?
+        .take(256)
+        .read_to_end(&mut head)
+        .ok()?;
+    let line = head.strip_prefix(b"#!")?;
+    let line = line.split(|&byte| byte == b'\n').next()?;
+    let interpreter = line
+        .split(|byte| byte.is_ascii_whitespace())
+        .find(|token| !token.is_empty())?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(interpreter)))
 }
 
 /// Puts the shell in its tree before it can start children of its own.
