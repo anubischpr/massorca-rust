@@ -1,7 +1,7 @@
 //! The bridge against a real service in a temporary profile, driven headlessly: no window opens. The
 //! agent sessions the service lists reach the store on connect, the way workspaces and terminals do.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use massorca_client::Client;
@@ -13,6 +13,25 @@ use massorca_protocol::methods::agents::AgentBringBackParams;
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -43,7 +62,7 @@ async fn stop_service(running: RunningService) {
 
 #[tokio::test]
 async fn the_agent_sessions_the_service_lists_reach_the_store_on_connect() {
-    let home: TempDir = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
         .expect("the bridge starts");
@@ -79,7 +98,7 @@ async fn the_agent_sessions_the_service_lists_reach_the_store_on_connect() {
 
 #[tokio::test]
 async fn a_bring_back_the_service_refuses_arrives_with_its_code_and_a_plain_sentence() {
-    let home: TempDir = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let service = start_service(home.path()).await;
     let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
         .expect("the bridge starts");
