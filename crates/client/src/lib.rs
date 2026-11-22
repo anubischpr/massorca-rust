@@ -4,6 +4,7 @@
 mod client;
 mod connect;
 mod error;
+mod extension_calls;
 mod git_calls;
 mod handshake;
 mod hosts;
