@@ -124,6 +124,34 @@ mod tests {
         }
     }
 
+    /// A piped download must fail the step when the download fails, not run what arrived.
+    #[test]
+    fn every_shell_script_step_fails_on_a_failed_pipe() {
+        for entry in entries() {
+            let bytes = entry.file("extension.json").expect("manifest");
+            let loaded = manifest::load(bytes).expect("valid");
+            for cli in loaded
+                .contributes
+                .agent_adapters
+                .iter()
+                .filter_map(|adapter| adapter.cli.as_ref())
+            {
+                for step in cli.install.iter().chain(&cli.uninstall) {
+                    if let [shell, flag, script] = step.command.as_slice()
+                        && matches!(shell.as_str(), "bash" | "sh")
+                        && flag == "-c"
+                    {
+                        assert!(
+                            script.starts_with("set -o pipefail;"),
+                            "{}: {script}",
+                            entry.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn find_knows_only_catalogue_ids() {
         assert!(find("massorca.claude").is_some());

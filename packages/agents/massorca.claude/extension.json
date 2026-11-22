@@ -22,8 +22,8 @@
         "source": "https://code.claude.com/docs/en/setup",
         "install": [
           { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"] },
-          { "os": "linux", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] },
-          { "os": "macos", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] }
+          { "os": "linux", "command": ["bash", "-c", "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash"] },
+          { "os": "macos", "command": ["bash", "-c", "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash"] }
         ]
       }
     }]
