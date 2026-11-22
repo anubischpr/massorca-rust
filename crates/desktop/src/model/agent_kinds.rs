@@ -3,23 +3,71 @@
 
 use massorca_protocol::methods::agents::{AgentKind, PackageState};
 
+/// Why a kind the host does not detect cannot be picked for a bot, or cannot run a bot there.
+pub const NOT_AVAILABLE_ON_HOST: &str = "Not available on this host";
+
+/// Why a kind that is installed but turned off cannot be picked for a bot, or run one.
+pub const TURNED_OFF: &str = "Turned off";
+
 /// A kind an Add bot form offers: the service's id for it, sent as the bot's kind, and the name the form shows.
+/// `unavailable` is the reason it cannot be picked: the kind is turned off, or its program is not found here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KindChoice {
     pub id: String,
     pub name: String,
+    pub unavailable: Option<&'static str>,
 }
 
-/// The kinds a new bot can run on, in the order the service lists them: installed and on, with no problems.
+/// The kinds a new bot can run on, in the order the service lists them: installed (on or off), with no problems.
+/// A kind that is off or not detected is listed unavailable, so the form shows it but cannot choose it.
 pub fn bot_kind_choices(kinds: &[AgentKind]) -> Vec<KindChoice> {
     kinds
         .iter()
-        .filter(|kind| kind.package.state == PackageState::Enabled && kind.problems.is_empty())
+        .filter(|kind| {
+            matches!(
+                kind.package.state,
+                PackageState::Enabled | PackageState::Disabled
+            ) && kind.problems.is_empty()
+        })
         .map(|kind| KindChoice {
             id: kind.id.clone(),
             name: kind.name.clone(),
+            unavailable: unavailable_reason(kind),
         })
         .collect()
+}
+
+/// The choice at `index` when it can be picked: an unavailable kind is refused here, whatever the form shows.
+pub fn choice_at(choices: &[KindChoice], index: usize) -> Option<&KindChoice> {
+    choices
+        .get(index)
+        .filter(|choice| choice.unavailable.is_none())
+}
+
+/// The first choice that can be picked, which a new form starts on.
+pub fn first_available(choices: &[KindChoice]) -> Option<usize> {
+    choices
+        .iter()
+        .position(|choice| choice.unavailable.is_none())
+}
+
+/// Why a bot on the service's kind with this id cannot run, when it cannot: the kind is turned off or not detected here.
+pub fn kind_unavailable_reason(kinds: &[AgentKind], id: &str) -> Option<&'static str> {
+    kinds
+        .iter()
+        .find(|kind| kind.id == id)
+        .and_then(unavailable_reason)
+}
+
+/// Turned off comes first: a kind that is off is shown so, whether or not its program is found.
+fn unavailable_reason(kind: &AgentKind) -> Option<&'static str> {
+    if kind.package.state == PackageState::Disabled {
+        Some(TURNED_OFF)
+    } else if !kind.detected {
+        Some(NOT_AVAILABLE_ON_HOST)
+    } else {
+        None
+    }
 }
 
 /// The four built-in kinds, offered by the sample in place of a service's list.
@@ -34,6 +82,7 @@ pub fn sample_bot_kind_choices() -> Vec<KindChoice> {
     .map(|(id, name)| KindChoice {
         id: id.to_owned(),
         name: name.to_owned(),
+        unavailable: None,
     })
     .collect()
 }
@@ -50,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bot_can_run_only_on_an_enabled_kind_with_no_problems() {
+    fn a_kind_is_listed_only_when_installed_and_it_has_no_problems() {
         let mut broken = agent_kind("broken", "Broken", PackageState::Enabled);
         broken.problems = vec!["its declaration does not parse".into()];
         let kinds = [
@@ -59,7 +108,33 @@ mod tests {
             agent_kind("cursor", "Cursor", PackageState::Available),
             broken,
         ];
-        assert_eq!(ids(&bot_kind_choices(&kinds)), ["claude"]);
+        assert_eq!(ids(&bot_kind_choices(&kinds)), ["claude", "codex"]);
+    }
+
+    #[test]
+    fn a_disabled_kind_is_listed_turned_off_and_cannot_be_chosen() {
+        let kinds = [
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Disabled),
+        ];
+        let choices = bot_kind_choices(&kinds);
+        assert_eq!(ids(&choices), ["claude", "codex"]);
+        assert_eq!(choices[1].unavailable, Some(TURNED_OFF));
+        assert_eq!(choice_at(&choices, 1), None, "a turned-off kind is refused");
+        assert_eq!(
+            choice_at(&choices, 0).map(|choice| choice.id.as_str()),
+            Some("claude")
+        );
+        assert_eq!(first_available(&choices), Some(0));
+    }
+
+    #[test]
+    fn a_disabled_kind_the_host_does_not_detect_says_turned_off_first() {
+        let mut codex = agent_kind("codex", "Codex", PackageState::Disabled);
+        codex.detected = false;
+        let kinds = [codex];
+        assert_eq!(bot_kind_choices(&kinds)[0].unavailable, Some(TURNED_OFF));
+        assert_eq!(kind_unavailable_reason(&kinds, "codex"), Some(TURNED_OFF));
     }
 
     #[test]
@@ -87,5 +162,68 @@ mod tests {
             ["claude", "codex", "antigravity", "gentle-shell"]
         );
         assert_eq!(choices[3].name, "Gentle Shell");
+    }
+
+    #[test]
+    fn a_kind_the_host_does_not_detect_is_listed_unavailable_and_cannot_be_chosen() {
+        let mut missing = agent_kind("codex", "Codex", PackageState::Enabled);
+        missing.detected = false;
+        let kinds = [
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            missing,
+        ];
+        let choices = bot_kind_choices(&kinds);
+        assert_eq!(ids(&choices), ["claude", "codex"]);
+        let unavailable: Vec<Option<&str>> =
+            choices.iter().map(|choice| choice.unavailable).collect();
+        assert_eq!(unavailable, [None, Some(NOT_AVAILABLE_ON_HOST)]);
+        assert_eq!(
+            choice_at(&choices, 1),
+            None,
+            "an unavailable kind is refused"
+        );
+        assert_eq!(
+            choice_at(&choices, 0).map(|choice| choice.id.as_str()),
+            Some("claude")
+        );
+        assert_eq!(first_available(&choices), Some(0));
+    }
+
+    #[test]
+    fn a_kind_that_is_not_installed_is_not_listed_even_when_detected() {
+        let mut cursor = agent_kind("cursor", "Cursor", PackageState::Available);
+        cursor.detected = true;
+        assert!(bot_kind_choices(&[cursor]).is_empty());
+    }
+
+    #[test]
+    fn only_a_kind_the_store_knows_and_does_not_detect_here_is_unavailable() {
+        let mut missing = agent_kind("codex", "Codex", PackageState::Enabled);
+        missing.detected = false;
+        let kinds = [
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            missing,
+        ];
+        assert_eq!(
+            kind_unavailable_reason(&kinds, "codex"),
+            Some(NOT_AVAILABLE_ON_HOST)
+        );
+        assert_eq!(kind_unavailable_reason(&kinds, "claude"), None);
+        assert_eq!(kind_unavailable_reason(&kinds, "unknown-kind"), None);
+    }
+
+    #[test]
+    fn a_turned_off_kind_is_unavailable_as_turned_off_even_when_detected() {
+        let codex = agent_kind("codex", "Codex", PackageState::Disabled);
+        assert_eq!(kind_unavailable_reason(&[codex], "codex"), Some(TURNED_OFF));
+    }
+
+    #[test]
+    fn the_sample_kinds_are_all_available() {
+        assert!(
+            sample_bot_kind_choices()
+                .iter()
+                .all(|choice| choice.unavailable.is_none())
+        );
     }
 }

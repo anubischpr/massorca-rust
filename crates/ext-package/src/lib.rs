@@ -4,6 +4,7 @@
 //! Pure data and checks. The crate reads only the bytes its callers hand in and writes nothing to disk.
 
 pub mod archive;
+pub mod display_chars;
 mod error;
 pub mod ids;
 pub mod manifest;

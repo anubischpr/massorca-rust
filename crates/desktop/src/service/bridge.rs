@@ -36,7 +36,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::agents;
-use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
+use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
@@ -403,7 +403,7 @@ struct Link {
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
-        let mut backoff = Backoff::default();
+        let mut backoff = backoff();
         let mut link_was_up = false;
         self.publish(ConnectionState::Connecting);
         loop {
