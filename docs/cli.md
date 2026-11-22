@@ -81,7 +81,13 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
 | `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
 | `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
-| `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
+| `extension list` | Lists installed extensions: id, version, state (`enabled` or `disabled`). `ext` is an alias of `extension`. |
+| `extension catalogue` | Lists the built-in catalogue, with each entry's state (`available`, `enabled` or `disabled`). |
+| `extension show <ID>` | Shows one extension, installed or from the catalogue: the item page data, its risk and, for agents, whether the CLI is detected and what the install ran. |
+| `extension inspect <SOURCE>` | Shows the install review for `catalogue:<id>`, `dir:<path>` or `file:<path>` without changing anything. |
+| `extension install <SOURCE> [--sha256 HEX] [--yes] [--yes-run-installer]` | Installs a package. Without `--yes` it prints the review and exits 1 with `extension.consent_required`. A package whose agent CLI is missing also needs `--yes-run-installer`, which runs the vendor's official command shown in the review. `file:` needs `--sha256`. Never prompts. |
+| `extension enable <ID>` / `extension disable <ID>` | Registers or unregisters the package's contributions. Files and data stay. |
+| `extension remove <ID> [--delete-agent-homes] [--uninstall-cli]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts; `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
 which must be an absolute path.
