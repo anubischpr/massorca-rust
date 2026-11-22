@@ -36,6 +36,11 @@ pub enum TreeRow {
         name: String,
         reach: HostReach,
     },
+    /// A paired remote host, listed after the projects with the state its last check left (D-HO-01).
+    RemoteHost {
+        name: String,
+        state: crate::model::hosts::HostState,
+    },
     Workspace {
         /// The workspace's id, for actions on the row.
         id: String,

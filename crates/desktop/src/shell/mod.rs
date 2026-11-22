@@ -220,6 +220,9 @@ impl Shell {
             }
             shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
+            let hosts =
+                crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
+            shell.model.set_remote_hosts(hosts);
             cx.notify();
         });
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -227,6 +230,10 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        model.set_remote_hosts(crate::model::hosts::host_rows(
+            &store.read(cx).state().hosts,
+            Instant::now(),
+        ));
         model.set_marketplace(marketplace.snapshot());
         let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
         let marketplace_search_changes = cx.subscribe(

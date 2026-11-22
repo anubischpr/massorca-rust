@@ -67,6 +67,14 @@ fn join_words(server: &str, version: &str) -> String {
         .join(" ")
 }
 
+/// Each paired host by name, with the state its last check left at `now`, in the order the store holds them.
+pub fn host_rows(entries: &[HostEntry], now: Instant) -> Vec<(String, HostState)> {
+    entries
+        .iter()
+        .map(|entry| (entry.record.name.clone(), host_state(entry, now)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
