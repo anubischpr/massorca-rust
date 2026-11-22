@@ -33,6 +33,14 @@ const PHASE1_METHODS: [&str; 14] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
+const DEVICE_METHODS: [&str; 5] = [
+    "device.list",
+    "device.revoke",
+    "device.whoami",
+    "pairing.create",
+    "network.status",
+];
+
 const TERMINAL_METHODS: [&str; 8] = [
     "terminal.create",
     "terminal.list",
@@ -220,6 +228,7 @@ async fn every_core_method_has_a_command_descriptor() {
     for method in PHASE1_METHODS
         .iter()
         .chain(&TERMINAL_METHODS)
+        .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
     {
         assert!(

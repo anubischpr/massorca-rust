@@ -174,7 +174,7 @@ fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
             cx,
         ))
         .child(variant(
-            "Danger: a failure with a Details disclosure and two actions",
+            "Danger: a failure with a Details disclosure, two actions and a dismiss control",
             Banner::new(
                 "banner-danger",
                 BannerVariant::Danger,
@@ -182,7 +182,8 @@ fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
             )
             .detail("Exit code 1. Open the log for the full output.")
             .action(Button::new("banner-danger-log", "Open log"))
-            .action(Button::new("banner-danger-retry", "Retry")),
+            .action(Button::new("banner-danger-retry", "Retry"))
+            .on_dismiss(|_, _| {}),
             cx,
         ))
         .child(variant(
@@ -200,9 +201,9 @@ fn banner_story(_: &mut Window, cx: &mut App) -> AnyElement {
             Banner::new(
                 "banner-unreachable",
                 BannerVariant::Unreachable,
-                "VPS can't be reached. Showing the last known state from 5 min ago.",
+                "VPS can't be reached. Showing the last known state from 5 min ago. Work that was running there may still be running.",
             )
-            .detail("Work that was running there may still be running.")
+            .detail("Last contact 5 min ago.")
             .action(Button::new("banner-unreachable-retry", "Retry")),
             cx,
         ))
@@ -246,7 +247,9 @@ fn error_state_story(_: &mut Window, cx: &mut App) -> AnyElement {
         ))
         .child(variant(
             "Inline: no panel, Retry as a text button",
-            ErrorState::new("error-inline", "Could not delete").variant(ErrorStateVariant::Inline),
+            ErrorState::new("error-inline", "Could not delete")
+                .variant(ErrorStateVariant::Inline)
+                .explanation("The secret is still there."),
             cx,
         ))
         .into_any_element()

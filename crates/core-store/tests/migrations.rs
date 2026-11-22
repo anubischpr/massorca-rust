@@ -128,7 +128,7 @@ fn older_non_empty_database_is_backed_up_before_it_is_migrated() {
 
 #[test]
 fn concurrent_opens_of_an_old_database_migrate_it_once() {
-    for round in 0..8 {
+    for round in 0..200 {
         let dir = tempfile::tempdir().unwrap();
         let path = store_path(&dir);
         {

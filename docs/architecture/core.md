@@ -107,3 +107,4 @@ Phase 1 capabilities:
 - 0006 async runtime, errors, logging and crate layout
 - 0007 cross-platform rules
 - 0008 projects and workspaces in Phase 1
+- 0040 to 0047 the network, pairing, Tailscale and SSH hosts; see `network.md`

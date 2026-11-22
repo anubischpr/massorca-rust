@@ -84,7 +84,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - B1, C1 New workspace: a 640 px page with Host, Type, Location, Base and Parent row and setup card. Not built (L4).
 - N2 project owner line: needs protocol data.
 - N3 Prototypes page: see Shell.
-- Breakpoints: the shell still draws the sidebar at 1048 px (`regions.rs:32`); the artboard ladder is 928 px. Follow-up PR.
+- Breakpoints: fixed in #114. The ladder is 1408 / 1168 / 928 / 728 px, as artboard `ws-narrow` measures.
 
 ## Dialogs
 
@@ -168,7 +168,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 
 **Cannot match yet**
 - N42 input row: about 28 px in the shell; the artboard says 44 px. Follow-up PR.
-- Width: the shell draws 560 px; the artboard says 600 px. Follow-up PR.
+- Width: fixed in #114. The palette is 600 px with a 44 px input row, as artboard `ws-palette` measures.
 
 ## Components (gallery, 51 stories, both themes)
 
@@ -244,6 +244,7 @@ Every resolution here is measured in the artboards, which settle conflicts first
 | N14 | Keep the "Delete ignored files" variant? No spec line exists. |
 | Copy without a spec source | PR #102 says the list is in this report. It is not in the PR description and is not reproduced here. |
 | Agent list and neutral swatches in Settings | Named in the brief. No PR description names them. Source needed. |
+| G-71 | Keep running hides a terminal's pane, and its tab stays in the Work panel strip. The spec says the pane closes (D-TM-04, A9, app-flow J5 step 4). No screen lists kept terminals (app-flow G6), and this report does not invent one. Confirm that the tab stays, or name the screen that lists kept terminals. |
 
 ## Real-window and Linux results
 
