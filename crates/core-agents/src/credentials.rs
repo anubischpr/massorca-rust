@@ -100,6 +100,7 @@ pub fn import(
     clear_leftovers(&homes, &decl.id);
     let staging = homes.join(sibling_name(&decl.id, STAGING));
     let placed = write_home(&staging, &contents)
+        .and_then(|()| check_staging(&staging))
         .and_then(|()| put_in_place(&staging, &home, &decl.id, replace));
     if let Err(error) = placed {
         if fs::symlink_metadata(&staging).is_ok() {
@@ -255,6 +256,17 @@ fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
                 "{} is not a plain directory; credential homes are never written through a link",
                 dir.display()
             )));
+        }
+        // A directory made before this service restricted it keeps its inherited access; restrict it now, so no
+        // other user can replace an entry in it.
+        #[cfg(windows)]
+        if !massorca_profile::has_owner_only_dacl(dir).unwrap_or(false) {
+            massorca_profile::restrict_dir_to_owner(dir).map_err(|error| {
+                internal(
+                    "restrict the credential homes directory to its owner",
+                    &error,
+                )
+            })?;
         }
     }
     Ok(homes)
@@ -424,11 +436,6 @@ fn same_file(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
 /// Creates `dir` and writes each file new in it. Creating fails when anything is at a path, so no link is followed.
 fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError> {
     create_private_dir(dir).map_err(|error| internal("create the new credential home", &error))?;
-    // Windows: the profile directory keeps its inherited access (0004), which can include other users, so the home
-    // gets its own protected owner-only DACL before any file is written; the files inherit it.
-    #[cfg(windows)]
-    massorca_profile::restrict_dir_to_owner(dir)
-        .map_err(|error| internal("restrict the new credential home to its owner", &error))?;
     for (name, bytes) in contents {
         write_private_file(&dir.join(name), bytes)
             .map_err(|error| internal("write a credential file", &error))?;
@@ -436,7 +443,33 @@ fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError
     Ok(())
 }
 
-/// A new directory, `0700` on Unix. On Windows it inherits its parent's access; a home is restricted after creation.
+/// Checks the finished new home before it is moved into place: still a plain directory, and on Windows still carrying
+/// the protected owner-only DACL it was created with. Anything else is refused, and the caller deletes it.
+fn check_staging(dir: &Path) -> Result<(), AgentError> {
+    let meta = fs::symlink_metadata(dir)
+        .map_err(|error| internal("read the new credential home", &error))?;
+    if is_link(&meta) || !meta.is_dir() {
+        return Err(invalid(format!(
+            "the new credential home {} was replaced while it was written; nothing was imported",
+            dir.display()
+        )));
+    }
+    #[cfg(windows)]
+    if !massorca_profile::has_owner_only_dacl(dir)
+        .map_err(|error| internal("read the new credential home's access", &error))?
+    {
+        return Err(invalid(format!(
+            "the new credential home {} does not carry the owner-only access it was created with; nothing was \
+             imported",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// A new directory that only its owner can reach: `0700` on Unix; on Windows created with a protected owner-only DACL
+/// (the owner and SYSTEM), since the profile directory keeps its inherited access (0004). Its files inherit it.
+/// Creating fails when anything is at the path, so no link is followed.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -444,7 +477,11 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
         fs::DirBuilder::new().mode(0o700).create(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        massorca_profile::create_dir_owner_only(dir)
+    }
+    #[cfg(not(any(unix, windows)))]
     fs::DirBuilder::new().create(dir)
 }
 
@@ -972,14 +1009,39 @@ mod tests {
         let fixture = Fixture::new(&["token.json"]);
         fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
         fixture.import(false).unwrap();
-        let home = massorca_profile::dacl_sddl(&fixture.home()).unwrap();
+        let homes = fixture.home().parent().unwrap().to_path_buf();
+        let agents = homes.parent().unwrap().to_path_buf();
+        for dir in [&agents, &homes, &fixture.home()] {
+            let sddl = massorca_profile::dacl_sddl(dir).unwrap();
+            assert!(sddl.starts_with("D:P"), "{}: {sddl}", dir.display());
+            assert!(
+                massorca_profile::has_owner_only_dacl(dir).unwrap(),
+                "{}: {sddl}",
+                dir.display()
+            );
+        }
         let file = massorca_profile::dacl_sddl(&fixture.home().join("token.json")).unwrap();
-        assert!(home.starts_with("D:P"), "{home}");
-        for granted in [&home, &file] {
+        for dir in [&agents, &homes, &fixture.home()] {
+            let granted = massorca_profile::dacl_sddl(dir).unwrap();
             for other in [";AU)", ";BU)", ";WD)"] {
                 assert!(!granted.contains(other), "{granted}");
+                assert!(!file.contains(other), "{file}");
             }
         }
+    }
+
+    /// `agents` and `homes` that already exist with inherited access are restricted by the next import.
+    #[cfg(windows)]
+    #[test]
+    fn existing_agents_and_homes_directories_are_restricted() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let homes = fixture.home().parent().unwrap().to_path_buf();
+        fs::create_dir_all(&homes).unwrap();
+        assert!(!massorca_profile::has_owner_only_dacl(&homes).unwrap());
+        fixture.import(false).unwrap();
+        assert!(massorca_profile::has_owner_only_dacl(&homes).unwrap());
+        assert!(massorca_profile::has_owner_only_dacl(homes.parent().unwrap()).unwrap());
     }
 
     /// A junction needs no privilege on Windows, so this always runs there.

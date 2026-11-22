@@ -200,8 +200,11 @@ anything: each must be a regular file, checked with `symlink_metadata` and opene
 following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, where
 every reparse point counts as a link), and at most 1 MiB as read from the open handle. The
 new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`, files
-`0600` and created new on Unix; on Windows a protected DACL for the owner and SYSTEM, set
-before any file is written and inherited by the files) and renamed into place. With
+`0600` and created new on Unix; on Windows created with a protected DACL for the owner and
+SYSTEM, which the files inherit) and renamed into place after its DACL is checked again.
+On Windows `agents` and `homes` are created the same way, and restricted when they already
+exist. Homes imported before this fix keep their old access until they are imported again
+with `--replace`. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
 swap fails (the error names where it is when that fails too), and deleted after it succeeds.
 Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
