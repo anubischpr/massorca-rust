@@ -36,7 +36,7 @@ use crate::launch_options::DebugFocus;
 use crate::model::canvas::Canvas;
 use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
-    AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
+    AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
 };
 use crate::model::navigation::Page;
 use crate::model::pairing::PairingState;
@@ -203,7 +203,7 @@ impl Shell {
             Some(handle),
             Some(bridge),
             UnavailableTeams.teams(),
-            Box::new(UnavailableMarketplace),
+            Box::new(ServiceMarketplace::default()),
             window,
             cx,
         )
@@ -246,6 +246,12 @@ impl Shell {
             }
             if let Some(teams) = store.read(cx).teams() {
                 shell.model.refresh_teams(teams);
+            }
+            if !store.read(cx).is_sample() {
+                shell
+                    .marketplace
+                    .follow_agent_kinds(&store.read(cx).state().agent_kinds);
+                shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();
         });

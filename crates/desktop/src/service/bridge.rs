@@ -532,6 +532,9 @@ impl Link {
         self.emit(StoreUpdate::TerminalsResync(terminals));
         let sessions = agents::list_sessions(client).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
+        // The protocol has no event for a change in the kinds, so they are read again on each connect.
+        let kinds = agents::list_kinds(client).await?;
+        self.emit(StoreUpdate::AgentKindsResync(kinds));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
