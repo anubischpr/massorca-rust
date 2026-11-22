@@ -25,6 +25,15 @@ pub enum AttachMode {
     Snapshot,
 }
 
+/// Who answers the cursor queries (`ESC [ 6 n`) in the output an attachment reads (0036).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryAnswers {
+    /// The client does not answer, so the service does, and no query waits for this client.
+    Service,
+    /// A terminal emulator: while it is attached, a query waits for its reply.
+    Client,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachItem {
     /// Always first: output continues from `offset`.
@@ -112,13 +121,23 @@ impl Queue {
 }
 
 /// The part of an attachment the terminal holds.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct AttachShared {
     pub(crate) queue: Mutex<Queue>,
     notify: Notify,
+    /// Whether the client answers queries; set when it attaches.
+    pub(crate) answers: QueryAnswers,
 }
 
 impl AttachShared {
+    pub(crate) fn new(answers: QueryAnswers) -> Self {
+        Self {
+            queue: Mutex::default(),
+            notify: Notify::new(),
+            answers,
+        }
+    }
+
     /// Never blocks: the reader thread calls this with the terminal lock held.
     pub(crate) fn push(&self, item: AttachItem) {
         let mut queue = lock(&self.queue);

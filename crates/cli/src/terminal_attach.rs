@@ -69,7 +69,8 @@ pub async fn attach(client: &Client, terminal: &str) -> Result<(), CliError> {
             since: None,
             cols,
             rows,
-            answers_queries: None,
+            // The user's terminal answers the program's queries; its replies arrive on stdin.
+            answers_queries: Some(true),
         })
         .await?;
     write_stderr(&format!(

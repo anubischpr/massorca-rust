@@ -87,11 +87,11 @@ store follows a service through the bridge (0028).
   terminal. The service sends no terminal events, so the store takes terminals
   from each resync and from the answers to create, kill and close. A lost
   connection ends each attach with `Lost`; the UI attaches again without an
-  offset, which gives a snapshot. An attached client must answer the program's queries
-  (cursor reports, 0034): the feed's replies go back as input, which the
-  integration test does; the UI owner must do the same. The status
-  bar counts the terminals that may still run. The work panel does not draw
-  terminals yet.
+  offset, which gives a snapshot. An attach that answers the program's queries
+  declares `answers_queries` (0036) and sends the feed's replies back as input
+  (cursor reports, 0034), which the integration test does; the UI owner must do
+  the same. The status bar counts the terminals that may still run. The work
+  panel does not draw terminals yet.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.

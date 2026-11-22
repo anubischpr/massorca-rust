@@ -140,13 +140,14 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
     }
 }
 
+/// Attaches as an emulator: `read_until` answers the queries the output carries.
 fn attach_params(terminal: &str) -> TerminalAttachParams {
     TerminalAttachParams {
         terminal: terminal.to_owned(),
         since: None,
         cols: None,
         rows: None,
-        answers_queries: None,
+        answers_queries: Some(true),
     }
 }
 
@@ -179,7 +180,7 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
         .any(|window| window == needle.as_bytes())
 }
 
-/// Reads the attachment's output until `needle` appears in it, and returns everything read. While a client is attached
+/// Reads the attachment's output until `needle` appears in it, and returns everything read. While an emulator is attached
 /// the service leaves cursor-position queries to it, so this answers each one, as a terminal emulator would.
 async fn read_until(
     client: &Client,

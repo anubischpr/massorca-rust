@@ -2,7 +2,7 @@
 //! Dropping the stream detaches; a terminal that exits ends it after the `exited` event.
 
 use massorca_core_terminal::pty::PtySize;
-use massorca_core_terminal::{AttachItem, AttachMode as CoreAttachMode, Attachment};
+use massorca_core_terminal::{AttachItem, AttachMode as CoreAttachMode, Attachment, QueryAnswers};
 use massorca_protocol::methods::terminals::{
     self, AttachEvent, AttachMode, ChunkKind, MAX_CHUNK_BYTES, TerminalAttachParams, encode_chunk,
 };
@@ -39,8 +39,14 @@ async fn attach(
         since,
         cols,
         rows,
-        ..
+        answers_queries,
     } = params;
+    // Only a client that declares it answers queries can hold one (0036).
+    let answers = if answers_queries == Some(true) {
+        QueryAnswers::Client
+    } else {
+        QueryAnswers::Service
+    };
     let manager = ctx.state.terminals.clone();
     let attachment = on_manager(move || {
         if cols.is_some() || rows.is_some() {
@@ -53,7 +59,7 @@ async fn attach(
                 },
             )?;
         }
-        manager.attach(&terminal, since)
+        manager.attach(&terminal, since, answers)
     })
     .await?;
 

@@ -1,5 +1,5 @@
 //! Terminal calls and attach streams through the bridge, against a real service in a temporary
-//! profile. The attached feed answers the program's queries, as an attached client must (0034).
+//! profile. The attached feed answers the program's queries and declares it (0034, 0036).
 //! No window opens: the feed is the emulator the desktop surface uses, without GPUI.
 
 use std::path::Path;
@@ -175,13 +175,14 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
     }
 }
 
+/// Attaches as an emulator: the feed answers the queries its output carries.
 fn attach_params(terminal: &str, since: Option<u64>) -> TerminalAttachParams {
     TerminalAttachParams {
         terminal: terminal.to_owned(),
         since,
         cols: None,
         rows: None,
-        answers_queries: None,
+        answers_queries: Some(true),
     }
 }
 
