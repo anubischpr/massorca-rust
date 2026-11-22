@@ -926,3 +926,37 @@ fn a_kind_that_never_had_an_account_starts_on_the_usual_home() {
     let terminal = start_in(&sandbox, &workspace);
     wait_for_line(&sandbox, &terminal, "fake-agent: credentials missing");
 }
+
+/// Declares kind `fake` as `declare_fake` does, and removes `names` from the account commands' environment.
+fn declare_fake_stripping(sandbox: &Sandbox, names: &[&str]) {
+    declare_fake(sandbox);
+    let path = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("kinds")
+        .join("fake.json");
+    let mut kind: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read the fake kind"))
+            .expect("the fake kind is JSON");
+    kind["accounts"]["strip_env"] = json!(names);
+    fs::write(&path, kind.to_string()).expect("write the fake kind");
+}
+
+/// A credential the service's own environment carries must not make an account signed in: the check judges the
+/// account's home only (decision 0059, amended 2026-11-22).
+#[test]
+fn a_check_judges_only_the_account_home_not_a_credential_in_the_environment() {
+    let sandbox = Sandbox::new();
+    declare_fake_stripping(&sandbox, &["FAKE_AGENT_AMBIENT_TOKEN"]);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_AMBIENT_TOKEN", "1")]);
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    fs::remove_file(account_home(&sandbox, &id).join("token.json"))
+        .expect("remove the account's token, leaving an empty home");
+
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "needs_sign_in", "{checked}");
+}
