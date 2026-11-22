@@ -390,6 +390,8 @@ async fn follow_terminal(
             since: None,
             cols: None,
             rows: None,
+            // The surface sends its feed's replies back as input (0036).
+            answers_queries: Some(true),
         };
         let mut stream = match service.attach_terminal(params).await {
             Ok(stream) => stream,
