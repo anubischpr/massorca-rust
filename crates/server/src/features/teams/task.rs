@@ -3,7 +3,7 @@
 
 use massorca_core_agents::Agents;
 use massorca_core_store::{
-    Store, TaskOrigin as StoredOrigin, TaskOutcome, TaskRow, TeamRow, new_id, now_ms,
+    Store, TaskDetails, TaskOrigin as StoredOrigin, TaskOutcome, TaskRow, TeamRow, new_id, now_ms,
 };
 use massorca_protocol::methods::events::TOPIC_TASK_CHANGED;
 use massorca_protocol::methods::tasks::{
@@ -18,6 +18,7 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
+use super::task_start::start_gate;
 use super::task_state::{self, Session, is_running, outcome_of, standing};
 use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
 
@@ -223,66 +224,96 @@ fn update_task(
     agents: &Agents,
     params: TaskUpdateParams,
 ) -> Result<Task, ErrorBody> {
-    let mut row = selectors::task(store, &params.task)?;
+    // A bot change waits for an in-flight start, which could link a run to the old bot.
+    let _gate = params.bot.is_some().then(start_gate);
+    let row = selectors::task(store, &params.task)?;
     let team = selectors::team(store, &row.team_id)?;
-    if let Some(title) = params.title {
-        row.title = non_blank(&title, "the task title")?;
+    let title = params
+        .title
+        .map(|title| non_blank(&title, "the task title"))
+        .transpose()?;
+    let bot_id = params
+        .bot
+        .map(|bot| {
+            optional_text(Some(bot))
+                .map(|selector| selectors::bot(store, &team, &selector))
+                .transpose()
+                .map(|bot| bot.map(|bot| bot.id))
+        })
+        .transpose()?;
+    if bot_id.as_ref().is_some_and(|bot_id| *bot_id != row.bot_id) {
+        refuse_while_running(&row, &task_state::load(agents, &row)?)?;
     }
-    if let Some(body) = params.body {
-        row.body = body;
+    let project_id = params
+        .project
+        .map(|project| {
+            optional_text(Some(project))
+                .map(|selector| selectors::team_project(store, &team, &selector))
+                .transpose()
+                .map(|project| project.map(|project| project.id))
+        })
+        .transpose()?;
+    let changes = TaskDetails {
+        project: project_id.as_ref().map(Option::as_deref),
+        bot: bot_id.as_ref().map(Option::as_deref),
+        title: title.as_deref(),
+        body: params.body.as_deref(),
+    };
+    let saved = store
+        .update_task_details(&row.id, &changes, now_ms())
+        .map_err(store_error)?;
+    if !saved {
+        return Err(removed());
     }
-    if let Some(bot) = params.bot {
-        row.bot_id = optional_text(Some(bot))
-            .map(|selector| selectors::bot(store, &team, &selector))
-            .transpose()?
-            .map(|bot| bot.id);
-    }
-    if let Some(project) = params.project {
-        row.project_id = optional_text(Some(project))
-            .map(|selector| selectors::team_project(store, &team, &selector))
-            .transpose()?
-            .map(|project| project.id);
-    }
-    row.updated_at = now_ms();
-    save(store, &row)?;
-    Ok(view_of(&row, &task_state::load(agents, &row)?))
+    let current = selectors::task(store, &row.id)?;
+    Ok(view_of(&current, &task_state::load(agents, &current)?))
 }
 
 /// Marks a task done by hand. Refused while its agent session runs.
 fn finish_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
-    let mut row = selectors::task(store, selector)?;
+    let row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
-    row.outcome = Some(TaskOutcome::Success);
-    row.updated_at = now_ms();
-    save(store, &row)?;
-    Ok(view_of(&row, &session))
+    let saved = store
+        .set_task_outcome(
+            &row.id,
+            TaskOutcome::Success,
+            row.session_id.as_deref(),
+            now_ms(),
+        )
+        .map_err(store_error)?;
+    if !saved {
+        return Err(changed_since_read(store, agents, &row.id));
+    }
+    Ok(view_of(&selectors::task(store, &row.id)?, &session))
 }
 
 /// Clears the outcome, the error and the session link, so the task returns to Open and can start again. Refused while its agent session runs.
 fn reopen_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
-    let mut row = selectors::task(store, selector)?;
+    let row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
-    row.outcome = None;
-    row.error = None;
-    row.error_code = None;
-    row.session_id = None;
-    row.updated_at = now_ms();
-    save(store, &row)?;
-    Ok(view_of(&row, &Session::Unstarted))
+    let saved = store
+        .reopen_task(&row.id, row.session_id.as_deref(), now_ms())
+        .map_err(store_error)?;
+    if !saved {
+        return Err(changed_since_read(store, agents, &row.id));
+    }
+    Ok(view_of(
+        &selectors::task(store, &row.id)?,
+        &Session::Unstarted,
+    ))
 }
 
 fn remove_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
+    // Waits for an in-flight start, so the run it links is seen and refused below.
+    let _gate = start_gate();
     let row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
     let view = view_of(&row, &session);
     if !store.delete_task(&row.id).map_err(store_error)? {
-        return Err(ErrorBody::new(
-            codes::TASK_NOT_FOUND,
-            "the task was removed by another call",
-        ));
+        return Err(removed());
     }
     Ok(view)
 }
@@ -297,14 +328,27 @@ fn refuse_while_running(row: &TaskRow, session: &Session) -> Result<(), ErrorBod
     Ok(())
 }
 
-fn save(store: &Store, row: &TaskRow) -> Result<(), ErrorBody> {
-    if store.update_task(row).map_err(store_error)? {
-        return Ok(());
+/// The refusal for a guarded write that found the task changed since it was read.
+fn changed_since_read(store: &Store, agents: &Agents, id: &str) -> ErrorBody {
+    let row = match store.get_task(id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return removed(),
+        Err(error) => return store_error(error),
+    };
+    match task_state::load(agents, &row) {
+        Ok(session) if is_running(&session) => ErrorBody::new(
+            codes::TASK_RUNNING,
+            format!("task {id} started running; stop its agent first"),
+        ),
+        _ => ErrorBody::new(codes::TASK_CHANGED, format!("task {id} changed; try again")),
     }
-    Err(ErrorBody::new(
+}
+
+pub(super) fn removed() -> ErrorBody {
+    ErrorBody::new(
         codes::TASK_NOT_FOUND,
         "the task was removed by another call",
-    ))
+    )
 }
 
 /// The protocol view of a stored task, with the state its session gives it.
