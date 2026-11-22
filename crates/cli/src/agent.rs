@@ -8,8 +8,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentDelegateParams, AgentPromptParams, AgentSession, AgentSessionList,
-    AgentStartParams, AgentWatchEvent, AgentWatchParams,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
@@ -64,6 +64,8 @@ pub enum AgentCommand {
         /// Session id, or a unique prefix of at least 8 characters.
         session: String,
     },
+    /// Merges a finished child's branch into its parent's worktree and tells the parent's run about it.
+    BringBack(AgentBringBackArgs),
 }
 
 #[derive(Debug, Args)]
@@ -83,6 +85,18 @@ pub struct AgentDelegateArgs {
     /// Run the child in the parent's workspace; it declares that it does not write.
     #[arg(long, conflicts_with = "name")]
     pub read_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentBringBackArgs {
+    /// The child session: id, or a unique prefix of at least 8 characters.
+    pub child: String,
+    /// Do not merge the child's branch into the parent's worktree.
+    #[arg(long)]
+    pub no_merge: bool,
+    /// Do not send the parent's run a prompt about the child.
+    #[arg(long)]
+    pub no_prompt: bool,
 }
 
 #[derive(Debug, Args)]
@@ -321,6 +335,28 @@ pub async fn execute(
         AgentCommand::Tree { session } => {
             let tree = client.agent_tree(&session).await?;
             output.success(&tree, &agent_text::tree_lines(&tree));
+        }
+        AgentCommand::BringBack(args) => {
+            // Inside the parent's own run the run's token goes with the call, as for delegate (0055).
+            let inside = run_identity();
+            let token = match &inside {
+                Some(_) => {
+                    let child = client.agent_show(&args.child).await?;
+                    child
+                        .parent_id
+                        .and_then(|parent| token_for(inside.as_ref(), &parent))
+                }
+                None => None,
+            };
+            let brought = client
+                .agent_bring_back(&AgentBringBackParams {
+                    child: args.child,
+                    merge: !args.no_merge,
+                    prompt: !args.no_prompt,
+                    token,
+                })
+                .await?;
+            output.success(&brought, &agent_text::bring_back_lines(&brought));
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),

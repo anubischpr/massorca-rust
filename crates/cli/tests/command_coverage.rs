@@ -53,6 +53,7 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
         checked,
         BTreeSet::from([
             "agent.attach",
+            "agent.bring-back",
             "agent.delegate",
             "agent.forget",
             "agent.hook",

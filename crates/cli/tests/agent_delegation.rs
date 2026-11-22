@@ -5,7 +5,7 @@ mod harness;
 
 use std::path::{Path, PathBuf};
 
-use harness::{Sandbox, git, git_repo, single_document, with_json};
+use harness::{Sandbox, eventually, git, git_repo, single_document, with_json};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -134,6 +134,28 @@ fn head(dir: &Path) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_owned()
 }
 
+/// Waits until a line of the terminal's screen contains `text`.
+fn wait_for_text(sandbox: &Sandbox, terminal: &str, text: &str) {
+    eventually(&format!("`{text}` on the agent's screen"), || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        screen["lines"]
+            .as_array()
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|shown| shown.as_str().is_some_and(|line| line.contains(text)))
+            })
+            .then_some(())
+    });
+}
+
+/// Delegates `prompt` to a writing child of `parent` and waits until the child is done; returns its id.
+fn finished_child(sandbox: &Sandbox, parent: &str, prompt: &str) -> String {
+    let child = id_of(&delegate(sandbox, parent, prompt, &[]));
+    until(sandbox, &child, "done");
+    child
+}
+
 #[test]
 fn a_delegated_child_gets_its_own_workspace_on_a_branch_from_the_parent_and_shows_in_the_tree() {
     let (sandbox, lead) = git_sandbox();
@@ -171,6 +193,103 @@ fn a_delegated_child_gets_its_own_workspace_on_a_branch_from_the_parent_and_show
     // Asked about the child, the tree still starts at its root.
     let from_child = sandbox.json_ok("default", &["agent", "tree", &child_id]);
     assert_eq!(from_child["root"]["id"], parent.as_str());
+}
+
+#[test]
+fn bring_back_merges_the_child_branch_with_a_merge_commit_and_prompts_the_parent_once() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, terminal) = start_parent(&sandbox, "lead");
+    let before = head(&lead);
+    let child = finished_child(&sandbox, &parent, "write:result.txt");
+
+    let brought = sandbox.json_ok("default", &["agent", "bring-back", &child]);
+
+    assert_eq!(brought["merged"], true, "{brought}");
+    assert_eq!(brought["prompt_delivered"], true, "{brought}");
+    let merge = brought["merge_commit"].as_str().expect("merge commit");
+    assert_eq!(head(&lead), merge);
+    let parents = git(&lead, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+    let ids: Vec<&str> = parents.split_whitespace().collect();
+    assert_eq!(
+        ids.len(),
+        3,
+        "a --no-ff merge commit has two parents: {parents}"
+    );
+    assert_eq!(ids[1], before);
+    assert!(lead.join("result.txt").is_file());
+    assert!(brought["child"]["brought_back_at_ms"].is_i64(), "{brought}");
+    wait_for_text(
+        &sandbox,
+        &terminal,
+        "working on MassOrca: delegated session",
+    );
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "bring-back", &child]),
+        "agent.already_brought_back"
+    );
+}
+
+#[test]
+fn bring_back_of_a_working_child_is_busy() {
+    let (sandbox, _lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = id_of(&delegate(&sandbox, &parent, "hold on", &[]));
+    until(&sandbox, &child, "working");
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "bring-back", &child]),
+        "agent.busy"
+    );
+}
+
+#[test]
+fn bring_back_into_a_dirty_parent_is_refused_and_changes_nothing() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:result.txt");
+    std::fs::write(lead.join("scratch.txt"), "local\n").expect("write a local file");
+    let before = head(&lead);
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "bring-back", &child]),
+        "agent.parent_dirty"
+    );
+    assert_eq!(head(&lead), before);
+    assert!(!lead.join("result.txt").exists());
+    assert!(lead.join("scratch.txt").is_file());
+    // Not marked: once the parent is clean the same child comes back.
+    std::fs::remove_file(lead.join("scratch.txt")).expect("remove the local file");
+    let brought = sandbox.json_ok("default", &["agent", "bring-back", &child, "--no-prompt"]);
+    assert_eq!(brought["merged"], true, "{brought}");
+}
+
+#[test]
+fn a_conflicting_bring_back_lists_the_paths_and_leaves_the_parent_as_it_was() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, _) = start_parent(&sandbox, "lead");
+    let child = finished_child(&sandbox, &parent, "write:README.md");
+    std::fs::write(lead.join("README.md"), "from the parent\n").expect("write README.md");
+    git(&lead, &["commit", "-q", "-am", "parent change"]);
+    let before = head(&lead);
+
+    let error = error_of(&sandbox, &["agent", "bring-back", &child]);
+
+    assert_eq!(error["code"], "agent.merge_conflict", "{error}");
+    assert_eq!(error["data"]["paths"], json!(["README.md"]), "{error}");
+    assert_eq!(head(&lead), before);
+    assert_eq!(
+        // A checkout with `core.autocrlf` writes the file back with CRLF line ends.
+        std::fs::read_to_string(lead.join("README.md"))
+            .expect("read README.md")
+            .replace("\r\n", "\n"),
+        "from the parent\n"
+    );
+    assert!(git(&lead, &["status", "--porcelain"]).is_empty());
+    let merging = git(&lead, &["rev-parse", "--git-path", "MERGE_HEAD"]);
+    assert!(!lead.join(merging.trim()).exists());
+    let shown = sandbox.json_ok("default", &["agent", "status", &child]);
+    assert!(shown.get("brought_back_at_ms").is_none(), "{shown}");
 }
 
 #[test]
@@ -237,4 +356,53 @@ fn a_folder_parent_cannot_delegate_a_writer() {
         ),
         "agent.delegate_needs_git"
     );
+}
+
+#[test]
+fn no_merge_and_no_prompt_each_skip_their_step() {
+    let (sandbox, lead) = git_sandbox();
+    let (parent, terminal) = start_parent(&sandbox, "lead");
+    let unmerged = finished_child(&sandbox, &parent, "write:first.txt");
+    let unprompted = finished_child(&sandbox, &parent, "write:second.txt");
+    let before = head(&lead);
+
+    let brought = sandbox.json_ok(
+        "default",
+        &["agent", "bring-back", &unprompted, "--no-prompt"],
+    );
+    assert_eq!(brought["merged"], true, "{brought}");
+    assert_eq!(brought["prompt_delivered"], false, "{brought}");
+    assert!(lead.join("second.txt").is_file());
+    let shown = sandbox.json_ok("default", &["agent", "status", &parent]);
+    assert_eq!(shown["activity"]["state"], "idle", "{shown}");
+
+    let brought = sandbox.json_ok("default", &["agent", "bring-back", &unmerged, "--no-merge"]);
+    assert_eq!(brought["merged"], false, "{brought}");
+    assert!(brought.get("merge_commit").is_none(), "{brought}");
+    assert_eq!(brought["prompt_delivered"], true, "{brought}");
+    wait_for_text(
+        &sandbox,
+        &terminal,
+        "working on MassOrca: delegated session",
+    );
+    // The fake parent acts on the words of the prompt, so it may commit files of its own; what must hold is that the
+    // child's branch was not merged.
+    until(&sandbox, &parent, "done");
+    assert!(!is_ancestor(&lead, "lead-1", "HEAD"));
+    assert!(is_ancestor(&lead, "lead-2", "HEAD"));
+    assert_ne!(head(&lead), before);
+}
+
+/// Whether `ancestor` is an ancestor of `of` in the repository at `dir`.
+fn is_ancestor(dir: &Path, ancestor: &str, of: &str) -> bool {
+    let status = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, of])
+        .current_dir(dir)
+        .status()
+        .expect("spawn git");
+    match status.code() {
+        Some(0) => true,
+        Some(1) => false,
+        other => panic!("git merge-base --is-ancestor failed: {other:?}"),
+    }
 }

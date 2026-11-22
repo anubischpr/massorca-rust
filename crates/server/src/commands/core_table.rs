@@ -344,6 +344,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("session"),
         ),
         command(
+            "agent.bring-back",
+            "Merge a finished child session back into its parent",
+            "agent.bring_back",
+            json!({
+                "type": "object",
+                "required": ["child"],
+                "properties": {
+                    "child": { "type": "string" },
+                    "merge": { "type": "boolean" },
+                    "prompt": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.attach",
             "Attach to an agent session's terminal",
             "agent.show",

@@ -61,6 +61,7 @@ letters, digits, `-` or `_`.
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
 | `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--read-only]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
+| `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -186,6 +187,18 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 - `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.
+- `agent bring-back CHILD` needs a child whose run has exited, or whose last turn is `done`;
+  otherwise it fails with `agent.busy`. When the child has a workspace of its own, its branch
+  is merged into the parent's worktree with `git merge --no-ff --no-edit`, unless
+  `--no-merge`: the parent must not be `working` (`agent.parent_busy`) and its worktree must
+  be clean (`agent.parent_dirty`). A merge that stops on conflicts is aborted, the parent is
+  left as it was, and the call fails with `agent.merge_conflict`, the conflicting paths in
+  the error's `data.paths`. Unless `--no-prompt`, a live parent run then gets one prompt, by
+  the `agent prompt` rules without `--force`, naming the child, the merge commit and the
+  child's result on one line. A prompt the parent cannot take does not fail the call: the
+  result says `prompt delivered: no` with a note. The child is marked brought back; a second
+  bring-back fails with `agent.already_brought_back`. The child's workspace is kept, and
+  nothing is ever pushed.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

@@ -1,7 +1,8 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, Execution, Outcome,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, BringBackResult,
+    Execution, Outcome,
 };
 
 use crate::terminal;
@@ -91,6 +92,23 @@ fn tree_line(session: &AgentSession, indent: &str) -> String {
         execution_text(&session.execution),
         activity_text(session.activity.as_ref())
     )
+}
+
+/// What a bring-back did: the merge, the prompt and its note.
+pub fn bring_back_lines(result: &BringBackResult) -> Vec<String> {
+    let mut lines = vec![format!("brought back session {}", result.child.id)];
+    lines.push(match &result.merge_commit {
+        Some(commit) => format!("merged: {commit}"),
+        None => "merged: no".to_owned(),
+    });
+    lines.push(format!(
+        "prompt delivered: {}",
+        if result.prompt_delivered { "yes" } else { "no" }
+    ));
+    if let Some(note) = &result.note {
+        lines.push(format!("note: {note}"));
+    }
+    lines
 }
 
 /// The sessions as a table, newest first.
