@@ -5,9 +5,11 @@
 
 pub mod catalogue;
 mod error;
+pub mod host;
 pub mod layout;
 pub mod lockfile;
 pub mod source;
+pub mod views;
 
 pub use error::{Error, HookError, codes};
 pub use layout::Layout;
