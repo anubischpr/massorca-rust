@@ -451,7 +451,7 @@ async fn a_terminal_is_created_attached_typed_into_resized_detached_and_killed()
 
 #[tokio::test]
 async fn the_work_panel_strip_follows_the_store_and_closing_asks_by_status() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let repo_dir = home.path().join("demo");
     repo(&repo_dir);
     let service = start_service(home.path()).await;
