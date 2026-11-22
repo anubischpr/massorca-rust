@@ -103,6 +103,7 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
         },
         title: params.title,
         request_id: params.request_id,
+        holds_secrets: false,
     };
     let manager = ctx.state.terminals.clone();
     let info = on_manager(move || manager.create(spec)).await?;
@@ -144,14 +145,12 @@ pub(super) async fn require_admin_for_terminal(
     if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
         return Ok(());
     }
-    let agents = ctx.state.agents.clone();
-    let terminal = terminal.to_owned();
-    let holds = tokio::task::spawn_blocking(move || agents.terminal_holds_secrets(&terminal))
-        .await
-        .map_err(|error| {
-            ErrorBody::new(codes::INTERNAL, format!("the agents task failed: {error}"))
-        })?
-        .map_err(ErrorBody::from)?;
+    // The terminal's own mark, set at its creation: an exited terminal of an earlier run keeps it.
+    let holds = ctx
+        .state
+        .terminals
+        .get(terminal)
+        .is_ok_and(|info| info.holds_secrets);
     if holds {
         return authorize(&ctx.principal, Permission::HostAdmin);
     }
@@ -254,6 +253,7 @@ pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
         cwd: info.cwd,
         created_at_ms: info.created_at_ms,
         exit: info.exit.map(exit_of),
+        holds_secrets: info.holds_secrets,
     }
 }
 

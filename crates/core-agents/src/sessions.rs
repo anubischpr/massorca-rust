@@ -441,6 +441,7 @@ impl Agents {
             credential_home: access.home.as_deref(),
             caller_args: &params.args,
             provided_env: &provided,
+            holds_secrets,
             caller_env: &params.env,
         })?;
 
@@ -563,7 +564,8 @@ impl Agents {
                 .is_some_and(|parent| parent.holds_secrets),
             None => false,
         };
-        let holds_secrets = !provided.is_empty() || parent_holds;
+        // Sticky: once a run of the session got secrets, its scrollback may hold them, so the mark never clears.
+        let holds_secrets = !provided.is_empty() || parent_holds || row.holds_secrets;
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
@@ -584,6 +586,7 @@ impl Agents {
             credential_home: access.home.as_deref(),
             caller_args: &[],
             provided_env: &provided,
+            holds_secrets,
             caller_env: &no_env,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
@@ -634,19 +637,6 @@ impl Agents {
         Ok(session)
     }
 
-    /// Whether the run on `terminal_id` holds vault secrets (decision 0071): reading or writing its terminal needs
-    /// host-admin scope.
-    ///
-    /// # Errors
-    /// A store failure.
-    pub fn terminal_holds_secrets(&self, terminal_id: &str) -> Result<bool, AgentError> {
-        Ok(self
-            .store()
-            .list_agent_sessions(None)?
-            .iter()
-            .any(|row| row.holds_secrets && row.terminal_id.as_deref() == Some(terminal_id)))
-    }
-
     /// Writes a run's files, then creates its terminal in the workspace root with the launch plan's program, arguments
     /// and environment (0051). Returns the terminal's id.
     fn spawn_run(
@@ -677,6 +667,7 @@ impl Agents {
             size,
             title: Some(title),
             request_id: None,
+            holds_secrets: plan.holds_secrets,
         };
         Ok(self.inner.config.terminals.create(spec)?.id)
     }

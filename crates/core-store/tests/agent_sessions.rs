@@ -401,3 +401,36 @@ fn a_bring_back_is_recorded_once() {
         Some(40)
     );
 }
+
+#[test]
+fn the_secrets_mark_is_sticky_across_restarts() {
+    let (store, workspace) = store_with_workspace();
+    let exited = || {
+        Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: 20,
+        })
+    };
+    let mut row = session_row(&workspace, 10);
+    row.exit = exited();
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(store.restart_agent_session(&row.id, "t-1", true).unwrap());
+    assert!(
+        store
+            .get_agent_session(&row.id)
+            .unwrap()
+            .unwrap()
+            .holds_secrets
+    );
+    store
+        .set_agent_session_exit(&row.id, "t-1", exited().as_ref().unwrap())
+        .unwrap();
+    // A later restart without secrets keeps the mark: the scrollback may still hold them.
+    assert!(store.restart_agent_session(&row.id, "t-2", false).unwrap());
+    let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(restarted.terminal_id.as_deref(), Some("t-2"));
+    assert!(restarted.holds_secrets);
+}

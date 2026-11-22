@@ -245,7 +245,8 @@ impl Store {
 
     /// Starts a new run of an exited session (0054): the row names the new run's terminal, and its exit and activity are
     /// cleared, so the activity starts absent until the agent reports. The result and the agent ref stay. One statement,
-    /// so a reader never sees the exit cleared with the old terminal. Returns whether an exited row changed.
+    /// so a reader never sees the exit cleared with the old terminal. `holds_secrets` can only set the mark, never clear it
+    /// (decision 0071). Returns whether an exited row changed.
     pub fn restart_agent_session(
         &self,
         id: &str,
@@ -253,7 +254,7 @@ impl Store {
         holds_secrets: bool,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = ?3, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
             params![id, terminal_id, holds_secrets],
         )?;
         Ok(changed > 0)

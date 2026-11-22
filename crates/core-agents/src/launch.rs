@@ -53,6 +53,9 @@ pub struct LaunchInput<'a> {
     /// Variables from the profile's vault (decision 0071): set after the run's own and the credential home, before the
     /// caller's.
     pub provided_env: &'a ProvidedEnv,
+    /// The run is marked as holding secrets: it got vault variables now, earlier (the mark is sticky), or through its
+    /// parent. Its terminal carries the mark, and the caller's env may not add a dangerous name.
+    pub holds_secrets: bool,
     pub caller_env: &'a BTreeMap<String, String>,
 }
 
@@ -71,6 +74,8 @@ pub struct LaunchPlan {
     pub agent_ref: Option<String>,
     /// A first prompt the kind cannot take at launch (`prompt.mode` `none`).
     pub pending_prompt: Option<String>,
+    /// Copied to the run's terminal at its creation (decision 0071).
+    pub holds_secrets: bool,
 }
 
 impl std::fmt::Debug for LaunchPlan {
@@ -134,7 +139,7 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     if let Some(name) = reserved_name(input.provided_env, decl) {
         return Err(LaunchError::ReservedName(name.to_owned()));
     }
-    if !input.provided_env.is_empty()
+    if (input.holds_secrets || !input.provided_env.is_empty())
         && let Some(name) = dangerous_caller_name(input.caller_env)
     {
         return Err(LaunchError::DangerousCallerEnv(name.to_owned()));
@@ -186,6 +191,7 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
         files,
         agent_ref,
         pending_prompt,
+        holds_secrets: input.holds_secrets || !input.provided_env.is_empty(),
     })
 }
 
@@ -309,6 +315,7 @@ mod tests {
         home: Option<PathBuf>,
         caller_args: Vec<String>,
         provided: ProvidedEnv,
+        holds_secrets: bool,
         caller_env: BTreeMap<String, String>,
     }
 
@@ -322,6 +329,7 @@ mod tests {
                 home: None,
                 caller_args: Vec::new(),
                 provided: ProvidedEnv::default(),
+                holds_secrets: false,
                 caller_env: BTreeMap::new(),
             }
         }
@@ -338,6 +346,7 @@ mod tests {
                 credential_home: self.home.as_deref(),
                 caller_args: &self.caller_args,
                 provided_env: &self.provided,
+                holds_secrets: self.holds_secrets,
                 caller_env: &self.caller_env,
             })
         }
@@ -665,6 +674,27 @@ mod tests {
         assert_eq!(
             refused,
             LaunchError::DangerousCallerEnv("NODE_OPTIONS".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_run_marked_only_by_inheritance_refuses_a_dangerous_caller_variable_and_marks_its_terminal()
+    {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.holds_secrets = true;
+        let plan = fixture.first(None);
+        assert!(plan.holds_secrets, "the terminal is created marked");
+        fixture.caller_env =
+            BTreeMap::from([("https_proxy".to_owned(), "http://proxy.invalid".to_owned())]);
+        let refused = fixture
+            .plan(Run::First {
+                prompt: None,
+                new_ref: "r-1",
+            })
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            LaunchError::DangerousCallerEnv("https_proxy".to_owned())
         );
     }
 

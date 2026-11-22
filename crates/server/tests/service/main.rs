@@ -28,4 +28,5 @@ mod secrets;
 mod secrets_hardening;
 mod tasks;
 mod teams;
+mod terminal_secrets;
 mod workspaces;
