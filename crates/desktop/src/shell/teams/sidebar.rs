@@ -10,7 +10,7 @@ use crate::model::teams::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamPage, TeamRow, TeamsSidebar,
 };
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
-use massorca_ui::components::sidebar_row::SidebarRow;
+use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
 use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
@@ -68,11 +68,19 @@ fn team_rows(
 ) -> impl IntoElement {
     let theme = *cx.theme();
     let focus = row_focus(window, cx, format!("team-{index}"));
-    let mut row = SidebarRow::nav(
-        format!("team-row-{index}"),
-        IconName::Users,
-        team.name.clone(),
-    )
+    let mut row = match team.reach {
+        HostReach::Connected => SidebarRow::nav(
+            format!("team-row-{index}"),
+            IconName::Users,
+            team.name.clone(),
+        ),
+        // An unreachable team reads like its host row: the status glyph, dimmed (A10).
+        HostReach::Unreachable { .. } => SidebarRow::host(
+            format!("team-row-{index}"),
+            team.name.clone(),
+            HostConnection::Unreachable,
+        ),
+    }
     .focus_handle(focus)
     .tab_stop(true)
     .selected(team.selected);
