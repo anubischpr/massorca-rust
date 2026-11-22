@@ -131,6 +131,7 @@ async fn attach(home: &Path, frames: Vec<Frame>) -> (Client, TerminalAttachment,
             since: None,
             cols: None,
             rows: None,
+            answers_queries: None,
         })
         .await
         .expect("the attach opens");

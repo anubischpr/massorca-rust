@@ -1,0 +1,20 @@
+[package]
+name = "massorca-core-remote"
+description = "Remote hosts of MassOrca: Tailscale status, SSH bootstrap through the system ssh, the systemd user unit (decisions 0043 to 0045)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

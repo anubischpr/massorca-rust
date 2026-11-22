@@ -1,10 +1,24 @@
-//! Every CLI command except `service run` and `ext` has a command descriptor in the server's core table.
+//! Every CLI command except `service run` and `ext` has a command descriptor in the server's core table,
+//! except the commands that run on this computer alone.
 
 use std::collections::BTreeSet;
 
 use clap::CommandFactory;
 use massorca_cli::args::Cli;
 use massorca_server::core_commands;
+
+/// Commands that run in the CLI itself: they read or write the client's own files, run SSH or Tailscale, or print
+/// text. They make no service request, and the server's descriptor test needs every descriptor to name a core method.
+const CLIENT_ONLY: [&str; 8] = [
+    "host.add-ssh",
+    "host.discover",
+    "host.list",
+    "host.remove",
+    "host.show",
+    "host.status",
+    "pair.accept",
+    "service.unit",
+];
 
 /// The dotted path of every leaf command (`service.info`); clap's generated `help` entries are skipped.
 fn command_paths(command: &clap::Command, prefix: &str, out: &mut Vec<String>) {
@@ -31,22 +45,35 @@ fn clap_definition_is_valid() {
 }
 
 #[test]
-fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
+fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
     let mut paths = Vec::new();
     command_paths(&Cli::command(), "", &mut paths);
     assert!(
         paths.iter().any(|path| path == "service.run"),
         "the walk must see `service run`: {paths:?}"
     );
+    for client_only in CLIENT_ONLY {
+        assert!(
+            paths.iter().any(|path| path == client_only),
+            "`{client_only}` is not a CLI command"
+        );
+    }
 
     let ids: BTreeSet<String> = core_commands()
         .into_iter()
         .map(|descriptor| descriptor.id)
         .collect();
+    for client_only in CLIENT_ONLY {
+        assert!(
+            !ids.contains(client_only),
+            "`{client_only}` makes no service request and must not have a descriptor"
+        );
+    }
     let checked: BTreeSet<&str> = paths
         .iter()
         .map(String::as_str)
         .filter(|path| *path != "service.run" && path.split('.').next() != Some("ext"))
+        .filter(|path| !CLIENT_ONLY.contains(path))
         .collect();
 
     assert_eq!(
@@ -57,12 +84,18 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "agent.hook",
             "agent.kinds",
             "agent.list",
+            "agent.prompt",
+            "agent.resume",
             "agent.start",
             "agent.status",
             "agent.stop",
-            "config.get",
-            "config.list",
-            "config.set",
+            "settings.get",
+            "settings.list",
+            "settings.reset",
+            "settings.set",
+            "device.list",
+            "device.revoke",
+            "device.whoami",
             "git.abort",
             "git.commit",
             "git.branch-create",
@@ -81,10 +114,12 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "git.switch",
             "git.unstage",
             "git.watch",
+            "pair.offer",
             "project.add",
             "project.list",
             "project.rm",
             "project.show",
+            "server.status",
             "service.info",
             "service.restart",
             "service.status",

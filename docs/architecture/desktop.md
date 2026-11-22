@@ -86,12 +86,18 @@ store follows a service through the bridge (0028).
   forwards its items, and dropping the stream detaches without ending the
   terminal. The service sends no terminal events, so the store takes terminals
   from each resync and from the answers to create, kill and close. A lost
-  connection ends each attach with `Lost`; the UI attaches again without an
-  offset, which gives a snapshot. An attached client must answer the program's queries
-  (cursor reports, 0034): the feed's replies go back as input, which the
-  integration test does; the UI owner must do the same. The status
-  bar counts the terminals that may still run. The work panel does not draw
-  terminals yet.
+  connection ends each attach with `Lost`; the UI waits for the link to come
+  back and attaches again without an offset, which gives a snapshot. The Work
+  panel's strip lists the selected workspace's terminals from the store, and the
+  window keeps only which one is selected. Each shown terminal is a
+  `TerminalSurface` fed by `feed_events`. Its replies go back as input through
+  one function (cursor reports, 0034); an attach that sends them declares
+  `answers_queries` (0036). The pane and the integration test both declare it
+  through `AttachRole::AnswersQueries`. Closing the tab of a running terminal
+  asks in X-DLG-01: "Keep running" drops the view and the tab stays in the
+  strip, and "Stop process" calls `terminal.close`. An unverifiable terminal
+  shows a banner that says it may still run. The status bar counts the
+  terminals that may still run.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.
@@ -99,6 +105,29 @@ store follows a service through the bridge (0028).
 Per-window UI state lives in `ShellModel`, not in the store: the open usage
 popover, the Status bar items the window hides, and the palette's Recent rows
 (the last five commands and workspaces run). None of it is saved to disk yet.
+
+## Source control
+
+The Project sidebar's Source control tab (D-DF-02) shows the selected workspace's branch, its changes
+in four groups, the commit box and the first page of history. It runs on `git/1` through the bridge
+(decisions 0010 to 0013):
+
+- **Calls.** `service/git.rs` runs diff, stage, unstage, discard and commit on the bridge runtime. A
+  mutation refetches the workspace's status (and history after a commit) before it replies, whatever
+  the answer.
+- **Watch.** While the tab is on screen, the bridge follows the selected workspace with `git.watch`.
+  Each event refetches the status. Watches survive a reconnect and end with their connection.
+- **Store.** `StoreState.git` holds each workspace's status, first history page and degraded-watch
+  state. A removed workspace takes them with it.
+- **Models.** `model::source_control` derives the panel from the store; `model::source_control_diff`
+  parses a patch into DiffView's data; `model::source_control_flow` holds the discard waivers and the
+  commit form. A refusal that names no file is a failed dialog, never a waiver.
+- **Shell.** `shell::source_control` holds the panel's own state and calls. `project_sidebar` draws the
+  tabs and the panel. `diff_page` draws a file's diff in the Canvas, in place of the start page.
+  `source_control_dialogs` draws the discard flow with the same `flow_dialog` as the remove dialog.
+- **Not built.** Fetch, pull, push, branch operations and abort; the Work panel tab (the diff takes the
+  Canvas until the Work panel is on main); a multi-line commit message, since the message field is one
+  line; history beyond the first page.
 
 ## Bot Teams
 
@@ -154,9 +183,26 @@ Linux only. No automated run opens a visible window.
   General and account. A step the core cannot satisfy says so instead of
   claiming a result.
 - Not built yet: search highlighting and the outline after a jump
-  (SettingsRow.md), the Marketplace and vault pages, the first-run wizard, and
-  host rows beyond This PC. Sample data holds no workspace records, so the
+  (SettingsRow.md), the vault page, the first-run wizard, and host rows beyond
+  This PC. Sample data holds no workspace records, so the
   start page shows "not listed by the service" in `--sample` mode.
+
+## Marketplace
+
+- **The Marketplace** (`Page::Marketplace`) is a full page with a left
+  navigation: Discover, Installed, Updates and the five categories. Its lists
+  are in `model/marketplace/catalogue.rs`; an item page shows its nine parts in
+  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2).
+- Its data comes from `MarketplaceSource`. The sample implements it in memory and
+  changes only itself. Without a service, `UnavailableMarketplace` lists nothing
+  and refuses every change. Actions the sample does not model are drawn disabled
+  with "Not available yet": installing, the host choice, the default agent and
+  item settings.
+- Settings lists the installed agents from the same snapshot, each linking to its
+  item page. Settings never installs anything. The Extensions row opens
+  Marketplace > Installed.
+- The element tests (`shell/marketplace/tests.rs`) find a button as
+  `button:<id>`, which every `Button` publishes under test.
 
 ## Browser pane
 

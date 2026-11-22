@@ -8,21 +8,27 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
 directories.workspace = true
 dunce.workspace = true
 interprocess.workspace = true
 massorca-core-agents.workspace = true
 massorca-core-git.workspace = true
+massorca-core-remote.workspace = true
 massorca-core-watch.workspace = true
 massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
 massorca-core-workspace.workspace = true
+massorca-net.workspace = true
 massorca-profile.workspace = true
 massorca-protocol.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio-rustls.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

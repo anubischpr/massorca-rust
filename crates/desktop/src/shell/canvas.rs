@@ -1,10 +1,12 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::marketplace::{self, MarketplaceFrame};
 use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
 use super::teams;
+use super::work_panel::{self, WorkFrame};
 use super::zones::{ZoneFocus, region_focus_ring};
 use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
@@ -32,18 +34,28 @@ pub(super) struct PageFrames<'a> {
     pub settings: SettingsFrame<'a>,
     pub start: Option<StartFrame>,
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
+    /// The Work panel, while its region is on screen.
+    pub work_panel: Option<WorkFrame>,
+    /// The body of the Project sidebar, when it is on screen.
+    pub project: Option<AnyElement>,
+    /// The diff of the file open from Source control, which takes the Canvas over the start page.
+    pub diff: Option<AnyElement>,
+    /// The Marketplace page's frame, while a Marketplace view or item page is on screen.
+    pub marketplace: Option<MarketplaceFrame>,
 }
 
 pub(super) fn canvas(
     model: &ShellModel,
     zones: &ZoneFocus,
-    pages: PageFrames<'_>,
+    mut pages: PageFrames<'_>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let shell = cx.entity().downgrade();
+    let mut work = pages.work_panel.take();
+    let mut project = pages.project.take();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
@@ -59,13 +71,38 @@ pub(super) fn canvas(
         .overflow_hidden()
         .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
-            region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
+            let body = region_body(region, &mut work, &mut project, cx);
+            region_column(
+                region,
+                zones.get(Zone::of_region(region)).clone(),
+                &theme,
+                body,
+            )
         }));
-    surface.children(
-        overlay.map(|region| {
-            overlay_panel(region, zones.get(Zone::of_region(region)).clone(), &theme)
-        }),
-    )
+    surface.children(overlay.map(|region| {
+        let body = region_body(region, &mut work, &mut project, cx);
+        overlay_panel(
+            region,
+            zones.get(Zone::of_region(region)).clone(),
+            &theme,
+            body,
+        )
+    }))
+}
+
+/// The body of a region, taken once: the Work panel's pane or the Project sidebar's body, and
+/// nothing for the other regions.
+fn region_body(
+    region: Region,
+    work: &mut Option<WorkFrame>,
+    project: &mut Option<AnyElement>,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    match region {
+        Region::WorkPanel => work.take().map(|frame| work_panel::work_panel(frame, cx)),
+        Region::ProjectSidebar => project.take(),
+        _ => None,
+    }
 }
 
 fn conversation(
@@ -83,6 +120,10 @@ fn conversation(
     if model.canvas() == Canvas::Page(Page::Setup) {
         return setup::setup_page(&pages.setup_rows, cx);
     }
+    // The Marketplace fills the Canvas too, with its own navigation column (D-EX-01).
+    if let (Canvas::Page(Page::Marketplace(_)), Some(frame)) = (model.canvas(), pages.marketplace) {
+        return marketplace::page(frame, window, cx);
+    }
     // A service that cannot be reached takes the Canvas: its page, not a banner over an empty one.
     if let Some(notice) = model
         .snapshot()
@@ -94,6 +135,9 @@ fn conversation(
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
+        if let Some(diff) = pages.diff {
+            return diff;
+        }
         return match pages.start {
             Some(frame) => start_page::start_page(frame, cx),
             None => placeholder(
@@ -217,7 +261,12 @@ fn service_down_page(notice: &ServiceNotice, shell: &WeakEntity<Shell>) -> AnyEl
 }
 
 /// A region docked beside the Conversation, at its default width (D-SH-01).
-fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
+fn region_column(
+    region: Region,
+    focus: FocusHandle,
+    theme: &Theme,
+    body: Option<AnyElement>,
+) -> impl IntoElement {
     div()
         .track_focus(&focus)
         .focus_visible(|style| style.shadow(region_focus_ring(theme)))
@@ -230,10 +279,16 @@ fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
         .border_l_1()
         .border_color(theme.palette.border.subtle)
         .child(region_header(region, theme))
+        .children(body)
 }
 
 /// A region open over the Canvas when the window is too narrow to fit it inline (X1).
-fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
+fn overlay_panel(
+    region: Region,
+    focus: FocusHandle,
+    theme: &Theme,
+    body: Option<AnyElement>,
+) -> impl IntoElement {
     div()
         .track_focus(&focus)
         .focus_visible(|style| {
@@ -253,6 +308,7 @@ fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
         .shadow(box_shadows(theme.shadows.e2))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(region_header(region, theme))
+        .children(body)
 }
 
 fn region_header(region: Region, theme: &Theme) -> impl IntoElement {

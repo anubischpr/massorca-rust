@@ -4,11 +4,15 @@ use std::io;
 use std::path::PathBuf;
 
 use massorca_client::ClientError;
+use massorca_core_remote::bootstrap::BootstrapError;
+use massorca_core_remote::ssh::SshError;
 use massorca_profile::{ProfileError, RootAccessError};
+use massorca_protocol::codes;
 use massorca_protocol::codes::{
     PROFILE_FOREIGN_ENTRIES, PROFILE_UNSAFE_LOCATION, PROFILE_WRITABLE_BY_OTHERS,
 };
-use massorca_server::ServiceError;
+use massorca_protocol::pairing::OfferError;
+use massorca_server::{ListenSpecError, ServiceError};
 use serde_json::{Value, json};
 
 /// Exit codes of `massorca` (docs/architecture/core.md).
@@ -75,6 +79,11 @@ impl From<ClientError> for CliError {
             ClientError::Disconnected => "service.disconnected",
             ClientError::Protocol(_) => "client.protocol",
             ClientError::Io(_) => "client.io",
+            ClientError::HostUnreachable(_) => "host.unreachable",
+            ClientError::ServerIdentityMismatch => "host.identity_mismatch",
+            ClientError::HostNotFound(_) => "host.not_found",
+            ClientError::HostExists(_) => "host.exists",
+            ClientError::InvalidHostName(_) => "host.invalid_name",
         };
         Self::new(code, message, exit_code)
     }
@@ -133,6 +142,64 @@ impl From<RootAccessError> for CliError {
             data: Some(Box::new(data)),
             ..Self::new(code, message, exit::ERROR)
         }
+    }
+}
+
+impl From<ListenSpecError> for CliError {
+    fn from(error: ListenSpecError) -> Self {
+        Self::new("usage.invalid_listen", error.to_string(), exit::USAGE)
+    }
+}
+
+/// Never echoes the offer: its messages are generic.
+impl From<OfferError> for CliError {
+    fn from(error: OfferError) -> Self {
+        let code = match &error {
+            OfferError::NotAnOffer => "pairing.not_an_offer",
+            OfferError::Damaged => "pairing.damaged",
+        };
+        Self::new(code, error.to_string(), exit::ERROR)
+    }
+}
+
+impl From<SshError> for CliError {
+    fn from(error: SshError) -> Self {
+        let (code, exit_code) = match &error {
+            SshError::NotFound => ("ssh.not_found", exit::ERROR),
+            SshError::Refused(_) => ("usage.invalid_ssh_target", exit::USAGE),
+            SshError::Spawn(_) => ("ssh.failed", exit::ERROR),
+            SshError::Failed { .. } | SshError::TimedOut(_) => {
+                ("host.unreachable", exit::UNAVAILABLE)
+            }
+        };
+        Self::new(code, error.to_string(), exit_code)
+    }
+}
+
+impl From<BootstrapError> for CliError {
+    fn from(error: BootstrapError) -> Self {
+        match error {
+            BootstrapError::Ssh(inner) => inner.into(),
+            BootstrapError::InvalidPlan(message) => {
+                Self::new("usage.invalid_plan", message, exit::USAGE)
+            }
+            BootstrapError::UnsupportedSystem(message) => {
+                Self::new("host.unsupported_system", message, exit::ERROR)
+            }
+            BootstrapError::BinaryMismatch(message) => {
+                Self::new("host.binary_mismatch", message, exit::ERROR)
+            }
+            BootstrapError::Remote(message) => {
+                Self::new("host.bootstrap_failed", message, exit::ERROR)
+            }
+            BootstrapError::Io(error) => error.into(),
+        }
+    }
+}
+
+impl From<tokio::task::JoinError> for CliError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        Self::new(codes::INTERNAL, error.to_string(), exit::ERROR)
     }
 }
 

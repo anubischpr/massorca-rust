@@ -1,7 +1,7 @@
 //! The Activity rail's items: what each one is, what it opens, and the order it is laid out
 //! and roved through (D-SH-09 to D-SH-16, handoff 5.3).
 
-use super::navigation::Page;
+use super::navigation::{MarketplacePage, Page};
 
 /// An item that opens a full page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,8 +17,16 @@ impl RailEntry {
         match self {
             RailEntry::Tasks => Page::Tasks,
             RailEntry::Calendar => Page::Calendar,
-            RailEntry::Marketplace => Page::Marketplace,
+            RailEntry::Marketplace => Page::Marketplace(MarketplacePage::Discover),
             RailEntry::Settings => Page::Settings,
+        }
+    }
+
+    /// Whether this entry is the one lit for `page`: every Marketplace view lights Marketplace.
+    pub fn shows(self, page: Page) -> bool {
+        match (self.page(), page) {
+            (Page::Marketplace(_), Page::Marketplace(_)) => true,
+            (target, current) => target == current,
         }
     }
 
@@ -91,10 +99,26 @@ mod tests {
     }
 
     #[test]
+    fn every_marketplace_view_lights_the_marketplace_entry_only() {
+        let installed = Page::Marketplace(MarketplacePage::Installed);
+        assert!(RailEntry::Marketplace.shows(installed));
+        assert!(
+            RailEntry::Marketplace.shows(Page::Marketplace(MarketplacePage::Item(
+                crate::model::marketplace::MarketplaceItemId(1)
+            )))
+        );
+        assert!(!RailEntry::Tasks.shows(installed));
+        assert!(!RailEntry::Marketplace.shows(Page::Settings));
+    }
+
+    #[test]
     fn each_entry_opens_its_own_full_page() {
         assert_eq!(RailEntry::Tasks.page(), Page::Tasks);
         assert_eq!(RailEntry::Calendar.page(), Page::Calendar);
-        assert_eq!(RailEntry::Marketplace.page(), Page::Marketplace);
+        assert_eq!(
+            RailEntry::Marketplace.page(),
+            Page::Marketplace(MarketplacePage::Discover)
+        );
         assert_eq!(RailEntry::Settings.page(), Page::Settings);
         assert_eq!(RailEntry::Marketplace.label(), "Marketplace");
     }

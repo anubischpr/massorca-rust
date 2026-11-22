@@ -1,5 +1,6 @@
 //! Modes and pages: the Activity rail and the mode switch (D-SH-09, D-SH-10).
 
+use super::marketplace::{ItemKind, MarketplaceItemId};
 use super::teams::TeamPage;
 
 /// The two modes of the app; each has its own Sidebar and home.
@@ -35,6 +36,17 @@ impl Mode {
     }
 }
 
+/// The Marketplace views: the catalogue lists, one kind of item, or one item's page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MarketplacePage {
+    #[default]
+    Discover,
+    Installed,
+    Updates,
+    Category(ItemKind),
+    Item(MarketplaceItemId),
+}
+
 /// What the Canvas shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -43,7 +55,8 @@ pub enum Page {
     Home,
     Tasks,
     Calendar,
-    Marketplace,
+    /// Opened from the rail. Every Marketplace view is a full page.
+    Marketplace(MarketplacePage),
     Settings,
     /// The setup checklist, a full page opened from Settings, General (D-OB-12).
     Setup,
@@ -64,7 +77,7 @@ impl Page {
             Page::Home => "",
             Page::Tasks => "Tasks",
             Page::Calendar => "Calendar",
-            Page::Marketplace => "Marketplace",
+            Page::Marketplace(_) => "Marketplace",
             Page::Settings => "Settings",
             Page::Setup => "Setup",
             Page::Automations => "Automations",
@@ -160,7 +173,7 @@ mod tests {
         nav.forward();
         assert_eq!(nav.page, Page::Calendar);
         nav.back();
-        nav.open(Page::Marketplace);
+        nav.open(Page::Marketplace(MarketplacePage::Discover));
         assert!(!nav.can_go_forward());
     }
 
@@ -183,5 +196,20 @@ mod tests {
         nav.back();
         assert_eq!(nav.page, Page::Home);
         assert!(Page::Settings.is_full_page() && !Page::Home.is_full_page());
+    }
+
+    #[test]
+    fn every_marketplace_page_is_a_full_page_named_marketplace() {
+        let pages = [
+            MarketplacePage::Discover,
+            MarketplacePage::Installed,
+            MarketplacePage::Updates,
+            MarketplacePage::Category(ItemKind::Agent),
+            MarketplacePage::Item(MarketplaceItemId(1)),
+        ];
+        for page in pages {
+            assert!(Page::Marketplace(page).is_full_page());
+            assert_eq!(Page::Marketplace(page).title(), "Marketplace");
+        }
     }
 }

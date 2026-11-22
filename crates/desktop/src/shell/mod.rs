@@ -3,7 +3,10 @@
 mod actions;
 mod canvas;
 mod debug_focus;
+mod diff_page;
+mod marketplace;
 mod palette;
+mod project_sidebar;
 mod rail;
 mod resize_edges;
 mod service_banner;
@@ -11,20 +14,28 @@ mod settings;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
+mod source_control;
+mod source_control_dialogs;
 mod start_page;
 mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
 use crate::launch_options::DebugFocus;
+use crate::model::canvas::Canvas;
+use crate::model::marketplace::{
+    AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
+};
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -43,7 +54,8 @@ use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
-use std::collections::HashMap;
+use source_control::SourceControl;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -55,9 +67,13 @@ mod service_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
+mod source_control_tests;
+#[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_panel_tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).
 #[derive(Debug)]
@@ -99,10 +115,29 @@ pub struct Shell {
     /// Each workspace's start page composer, kept so its draft survives redraws.
     start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
+    /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
+    source_control: SourceControl,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
+    marketplace: Box<dyn MarketplaceSource>,
+    /// The catalogue's search field; its settled text becomes the Marketplace query.
+    marketplace_search: Entity<SearchField>,
+    _marketplace_search_changes: Subscription,
+    /// The code field of the account sign-in dialog.
+    marketplace_code: Entity<TextField>,
+    /// The last refused change, with the account it concerns (None for the whole Connection part).
+    marketplace_error: Option<(Option<AccountId>, String)>,
+    /// The uninstall confirm on screen, if any.
+    marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
+    terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal whose closing waits for the stop question.
+    stop_prompt: Option<String>,
+    /// A refused terminal call, as its title and its reason, under the Work panel's strip.
+    terminal_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -115,7 +150,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let store = cx.new(|_| ServiceStore::sample(data));
-        Self::with_store(store, None, None, teams.teams(), window, cx)
+        let marketplace = Box::new(SampleMarketplaceSource::default());
+        Self::with_store(store, None, None, teams.teams(), marketplace, window, cx)
     }
 
     /// Follows a running service through the bridge of `source`.
@@ -132,6 +168,7 @@ impl Shell {
             Some(handle),
             Some(bridge),
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )
@@ -142,6 +179,7 @@ impl Shell {
         service: Option<ServiceHandle>,
         bridge: Option<ServiceBridge>,
         teams: TeamsState,
+        marketplace: Box<dyn MarketplaceSource>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -154,6 +192,7 @@ impl Shell {
             if store.read(cx).state().connection.is_connected() {
                 shell.settings.folder.forget_read_failure();
             }
+            shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -162,6 +201,21 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        model.set_marketplace(marketplace.snapshot());
+        let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
+        let marketplace_search_changes = cx.subscribe(
+            &marketplace_search,
+            |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.set_marketplace_query(query.as_ref(), cx);
+                }
+            },
+        );
+        let marketplace_code = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Code")
+                .placeholder("Code from the sign-in page")
+        });
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
@@ -189,6 +243,16 @@ impl Shell {
                 }
             },
         );
+        let commit_field = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Message")
+                .placeholder("Commit message")
+        });
+        let commit_changes = cx.subscribe(&commit_field, |shell, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                shell.read_commit_message(cx);
+            }
+        });
         Self {
             model,
             focus,
@@ -213,8 +277,18 @@ impl Shell {
             debug_focus: None,
             start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
+            source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            marketplace,
+            marketplace_search,
+            _marketplace_search_changes: marketplace_search_changes,
+            marketplace_code,
+            marketplace_error: None,
+            marketplace_uninstall: None,
+            terminal_views: BTreeMap::new(),
+            stop_prompt: None,
+            terminal_notice: None,
         }
     }
 
@@ -364,6 +438,8 @@ impl Render for Shell {
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        self.sync_source_control(window, cx);
+        let connected = self.store.read(cx).state().connection.is_connected();
         // The start page's composer is created before the frames below borrow the Shell's fields.
         let start = self.model.selected_workspace().and_then(|id| {
             crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
@@ -374,6 +450,7 @@ impl Render for Shell {
                 page,
                 composer,
                 shell: shell.clone(),
+                connected,
             }
         });
         let connection = self.store.read(cx).state().connection.clone();
@@ -384,11 +461,31 @@ impl Render for Shell {
             shell: shell.clone(),
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
+            agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
         };
         let setup_rows = crate::model::setup::checklist(
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
         );
+        let work_panel = self
+            .model
+            .region_visible(Region::WorkPanel)
+            .then(|| self.work_frame(shell.clone(), cx));
+        let diff = self
+            .source_control
+            .open
+            .is_some()
+            .then(|| diff_page::diff_page(self, &shell, cx));
+        let project = self
+            .model
+            .region_visible(Region::ProjectSidebar)
+            .then(|| project_sidebar::project_body(self, &shell, cx));
+        let marketplace = match self.model.canvas() {
+            Canvas::Page(Page::Marketplace(page)) => {
+                Some(marketplace::frame(self, page, shell.clone()))
+            }
+            _ => None,
+        };
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -396,6 +493,10 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                work_panel,
+                project,
+                diff,
+                marketplace,
             },
             window,
             cx,
@@ -493,6 +594,11 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let discard = self
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| source_control_dialogs::discard_dialog(flow, &shell, cx));
         let team_dialog = self
             .team_dialog
             .as_ref()
@@ -501,6 +607,11 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let marketplace_dialog = marketplace::dialog(self, &shell, cx);
+        let stop_terminal = self
+            .stop_prompt
+            .is_some()
+            .then(|| work_panel::stop_dialog(&shell, cx));
         div()
             .size_full()
             .flex()
@@ -559,8 +670,11 @@ impl Render for Shell {
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
+            .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }

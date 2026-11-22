@@ -23,6 +23,12 @@ pub enum Refusal {
     PathProblem { message: String },
     /// Any other answer of the service.
     Failed { code: String, message: String },
+    /// A git refusal that names the files it would affect (decision 0013), in `paths`.
+    GitRefused {
+        code: String,
+        message: String,
+        paths: Vec<String>,
+    },
     /// The service could not be reached for this call.
     Unavailable { message: String },
 }
@@ -31,6 +37,14 @@ impl Refusal {
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::Unavailable {
             message: message.into(),
+        }
+    }
+
+    /// The service's code for this refusal, when it gave one.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Failed { code, .. } | Self::GitRefused { code, .. } => Some(code),
+            _ => None,
         }
     }
 
@@ -45,6 +59,7 @@ impl Refusal {
             | Self::NameProblem { message }
             | Self::PathProblem { message }
             | Self::Failed { message, .. }
+            | Self::GitRefused { message, .. }
             | Self::Unavailable { message } => message.clone(),
         }
     }
@@ -74,6 +89,14 @@ impl From<&ClientError> for Refusal {
                 | codes::PROJECT_NOT_GIT => Self::PathProblem {
                     message: body.message.clone(),
                 },
+                codes::GIT_DISCARD_UNTRACKED
+                | codes::GIT_DISCARD_STAGED
+                | codes::GIT_PATH_CONFLICTED
+                | codes::GIT_PATH_IS_DIRECTORY => Self::GitRefused {
+                    code: body.code.clone(),
+                    message: body.message.clone(),
+                    paths: paths_of(body),
+                },
                 code => Self::Failed {
                     code: code.to_owned(),
                     message: body.message.clone(),
@@ -83,15 +106,36 @@ impl From<&ClientError> for Refusal {
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)
             | ClientError::UntrustedEndpoint(_)
-            | ClientError::Handshake { .. } => Self::Unavailable {
+            | ClientError::Handshake { .. }
+            | ClientError::HostUnreachable(_) => Self::Unavailable {
                 message: "The service cannot be reached right now.".to_owned(),
             },
-            ClientError::Protocol(_) | ClientError::Io(_) => Self::Failed {
+            ClientError::Protocol(_)
+            | ClientError::Io(_)
+            | ClientError::ServerIdentityMismatch
+            | ClientError::HostNotFound(_)
+            | ClientError::HostExists(_)
+            | ClientError::InvalidHostName(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
             },
         }
     }
+}
+
+/// The files a refusal names in `data.paths`; none when it names none.
+fn paths_of(body: &massorca_protocol::ErrorBody) -> Vec<String> {
+    body.data
+        .as_ref()
+        .and_then(|data| data.get("paths"))
+        .and_then(|paths| paths.as_array())
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -159,6 +203,18 @@ mod tests {
         assert!(matches!(
             Refusal::from(&ClientError::Disconnected),
             Refusal::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unreachable_host_is_unavailable_and_a_key_mismatch_is_a_failure() {
+        assert!(matches!(
+            Refusal::from(&ClientError::HostUnreachable("timed out".into())),
+            Refusal::Unavailable { .. }
+        ));
+        assert!(matches!(
+            Refusal::from(&ClientError::ServerIdentityMismatch),
+            Refusal::Failed { code, .. } if code == "client.failed"
         ));
     }
 

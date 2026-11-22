@@ -2,6 +2,7 @@
 //! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
+use super::marketplace::MarketplaceSnapshot;
 use super::navigation::{Mode, Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
 use super::palette_recent::RecentActions;
@@ -11,6 +12,7 @@ use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
 use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
+use super::work_panel::TerminalSelection;
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -27,6 +29,12 @@ pub struct ShellModel {
     regions: RegionState,
     /// The Bot Teams data the Bot Teams pages and Sidebar show (screens 4).
     teams: TeamsState,
+    /// The Marketplace data the Marketplace pages show: the catalogue, accounts and sign-in.
+    marketplace: MarketplaceSnapshot,
+    /// The text of the catalogue search field.
+    marketplace_query: String,
+    /// Whether an item page's Advanced Options section is open (collapsed by default).
+    marketplace_advanced_open: bool,
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
@@ -38,6 +46,8 @@ pub struct ShellModel {
     recent: RecentActions,
     /// The workspace the Sidebar opened; its start page shows while no session is open.
     selected_workspace: Option<String>,
+    /// The terminal each workspace's Work panel shows selected.
+    terminal_selection: TerminalSelection,
 }
 
 impl ShellModel {
@@ -48,12 +58,16 @@ impl ShellModel {
             navigation: Navigation::default(),
             regions: RegionState::default(),
             teams: TeamsState::unavailable(),
+            marketplace: MarketplaceSnapshot::default(),
+            marketplace_query: String::new(),
+            marketplace_advanced_open: false,
             window_width,
             palette: None,
             usage_popover: None,
             status_items: StatusItemVisibility::default(),
             recent: RecentActions::default(),
             selected_workspace: None,
+            terminal_selection: TerminalSelection::default(),
         }
     }
 
@@ -95,6 +109,32 @@ impl ShellModel {
     /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
     pub fn set_teams(&mut self, teams: TeamsState) {
         self.teams = teams;
+    }
+
+    /// The Marketplace data the Marketplace pages draw.
+    pub fn marketplace(&self) -> &MarketplaceSnapshot {
+        &self.marketplace
+    }
+
+    /// Swaps in the Marketplace data of a source, as `set_teams` does for Bot Teams.
+    pub fn set_marketplace(&mut self, snapshot: MarketplaceSnapshot) {
+        self.marketplace = snapshot;
+    }
+
+    pub fn marketplace_query(&self) -> &str {
+        &self.marketplace_query
+    }
+
+    pub fn set_marketplace_query(&mut self, query: impl Into<String>) {
+        self.marketplace_query = query.into();
+    }
+
+    pub fn marketplace_advanced_open(&self) -> bool {
+        self.marketplace_advanced_open
+    }
+
+    pub fn set_marketplace_advanced_open(&mut self, open: bool) {
+        self.marketplace_advanced_open = open;
     }
 
     /// The Bot Teams Sidebar for the page on screen.
@@ -255,6 +295,24 @@ impl ShellModel {
     pub fn select_workspace(&mut self, id: Option<String>) {
         self.selected_workspace = id;
         self.navigation.open(Page::Home);
+    }
+
+    /// Makes the Work panel visible, inline or as the overlay the window width asks for.
+    pub fn show_region(&mut self, region: Region) {
+        self.regions.show(region, self.window_width);
+    }
+
+    /// The terminal each workspace's Work panel has selected.
+    pub fn terminal_selection(&self) -> &TerminalSelection {
+        &self.terminal_selection
+    }
+
+    pub fn select_terminal(&mut self, workspace: &str, terminal: &str) {
+        self.terminal_selection.select(workspace, terminal);
+    }
+
+    pub fn forget_terminal(&mut self, terminal: &str) {
+        self.terminal_selection.forget(terminal);
     }
 
     /// The zones F6 cycles through now: the frame's parts, and the regions on screen.
@@ -580,5 +638,20 @@ mod tests {
             Some("Feed endpoints")
         );
         assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
+    }
+
+    #[test]
+    fn the_marketplace_starts_empty_and_keeps_its_query_and_advanced_flag() {
+        use crate::model::marketplace::{MarketplaceSource, SampleMarketplaceSource};
+        let mut model = shell(1440.0);
+        assert!(model.marketplace().items.is_empty());
+        assert_eq!(model.marketplace_query(), "");
+        assert!(!model.marketplace_advanced_open());
+        model.set_marketplace(SampleMarketplaceSource::default().snapshot());
+        assert_eq!(model.marketplace().items.len(), 8);
+        model.set_marketplace_query("github");
+        model.set_marketplace_advanced_open(true);
+        assert_eq!(model.marketplace_query(), "github");
+        assert!(model.marketplace_advanced_open());
     }
 }

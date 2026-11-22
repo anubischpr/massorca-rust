@@ -191,7 +191,7 @@ fn rail_item(
         }
         RailItem::Entry(entry) => {
             let target = entry.page();
-            let active = model.navigation().page == target;
+            let active = entry.shows(model.navigation().page);
             let slot = RailSlot {
                 id: SharedString::from(format!("rail-{}", entry.label().to_lowercase())),
                 handle,
