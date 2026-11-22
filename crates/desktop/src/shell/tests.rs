@@ -375,6 +375,55 @@ fn escape_closes_a_region_overlay_opened_on_a_narrow_window(cx: &mut TestAppCont
     );
 }
 
+/// The text the sidebar Search field holds, as typed.
+fn search_query(shell: &Entity<Shell>, cx: &VisualTestContext) -> String {
+    shell.read_with(cx, |shell, cx| shell.search.read(cx).text(cx).to_owned())
+}
+
+#[gpui::test]
+fn escape_clears_the_search_field_when_no_overlay_is_open(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    draw(cx);
+    let search = shell.read_with(cx, |shell, cx| shell.search.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&search, cx));
+    draw(cx);
+    cx.simulate_input("abc");
+    assert_eq!(search_query(&shell, cx), "abc");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(search_query(&shell, cx), "");
+}
+
+#[gpui::test]
+fn escape_closes_an_open_overlay_before_the_search_field_sees_it(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    // A resize refreshes the real window; the test window needs the view told to re-render.
+    shell.update(cx, |_, cx| cx.notify());
+    draw(cx);
+    shell.update(cx, |shell, _| shell.model.toggle_sidebar());
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.model().overlay()),
+        Some(Region::Sidebar)
+    );
+    let search = shell.read_with(cx, |shell, cx| shell.search.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&search, cx));
+    draw(cx);
+    cx.simulate_input("abc");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.model().overlay()),
+        None
+    );
+    assert_eq!(search_query(&shell, cx), "abc");
+}
+
 /// Sample data whose rings show the reading states other than a percentage.
 struct UsageStates;
 

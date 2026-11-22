@@ -11,6 +11,7 @@ use crate::service::StoreState;
 pub const SESSIONS_LATER: &str = "Agent sessions come later.";
 pub const TERMINALS_LATER: &str = "Terminals come later.";
 pub const GIT_LATER: &str = "Git operations come later.";
+pub const VOICE_LATER: &str = "Voice input comes later.";
 
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
