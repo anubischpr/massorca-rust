@@ -105,6 +105,8 @@ pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
+/// CLI only: the service refused a profile directory that holds entries another user owns; `data.paths` lists up to ten.
+pub const PROFILE_FOREIGN_ENTRIES: &str = "profile.foreign_entries";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";

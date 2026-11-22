@@ -233,6 +233,31 @@ async fn the_profile_directory_and_socket_are_private_to_their_owner() {
     stop(running).await;
 }
 
+/// A profile directory made without the owner-only access is repaired before the service opens anything in it.
+#[tokio::test]
+async fn a_start_repairs_a_profile_directory_that_others_could_reach() {
+    use massorca_profile::{RootAccess, secure_root};
+
+    let home = temp_home();
+    let profile = profile(home.path(), "default");
+    std::fs::create_dir_all(profile.dir()).expect("an ordinary directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(profile.dir(), std::fs::Permissions::from_mode(0o755))
+            .expect("a permissive directory");
+    }
+
+    let running = start(home.path(), "default").await;
+
+    assert_eq!(
+        secure_root(&profile).expect("checked"),
+        RootAccess::Private,
+        "the service left the directory private"
+    );
+    stop(running).await;
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn a_squatter_on_the_endpoint_name_stops_the_service_from_starting() {

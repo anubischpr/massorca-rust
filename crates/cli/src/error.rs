@@ -4,8 +4,9 @@ use std::io;
 
 use massorca_client::ClientError;
 use massorca_profile::ProfileError;
+use massorca_protocol::codes::PROFILE_FOREIGN_ENTRIES;
 use massorca_server::ServiceError;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Exit codes of `massorca` (docs/architecture/core.md).
 pub mod exit {
@@ -95,7 +96,45 @@ impl From<ServiceError> for CliError {
                 "another service already runs this profile",
                 exit::ALREADY_RUNNING,
             ),
+            ServiceError::ForeignEntries { paths, message } => {
+                let paths: Vec<String> = paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+                Self {
+                    data: Some(Box::new(json!({ "paths": paths }))),
+                    ..Self::new(PROFILE_FOREIGN_ENTRIES, message, exit::ERROR)
+                }
+            }
             other => Self::new("service.failed", other.to_string(), exit::ERROR),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use massorca_server::ServiceError;
+    use serde_json::json;
+
+    use super::{CliError, exit};
+
+    #[test]
+    fn foreign_entries_report_their_code_and_paths() {
+        let planted = PathBuf::from("profiles")
+            .join("default")
+            .join("planted.json");
+        let error = CliError::from(ServiceError::ForeignEntries {
+            paths: vec![planted.clone()],
+            message: "foreign".to_owned(),
+        });
+
+        assert_eq!(error.code, "profile.foreign_entries");
+        assert_eq!(error.exit_code, exit::ERROR);
+        assert_eq!(
+            error.data.as_deref(),
+            Some(&json!({ "paths": [planted.display().to_string()] }))
+        );
     }
 }

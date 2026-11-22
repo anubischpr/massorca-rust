@@ -16,7 +16,7 @@ use massorca_core_workspace::Workspaces;
 use massorca_profile::owner_only_security_descriptor;
 #[cfg(unix)]
 use massorca_profile::restrict_socket;
-use massorca_profile::{Profile, ensure_dir, local_socket_name};
+use massorca_profile::{Profile, RootAccess, ensure_dir, local_socket_name, secure_root};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
 use massorca_protocol::methods::service::ServiceInfo;
@@ -54,6 +54,13 @@ impl Service {
             server_name,
             server_version,
         } = config;
+        // Before anything in the profile is opened, so planted content is never trusted (ADR 0073).
+        if secure_root(&profile)? == RootAccess::Repaired {
+            tracing::warn!(
+                path = %profile.dir().display(),
+                "profile directory access was repaired: it is now private to its owner"
+            );
+        }
         ensure_dir(&profile)?;
         let lock = instance_lock::acquire(&profile).await?;
         instance_lock::remove_stale_socket(&profile)?;
