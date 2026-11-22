@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::endpoint::fnv1a_64;
 use crate::error::ProfileError;
-use crate::root_access::create_private_dir;
+use crate::root_access::create_root;
 
 const DEFAULT_PROFILE: &str = "default";
 const PROFILE_ENV: &str = "MASSORCA_PROFILE";
@@ -95,10 +95,11 @@ impl Profile {
 }
 
 /// Creates the profile and logs directories. Extension directories are left to the extension host.
-/// A new profile directory is created private to its owner in one step (ADR 0073); `secure_root` checks an existing one.
+/// Missing home, `profiles` and profile folders are created private to their owner in one step (ADR 0073);
+/// `secure_root` checks existing ones.
 /// On Unix it is also made 0700 when it already existed, so no other user can reach the socket in it.
 pub fn ensure_dir(profile: &Profile) -> io::Result<()> {
-    create_private_dir(profile.dir())?;
+    create_root(profile)?;
     restrict_dir(profile.dir())?;
     fs::create_dir_all(profile.logs_dir())
 }

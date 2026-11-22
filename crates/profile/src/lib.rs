@@ -20,7 +20,9 @@ pub use endpoint::local_socket_name;
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use profile::{Profile, ensure_dir};
-pub use root_access::{MAX_LISTED_ENTRIES, RootAccess, RootAccessError, secure_root};
+pub use root_access::{
+    MAX_LISTED_ENTRIES, RootAccess, RootAccessError, create_home, create_root, secure_root,
+};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]

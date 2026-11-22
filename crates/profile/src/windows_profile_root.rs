@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr;
 
 use interprocess::os::windows::security_descriptor::{
@@ -29,59 +29,179 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
 };
 
-use crate::root_access::{
-    MAX_LISTED_ENTRIES, RootAccess, RootAccessError, create_private_dir as create_dir_and_parents,
-};
-use crate::windows_endpoint_access::current_user_sid;
+use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
+use crate::windows_sddl::{Descriptor, verbatim};
+use crate::windows_sid::{Sid, Trusted};
 
-/// How many levels below the root are checked for entries another user owns.
-const MAX_SCAN_DEPTH: usize = 4;
-
-/// Owners trusted below the root besides the current user: SYSTEM and the Administrators group.
-const TRUSTED_OWNERS: [&str; 4] = ["SY", "BA", "S-1-5-18", "S-1-5-32-544"];
-
-/// The DACL of a profile root: full access for `user`, inherited by every file and folder below, nothing inherited from above.
-fn owner_only_dir_dacl_sddl(user: &str) -> String {
-    format!("D:P(A;OICI;FA;;;{user})")
+/// Whether a descriptor read opens a link itself or what it points to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Links {
+    Follow,
+    Open,
 }
 
-pub(crate) fn secure_root(dir: &Path) -> Result<RootAccess, RootAccessError> {
-    secure_root_with(dir, &read_sddl)
+/// The descriptor reads and DACL writes `secure_root` makes, so tests can report owners and users no unprivileged
+/// test can set, and record a repair instead of applying it.
+trait Disk {
+    /// The owner and DACL of `path` as SDDL.
+    fn read(&self, path: &Path, links: Links) -> io::Result<String>;
+    /// Replaces the DACL of `path` with the protected `dacl`.
+    fn protect(&self, path: &Path, dacl: &str) -> io::Result<()>;
 }
 
-/// `secure_root` with the descriptor reader passed in, so tests can report an owner no unprivileged test can set.
+#[derive(Debug)]
+struct RealDisk;
+
+impl Disk for RealDisk {
+    fn read(&self, path: &Path, links: Links) -> io::Result<String> {
+        read_sddl(path, links)
+    }
+
+    fn protect(&self, path: &Path, dacl: &str) -> io::Result<()> {
+        set_dacl(path, dacl, true)
+    }
+}
+
+/// The DACL of a private folder: full access for `user`, inherited by every file and folder below, nothing from above.
+/// The user is written as an `S-1-…` string, never an alias.
+fn owner_only_dir_dacl_sddl(user: &Sid) -> io::Result<String> {
+    Ok(format!("D:P(A;OICI;FA;;;{})", user.to_sid_string()?))
+}
+
+pub(crate) fn secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAccessError> {
+    secure_root_with(home, dir, Sid::current_user()?, &RealDisk)
+}
+
 fn secure_root_with(
+    home: &Path,
     dir: &Path,
-    read: &dyn Fn(&Path) -> io::Result<String>,
+    user: Sid,
+    disk: &dyn Disk,
 ) -> Result<RootAccess, RootAccessError> {
-    if create_dir_and_parents(dir)? {
+    let trusted = Trusted::for_user(user)?;
+    if let Some(parent) = home.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // The home may itself be a link the user chose; `profiles` and the root may not.
+    for (ancestor, links) in [
+        (home, Links::Follow),
+        (profiles_dir(home, dir), Links::Open),
+    ] {
+        if !create_private_dir(ancestor)? {
+            check_ancestor(ancestor, links, &trusted, disk)?;
+        }
+    }
+    if create_private_dir(dir)? {
         return Ok(RootAccess::Created);
     }
-    let user_sid = current_user_sid()?;
-    let user = owner_sddl(&user_sid)?;
-    let root_sddl = read(dir)?;
-    let (owner, dacl) = split_sddl(&root_sddl);
-    if owner != user {
+    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        });
+    }
+    let root = Descriptor::parse(&disk.read(dir, Links::Open)?);
+    if root.owner.as_ref() != Some(&trusted.user) {
         return Err(RootAccessError::ForeignEntries {
             paths: vec![dir.to_path_buf()],
         });
     }
-    let foreign = foreign_entries(dir, &user, read)?;
-    if !foreign.is_empty() {
-        return Err(RootAccessError::ForeignEntries { paths: foreign });
+    // Others could have rewritten files the user owns; locking them in would make the content trusted.
+    if root.grants_write_to_others(&trusted) {
+        return Err(RootAccessError::WritableByOthers {
+            paths: vec![dir.to_path_buf()],
+        });
     }
-    let expected = canonical_dacl_sddl(&owner_only_dir_dacl_sddl(&user_sid))?;
-    if is_owner_only(dacl, &expected) {
-        return Ok(RootAccess::Private);
+    let repaired = !root.is_owner_only(&trusted.user);
+    if repaired {
+        disk.protect(dir, &owner_only_dir_dacl_sddl(&trusted.user)?)?;
     }
-    set_dacl(dir, &expected, true)?;
-    Ok(RootAccess::Repaired)
+    // After the repair, so nothing can be planted between the listing and the new access.
+    scan_entries(dir, &trusted, disk)?.into_result()?;
+    Ok(if repaired {
+        RootAccess::Repaired
+    } else {
+        RootAccess::Private
+    })
+}
+
+/// A folder between the home and the root must be a real folder (unless `links` follows), owned by a trusted SID,
+/// and changeable by nobody else.
+fn check_ancestor(
+    path: &Path,
+    links: Links,
+    trusted: &Trusted,
+    disk: &dyn Disk,
+) -> Result<(), RootAccessError> {
+    let unsafe_location = || RootAccessError::UnsafeLocation {
+        path: path.to_path_buf(),
+    };
+    if links == Links::Open && fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(unsafe_location());
+    }
+    let descriptor = Descriptor::parse(&disk.read(path, links)?);
+    let owned = descriptor
+        .owner
+        .as_ref()
+        .is_some_and(|owner| trusted.contains(owner));
+    if !owned || descriptor.grants_write_to_others(trusted) {
+        return Err(unsafe_location());
+    }
+    Ok(())
+}
+
+/// Every entry below `root`, links read themselves and never followed: owners must be trusted and readable, and no
+/// entry may let others change it.
+fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<Findings> {
+    let mut findings = Findings::default();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if dir == root => return Err(error),
+            // A folder that cannot be listed may hide planted content.
+            Err(_) => {
+                findings.add_foreign(dir);
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            match disk
+                .read(&path, Links::Open)
+                .map(|sddl| Descriptor::parse(&sddl))
+            {
+                Ok(descriptor) => {
+                    let owned = descriptor
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| trusted.contains(owner));
+                    if !owned {
+                        findings.add_foreign(path);
+                    } else if descriptor.grants_write_to_others(trusted) {
+                        findings.add_writable(path);
+                    } else if entry.file_type()?.is_dir() {
+                        pending.push(path);
+                    }
+                }
+                Err(_) => findings.add_foreign(path),
+            }
+            if findings.is_full() {
+                return Ok(findings);
+            }
+        }
+    }
+    Ok(findings)
 }
 
 /// Creates `dir` with the owner-only descriptor in one call, so it is never reachable by others; false when it existed.
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<bool> {
-    let user = current_user_sid()?;
-    let descriptor = descriptor(&format!("O:{user}{}", owner_only_dir_dacl_sddl(&user)))?;
+    let user = Sid::current_user()?;
+    let descriptor = descriptor(&format!(
+        "O:{}{}",
+        user.to_sid_string()?,
+        owner_only_dir_dacl_sddl(&user)?
+    ))?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor.as_sd().cast_mut(),
@@ -100,92 +220,10 @@ pub(crate) fn create_private_dir(dir: &Path) -> io::Result<bool> {
     }
 }
 
-/// Up to `MAX_LISTED_ENTRIES` entries below `root` whose owner is not trusted or cannot be read. Links are not followed.
-fn foreign_entries(
-    root: &Path,
-    user: &str,
-    read: &dyn Fn(&Path) -> io::Result<String>,
-) -> io::Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    let mut pending = vec![(root.to_path_buf(), 1)];
-    while let Some((dir, depth)) = pending.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if dir == root => return Err(error),
-            // A folder that cannot be listed may hide planted content.
-            Err(_) => {
-                found.push(dir);
-                continue;
-            }
-        };
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let owner = read(&path).ok().map(|sddl| split_sddl(&sddl).0.to_owned());
-            if !is_trusted_owner(owner.as_deref(), user) {
-                found.push(path);
-            } else if depth < MAX_SCAN_DEPTH && entry.file_type()?.is_dir() {
-                pending.push((path, depth + 1));
-            }
-            if found.len() >= MAX_LISTED_ENTRIES {
-                found.truncate(MAX_LISTED_ENTRIES);
-                return Ok(found);
-            }
-        }
-    }
-    Ok(found)
-}
-
-/// Whether an entry's owner may stay: the current user, SYSTEM or Administrators. An unreadable owner is not trusted.
-fn is_trusted_owner(owner: Option<&str>, user: &str) -> bool {
-    owner.is_some_and(|owner| owner == user || TRUSTED_OWNERS.contains(&owner))
-}
-
-/// Whether `actual` is the protected owner-only DACL `expected`; the auto-inherited flags `AI` and `AR` are ignored.
-fn is_owner_only(actual: &str, expected: &str) -> bool {
-    let (actual_flags, actual_aces) = split_dacl(actual);
-    let (_, expected_aces) = split_dacl(expected);
-    actual_flags.contains('P') && actual_aces == expected_aces
-}
-
-/// The control flags and the ACEs of a `D:` SDDL section.
-fn split_dacl(dacl: &str) -> (&str, &str) {
-    let body = dacl.strip_prefix("D:").unwrap_or(dacl);
-    body.split_at(body.find('(').unwrap_or(body.len()))
-}
-
-/// The owner and the DACL sections of an `O:…D:…` SDDL string.
-fn split_sddl(sddl: &str) -> (&str, &str) {
-    let owner_start = sddl.find("O:").map_or(0, |index| index + 2);
-    let dacl_start = sddl.find("D:").unwrap_or(sddl.len());
-    let owner = sddl
-        .get(owner_start..dacl_start.max(owner_start))
-        .unwrap_or("");
-    (owner, &sddl[dacl_start..])
-}
-
-/// How SDDL spells `sid` as an owner, for example `SY` for SYSTEM.
-fn owner_sddl(sid: &str) -> io::Result<String> {
-    serialize(
-        &descriptor(&format!("O:{sid}"))?,
-        OWNER_SECURITY_INFORMATION,
-    )
-    .map(|text| text.trim_start_matches("O:").to_owned())
-}
-
-/// `dacl` as Windows writes it back, so it compares equal with a DACL read from disk.
-fn canonical_dacl_sddl(dacl: &str) -> io::Result<String> {
-    serialize(&descriptor(dacl)?, DACL_SECURITY_INFORMATION)
-}
-
 fn descriptor(sddl: &str) -> io::Result<SecurityDescriptor> {
     let text = U16CString::from_str(sddl)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     SecurityDescriptor::deserialize(&text)
-}
-
-fn serialize(descriptor: &SecurityDescriptor, selector: u32) -> io::Result<String> {
-    descriptor.serialize(selector, U16CStr::to_string_lossy)
 }
 
 /// Replaces the DACL of `path` with `dacl`. Windows passes the change on to the inherited entries of everything below.
@@ -219,9 +257,13 @@ fn set_dacl(path: &Path, dacl: &str, protected: bool) -> io::Result<()> {
     }
 }
 
-/// The owner and DACL of `path` as SDDL. A link is read itself, never its target.
-fn read_sddl(path: &Path) -> io::Result<String> {
+/// The owner and DACL of `path` as SDDL; with `Links::Open` a link is read itself, never its target.
+fn read_sddl(path: &Path, links: Links) -> io::Result<String> {
     let wide = wide_path(path)?;
+    let flags = match links {
+        Links::Follow => FILE_FLAG_BACKUP_SEMANTICS,
+        Links::Open => FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+    };
     // SAFETY: `wide` is NUL-terminated and outlives the call; the result is checked against INVALID_HANDLE_VALUE.
     let handle = unsafe {
         CreateFileW(
@@ -230,7 +272,7 @@ fn read_sddl(path: &Path) -> io::Result<String> {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            flags,
             ptr::null_mut(),
         )
     };
@@ -285,192 +327,8 @@ fn descriptor_to_sddl(descriptor: PSECURITY_DESCRIPTOR) -> io::Result<String> {
     Ok(value)
 }
 
+/// The NUL-terminated `\\?\` form of `path`, which Win32 calls accept past 248 characters.
 fn wide_path(path: &Path) -> io::Result<U16CString> {
-    U16CString::from_os_str(path)
+    U16CString::from_os_str(verbatim(path))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::io;
-    use std::path::{Path, PathBuf};
-
-    use super::{
-        MAX_LISTED_ENTRIES, RootAccess, RootAccessError, canonical_dacl_sddl, current_user_sid,
-        is_owner_only, is_trusted_owner, owner_only_dir_dacl_sddl, owner_sddl, read_sddl,
-        secure_root, secure_root_with, set_dacl, split_dacl, split_sddl,
-    };
-
-    /// A user SID no account on the test machine has.
-    const STRANGER: &str = "S-1-5-21-1-2-3-4242";
-
-    fn user() -> String {
-        owner_sddl(&current_user_sid().expect("the current user")).expect("the owner form")
-    }
-
-    fn dacl_of(path: &Path) -> String {
-        split_sddl(&read_sddl(path).expect("the descriptor"))
-            .1
-            .to_owned()
-    }
-
-    /// A root that also grants Everyone full access, inherited by what is created in it.
-    fn broad_root(home: &Path) -> PathBuf {
-        let root = home.join("profiles").join("default");
-        fs::create_dir_all(&root).expect("the root");
-        let dacl = format!("D:(A;OICI;FA;;;WD)(A;OICI;FA;;;{})", user());
-        set_dacl(&root, &dacl, false).expect("a broad DACL");
-        root
-    }
-
-    /// Reads descriptors from disk, but reports `STRANGER` as the owner of `foreign`.
-    fn reader_with_foreign(foreign: Vec<PathBuf>) -> impl Fn(&Path) -> io::Result<String> {
-        move |path| {
-            let sddl = read_sddl(path)?;
-            if foreign.iter().any(|planted| planted == path) {
-                let (_, dacl) = split_sddl(&sddl);
-                return Ok(format!("O:{STRANGER}{dacl}"));
-            }
-            Ok(sddl)
-        }
-    }
-
-    #[test]
-    fn a_new_profile_root_has_a_protected_dacl_with_one_ace_for_the_current_user() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = home.path().join("profiles").join("default");
-
-        assert_eq!(secure_root(&root).expect("created"), RootAccess::Created);
-
-        let sddl = read_sddl(&root).expect("the descriptor");
-        let (owner, dacl) = split_sddl(&sddl);
-        assert_eq!(owner, user());
-        let (flags, aces) = split_dacl(dacl);
-        assert!(flags.contains('P'), "the DACL is protected: {dacl}");
-        assert_eq!(aces, format!("(A;OICI;FA;;;{})", user()));
-        assert_eq!(secure_root(&root).expect("checked"), RootAccess::Private);
-    }
-
-    #[test]
-    fn a_folder_created_later_inherits_only_the_owner_entry() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = home.path().join("profiles").join("default");
-        secure_root(&root).expect("created");
-        let child = root.join("agents").join("kinds");
-        fs::create_dir_all(&child).expect("a child folder");
-
-        let dacl = dacl_of(&child);
-        assert_eq!(split_dacl(&dacl).1, format!("(A;OICIID;FA;;;{})", user()));
-    }
-
-    #[test]
-    fn a_root_with_inherited_broader_access_is_repaired_with_everything_below_it() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = broad_root(home.path());
-        let kinds = root.join("agents").join("kinds");
-        fs::create_dir_all(&kinds).expect("a child folder");
-        fs::write(kinds.join("tool.json"), b"{}").expect("a child file");
-        assert!(dacl_of(&kinds.join("tool.json")).contains(";;;WD)"));
-
-        assert_eq!(secure_root(&root).expect("repaired"), RootAccess::Repaired);
-
-        let expected = canonical_dacl_sddl(&owner_only_dir_dacl_sddl(
-            &current_user_sid().expect("the current user"),
-        ))
-        .expect("the expected DACL");
-        assert!(
-            is_owner_only(&dacl_of(&root), &expected),
-            "{}",
-            dacl_of(&root)
-        );
-        for below in [kinds.clone(), kinds.join("tool.json")] {
-            let dacl = dacl_of(&below);
-            assert!(
-                !dacl.contains(";;;WD)"),
-                "{} keeps Everyone: {dacl}",
-                below.display()
-            );
-        }
-        assert_eq!(secure_root(&root).expect("checked"), RootAccess::Private);
-    }
-
-    #[test]
-    fn an_entry_owned_by_another_user_is_refused_before_anything_is_repaired() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = broad_root(home.path());
-        let kinds = root.join("agents").join("kinds");
-        fs::create_dir_all(&kinds).expect("a child folder");
-        let planted = kinds.join("planted.json");
-        fs::write(&planted, b"{}").expect("a planted file");
-
-        let refused = secure_root_with(&root, &reader_with_foreign(vec![planted.clone()]));
-
-        match refused {
-            Err(RootAccessError::ForeignEntries { paths }) => assert_eq!(paths, vec![planted]),
-            other => panic!("expected a refusal, got {other:?}"),
-        }
-        assert!(dacl_of(&root).contains(";;;WD)"), "nothing was repaired");
-    }
-
-    #[test]
-    fn a_root_owned_by_another_user_is_refused() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = broad_root(home.path());
-
-        let refused = secure_root_with(&root, &reader_with_foreign(vec![root.clone()]));
-
-        assert!(
-            matches!(&refused, Err(RootAccessError::ForeignEntries { paths }) if paths == &vec![root.clone()]),
-            "{refused:?}"
-        );
-    }
-
-    #[test]
-    fn a_refusal_names_at_most_ten_entries() {
-        let home = tempfile::tempdir().expect("a home");
-        let root = broad_root(home.path());
-        let planted: Vec<PathBuf> = (0..12)
-            .map(|index| root.join(format!("{index}.json")))
-            .collect();
-        for path in &planted {
-            fs::write(path, b"{}").expect("a planted file");
-        }
-
-        let refused = secure_root_with(&root, &reader_with_foreign(planted.clone()));
-
-        match refused {
-            Err(RootAccessError::ForeignEntries { paths }) => {
-                assert_eq!(paths.len(), MAX_LISTED_ENTRIES);
-                assert!(paths.iter().all(|path| planted.contains(path)));
-            }
-            other => panic!("expected a refusal, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn system_administrators_and_the_user_are_trusted_owners_and_nobody_else() {
-        let user = user();
-        for owner in ["SY", "BA", "S-1-5-18", "S-1-5-32-544", user.as_str()] {
-            assert!(is_trusted_owner(Some(owner), &user), "{owner}");
-        }
-        assert!(!is_trusted_owner(Some(STRANGER), &user));
-        assert!(!is_trusted_owner(Some("WD"), &user));
-        assert!(
-            !is_trusted_owner(None, &user),
-            "an unreadable owner is not trusted"
-        );
-    }
-
-    #[test]
-    fn an_owner_only_dacl_must_be_protected_and_hold_only_the_owner_entry() {
-        let expected = "D:P(A;OICI;FA;;;S-1-5-21-9)";
-        assert!(is_owner_only("D:PAI(A;OICI;FA;;;S-1-5-21-9)", expected));
-        assert!(!is_owner_only("D:AI(A;OICI;FA;;;S-1-5-21-9)", expected));
-        assert!(!is_owner_only(
-            "D:P(A;OICI;FA;;;S-1-5-21-9)(A;OICI;FA;;;WD)",
-            expected
-        ));
-        assert!(!is_owner_only("D:NO_ACCESS_CONTROL", expected));
-    }
 }
