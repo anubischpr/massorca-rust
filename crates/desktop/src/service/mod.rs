@@ -4,10 +4,14 @@
 
 mod bridge;
 mod connection;
+mod git;
 mod launch;
 mod refusal;
 mod terminals;
 mod update;
+
+#[cfg(test)]
+mod git_tests;
 
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
@@ -20,7 +24,7 @@ pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 pub use terminals::{StreamEnd, TerminalStream, TerminalStreamItem};
-pub use update::{StoreState, StoreUpdate};
+pub use update::{GitUpdate, StoreState, StoreUpdate, WorkspaceGit};
 
 #[cfg(test)]
 pub(crate) use update::fixtures;
