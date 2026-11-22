@@ -11,6 +11,9 @@ mod terminals;
 mod update;
 
 #[cfg(test)]
+mod git_tests;
+
+#[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
 pub use connection::{
