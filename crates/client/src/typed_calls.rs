@@ -171,7 +171,7 @@ impl Client {
         self.call(terminals::CLOSE, &terminal_ref(terminal)).await
     }
 
-    /// `agent.kinds`: every declared agent kind, whether it is installed, and its problems.
+    /// `agent.kinds`: every declared agent kind, its package state, whether a program is detected, and its problems.
     pub async fn agent_kinds(&self) -> Result<AgentKinds, ClientError> {
         self.call(agents::KINDS, &()).await
     }

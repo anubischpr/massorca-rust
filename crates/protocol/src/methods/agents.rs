@@ -73,6 +73,7 @@ pub struct KindCredentials {
 
 /// One declared agent kind, as `agent.kinds` lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AgentKindWire")]
 pub struct AgentKind {
     pub id: String,
     pub name: String,
@@ -83,20 +84,60 @@ pub struct AgentKind {
     /// and `package.state` instead; `agents/2` drops this field.
     pub installed: bool,
     /// One of the program candidates resolves to a file (0050). `agent.start` refuses kinds that are not detected.
-    #[serde(default)]
+    /// A peer that sends no `detected` (`agents/1`) gets the value of `installed`.
     pub detected: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub program_path: Option<String>,
     /// Whether the kind's package is available, enabled or disabled (0059).
-    #[serde(default)]
     pub package: KindPackage,
     /// The kind declares a resume form and a way to know the agent's own id.
     pub resumable: bool,
     pub status_mechanism: StatusMechanism,
     pub credentials: KindCredentials,
     /// Why the declaration is invalid. A kind with problems is listed but never started.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+}
+
+/// The decoded form of [`AgentKind`]. Only the fallback for an absent `detected` lives here: an `agents/1` peer
+/// sends `installed` alone, and there it already meant "the program resolves" (0059).
+#[derive(Deserialize)]
+struct AgentKindWire {
+    id: String,
+    name: String,
+    icon: String,
+    owner: String,
+    installed: bool,
+    #[serde(default)]
+    detected: Option<bool>,
+    #[serde(default)]
+    program_path: Option<String>,
+    #[serde(default)]
+    package: KindPackage,
+    resumable: bool,
+    status_mechanism: StatusMechanism,
+    credentials: KindCredentials,
+    #[serde(default)]
+    problems: Vec<String>,
+}
+
+impl From<AgentKindWire> for AgentKind {
+    fn from(wire: AgentKindWire) -> Self {
+        Self {
+            detected: wire.detected.unwrap_or(wire.installed),
+            id: wire.id,
+            name: wire.name,
+            icon: wire.icon,
+            owner: wire.owner,
+            installed: wire.installed,
+            program_path: wire.program_path,
+            package: wire.package,
+            resumable: wire.resumable,
+            status_mechanism: wire.status_mechanism,
+            credentials: wire.credentials,
+            problems: wire.problems,
+        }
+    }
 }
 
 /// The package a kind comes from (0059). Built-ins and profile files are `enabled` with no id until packages land.

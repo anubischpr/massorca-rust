@@ -233,14 +233,22 @@ fn a_kind_from_before_detection_and_packages_still_decodes() {
         "status_mechanism": "claude-settings",
         "credentials": { "supported": true, "imported": false }
     });
-    let decoded: AgentKind = serde_json::from_value(before).expect("an agents/1 kind decodes");
+    let decoded: AgentKind =
+        serde_json::from_value(before.clone()).expect("an agents/1 kind decodes");
     assert!(decoded.installed, "the old installed field still decodes");
     assert!(
-        !decoded.detected,
-        "detected is absent, so it defaults to false"
+        decoded.detected,
+        "detected is absent, so it takes the value of installed"
     );
     assert_eq!(decoded.package, KindPackage::default());
     assert_eq!(decoded.package.state, PackageState::Unknown);
+
+    let mut not_installed = before;
+    not_installed["installed"] = json!(false);
+    let decoded: AgentKind =
+        serde_json::from_value(not_installed).expect("an agents/1 kind decodes");
+    assert!(!decoded.installed);
+    assert!(!decoded.detected, "installed false, so detected is false");
 }
 
 #[test]
