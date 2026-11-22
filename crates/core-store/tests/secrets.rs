@@ -216,19 +216,60 @@ fn requests_count_by_requester_pending_and_recent() {
     assert!(store.resolve_secret_request("r1", "declined", 500).unwrap());
 
     let (me, session) = ("owner", Some("session-1"));
-    let pending = |scope, requester, session| {
+    let pending = |scope, requester| {
         store
-            .count_pending_secret_requests(scope, requester, session)
+            .count_pending_secret_requests(scope, requester)
             .unwrap()
     };
-    assert_eq!(pending("global", me, session), 1);
-    assert_eq!(pending("project:p", me, session), 1);
-    assert_eq!(pending("global", me, None), 0);
-    assert_eq!(pending("global", "device:d1", None), 1);
-    assert_eq!(store.count_secret_requests_since(me, 150).unwrap(), 2);
-    assert_eq!(store.count_secret_requests_since(me, 0).unwrap(), 3);
+    let mut other_session = request("r5", "global", "TOKEN", 450);
+    other_session.session = Some("session-2".to_owned());
+    store.insert_secret_request(&other_session).unwrap();
+    assert_eq!(
+        pending("global", me),
+        2,
+        "a new session name shares the cap"
+    );
+    assert_eq!(pending("project:p", me), 1);
+    assert_eq!(pending("global", "device:d1"), 1);
+    assert!(session.is_some());
+    assert_eq!(store.count_secret_requests_since(me, 150).unwrap(), 3);
+    assert_eq!(store.count_secret_requests_since(me, 0).unwrap(), 4);
     assert_eq!(
         store.count_secret_requests_since("device:d1", 0).unwrap(),
         1
     );
+}
+
+#[test]
+fn pruning_drops_old_answered_and_expired_pending_requests_only() {
+    let store = store();
+    for (id, created_at) in [
+        ("old-answered", 100),
+        ("new-answered", 100),
+        ("old-pending", 100),
+        ("new-pending", 900),
+    ] {
+        store
+            .insert_secret_request(&request(id, "global", "TOKEN", created_at))
+            .unwrap();
+    }
+    assert!(
+        store
+            .resolve_secret_request("old-answered", "stored", 200)
+            .unwrap()
+    );
+    assert!(
+        store
+            .resolve_secret_request("new-answered", "declined", 800)
+            .unwrap()
+    );
+
+    assert_eq!(store.prune_secret_requests(500, 500).unwrap(), 2);
+    let left: Vec<String> = store
+        .list_secret_requests(false)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(left, ["new-answered", "new-pending"]);
 }

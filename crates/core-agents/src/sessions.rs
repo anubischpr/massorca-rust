@@ -585,6 +585,13 @@ impl Agents {
         Ok((decl.clone(), program))
     }
 
+    /// Whether `token` is the run token of a live run of `session`, compared in constant time.
+    pub fn run_token_matches(&self, session: &str, token: &str) -> bool {
+        lock(&self.inner.status)
+            .get(session)
+            .is_some_and(|run| tokens_match(&run.token, token))
+    }
+
     /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
     /// `agent.hook_refused` and changes nothing; an event the kind does not map, or maps to `ignore`, changes nothing.
     pub fn hook(&self, params: &AgentHookParams) -> Result<(), AgentError> {
