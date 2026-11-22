@@ -873,7 +873,40 @@ mod tests {
         };
 
         for _ in 0..2 {
-            let failed = agents.delegate(params()).unwrap_err();
+            // TEMPORARY diagnostics for the Linux CI run: what a direct spawn of the program does, and what the
+            // session's run did after a successful delegate.
+            let failed = match agents.delegate(params()) {
+                Err(failed) => failed,
+                Ok(delegated) => {
+                    let program = root.path().join("broken.exe");
+                    let direct = std::process::Command::new(&program)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .map(|mut child| child.wait().map(|status| format!("{status}")));
+                    let mut states = Vec::new();
+                    for _ in 0..20 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        states.push(
+                            agents
+                                .show(&delegated.session.id)
+                                .map(|session| format!("{:?}", session.execution))
+                                .unwrap_or_else(|error| error.to_string()),
+                        );
+                    }
+                    let resolved = crate::resolve::resolve(
+                        &program.to_string_lossy(),
+                        &crate::SearchEnv::current(),
+                    );
+                    panic!(
+                        "delegate succeeded: program={} resolved={resolved:?} direct_spawn={direct:?} \
+                         session={:?} states={states:?}",
+                        program.display(),
+                        delegated.session
+                    );
+                }
+            };
             assert!(failed.message.contains("lead-1"), "{failed}");
             let data = failed.data.expect("data names the kept workspace");
             assert_eq!(data["workspace"]["name"], "lead-1");
