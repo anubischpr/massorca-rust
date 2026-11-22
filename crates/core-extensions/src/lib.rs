@@ -7,6 +7,7 @@ pub mod catalogue;
 mod error;
 pub mod layout;
 pub mod lockfile;
+pub mod source;
 
 pub use error::{Error, HookError, codes};
 pub use layout::Layout;
