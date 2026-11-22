@@ -15,21 +15,21 @@ use interprocess::os::windows::security_descriptor::{AsSecurityDescriptor, Secur
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
-    SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-    FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo,
+    FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo, READ_CONTROL,
     SetFileInformationByHandle,
 };
 
-use crate::windows_endpoint_access::{current_user_sid, wide_to_string};
+use crate::windows_endpoint_access::{current_user_sid, sid_to_string, wide_to_string};
 
 /// The SDDL of an owner-only directory: full access for the current user and for SYSTEM, inherited by every file and
 /// directory created in it (`OICI`), and nothing from the parent (`P`).
@@ -51,7 +51,12 @@ fn owner_only_dir_descriptor() -> io::Result<SecurityDescriptor> {
 /// access to it. Fails with `AlreadyExists` when anything is at the path, a link or junction included, which is never
 /// followed.
 pub fn create_dir_owner_only(dir: &Path) -> io::Result<()> {
-    let descriptor = owner_only_dir_descriptor()?;
+    // The owner is set to the current user explicitly: an elevated process's token would otherwise make the
+    // Administrators group the owner, and [`PinnedDir::open`] accepts only the current user.
+    let sddl = format!("O:{}{}", current_user_sid()?, owner_only_dir_sddl()?);
+    let sddl = U16CString::from_str(sddl)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let descriptor = SecurityDescriptor::deserialize(&sddl)?;
     let name = wide_path(dir)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -190,18 +195,22 @@ pub fn dacl_sddl(path: &Path) -> io::Result<String> {
 /// A directory held open so that nobody, this process included, can rename, delete or replace it while the guard
 /// lives: it is opened without `FILE_SHARE_DELETE`. It is opened as itself (`FILE_FLAG_OPEN_REPARSE_POINT`), and a
 /// reparse point (a junction or a link) or anything but a directory is refused, so the pinned directory is the real
-/// one. Only [`PinnedDir::rename_to`], through this handle, can still move it.
+/// one. Its owner must be the current user: an owner keeps the right to rewrite the access list, so a directory
+/// another principal owns is refused, the Administrators group included (an elevated process's default owner; the
+/// directories this crate creates name the user as owner instead). Only [`PinnedDir::rename_to`], through this
+/// handle, can still move it.
 #[derive(Debug)]
 pub struct PinnedDir {
     file: File,
 }
 
 impl PinnedDir {
-    /// Opens and pins `dir`. Fails with `InvalidInput` when it is a reparse point or not a directory, and with a
-    /// sharing violation when another handle already holds it without sharing delete.
+    /// Opens and pins `dir`. Fails with `InvalidInput` when it is a reparse point or not a directory, with
+    /// `PermissionDenied` when its owner is not the current user, and with a sharing violation when another handle
+    /// already holds it without sharing delete.
     pub fn open(dir: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE | READ_CONTROL)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(dir)?;
@@ -218,7 +227,41 @@ impl PinnedDir {
                 format!("{} is not a directory", dir.display()),
             ));
         }
-        Ok(Self { file })
+        let pinned = Self { file };
+        check_owner(&pinned.owner()?, &current_user_sid()?)
+            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))?;
+        Ok(pinned)
+    }
+
+    /// The SID of the pinned directory's owner, read through the handle.
+    pub fn owner(&self) -> io::Result<String> {
+        let mut owner: PSID = ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        // SAFETY: the handle is open with READ_CONTROL for the life of `self`; only the owner and the descriptor
+        // out-pointers are requested, and the call allocates the descriptor with LocalAlloc.
+        let status = unsafe {
+            GetSecurityInfo(
+                self.file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        let result = if owner.is_null() {
+            Err(io::Error::other("the directory has no owner"))
+        } else {
+            sid_to_string(owner)
+        };
+        // SAFETY: the descriptor was allocated by GetSecurityInfo and `owner` points into it; neither is used after.
+        unsafe { LocalFree(descriptor) };
+        result
     }
 
     /// Renames the pinned directory to `target` (a full path) through its own handle, so the pin holds until the
@@ -259,6 +302,18 @@ impl PinnedDir {
     }
 }
 
+/// Refuses, with `PermissionDenied`, an owner that is not the current user.
+fn check_owner(owner: &str, user: &str) -> io::Result<()> {
+    if owner == user {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("owned by {owner}, not by the current user"),
+        ))
+    }
+}
+
 fn wide_path(path: &Path) -> io::Result<U16CString> {
     U16CString::from_os_str(path.as_os_str())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
@@ -267,8 +322,8 @@ fn wide_path(path: &Path) -> io::Result<U16CString> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PinnedDir, create_dir_owner_only, dacl_sddl, has_owner_only_dacl, is_owner_only_sddl,
-        owner_only_dir_sddl, restrict_dir_to_owner,
+        PinnedDir, check_owner, create_dir_owner_only, dacl_sddl, has_owner_only_dacl,
+        is_owner_only_sddl, owner_only_dir_sddl, restrict_dir_to_owner,
     };
 
     #[test]
@@ -287,6 +342,37 @@ mod tests {
         assert!(dir.is_dir());
         pin.rename_to(&parent.path().join("moved")).unwrap();
         assert!(parent.path().join("moved").join("file").exists());
+    }
+
+    /// Without admin rights no directory owned by another principal can be made here, so the refusal is tested on the
+    /// owner comparison itself, with synthetic SIDs; the accept path runs on a real directory below.
+    #[test]
+    fn an_owner_other_than_the_current_user_is_refused() {
+        let user = "S-1-5-21-1-2-3-1001";
+        for other in ["S-1-5-21-1-2-3-1005", "S-1-5-32-544", "S-1-5-18"] {
+            let error = check_owner(other, user).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "{other}"
+            );
+        }
+        check_owner(user, user).unwrap();
+    }
+
+    #[test]
+    fn a_directory_this_user_creates_is_owned_by_it_and_pinned() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("owned");
+        create_dir_owner_only(&dir).unwrap();
+        let pin = PinnedDir::open(&dir).unwrap();
+        assert_eq!(pin.owner().unwrap(), current_user_sid().unwrap());
+        let plain = parent.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        assert_eq!(
+            PinnedDir::open(&plain).unwrap().owner().unwrap(),
+            current_user_sid().unwrap()
+        );
     }
 
     #[test]

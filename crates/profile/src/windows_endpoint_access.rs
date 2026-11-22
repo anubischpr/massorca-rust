@@ -9,7 +9,7 @@ use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+use windows_sys::Win32::Security::{GetTokenInformation, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -76,8 +76,13 @@ fn token_user_sid(token: HANDLE) -> io::Result<String> {
     let user = buffer.as_ptr().cast::<TOKEN_USER>();
     // SAFETY: on success the buffer starts with a TOKEN_USER, and its SID points into the same buffer, which lives through this call.
     let sid = unsafe { (*user).User.Sid };
+    sid_to_string(sid)
+}
+
+/// The string form (`S-1-...`) of a SID. `sid` must point at a valid SID for the duration of the call.
+pub(crate) fn sid_to_string(sid: PSID) -> io::Result<String> {
     let mut text: *mut u16 = ptr::null_mut();
-    // SAFETY: `sid` is a valid SID from the buffer, and `text` is a valid out-pointer for the allocated string.
+    // SAFETY: the caller passes a valid SID, and `text` is a valid out-pointer for the allocated string.
     if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
         return Err(io::Error::last_os_error());
     }
