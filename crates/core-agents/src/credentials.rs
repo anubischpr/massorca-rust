@@ -1,4 +1,4 @@
-//! Credential homes, one per profile and kind (decision 0056): import.
+//! Credential homes, one per profile and kind (decision 0056): import, show and remove.
 //!
 //! Import copies only the files the kind declares, only regular files, at most [`MAX_FILE_BYTES`] each. The new home
 //! is built in a temporary sibling directory and renamed into place, so a failed import leaves an existing home as it
@@ -12,9 +12,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use std::time::UNIX_EPOCH;
 
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{CredentialsImported, ImportedFile};
+use massorca_protocol::methods::agents::{
+    CredentialFile, CredentialsImported, CredentialsRemoved, CredentialsShown, ImportedFile,
+};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
@@ -113,6 +116,62 @@ pub fn import(
         kind: decl.id.clone(),
         home: home.display().to_string(),
         files,
+    })
+}
+
+/// Whether the kind's home exists, and each declared file in it: present when it is a regular file, with its size
+/// and modification time.
+pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = home_of(profile_dir, &decl.id)?;
+    let exists = home_state(&home)? == HomeState::Directory;
+    let names = decl
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.files.clone())
+        .unwrap_or_default();
+    let files = names
+        .into_iter()
+        .map(|name| {
+            let meta = exists
+                .then(|| fs::symlink_metadata(home.join(&name)).ok())
+                .flatten()
+                .filter(|meta| meta.is_file() && !is_link(meta));
+            CredentialFile {
+                present: meta.is_some(),
+                bytes: meta.as_ref().map(fs::Metadata::len),
+                modified_at_ms: meta.as_ref().and_then(modified_ms),
+                name,
+            }
+        })
+        .collect();
+    Ok(CredentialsShown {
+        kind: decl.id.clone(),
+        home: home.display().to_string(),
+        exists,
+        files,
+    })
+}
+
+/// Deletes the kind's home. A kind that is no longer declared still has its home removed; a home that is a link is
+/// refused, never followed.
+pub fn remove(profile_dir: &Path, kind: &str) -> Result<CredentialsRemoved, AgentError> {
+    let home = home_of(profile_dir, kind)?;
+    let _gate = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let removed = match home_state(&home)? {
+        HomeState::Missing => false,
+        HomeState::Directory => {
+            fs::remove_dir_all(&home)
+                .map_err(|error| internal("delete the credential home", &error))?;
+            true
+        }
+    };
+    if removed {
+        tracing::info!(kind, "removed agent credentials");
+    }
+    Ok(CredentialsRemoved {
+        kind: kind.to_owned(),
+        removed,
     })
 }
 
@@ -371,6 +430,11 @@ fn put_in_place(staging: &Path, home: &Path, kind: &str, replace: bool) -> Resul
             Ok(())
         }
     }
+}
+
+fn modified_ms(meta: &fs::Metadata) -> Option<i64> {
+    let since = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_millis()).ok()
 }
 
 fn not_found(kind: &str) -> AgentError {
@@ -641,6 +705,100 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn show_and_remove_follow_the_home() {
+        let fixture = Fixture::new(&["token.json", "config.toml"]);
+        let before = show(fixture.profile.path(), "fake").unwrap();
+        assert!(!before.exists);
+        assert_eq!(before.files.len(), 2);
+        assert!(
+            before
+                .files
+                .iter()
+                .all(|file| !file.present && file.bytes.is_none())
+        );
+
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.source_file("config.toml", b"fake = true\n");
+        fixture.import(false).unwrap();
+        fs::remove_file(fixture.home().join("config.toml")).unwrap();
+        let after = show(fixture.profile.path(), "fake").unwrap();
+        assert!(after.exists);
+        assert_eq!(after.home, fixture.home().display().to_string());
+        assert!(after.files[0].present);
+        assert_eq!(after.files[0].bytes, Some(FAKE_TOKEN.len() as u64));
+        assert!(after.files[0].modified_at_ms.is_some_and(|ms| ms > 0));
+        assert!(!after.files[1].present);
+
+        assert!(remove(fixture.profile.path(), "fake").unwrap().removed);
+        assert!(!fixture.home().exists());
+        assert!(!remove(fixture.profile.path(), "fake").unwrap().removed);
+        assert_eq!(
+            remove(fixture.profile.path(), "../x").unwrap_err().code,
+            codes::AGENT_KIND_NOT_FOUND
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_refused_in_the_source_and_never_followed_at_the_home() {
+        use std::os::unix::fs::symlink;
+        let fixture = Fixture::new(&["token.json"]);
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
+        symlink(
+            elsewhere.path().join("real.json"),
+            fixture.source.path().join("token.json"),
+        )
+        .unwrap();
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert_eq!(error.data.unwrap()["files"][0]["reason"], "a link");
+
+        fs::remove_file(fixture.source.path().join("token.json")).unwrap();
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fs::create_dir_all(fixture.home().parent().unwrap()).unwrap();
+        symlink(elsewhere.path(), fixture.home()).unwrap();
+        for error in [
+            fixture.import(true).unwrap_err(),
+            show(fixture.profile.path(), "fake").unwrap_err(),
+            remove(fixture.profile.path(), "fake").unwrap_err(),
+        ] {
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        }
+        assert!(
+            elsewhere.path().join("real.json").exists(),
+            "the link target is untouched"
+        );
+    }
+
+    /// A junction needs no privilege on Windows, so this always runs there.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_at_the_home_is_never_followed() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
+        fs::create_dir_all(fixture.home().parent().unwrap()).unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(fixture.home())
+            .arg(elsewhere.path())
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "mklink /J failed");
+        for error in [
+            fixture.import(true).unwrap_err(),
+            show(fixture.profile.path(), "fake").unwrap_err(),
+            remove(fixture.profile.path(), "fake").unwrap_err(),
+        ] {
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        }
+        assert!(elsewhere.path().join("real.json").exists());
+        assert!(!elsewhere.path().join("token.json").exists());
     }
 
     /// A file symlink needs Developer Mode or a privilege on Windows; without it the test says so and passes.
