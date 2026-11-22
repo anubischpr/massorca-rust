@@ -259,16 +259,17 @@ fn finish_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, E
     Ok(view_of(&row, &session))
 }
 
-/// Clears the outcome and the error, so the task shows its session again. Refused while its agent session runs.
+/// Clears the outcome, the error and the session link, so the task returns to Open and can start again. Refused while its agent session runs.
 fn reopen_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
     let mut row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
     row.outcome = None;
     row.error = None;
+    row.session_id = None;
     row.updated_at = now_ms();
     save(store, &row)?;
-    Ok(view_of(&row, &session))
+    Ok(view_of(&row, &Session::Unstarted))
 }
 
 fn remove_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {

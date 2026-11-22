@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use massorca_client::Subscription;
+use massorca_core_store::{Store, TaskOutcome};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::Outcome;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
@@ -17,7 +18,7 @@ use massorca_protocol::methods::teams::{
 };
 use tokio::time::{sleep, timeout};
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use super::common::{connect, profile, remote_code, start, stop, temp_home};
 
 fn team_params(name: &str) -> TeamCreateParams {
     TeamCreateParams {
@@ -685,5 +686,60 @@ async fn removing_a_team_removes_its_tasks_and_publishes_task_changed_for_each()
         .await
         .expect_err("its tasks are gone");
     assert_eq!(remote_code(&task_gone), codes::TASK_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn reopening_a_task_unlinks_its_session_so_it_can_start_again() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &team_params("alpha"))
+        .await
+        .expect("team.create");
+    let task: Task = client
+        .call(tasks::CREATE, &task_params("alpha", "ship it"))
+        .await
+        .expect("task.create");
+
+    // A session linked the way task.start will link one, to a session the agents domain has forgotten.
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store opens");
+    let mut linked = store
+        .get_task(&task.id)
+        .expect("the task is stored")
+        .expect("the task row");
+    linked.session_id = Some("forgotten-session".to_owned());
+    linked.outcome = Some(TaskOutcome::Failure);
+    assert!(store.update_task(&linked).expect("the link is stored"));
+    let stuck: Task = client
+        .call(
+            tasks::SHOW,
+            &TaskRef {
+                task: task.id.clone(),
+            },
+        )
+        .await
+        .expect("task.show");
+    assert_eq!(
+        (stuck.column, stuck.state),
+        (Column::Waiting, CardState::Stuck)
+    );
+
+    let reopened: Task = client
+        .call(
+            tasks::REOPEN,
+            &TaskRef {
+                task: task.id.clone(),
+            },
+        )
+        .await
+        .expect("task.reopen");
+    assert_eq!(reopened.session_id, None);
+    assert_eq!(reopened.outcome, None);
+    assert_eq!(
+        (reopened.column, reopened.state),
+        (Column::Open, CardState::NotStarted)
+    );
     stop(running).await;
 }
