@@ -108,8 +108,8 @@ impl Hosts {
     }
 
     /// Stores a new host with its device identity. Refuses to replace an existing host, and to write into a profile
-    /// others could change. `hosts` and the host's folder are held open without following links, and each file is
-    /// written through the open folder (relative to its descriptor on Unix), so no link redirects a write.
+    /// others could change. The files are written into a staged folder held open without following links, and the
+    /// folder is renamed to the host's name only once all of them are there, so a crash never leaves half a host.
     pub fn add(&self, record: &HostRecord, identity: &TlsIdentity) -> Result<(), ClientError> {
         validate_host_name(&record.name)?;
         let dir = self.dir.join(&record.name);
@@ -119,16 +119,25 @@ impl Hosts {
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
         hosts.sweep_leftovers()?;
-        let host = hosts.child(&record.name)?;
-        host.sweep_leftovers()?;
+        // A host folder without a host file is what an interrupted add of an older build left: it never became a host.
+        if fs::symlink_metadata(dir).is_ok() {
+            hosts.remove_child_dir(&record.name)?;
+        }
         let (key_pem, cert_pem) = identity.to_pem().map_err(|error| {
             ClientError::Protocol(format!("cannot save the device key: {error}"))
         })?;
         let json = serde_json::to_vec_pretty(record)
             .map_err(|error| ClientError::Protocol(error.to_string()))?;
-        host.write_file(KEY_FILE, key_pem.as_bytes())?;
-        host.write_file(CERT_FILE, cert_pem.as_bytes())?;
-        host.write_file(HOST_FILE, &json)?;
+        let staged = hosts.staged_child()?;
+        let written = staged
+            .write_file(KEY_FILE, key_pem.as_bytes())
+            .and_then(|()| staged.write_file(CERT_FILE, cert_pem.as_bytes()))
+            .and_then(|()| staged.write_file(HOST_FILE, &json));
+        if let Err(error) = written {
+            let _ = hosts.discard(staged);
+            return Err(error.into());
+        }
+        hosts.publish(staged, &record.name)?;
         Ok(())
     }
 
@@ -156,11 +165,23 @@ pub fn validate_host_name(name: &str) -> Result<(), ClientError> {
             .next()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        && name != "local";
+        && name != "local"
+        && !is_windows_reserved(name);
     if valid {
         Ok(())
     } else {
         Err(ClientError::InvalidHostName(name.to_owned()))
+    }
+}
+
+/// Whether Windows reserves `name` for a device, so no file or folder can have it: CON, PRN, AUX, NUL, COM1 to COM9 and
+/// LPT1 to LPT9, in any case, alone or before an extension. Trailing dots and spaces cannot appear in a host name.
+fn is_windows_reserved(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
+    match base.as_bytes() {
+        b"con" | b"prn" | b"aux" | b"nul" => true,
+        [b'c', b'o', b'm', digit] | [b'l', b'p', b't', digit] => (b'1'..=b'9').contains(digit),
+        _ => false,
     }
 }
 
@@ -466,5 +487,86 @@ mod tests {
             other => panic!("expected a refusal, got {other:?}"),
         }
         assert!(!hosts.join("office").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_crash_while_adding_leaves_no_host_and_the_next_add_succeeds() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        let dir = profile.dir().join("hosts");
+        drop(massorca_profile::open_private_dir(&dir).expect("hosts"));
+        // This layout: a staged folder that never got its host file.
+        let staged = dir.join(".writing-crashed");
+        std::fs::create_dir(&staged).expect("a staged folder");
+        std::fs::write(staged.join("device.key"), b"old key").expect("a key");
+        // An older build's layout: the host folder itself, with a key but no host file.
+        let half = dir.join("office");
+        std::fs::create_dir(&half).expect("a half-written host");
+        std::fs::write(half.join("device.key"), b"old key").expect("a key");
+        let hosts = Hosts::of(&profile);
+        assert!(
+            hosts.list().expect("listed").is_empty(),
+            "neither is a host"
+        );
+
+        hosts
+            .add(&office(), &identity)
+            .expect("added over the leftovers");
+
+        assert_eq!(hosts.get("office").expect("the host").name, "office");
+        assert_ne!(
+            std::fs::read(half.join("device.key")).expect("the new key"),
+            b"old key"
+        );
+        assert!(!staged.exists(), "the staged folder was swept");
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("listed")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, vec!["office".to_owned()]);
+    }
+
+    #[test]
+    fn windows_reserved_device_names_and_trailing_dots_or_spaces_are_not_host_names() {
+        use super::validate_host_name;
+
+        for name in [
+            "con",
+            "prn",
+            "aux",
+            "nul",
+            "com1",
+            "com9",
+            "lpt1",
+            "lpt9",
+            "CON",
+            "Nul",
+            "aux.txt",
+            "nul.tar.gz",
+            "office.",
+            "office ",
+            "office..",
+            "com1.",
+        ] {
+            assert!(validate_host_name(name).is_err(), "{name:?}");
+        }
+        for name in [
+            "console",
+            "com0",
+            "com10",
+            "lpt",
+            "auxiliary",
+            "null",
+            "office",
+        ] {
+            assert!(validate_host_name(name).is_ok(), "{name:?}");
+        }
     }
 }

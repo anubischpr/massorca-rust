@@ -214,6 +214,13 @@ mod tests {
                 json!({ "paths": [planted().display().to_string()] }),
             ),
             (
+                RootAccessError::ReadableByOthers {
+                    paths: vec![planted()],
+                },
+                "profile.readable_by_others",
+                json!({ "paths": [planted().display().to_string()] }),
+            ),
+            (
                 RootAccessError::UnsafeLocation { path: planted() },
                 "profile.unsafe_location",
                 json!({ "path": planted().display().to_string() }),
@@ -244,6 +251,29 @@ mod tests {
                 .message
                 .contains("other programs on this computer could change these files")
                 && error.message.contains("massorca profile secure"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_hosts_folder_readable_by_others_says_why_and_what_to_do() {
+        let error = CliError::from(ServiceError::from(RootAccessError::ReadableByOthers {
+            paths: vec![planted()],
+        }));
+
+        assert_eq!(error.code, "profile.readable_by_others");
+        assert!(
+            error.message.contains(
+                "other programs on this computer could read these files, which hold secrets"
+            ),
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("remove the folder or restrict it to yourself"),
             "{}",
             error.message
         );

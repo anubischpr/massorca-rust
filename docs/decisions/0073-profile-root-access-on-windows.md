@@ -141,16 +141,25 @@ owner then makes the home private once with `massorca profile secure`.
   Windows read access for others is refused as well
   (`profile.readable_by_others`), because the folder holds a device key,
   and a folder only the accepted owners and Administrators can reach is
-  given the owner-only DACL. On Unix a folder others can only read (such as
+  given the owner-only DACL. That also resets the inherited entries of
+  everything below it, so a grant it used to pass on through an
+  inherit-only entry is taken away; an explicit grant below that still
+  lets others in is refused with `profile.readable_by_others`. On Unix a folder others can only read (such as
   `0755` or `0750`) is set to `0700`. Files are written through a temporary
   file with a random name, created new and the owner's alone from the start
   (an owner-only descriptor passed to `CreateFileW` on Windows, `openat`
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode `0600` on Unix), renamed
   into place, and deleted on any failure. `remove` renames the host folder
   through its open handle to a tombstone with a random name
-  (`FileRenameInfo` on Windows, `renameat` on Unix), then deletes the
-  tombstone by path inside the held `hosts` folder with
-  `fs::remove_dir_all`, which never follows links. `list` skips tombstones
+  (`FileRenameInfo` on Windows, `renameat` on Unix), then deletes it. On
+  Unix that delete, like every sweep, works relative to the folder's
+  descriptor (`unlinkat`, and `openat` with `O_NOFOLLOW | O_DIRECTORY` for
+  each folder below); on Windows it goes by path inside the held `hosts`
+  folder with `fs::remove_dir_all`, which never follows links. `add`
+  writes all of a host's files into a staged `.writing-` folder and
+  renames it to the host's name only at the end, so a crash leaves no
+  half host; a host folder without its host file, from an older build, is
+  removed before the new one is published. `list` skips tombstones
   and temporary files, and `add` and `remove` delete those a crash left,
   retrying each a few times. `Client::pair` checks before it uses
   the offer, which works only once. Autostart first checks the location

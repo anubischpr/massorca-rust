@@ -165,6 +165,20 @@ impl PrivateDir {
         Ok(())
     }
 
+    /// Deletes `staged`, a folder `staged_child` made in this one that will not be published.
+    pub fn discard(&self, staged: PrivateDir) -> io::Result<()> {
+        let name = staged
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "a staged folder has no name")
+            })?
+            .to_owned();
+        drop(staged);
+        self.delete_entry(&name)
+    }
+
     /// Writes `name` in this folder through a temporary file with an unpredictable name, created new, never through a
     /// link, and the owner's alone from the moment it exists (`0600` on Unix; an owner-only descriptor given to
     /// `CreateFileW` on Windows). It is then renamed over `name`; on any failure it is deleted.
