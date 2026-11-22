@@ -7,6 +7,10 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::{AttachUpdate, Client, ConnectOptions};
+use massorca_desktop::model::terminals::{TerminalStatus, may_run, status_of};
+use massorca_desktop::model::work_panel::{
+    CloseStep, TerminalSelection, close_step, detached_text, status_banner, terminal_strip,
+};
 use massorca_desktop::service::{
     ServiceBridge, ServiceHandle, StoreState, StoreUpdate, StreamEnd, TerminalStream,
     TerminalStreamItem, connect_options, feed_events,
@@ -425,6 +429,89 @@ async fn a_terminal_is_created_attached_typed_into_resized_detached_and_killed()
         .await
         .expect("the stream ends in time");
     assert_eq!(end, Some(TerminalStreamItem::Ended(StreamEnd::Finished)));
+
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn the_work_panel_strip_follows_the_store_and_closing_asks_by_status() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let repo_dir = home.path().join("demo");
+    repo(&repo_dir);
+    let service = start_service(home.path()).await;
+    let project_id = add_project(home.path(), &repo_dir).await;
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first list", |s| {
+        s.connection.is_connected() && s.loaded
+    })
+    .await;
+    let workspace = handle
+        .create_workspace(workspace_params(&project_id))
+        .await
+        .expect("the workspace is created");
+    let terminal = handle
+        .create_terminal(create_params(&workspace.id))
+        .await
+        .expect("the terminal is created");
+    let id = terminal.id.clone();
+    until(&mut updates, &mut state, "the terminal in the store", |s| {
+        s.terminals.iter().any(|t| t.id == id)
+    })
+    .await;
+
+    // A running terminal is the strip's selected tab, and closing it asks first.
+    let mut selection = TerminalSelection::default();
+    let strip = terminal_strip(&state, &workspace.id, &selection);
+    let listed: Vec<&str> = strip.tabs.iter().map(|tab| tab.id.as_str()).collect();
+    assert_eq!(listed, [id.as_str()]);
+    assert_eq!(strip.selected, Some(0));
+    assert_eq!(
+        close_step(strip.tabs[0].status),
+        CloseStep::AskWhetherToStop
+    );
+    assert_eq!(status_banner(strip.tabs[0].status), None);
+
+    // Killed, the tab says it has ended, and closing it needs no question.
+    handle
+        .kill_terminal(&id, true)
+        .await
+        .expect("the terminal is killed");
+    until(&mut updates, &mut state, "the kill in the store", |s| {
+        s.terminals
+            .iter()
+            .any(|t| t.id == id && !may_run(status_of(t)))
+    })
+    .await;
+    let strip = terminal_strip(&state, &workspace.id, &selection);
+    assert!(matches!(
+        strip.tabs[0].status,
+        TerminalStatus::Exited {
+            reason: ExitReason::Killed,
+            ..
+        }
+    ));
+    assert_eq!(close_step(strip.tabs[0].status), CloseStep::Forget);
+    assert_eq!(
+        detached_text(strip.tabs[0].status),
+        "This terminal has exited."
+    );
+
+    // Closing forgets the terminal, and the selection of it goes with it.
+    selection.select(&workspace.id, &id);
+    handle
+        .close_terminal(&id)
+        .await
+        .expect("the terminal is closed");
+    until(&mut updates, &mut state, "the terminal is gone", |s| {
+        s.terminals.iter().all(|t| t.id != id)
+    })
+    .await;
+    selection.forget(&id);
+    let strip = terminal_strip(&state, &workspace.id, &selection);
+    assert!(strip.tabs.is_empty());
+    assert_eq!(strip.selected, None);
 
     stop_service(service).await;
 }
