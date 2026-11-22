@@ -52,6 +52,12 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
     assert_eq!(
         checked,
         BTreeSet::from([
+            "agent.accounts.activate",
+            "agent.accounts.add",
+            "agent.accounts.check",
+            "agent.accounts.import",
+            "agent.accounts.list",
+            "agent.accounts.remove",
             "agent.attach",
             "agent.credentials.import",
             "agent.credentials.remove",
