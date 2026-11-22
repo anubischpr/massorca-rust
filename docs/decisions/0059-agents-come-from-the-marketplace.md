@@ -62,12 +62,17 @@ and what the agent states mean. The two sessions agreed the format below.
   optional `uninstall` commands per OS. Packages bundle no binaries.
   - If the program is already `detected`, the package registers at once.
   - Otherwise the install review shows the exact official command. It runs
-    only after the person confirms it as a High-risk step, and is never
-    elevated unless the vendor's installer asks. On a headless host,
-    `--yes-run-installer` gives that consent. The verify command must then
-    succeed.
-  - On remove, the CLI is offered for removal only if the lockfile says
-    this package installed it.
+    only after the person confirms it as a High-risk step, never
+    silently. It is never elevated unless the vendor's own installer asks
+    and the person accepts that prompt. On a headless host,
+    `massorca extension install <id> --yes-run-installer` gives the same
+    consent through the CLI. The verify command must then succeed, or the
+    install fails and the package is not registered.
+  - What was run is recorded in the lockfile: the command, the time, its
+    exit code, and whether this package installed the CLI.
+  - On remove, the agent is unregistered. A CLI the package did not install
+    is left alone. If the package installed it, the person is offered its
+    `uninstall` command.
   - The extension runtime runs the installer and the verify command. In
     M3 nothing runs them yet: the Marketplace entry shows the command for
     the person to copy until `core-extensions` lands. There is no separate
@@ -150,6 +155,13 @@ and what the agent states mean. The two sessions agreed the format below.
    dev-folder install exists. Then they fold into it.
 
 ## Alternatives
+
+- **Show the vendor's install command and never run it (display-only).**
+  Installing an agent from the Marketplace would then end with a command to
+  copy into another terminal, not with an agent the person can use. That
+  breaks the owner's rule that the Marketplace is where agents get
+  installed. Running the official command only after an explicit High-risk
+  confirmation keeps the person in control without that detour.
 
 - **Keep built-ins as a fixed list and let Settings add agents.** Settings
   would become a second install path, against the owner's rule.
