@@ -30,7 +30,7 @@ use crate::data::DataSource;
 use crate::launch_options::DebugFocus;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::{
-    MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
+    AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
 };
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
@@ -128,6 +128,8 @@ pub struct Shell {
     _marketplace_search_changes: Subscription,
     /// The code field of the account sign-in dialog.
     marketplace_code: Entity<TextField>,
+    /// The last refused change, with the account it concerns (None for the whole Connection part).
+    marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
@@ -282,6 +284,7 @@ impl Shell {
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
             marketplace_code,
+            marketplace_error: None,
             marketplace_uninstall: None,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
