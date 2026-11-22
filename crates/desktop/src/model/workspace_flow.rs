@@ -12,6 +12,9 @@ pub const NO_PROJECT_LABEL: &str = "No project";
 /// The confirm button of every destructive delete dialog (D-WS-16).
 pub const DELETE_ACTION: &str = "Delete workspace";
 
+/// Helper under the "Keep the branch" choice, which stays off until the service takes it.
+pub const KEEP_BRANCH_LATER: &str = "Choosing to keep the branch comes later.";
+
 /// What a row of the project menu stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectChoice {

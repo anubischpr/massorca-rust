@@ -2,7 +2,7 @@
 
 use super::Shell;
 use super::workspace_dialogs::{AddProjectDialog, CreateDialog};
-use crate::model::workspace_flow::{DialogKind, ProjectChoice, RemoveFlow};
+use crate::model::workspace_flow::{DialogKind, KEEP_BRANCH_LATER, ProjectChoice, RemoveFlow};
 use gpui::{App, Focusable, WeakEntity, div, prelude::*, px};
 use massorca_protocol::methods::projects::Project;
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -131,14 +131,25 @@ pub(super) fn remove_dialog(flow: &RemoveFlow, shell: &WeakEntity<Shell>, cx: &A
         DialogKind::Error => DialogVariant::Error,
     };
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
+    let destructive = copy.kind == DialogKind::Destructive;
+    let mut body = div().flex().flex_col().gap(px(SPACE_3)).child(
+        div()
+            .text_color(theme.palette.text.secondary)
+            .child(copy.body),
+    );
+    if destructive {
+        // Shown off: the remove call has no keep flag yet (D-WS-16).
+        body = body.child(
+            Checkbox::new("remove-keep-branch", false)
+                .label("Keep the branch")
+                .helper(KEEP_BRANCH_LATER)
+                .disabled(true),
+        );
+    }
     let mut dialog = Dialog::new("remove-workspace", copy.title)
         .open(true)
         .variant(variant)
-        .child(
-            div()
-                .text_color(theme.palette.text.secondary)
-                .child(copy.body),
-        )
+        .child(body)
         .loss(copy.loss)
         .action(copy.action)
         .busy(flow.busy())
