@@ -20,7 +20,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::common::{connect, profile, remote_code, service_config, stop, temp_home};
 
-fn peer() -> PeerInfo {
+pub(crate) fn peer() -> PeerInfo {
     PeerInfo {
         name: "massorca-test-device".to_owned(),
         version: "0.0.0-test".to_owned(),
@@ -28,7 +28,7 @@ fn peer() -> PeerInfo {
 }
 
 /// A service listening on an ephemeral loopback port.
-async fn start_listening(home: &Path) -> RunningService {
+pub(crate) async fn start_listening(home: &Path) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -54,7 +54,7 @@ async fn start_listening(home: &Path) -> RunningService {
     panic!("the network listener did not start");
 }
 
-async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
+pub(crate) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
     let owner = connect(home, "server").await;
     let created: PairingCreated = owner
         .call(
@@ -67,13 +67,13 @@ async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
 }
 
 /// A client profile with its own hosts list.
-fn client_side() -> (TempHome, Hosts) {
+pub(crate) fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)
 }
 
-async fn pair(
+pub(crate) async fn pair(
     hosts: &Hosts,
     offer: &Offer,
     name: &str,
