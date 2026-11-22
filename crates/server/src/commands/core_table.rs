@@ -111,6 +111,42 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             json!({ "type": "object", "properties": { "project": { "type": "string" } } }),
         ),
         command(
+            "device.list",
+            "List the devices paired with the service",
+            "device.list",
+            no_args(),
+        ),
+        command(
+            "device.revoke",
+            "Revoke a paired device",
+            "device.revoke",
+            selector("device"),
+        ),
+        command(
+            "device.whoami",
+            "Show who this connection acts as",
+            "device.whoami",
+            no_args(),
+        ),
+        command(
+            "pair.offer",
+            "Create a one-time pairing offer for a new device",
+            "pairing.create",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
+                    "admin": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "server.status",
+            "Show the service's network listeners and devices",
+            "network.status",
+            no_args(),
+        ),
+        command(
             "workspace.show",
             "Show a workspace",
             "workspace.show",

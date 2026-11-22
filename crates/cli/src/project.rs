@@ -1,26 +1,27 @@
 //! `massorca project add|list|show|rm`: registering and unregistering projects through the service.
 
-use massorca_profile::Profile;
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectKind, ProjectRef};
 
 use crate::args::{ProjectAddArgs, ProjectCommand};
 use crate::connect::connect;
-use crate::cwd_path;
+use crate::cwd_path::PathRules;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::target::Target;
 use crate::workspace_text;
 
-/// Runs one `project` subcommand against the service of `profile`.
+/// Runs one `project` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: ProjectCommand,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
+    let paths = PathRules::for_target(target);
     match command {
         ProjectCommand::Add(args) => {
-            let params = add_params(args)?;
+            let params = add_params(args, paths)?;
             let project = client.project_add(&params).await?;
             output.success(&project, &[workspace_text::project_line(&project, "added")]);
         }
@@ -34,12 +35,12 @@ pub async fn execute(
             output.success(&list, &lines);
         }
         ProjectCommand::Show { project } => {
-            let project = cwd_path::selector(&project)?;
+            let project = paths.selector(&project)?;
             let shown = client.project_show(&ProjectRef { project }).await?;
             output.success(&shown, &workspace_text::project_details(&shown));
         }
         ProjectCommand::Rm { project } => {
-            let project = cwd_path::selector(&project)?;
+            let project = paths.selector(&project)?;
             let removed: Project = client.project_remove(&ProjectRef { project }).await?;
             output.success(
                 &removed,
@@ -51,7 +52,7 @@ pub async fn execute(
 }
 
 /// The protocol params for `project add`, with every path made absolute against the working directory.
-fn add_params(args: ProjectAddArgs) -> Result<ProjectAddParams, CliError> {
+fn add_params(args: ProjectAddArgs, paths: PathRules) -> Result<ProjectAddParams, CliError> {
     let kind = if args.folder {
         Some(ProjectKind::Folder)
     } else if args.git {
@@ -62,10 +63,10 @@ fn add_params(args: ProjectAddArgs) -> Result<ProjectAddParams, CliError> {
     let workspaces_root = args
         .workspaces_root
         .as_deref()
-        .map(cwd_path::absolute)
+        .map(|path| paths.path(path))
         .transpose()?;
     Ok(ProjectAddParams {
-        path: cwd_path::absolute(&args.path)?,
+        path: paths.path(&args.path)?,
         name: args.name,
         kind,
         workspaces_root,

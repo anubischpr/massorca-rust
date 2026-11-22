@@ -3390,7 +3390,9 @@ dependencies = [
  "clap",
  "crossterm",
  "massorca-client",
+ "massorca-core-remote",
  "massorca-core-terminal",
+ "massorca-net",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
@@ -3411,6 +3413,7 @@ name = "massorca-client"
 version = "0.1.0"
 dependencies = [
  "interprocess",
+ "massorca-net",
  "massorca-profile",
  "massorca-protocol",
  "serde",
@@ -3450,6 +3453,17 @@ dependencies = [
  "tracing",
  "win32job",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "massorca-core-remote"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -3567,23 +3581,29 @@ dependencies = [
 name = "massorca-server"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "directories",
  "dunce",
  "interprocess",
  "massorca-client",
  "massorca-core-agents",
  "massorca-core-git",
+ "massorca-core-remote",
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-watch",
  "massorca-core-workspace",
+ "massorca-net",
  "massorca-profile",
  "massorca-protocol",
+ "ring",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tracing",
 ]
 

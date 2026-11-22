@@ -11,7 +11,9 @@ use massorca_protocol::{
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::connection::Origin;
 use crate::context::AppState;
+use crate::network;
 use crate::permission::Principal;
 
 /// How long a client may take to send its first frame.
@@ -40,6 +42,7 @@ pub(crate) async fn accept(
     outbound: &mpsc::Sender<Frame>,
     state: &AppState,
     max_frame_len: u32,
+    origin: &Origin,
 ) -> Option<Negotiated> {
     let first = match timeout(HELLO_TIMEOUT, inbound.recv()).await {
         Ok(Some(first)) => first,
@@ -57,6 +60,7 @@ pub(crate) async fn accept(
     let Frame::Message(Message::Hello {
         protocol,
         capabilities: offered,
+        auth,
         ..
     }) = first
     else {
@@ -75,6 +79,20 @@ pub(crate) async fn accept(
         }
     };
 
+    let principal = match origin {
+        Origin::Local => Principal::Owner,
+        Origin::Network { client_pin, peer } => {
+            match network::authenticate(state, *client_pin, *peer, auth.as_ref()).await {
+                Ok(principal) => principal,
+                Err(error) => {
+                    tracing::info!(%peer, code = %error.code, "a network connection was refused");
+                    refuse(outbound, error).await;
+                    return None;
+                }
+            }
+        }
+    };
+
     let capabilities = state.registries.capabilities.names();
     let connection_id = new_id();
     let welcome = Message::Welcome {
@@ -89,7 +107,7 @@ pub(crate) async fn accept(
         connection_id,
         capabilities: capabilities.into_iter().collect(),
         client_capabilities: offered.into_iter().collect(),
-        principal: Principal::Owner,
+        principal,
     })
 }
 
