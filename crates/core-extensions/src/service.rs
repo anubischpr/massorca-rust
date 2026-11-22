@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use massorca_ext_package::manifest::agent::CliOs;
+use massorca_ext_package::manifest::agent::{CliOs, is_vendor_program};
 use massorca_ext_package::manifest::{self, Manifest};
 use massorca_profile::Profile;
 
@@ -379,6 +379,12 @@ impl Extensions {
                 PlanState::Detected { .. } => record.detected_before_install = true,
                 PlanState::Unsupported => {}
                 PlanState::WillRun { command } => {
+                    if !is_vendor_program(command) {
+                        return Err(Error::InstallerFailed {
+                            agent: adapter.id.clone(),
+                            message: "its program is not on the vendor allowlist".to_owned(),
+                        });
+                    }
                     let data = self.layout.data_dir(&manifest.id);
                     fs::create_dir_all(&data).map_err(Error::io("cannot create", &data))?;
                     let log = self.layout.install_log(&manifest.id);

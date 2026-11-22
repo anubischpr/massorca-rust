@@ -28,7 +28,7 @@ fn agent_package(publisher: &str, id: &str) -> Value {
                     "source": "https://vendor.example/docs/install",
                     "install": [
                         { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm x | iex"] },
-                        { "os": "linux", "command": ["sh", "-c", "curl x | sh"] }
+                        { "os": "linux", "command": ["bash", "-c", "curl x | sh"] }
                     ]
                 }
             }]
@@ -151,7 +151,7 @@ fn the_cli_block_is_checked_field_by_field() {
         ),
         (
             "install",
-            json!([{ "os": "linux", "command": ["sh"] }, { "os": "linux", "command": ["sh"] }]),
+            json!([{ "os": "linux", "command": ["bash"] }, { "os": "linux", "command": ["bash"] }]),
             "one entry per operating system",
         ),
     ];
@@ -182,7 +182,7 @@ fn an_install_step_needs_a_non_empty_argv_and_os_names_are_closed() {
     ));
 
     value["contributes"]["agentAdapters"][0]["cli"]["install"] =
-        json!([{ "os": "freebsd", "command": ["sh"] }]);
+        json!([{ "os": "freebsd", "command": ["bash"] }]);
     assert!(shape_message(&value).contains("unknown variant"));
 }
 
@@ -203,12 +203,12 @@ fn control_characters_are_refused_in_every_cli_argv() {
     let cases: [(&str, Value, &str); 3] = [
         (
             "install",
-            json!([{ "os": "linux", "command": ["sh", "-c", "ok\u{1b}[2Kfake"] }]),
+            json!([{ "os": "linux", "command": ["bash", "-c", "ok\u{1b}[2Kfake"] }]),
             "/install/0/command",
         ),
         (
             "uninstall",
-            json!([{ "os": "linux", "command": ["sh", "a\nb"] }]),
+            json!([{ "os": "linux", "command": ["bash", "a\nb"] }]),
             "/uninstall/0/command",
         ),
         ("verify", json!(["claude", "--version\r"]), "/verify"),

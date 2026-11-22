@@ -62,3 +62,24 @@ fn source_checked_must_be_a_real_date() {
         );
     }
 }
+
+#[test]
+fn an_install_program_must_be_on_the_vendor_allowlist_and_bare() {
+    for program in ["sh", "curl", "/usr/bin/npm", "./npm", "C:/Tools/npm.exe"] {
+        let cli = json!({
+            "binary": "codex", "source": "https://vendor.example/x",
+            "install": [{ "os": "linux", "command": [program, "install"] }]
+        });
+        assert!(
+            problems(cli)
+                .iter()
+                .any(|problem| problem.path.ends_with("/install/0/command")),
+            "{program} is refused"
+        );
+    }
+    let allowed = json!({
+        "binary": "codex", "source": "https://vendor.example/x",
+        "install": [{ "os": "linux", "command": ["npm", "install", "-g", "@openai/codex"] }]
+    });
+    assert!(problems(allowed).is_empty());
+}

@@ -27,7 +27,12 @@ fn a_missing_cli_plans_the_vendor_command_for_this_os() {
     assert_eq!(
         review.cli[0].state,
         PlanState::WillRun {
-            command: vec!["kit-setup".to_owned(), "install".to_owned()]
+            command: vec![
+                "npm".to_owned(),
+                "install".to_owned(),
+                "-g".to_owned(),
+                "kit".to_owned()
+            ]
         }
     );
     assert_eq!(
@@ -50,7 +55,7 @@ fn a_review_serializes_the_plan_state_inline() {
     let review = kit_review(&FakeHost::new());
     let value = serde_json::to_value(&review).expect("serializes");
     assert_eq!(value["cli"][0]["state"], "will_run");
-    assert_eq!(value["cli"][0]["command"][0], "kit-setup");
+    assert_eq!(value["cli"][0]["command"][0], "npm");
     assert_eq!(value["source"]["kind"], "dir");
 }
 
@@ -76,7 +81,7 @@ fn the_fingerprint_covers_the_verify_and_uninstall_commands() {
         .and_then(serde_json::Value::as_array_mut)
         .expect("steps")
     {
-        step["command"] = serde_json::json!(["kit-setup", "remove", "--everything"]);
+        step["command"] = serde_json::json!(["npm", "uninstall", "-g", "kit", "--everything"]);
     }
 
     let consent = fingerprint_of(&base);

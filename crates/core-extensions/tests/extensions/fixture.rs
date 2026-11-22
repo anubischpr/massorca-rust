@@ -11,8 +11,7 @@ use zip::write::SimpleFileOptions;
 /// An agent package `<publisher>.kit` contributing the agent `agent`, whose CLI `binary` has an installer and an
 /// uninstaller on every OS.
 pub fn agent_package(publisher: &str, agent: &str, binary: &str) -> Value {
-    let step =
-        |os: &str, verb: &str| json!({ "os": os, "command": [format!("{binary}-setup"), verb] });
+    let step = |os: &str, verb: &str| json!({ "os": os, "command": ["npm", verb, "-g", binary] });
     json!({
         "id": format!("{publisher}.kit"), "name": "Kit", "version": "1.2.0", "publisher": publisher,
         "description": "A coding agent.", "api": "1.0", "requires": { "massorca": ">=0.1.0" },
@@ -26,7 +25,7 @@ pub fn agent_package(publisher: &str, agent: &str, binary: &str) -> Value {
             "cli": {
                 "binary": binary, "verify": [binary, "--version"], "source": "https://vendor.example/install",
                 "install": [step("windows", "install"), step("linux", "install"), step("macos", "install")],
-                "uninstall": [step("windows", "remove"), step("linux", "remove"), step("macos", "remove")]
+                "uninstall": [step("windows", "uninstall"), step("linux", "uninstall"), step("macos", "uninstall")]
             }
         }] },
         "listing": {

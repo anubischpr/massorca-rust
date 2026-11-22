@@ -221,6 +221,12 @@ impl Extensions {
     }
 
     fn run_uninstall(&self, id: &str, command: Vec<String>) -> CliAction {
+        if !massorca_ext_package::manifest::agent::is_vendor_program(&command) {
+            return CliAction::Failed {
+                message: "its program is not on the vendor allowlist".to_owned(),
+                command,
+            };
+        }
         let log = self.layout.uninstall_log(id);
         let ran = log
             .parent()

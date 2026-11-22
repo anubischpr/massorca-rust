@@ -21,6 +21,16 @@ pub const RESERVED_AGENT_IDS: [&str; 4] = ["claude", "codex", "antigravity", "ge
 /// The publisher allowed to use the reserved agent ids.
 pub const RESERVED_PUBLISHER: &str = "massorca";
 
+/// The programs a vendor install or uninstall command may start, on every OS (0062, second review). A command names one
+/// of these bare, never a path; the manifest refuses any other, and the install refuses it again before it runs.
+pub const VENDOR_PROGRAMS: [&str; 5] = ["winget", "brew", "npm", "powershell", "bash"];
+
+/// Whether a vendor command's argv starts with an allowlisted program.
+pub fn is_vendor_program(argv: &[String]) -> bool {
+    argv.first()
+        .is_some_and(|program| VENDOR_PROGRAMS.contains(&program.as_str()))
+}
+
 /// Whether an id or publisher is the first party's: publisher `massorca` or an id `massorca.*`. Only the built-in
 /// catalogue may ship these; a package from any other source that claims one is refused (0062).
 pub fn reserves_identity(id: &str, publisher: &str) -> bool {
@@ -191,6 +201,15 @@ fn check_steps(steps: &[CliStep], base: &str, problems: &mut Problems) {
             );
         }
         check_argv(&step.command, &at(&here, "command"), problems);
+        if !is_vendor_program(&step.command) {
+            problems.add(
+                at(&here, "command"),
+                format!(
+                    "must start with an allowlisted program: {}",
+                    VENDOR_PROGRAMS.join(", ")
+                ),
+            );
+        }
     }
 }
 

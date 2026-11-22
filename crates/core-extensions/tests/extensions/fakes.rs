@@ -14,9 +14,9 @@ use massorca_core_extensions::host::{CommandRunner, Exit, ProgramResolver};
 pub struct FakeHost {
     programs: Mutex<HashMap<String, PathBuf>>,
     runs: Mutex<Vec<Vec<String>>>,
-    /// Exit codes by the argv's second item (`install`, `remove`, `--version`); missing means 0.
+    /// Exit codes by the argv's second item (`install`, `uninstall`, `--version`); missing means 0.
     exits: Mutex<HashMap<String, i32>>,
-    /// Whether a successful `<binary>-setup install` makes `<binary>` resolve.
+    /// Whether a successful `npm install -g <binary>` makes `<binary>` resolve.
     installs_binary: bool,
 }
 
@@ -81,7 +81,8 @@ impl CommandRunner for FakeHost {
         if code == 0
             && verb == "install"
             && self.installs_binary
-            && let Some(binary) = argv[0].strip_suffix("-setup")
+            && argv[0] == "npm"
+            && let Some(binary) = argv.last()
         {
             self.add_program(binary);
         }
@@ -92,7 +93,7 @@ impl CommandRunner for FakeHost {
     }
 }
 
-/// Holds every `install` run of a program named `slow...` until the test releases it, and reports when each one
+/// Holds every `install` run of a CLI named `slow...` until the test releases it, and reports when each one
 /// starts. Everything else runs on the fake host.
 pub struct Gate {
     pub host: Arc<FakeHost>,
@@ -115,7 +116,9 @@ impl Gate {
 
 impl CommandRunner for Gate {
     fn run(&self, argv: &[String], log: &Path, timeout: Duration) -> io::Result<Exit> {
-        if argv.get(1).map(String::as_str) == Some("install") && argv[0].starts_with("slow") {
+        if argv.get(1).map(String::as_str) == Some("install")
+            && argv.last().is_some_and(|name| name.starts_with("slow"))
+        {
             let _ = self.started.lock().expect("started").send(());
             let _ = self.release.lock().expect("release").recv();
         }

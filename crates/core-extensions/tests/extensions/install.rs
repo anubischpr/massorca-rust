@@ -111,7 +111,10 @@ fn a_successful_installer_is_recorded() {
     s.install(&source, true).expect("installs");
     assert_eq!(
         s.host.runs(),
-        vec![vec!["kit-setup", "install"], vec!["kit", "--version"]]
+        vec![
+            vec!["npm", "install", "-g", "kit"],
+            vec!["kit", "--version"]
+        ]
     );
     let lock = s.lock_json().expect("lockfile");
     let cli = &lock["packages"][0]["cli"][0];
@@ -119,7 +122,7 @@ fn a_successful_installer_is_recorded() {
     assert_eq!(cli["installed_by_package"], true);
     assert_eq!(
         cli["installer"]["command"],
-        serde_json::json!(["kit-setup", "install"])
+        serde_json::json!(["npm", "install", "-g", "kit"])
     );
     assert_eq!(cli["installer"]["exit_code"], 0);
     assert!(s.exists("data/acme.kit/install.log"));
@@ -134,7 +137,7 @@ fn a_failed_installer_leaves_nothing_installed_but_its_log() {
     assert!(s.lock_json().is_none());
     assert!(!s.exists("pkgs/acme.kit"));
     let log = std::fs::read_to_string(s.service.layout().install_log("acme.kit")).expect("log");
-    assert!(log.contains("kit-setup install -> 3"));
+    assert!(log.contains("npm install -g kit -> 3"));
 }
 
 #[test]
@@ -152,7 +155,10 @@ fn a_failed_verify_leaves_nothing_installed() {
         let data = error.data().expect("the error says what ran");
         assert_eq!(data["installer_ran"], true);
         assert_eq!(data["cli_may_remain"], true);
-        assert_eq!(data["command"], serde_json::json!(["kit-setup", "install"]));
+        assert_eq!(
+            data["command"],
+            serde_json::json!(["npm", "install", "-g", "kit"])
+        );
         let log = std::fs::read_to_string(s.service.layout().install_log("acme.kit"))
             .expect("the install log");
         assert!(log.contains("the CLI it installed may remain"), "{log}");

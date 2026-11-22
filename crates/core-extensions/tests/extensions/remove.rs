@@ -129,7 +129,12 @@ fn cleanups_run_only_when_asked_and_their_failures_are_reported() {
 fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_asked() {
     let s = installed(FakeHost::new(), true);
     let offered = s.service.remove("acme.kit", false, false).expect("removes");
-    let command = vec!["kit-setup".to_owned(), "remove".to_owned()];
+    let command = vec![
+        "npm".to_owned(),
+        "uninstall".to_owned(),
+        "-g".to_owned(),
+        "kit".to_owned(),
+    ];
     assert_eq!(
         offered.cli[0].action,
         CliAction::Offered {
@@ -157,7 +162,7 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
 
 #[test]
 fn a_failed_cli_uninstall_is_reported_after_the_removal() {
-    let s = installed(FakeHost::new().exit_for("remove", 2), true);
+    let s = installed(FakeHost::new().exit_for("uninstall", 2), true);
     let removed = s.service.remove("acme.kit", false, true).expect("removes");
     assert!(matches!(removed.cli[0].action, CliAction::Failed { .. }));
     assert_eq!(
