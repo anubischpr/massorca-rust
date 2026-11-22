@@ -3,9 +3,8 @@
 Status: accepted, 2026-11-22. Design: `docs/architecture/extensions.md` §2 to §6. Code: `crates/ext-package`
 (`massorca-ext-package`), pure and without I/O beyond the bytes its callers pass in.
 
-This PR lands the manifest, the contribution kinds, the permission vocabulary, identifiers, paths and the listing.
-Risk and update review, uninstall effects and the archive check follow in the next PR (`ext/package-review`); they are
-specified here so the whole format is decided in one place.
+The format is complete in this PR and its base (`ext/package-format`): the manifest, the contribution kinds, the permission
+vocabulary, identifiers, paths, the listing, risk and update review, uninstall effects and the archive check.
 
 ## Context
 
@@ -106,10 +105,10 @@ adapter, but an adapter does not force the `agents` category.
 | 3 | Host | runtime: the host the item is installed on. Not in the manifest |
 | 4 | Banner | `listing.banner.image`, `listing.banner.examples`, `listing.mention` |
 | 5 | Connection | `listing.connections`, with the permissions each kind needs |
-| 6 | Information | `version`, `api`, `requires.massorca`, `surfaces`, `modes`, `readme`; `category()` (declared or derived); `placements()`, the distinct slots of `contributes.views` in declaration order (the artboard's "Sidebar section" is the `sidebar-section` slot); the permission list with each reason and scope; the risk reasons (next PR) |
+| 6 | Information | `version`, `api`, `requires.massorca`, `surfaces`, `modes`, `readme`; `category()` (declared or derived); `placements()`, the distinct slots of `contributes.views` in declaration order (the artboard's "Sidebar section" is the `sidebar-section` slot); the permission list with each reason and scope; the risk reasons |
 | 7 | Settings (basic) | `contributes.settings` with `section` `basic` |
 | 8 | Advanced Options | `contributes.settings` with `section` `advanced` |
-| 9 | Danger Zone (uninstall) | `uninstall_effects()` (next PR), below |
+| 9 | Danger Zone (uninstall) | `uninstall_effects()`, below |
 
 The category names and the "MassOrca extras" developer label match `docs/design/artboards/bt-marketplace-catalogue.dc.html`
 on main. "Third party" is a label the index source gives, not a manifest field.
@@ -135,7 +134,7 @@ under the reserved `extension.` prefix: `extension.invalid_manifest`, `extension
 `extension.hash_mismatch`, `extension.invalid_archive`, `extension.unsafe_path`, `extension.unsafe_entry`,
 `extension.limit_exceeded`, `extension.missing_file`.
 
-### Risk (next PR, `ext/package-review`)
+### Risk
 
 Computed from permissions and contributions, never read from the manifest. Each reason names its subject and carries its
 review copy.
@@ -153,7 +152,7 @@ review copy.
 risk before and after. `requires_review()` holds when any of them is non-empty, or the risk rises. Updates never widen
 silently (§5).
 
-### Uninstall (next PR, `ext/package-review`)
+### Uninstall
 
 The manifest cannot declare what removal deletes. `uninstall_effects(manifest, cli_installed)` computes it:
 
@@ -164,7 +163,7 @@ The manifest cannot declare what removal deletes. `uninstall_effects(manifest, c
 - The CLI binaries of the agent adapters, only when `cli_installed` is true.
 - Offered, not deleted: the agent credential home (0056) of each agent the package provides.
 
-### Archive (next PR, `ext/package-review`)
+### Archive
 
 A `.mxt` is a zip. `archive::open(bytes, pinned_sha256, limits)`:
 
@@ -193,8 +192,8 @@ The published JSON Schema export is deferred. The Rust types and rules are the s
 
 ## Consequences
 
-- This PR depends on `semver` (with serde) and `serde_path_to_error`, which gives the JSON-pointer path on shape errors.
-  The review PR adds `sha2` and `zip` (deflate only) for the archive check.
+- The crate depends on `semver` (with serde), `serde_path_to_error` (the JSON-pointer path on shape errors), `sha2`, and
+  `zip` (deflate only, for the archive check).
 - Other sessions read these types: `core-agents` takes the agent declaration, `core-extensions` writes the lockfile and
   runs the install, and the protocol carries the error codes. Their interfaces follow this crate's public API.
 - Permission and kind vocabularies are closed. Adding one is a manifest change, reviewed with a contract bump.
