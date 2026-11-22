@@ -423,3 +423,36 @@ $M host remove vps          # revokes the validator device on the server; the br
 - Linux client: only the Windows client was run against the server. WSL was
   unavailable, so Linux coverage is CI plus the VPS server itself.
 - Android (M5) and the desktop UI (M4) are later milestones.
+
+## Sign-off
+
+M2 was signed off on 2026-11-22 with open items, after an independent
+validation. The validator used a client built from main `ca5685db`, against the
+deploy built from `612dd983`. It started from a fresh client home and used the
+client protocol only, with no SSH access to the VPS. The validator's device was
+paired from a single-use standard offer, with scopes read and workspace.
+
+| Check | Result |
+|---|---|
+| Pair with a single-use standard offer (19:27 UTC) | pass |
+| Remote terminal: create, send, read (`m2-validate-ok`, `Linux`), close | pass |
+| Worktree workspace in the `demo-git` project: `git status` before and after a change, then removal with its branch | pass |
+| About 15 separate commands, each reconnecting without pairing again | pass |
+| `git watch` live, reporting a worktree change | pass |
+| A device-admin call refused with `permission.denied`, exit 1 | pass |
+| After the revoke at 19:36:22 UTC: `server status`, `terminal list` and a new `git watch` each refused at once with `auth.device_revoked`, exit 4 | pass |
+
+The validator's client home, with its device key, was deleted afterwards.
+
+Open items, not verified independently:
+
+- The server side: the service unit, the listeners, and surviving a restart.
+- Reconnecting after a server restart.
+- A stream already open when its device is revoked. This is fixed in #162,
+  which is not deployed yet.
+- The revoked devices `second-device` and `m2-validate` still appear in the
+  server's device list.
+
+To close them: once #162, #165 and #166 are on main, redeploy once from main.
+Then rerun only two checks: a stream open when its device is revoked, and
+reconnecting after a server restart.
