@@ -6,6 +6,7 @@ use std::time::Instant;
 use massorca_protocol::methods::git::status::{BranchState, GitStatus, StatusTotals};
 
 use super::fixtures::{project, workspace};
+use super::git::{RESTART_BACKOFF, WatchRestarts};
 use super::{GitUpdate, Refusal, StoreState, StoreUpdate};
 
 fn status() -> GitStatus {
@@ -149,4 +150,27 @@ fn a_git_update_names_its_workspace_for_the_store() {
         degraded: None,
     };
     assert_eq!(update.workspace(), "w9");
+}
+
+#[test]
+fn a_lost_watch_is_started_once_more_and_then_left_stale() {
+    let mut restarts = WatchRestarts::new();
+    assert_eq!(restarts.lost(), Some(RESTART_BACKOFF));
+    assert_eq!(
+        restarts.lost(),
+        None,
+        "the restart is spent, so the panel stays stale"
+    );
+}
+
+#[test]
+fn a_subscription_that_was_healthy_earns_its_restart_back() {
+    let mut restarts = WatchRestarts::new();
+    assert!(restarts.lost().is_some());
+    restarts.healthy();
+    assert!(
+        restarts.lost().is_some(),
+        "a healthy subscription earns its restart back"
+    );
+    assert!(restarts.lost().is_none());
 }

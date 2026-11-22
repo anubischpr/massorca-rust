@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::time::Duration;
 
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::codes;
@@ -24,6 +25,13 @@ use super::update::{GitUpdate, StoreUpdate};
 
 /// The reason shown when the service does not observe working-tree edits and gives none.
 const NO_REASON: &str = "Working-tree edits are not observed.";
+
+/// The reason shown when a watch ends while the link is up, until a new subscription starts.
+const STALE_REASON: &str = "Live updates stopped, so the panel may be out of date.";
+/// The pause before a lost subscription is started again; each later pause doubles it.
+pub(super) const RESTART_BACKOFF: Duration = Duration::from_millis(500);
+/// How many times a lost subscription is started again before the panel is left stale.
+const RESTART_LIMIT: u32 = 1;
 
 impl ServiceHandle {
     /// `git.diff_file`: the patch of one file, capped by the service (decision 0011).
@@ -219,9 +227,42 @@ impl Drop for Watches {
     }
 }
 
-/// Follows one workspace until its watch ends. Lost events (an overflow) start it again, after a
-/// full read.
+/// The restart budget of one workspace's watch (decision 0012). A subscription lost while the link is up is
+/// started again after a backoff, while the budget lasts. A subscription that delivered its first item earns
+/// the budget back.
+#[derive(Debug)]
+pub(super) struct WatchRestarts {
+    left: u32,
+}
+
+impl WatchRestarts {
+    pub(super) fn new() -> Self {
+        Self {
+            left: RESTART_LIMIT,
+        }
+    }
+
+    /// The subscription delivered its first item: a later loss gets a restart again.
+    pub(super) fn healthy(&mut self) {
+        self.left = RESTART_LIMIT;
+    }
+
+    /// A subscription was lost while the link was up. The pause before its restart, or None when the budget
+    /// is spent and the panel stays stale.
+    pub(super) fn lost(&mut self) -> Option<Duration> {
+        if self.left == 0 {
+            return None;
+        }
+        let used = RESTART_LIMIT - self.left;
+        self.left -= 1;
+        Some(RESTART_BACKOFF * 2u32.pow(used))
+    }
+}
+
+/// Follows one workspace until its watch ends for good. A subscription lost while the link is up is reported
+/// stale, then started again within the restart budget. Lost events (an overflow) are read again at once.
 async fn watch(client: Client, workspace: String, updates: mpsc::UnboundedSender<StoreUpdate>) {
+    let mut restarts = WatchRestarts::new();
     loop {
         let subscription = client
             .git_watch(&GitWorkspaceRef {
@@ -229,25 +270,52 @@ async fn watch(client: Client, workspace: String, updates: mpsc::UnboundedSender
             })
             .await;
         refresh(&client, &updates, &workspace, true).await;
-        let Ok(mut events) = subscription else {
+        let ending = match subscription {
+            Ok(mut events) => follow(&client, &updates, &workspace, &mut events).await,
+            Err(_) => Ending::Lost { healthy: false },
+        };
+        let Ending::Lost { healthy } = ending else {
+            continue;
+        };
+        if healthy {
+            restarts.healthy();
+        }
+        // The panel must not look live once its subscription is gone.
+        send(
+            &updates,
+            GitUpdate::Watch {
+                workspace: workspace.clone(),
+                degraded: Some(STALE_REASON.to_owned()),
+            },
+        );
+        let Some(backoff) = restarts.lost() else {
             return;
         };
-        if !follow(&client, &updates, &workspace, &mut events).await {
-            return;
-        }
+        tokio::time::sleep(backoff).await;
     }
 }
 
-/// Serves one subscription. Returns true when its events were lost and the watch must start again.
+/// How a subscription ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Ending {
+    /// Its events were lost: the watch starts again at once, after a full read.
+    Overflow,
+    /// It ended while the link was up. `healthy`: it had delivered its first item.
+    Lost { healthy: bool },
+}
+
+/// Serves one subscription until it ends.
 async fn follow(
     client: &Client,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
     workspace: &str,
     events: &mut Subscription,
-) -> bool {
+) -> Ending {
+    let mut healthy = false;
     loop {
         match events.next_as::<GitWatchEvent>().await {
             Some(Ok(event)) => {
+                healthy |= event.ready;
                 let history = event
                     .kinds
                     .iter()
@@ -269,9 +337,9 @@ async fn follow(
             // An item this build cannot read changes nothing it shows (decision 0002).
             Some(Err(ClientError::Protocol(_))) => {}
             Some(Err(ClientError::Remote(body))) if body.code == codes::STREAM_OVERFLOW => {
-                return true;
+                return Ending::Overflow;
             }
-            Some(Err(_)) | None => return false,
+            Some(Err(_)) | None => return Ending::Lost { healthy },
         }
     }
 }
