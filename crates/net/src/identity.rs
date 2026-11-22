@@ -156,9 +156,14 @@ fn write_atomically(path: &Path, contents: &[u8], secret: bool) -> Result<(), Ne
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    #[cfg(not(unix))]
-    let _ = secret;
     let mut file = options.open(&tmp)?;
+    // Before any key byte lands, so a wide inherited ACL never covers it; the rename keeps the DACL.
+    #[cfg(windows)]
+    if secret {
+        massorca_profile::restrict_to_owner(&tmp)?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = secret;
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
@@ -174,6 +179,13 @@ fn create_private_dirs(dir: &Path) -> Result<(), NetError> {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
+    #[cfg(windows)]
+    let existed = dir.exists();
     builder.create(dir)?;
+    // Like the Unix mode, only a directory this call creates is restricted.
+    #[cfg(windows)]
+    if !existed {
+        massorca_profile::restrict_to_owner(dir)?;
+    }
     Ok(())
 }

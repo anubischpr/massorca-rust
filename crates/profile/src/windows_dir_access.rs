@@ -566,7 +566,7 @@ impl PinnedDir {
     }
 }
 
-fn wide_path(path: &Path) -> io::Result<U16CString> {
+pub(crate) fn wide_path(path: &Path) -> io::Result<U16CString> {
     U16CString::from_os_str(path.as_os_str())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }

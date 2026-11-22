@@ -20,6 +20,8 @@ pub mod logging;
 pub mod output;
 pub mod pair;
 pub mod project;
+pub mod secret;
+pub mod secret_input;
 pub mod server_status;
 pub mod service;
 pub mod target;

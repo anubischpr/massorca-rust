@@ -113,6 +113,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::git::GitCommand,
     },
+    /// Stores secrets for agents and lists them by name. Values are never printed.
+    Secret {
+        #[command(subcommand)]
+        command: crate::secret::SecretCommand,
+    },
     /// Creates, lists, shows and removes Bot Teams: teams, their bots and projects, and their Boards.
     Team {
         #[command(subcommand)]
