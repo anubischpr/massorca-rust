@@ -8,6 +8,7 @@ use clap::Parser;
 use massorca_profile::Profile;
 use tokio::runtime::Builder;
 
+use crate::agent;
 use crate::args::{Cli, Commands, ServiceCommand};
 use crate::config;
 use crate::error::CliError;
@@ -77,6 +78,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             block_on(terminal::execute(
                 &profile, autostart, command, output, json,
             ))
+        }
+        Commands::Agent { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            block_on(agent::execute(&profile, autostart, command, output, json))
         }
         Commands::Git { command } => {
             let profile = Profile::resolve(home, profile)?;

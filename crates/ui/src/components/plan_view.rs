@@ -5,7 +5,6 @@
 
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::components::empty_state::EmptyState;
 use crate::components::error_state::ErrorState;
 use crate::components::segmented_control::{Segment, SegmentedControl};
 use crate::components::skeleton::{LineWidth, Skeleton};
@@ -24,6 +23,9 @@ use gpui::{
 };
 use std::collections::HashSet;
 use std::rc::Rc;
+
+/// The empty plan's line.
+pub const EMPTY_TEXT: &str = "The agent has not shared a plan yet.";
 
 /// Rows the Session summary card shows at most.
 pub const CARD_ROWS: usize = 6;
@@ -690,6 +692,19 @@ fn step_row(index: usize, row: &Row, look: &Look) -> AnyElement {
     el.into_any_element()
 }
 
+/// PlanView.md States (empty): one line in text.secondary.
+fn empty_body(p: &Palette) -> AnyElement {
+    div()
+        .id("plan-empty")
+        .role(Role::Group)
+        .aria_label(EMPTY_TEXT)
+        .p(px(SPACE_4))
+        .text_style(TYPE_BODY)
+        .text_color(p.text.secondary)
+        .child(EMPTY_TEXT)
+        .into_any_element()
+}
+
 /// The skeleton of a plan that is loading: a header and six rows of two lengths.
 fn loading_body(id: &ElementId, p: &Palette) -> AnyElement {
     div()
@@ -855,14 +870,8 @@ impl RenderOnce for PlanView {
                 .explanation(reason)
                 .on_retry(on(&handler, PlanAction::Retry))
                 .into_any_element(),
-            PlanStatus::Empty => {
-                EmptyState::new("plan-empty", "The agent has not shared a plan yet.")
-                    .into_any_element()
-            }
-            PlanStatus::Ready | PlanStatus::Stale(_) if empty => {
-                EmptyState::new("plan-empty", "The agent has not shared a plan yet.")
-                    .into_any_element()
-            }
+            PlanStatus::Empty => empty_body(&p),
+            PlanStatus::Ready | PlanStatus::Stale(_) if empty => empty_body(&p),
             PlanStatus::Ready | PlanStatus::Stale(_) if show_document => {
                 document_body(plan.document.as_deref().unwrap_or_default(), &p)
             }

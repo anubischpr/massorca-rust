@@ -1518,6 +1518,21 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_dead_accent_then_a_letter_commits_the_composed_letter(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.replace_and_mark_text_in_range(None, "´", None, window, cx);
+            assert_eq!(field.marked_text_range(window, cx), Some(0..1));
+        });
+        field.update_in(cx, |field, window, cx| {
+            field.replace_text_in_range(None, "á", window, cx);
+            assert_eq!(field.text(), "á");
+            assert_eq!(field.marked_text_range(window, cx), None);
+        });
+    }
+
+    #[gpui::test]
     fn edits_emit_changed_but_identical_text_does_not(cx: &mut TestAppContext) {
         let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
         let events = record_events(&field, cx);

@@ -21,6 +21,8 @@ pub struct NavRow {
     /// A trailing count, such as the number of prototypes.
     pub count: Option<u32>,
     pub page: Option<Page>,
+    /// A closed disclosure chevron at the trailing edge (Prototypes, D-WS-01).
+    pub chevron: bool,
 }
 
 /// One row of the project tree, top to bottom: a project, its hosts, their workspaces and
@@ -72,24 +74,28 @@ pub fn sidebar_content(snapshot: &ShellSnapshot, mode: Mode) -> SidebarContent {
                     label: "Prototypes",
                     count: Some(snapshot.prototypes),
                     page: None,
+                    chevron: true,
                 },
                 NavRow {
                     kind: NavKind::Tasks,
                     label: "Tasks",
                     count: None,
                     page: Some(Page::Tasks),
+                    chevron: false,
                 },
                 NavRow {
                     kind: NavKind::Automations,
                     label: "Automations",
                     count: None,
                     page: Some(Page::Automations),
+                    chevron: false,
                 },
                 NavRow {
                     kind: NavKind::Mobile,
                     label: "MassOrca Mobile",
                     count: None,
                     page: None,
+                    chevron: false,
                 },
             ],
             tree: flatten(&snapshot.projects, snapshot.active_session.as_deref()),
@@ -164,6 +170,16 @@ mod tests {
         assert_eq!(nav[0].count, Some(3));
         assert_eq!(nav[2].page, Some(Page::Automations));
         assert_eq!(nav[3].page, None);
+    }
+
+    #[test]
+    fn only_prototypes_shows_a_chevron() {
+        let SidebarContent::Workspaces { nav, .. } = sidebar_content(&sample(), Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        let chevrons: Vec<bool> = nav.iter().map(|row| row.chevron).collect();
+        assert_eq!(chevrons, [true, false, false, false]);
     }
 
     #[test]
