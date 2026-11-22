@@ -10,6 +10,10 @@ pub enum ClientError {
     Unavailable(#[source] io::Error),
     #[error("could not start the service: {0}")]
     StartFailed(String),
+    /// The service this client started refused to start, with its own code and message, for example a profile in an
+    /// unsafe location (ADR 0073). Boxed so the error stays small.
+    #[error("{} ({})", .0.message, .0.code)]
+    StartRefused(Box<ErrorBody>),
     /// The endpoint is served by another user, or its owner cannot be checked. It is never retried.
     #[error("the service endpoint is not trusted: {0} (service.untrusted_endpoint)")]
     UntrustedEndpoint(String),
@@ -53,7 +57,8 @@ impl ClientError {
             | Self::Io(_)
             | Self::HostNotFound(_)
             | Self::HostExists(_)
-            | Self::InvalidHostName(_) => 1,
+            | Self::InvalidHostName(_)
+            | Self::StartRefused(_) => 1,
             Self::Unavailable(_)
             | Self::StartFailed(_)
             | Self::UntrustedEndpoint(_)

@@ -35,12 +35,14 @@ pub struct HostRecord {
 /// The hosts of one client profile.
 #[derive(Debug, Clone)]
 pub struct Hosts {
+    profile: Profile,
     dir: PathBuf,
 }
 
 impl Hosts {
     pub fn of(profile: &Profile) -> Self {
         Self {
+            profile: profile.clone(),
             dir: profile.dir().join("hosts"),
         }
     }
@@ -95,6 +97,7 @@ impl Hosts {
         if dir.join(HOST_FILE).exists() {
             return Err(ClientError::HostExists(record.name.clone()));
         }
+        massorca_profile::create_root(&self.profile)?;
         create_private_dir(&self.dir)?;
         create_private_dir(&dir)?;
         identity
@@ -148,13 +151,75 @@ fn read_record(path: &Path) -> Result<Option<HostRecord>, ClientError> {
     }
 }
 
-/// Creates a directory only the user can enter (0700 on Unix; Windows keeps the profile's per-user access).
+/// Creates a directory only the user can enter, in one step: owner-only on Windows, 0700 on Unix (ADR 0073). The
+/// device key is written into it, so it never exists with wider access. An existing one keeps 0700 on Unix.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
+    massorca_profile::create_private_dir(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_net::TlsIdentity;
+    use massorca_profile::Profile;
+
+    use super::{HostRecord, Hosts};
+
+    #[test]
+    fn a_new_host_folder_is_private_before_the_device_key_is_written() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = Profile::resolve_with(
+            Some(temp.path().join("home")),
+            Some("default".to_owned()),
+            |_| None,
+        )
+        .expect("the profile resolves");
+        let record = HostRecord {
+            name: "office".to_owned(),
+            server: "office".to_owned(),
+            addresses: vec!["127.0.0.1:1".to_owned()],
+            pin: "sha256:pin".to_owned(),
+            device_id: "device".to_owned(),
+            device_name: "laptop".to_owned(),
+            scopes: Vec::new(),
+            paired_at_ms: 0,
+        };
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+
+        Hosts::of(&profile)
+            .add(&record, &identity)
+            .expect("the host is stored");
+
+        let folders = [
+            profile.dir().join("hosts"),
+            profile.dir().join("hosts").join("office"),
+        ];
+        for folder in &folders {
+            #[cfg(windows)]
+            assert!(
+                massorca_profile::has_owner_only_dacl(folder).expect("its DACL"),
+                "{}: {}",
+                folder.display(),
+                massorca_profile::dacl_sddl(folder).expect("its DACL")
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(folder)
+                    .expect("metadata")
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o700, "{}", folder.display());
+            }
+        }
+        assert_eq!(
+            massorca_profile::secure_root(&profile).expect("checked"),
+            massorca_profile::RootAccess::Private
+        );
+    }
 }

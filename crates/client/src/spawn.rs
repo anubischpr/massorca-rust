@@ -1,22 +1,92 @@
 //! Starts `massorca service run` detached from this process (ADR 0003), so the service outlives the client that started it.
 
-use std::process::{Child, Command, Stdio};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use massorca_profile::Profile;
+use massorca_protocol::ErrorBody;
 
 use crate::error::ClientError;
 use crate::options::Autostart;
 
-pub(crate) fn service_run(profile: &Profile, autostart: &Autostart) -> Result<(), ClientError> {
+/// The hidden `service run` option that names the file a starting service writes its refusal to, as one `ErrorBody`.
+/// An option, not an environment variable, so it never reaches the terminals the service starts.
+const START_STATUS_OPTION: &str = "--start-status";
+
+/// A service this client started: its process, and the private folder its start status goes to.
+#[derive(Debug)]
+pub(crate) struct Starting {
+    child: Child,
+    status_dir: PathBuf,
+}
+
+impl Starting {
+    /// The refusal, once the service has exited before accepting connections; `None` while it still runs.
+    pub(crate) fn refusal(&mut self) -> Option<ClientError> {
+        let status = self.child.try_wait().ok().flatten()?;
+        Some(read_refusal(&self.status_dir.join(STATUS_FILE), status))
+    }
+
+    /// Lets the service run on without this client, and removes the status folder.
+    pub(crate) fn release(self) {
+        let _ = fs::remove_dir_all(&self.status_dir);
+        reap_when_it_exits(self.child);
+    }
+}
+
+const STATUS_FILE: &str = "status.json";
+
+pub(crate) fn service_run(
+    profile: &Profile,
+    autostart: &Autostart,
+) -> Result<Starting, ClientError> {
     create_profile_dir(profile)?;
+    let status_dir = status_dir().map_err(|error| {
+        ClientError::StartFailed(format!("cannot create the start status folder: {error}"))
+    })?;
     let mut command = service_command(profile, autostart);
+    command
+        .arg(START_STATUS_OPTION)
+        .arg(status_dir.join(STATUS_FILE));
     detach(&mut command);
     keep_handles_private();
     let child = command.spawn().map_err(|error| {
+        let _ = fs::remove_dir_all(&status_dir);
         ClientError::StartFailed(format!("{}: {error}", autostart.exe.display()))
     })?;
-    reap_when_it_exits(child);
-    Ok(())
+    Ok(Starting { child, status_dir })
+}
+
+/// A new folder only this user can reach, outside the profile: a refused profile is never written to.
+fn status_dir() -> std::io::Result<PathBuf> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("massorca-start-{}-{nanos}", std::process::id()));
+    if massorca_profile::create_private_dir(&dir)? {
+        Ok(dir)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} already exists", dir.display()),
+        ))
+    }
+}
+
+/// The error a service left in its status file, or a plain start failure when it left none.
+fn read_refusal(path: &Path, status: ExitStatus) -> ClientError {
+    match fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ErrorBody>(&bytes).ok())
+    {
+        Some(body) => ClientError::StartRefused(Box::new(body)),
+        None => ClientError::StartFailed(format!(
+            "the service exited ({status}) before accepting connections"
+        )),
+    }
 }
 
 /// The service starts in its profile directory, so it must exist. Missing folders are created private to their owner in
