@@ -1,0 +1,10 @@
+{
+  "id": "antigravity",
+  "name": "Antigravity",
+  "icon": "antigravity",
+  "program": ["agy"],
+  "args": [],
+  "prompt": { "mode": "flag", "flag": "--prompt-interactive", "paste": "plain", "submit": "\r" },
+  "resume": ["--conversation", "{ref}"],
+  "status": { "mechanism": "none" }
+}
