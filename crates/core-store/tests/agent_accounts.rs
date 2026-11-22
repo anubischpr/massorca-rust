@@ -26,6 +26,7 @@ fn account(kind: &str, label: &str, created_at: i64) -> AgentAccountRow {
         created_at,
         identity: None,
         state: "needs_sign_in".to_owned(),
+        origin: "sign_in".to_owned(),
     }
 }
 
@@ -194,4 +195,25 @@ fn removing_a_project_clears_its_choices() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn an_origin_is_stored_and_one_outside_the_vocabulary_is_refused() {
+    let store = Store::open_in_memory().unwrap();
+    let mut imported = account("fake", "imported", 1);
+    imported.origin = "import".to_owned();
+    store.insert_agent_account(&imported).unwrap();
+    assert_eq!(
+        store
+            .get_agent_account(&imported.id)
+            .unwrap()
+            .unwrap()
+            .origin,
+        "import"
+    );
+    let mut unknown = account("fake", "unknown", 2);
+    unknown.origin = "stolen".to_owned();
+    let error = store.insert_agent_account(&unknown).unwrap_err();
+    assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
+    assert_eq!(store.list_all_agent_accounts().unwrap().len(), 1);
 }

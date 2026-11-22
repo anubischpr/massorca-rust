@@ -193,6 +193,8 @@ struct Inner {
     listener: OnceLock<Listener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
+    /// The accounts a call is working on: sign-ins still open, and removals (decision 0059). See `accounts`.
+    accounts: Mutex<crate::accounts::AccountBusy>,
 }
 
 /// A run whose exit the service has not seen yet.
@@ -260,6 +262,7 @@ impl Agents {
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
+                accounts: Mutex::new(crate::accounts::AccountBusy::default()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -283,6 +286,11 @@ impl Agents {
     /// The terminal manager the runs and sign-ins are created in.
     pub(crate) fn terminals(&self) -> &TerminalManager {
         &self.inner.config.terminals
+    }
+
+    /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.
+    pub(crate) fn account_busy(&self) -> MutexGuard<'_, crate::accounts::AccountBusy> {
+        lock(&self.inner.accounts)
     }
 
     /// The live runs, under the status lock.

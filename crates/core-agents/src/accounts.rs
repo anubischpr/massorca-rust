@@ -1,9 +1,15 @@
 //! Accounts of a kind (decision 0059): several credential homes per kind, one active per kind, per-project choices,
 //! sign-in through a service-owned terminal, import, checks, sign-out and removal. The files of an account follow the
 //! rules of 0056 (see [`crate::credentials`]); this module decides which account a run uses and what its state is.
+//!
+//! Lock order, everywhere: the homes gate ([`credentials::lock_homes`]), then the account busy set ([`AccountBusy`]),
+//! then the status lock of live runs. A sign-out or a check runs outside the gate, so a hung program cannot hold it.
 
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::MutexGuard;
+use std::thread;
 
 use massorca_core_store::{AgentAccountRow, new_id, now_ms};
 use massorca_protocol::codes;
@@ -13,15 +19,23 @@ use massorca_protocol::methods::agents::{
 };
 
 use crate::account_check::{
-    Verdict, parse_state, run_program, settle, state_name, unknown, verdict,
+    MAX_TEXT_CHARS, Verdict, parse_state, run_program, settle, state_name, unknown, verdict,
 };
 use crate::credentials;
 use crate::kind::{KindDecl, valid_id};
+use crate::paths;
 use crate::sessions::{AgentError, Agents, Change};
+
 /// The label of an account when the person gives none.
 pub(crate) const DEFAULT_LABEL: &str = "account";
-/// The label of the account made from 0056's single home.
+/// The label of an account made from 0056's single home, or adopted from a home that has no row.
 const MIGRATED_LABEL: &str = "default";
+/// An account whose sign-in the service ran: removing it runs the kind's sign-out (decision 0059).
+pub(crate) const ORIGIN_SIGN_IN: &str = "sign_in";
+/// An account whose files were imported: removing it only deletes them, the login stays the person's.
+pub(crate) const ORIGIN_IMPORT: &str = "import";
+/// An account made from 0056's home, or adopted at startup: removing it only deletes its files.
+pub(crate) const ORIGIN_MIGRATED: &str = "migrated";
 
 /// Which account a run uses, and its home (decision 0059). Both are absent when the kind has no account, and the agent
 /// then uses its usual home, as in 0056.
@@ -29,6 +43,26 @@ const MIGRATED_LABEL: &str = "default";
 pub struct AccountUse {
     pub home: Option<PathBuf>,
     pub account: Option<String>,
+}
+
+/// The accounts a service call is working on, under the busy lock: sign-ins still open (account to its terminal, or empty
+/// until the terminal starts) and accounts being removed.
+#[derive(Debug, Default)]
+pub(crate) struct AccountBusy {
+    pub(crate) pending: HashMap<String, String>,
+    pub(crate) removing: HashSet<String>,
+}
+
+/// Marks an account as being removed until dropped, so no run starts on it and no other change touches it.
+pub(crate) struct RemovalMark {
+    agents: Agents,
+    account: String,
+}
+
+impl Drop for RemovalMark {
+    fn drop(&mut self) {
+        self.agents.account_busy().removing.remove(&self.account);
+    }
 }
 
 fn kind_not_found(kind: &str) -> AgentError {
@@ -42,10 +76,10 @@ fn account_not_found(kind: &str, account: &str) -> AgentError {
     )
 }
 
-fn busy(account: &str) -> AgentError {
+fn busy(account: &str, why: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_BUSY,
-        format!("a live session uses account {account}; stop or forget it first"),
+        format!("account {account} is {why}; wait for it, or stop the live session that uses it"),
     )
 }
 
@@ -56,13 +90,26 @@ fn already_has_home(kind: &str) -> AgentError {
     )
 }
 
+/// A label is at most [`MAX_TEXT_CHARS`] characters with no control character; anything else is an invalid request.
+pub(crate) fn valid_label(label: &str) -> Result<(), AgentError> {
+    if label.chars().count() <= MAX_TEXT_CHARS && !label.chars().any(char::is_control) {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        codes::REQUEST_INVALID_PARAMS,
+        format!(
+            "an account label is at most {MAX_TEXT_CHARS} characters and holds no control character"
+        ),
+    ))
+}
+
 impl Agents {
-    /// The accounts of a kind, oldest first, with the active one and the projects that chose each.
+    /// The accounts of a kind, oldest first, with the active one and the projects that chose each. A read: it never moves
+    /// a credential home (that happens at startup, and at a start or resume).
     pub fn accounts_list(&self, kind: &str) -> Result<Vec<AccountSummary>, AgentError> {
         if !valid_id(kind) {
             return Err(kind_not_found(kind));
         }
-        self.migrate_now(kind)?;
         let active = self.store().get_active_agent_account(kind)?;
         self.store()
             .list_agent_accounts(kind)?
@@ -81,24 +128,28 @@ impl Agents {
         label: Option<String>,
     ) -> Result<AccountsImported, AgentError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
-        let (account, _) = match self.import_new_account(kind, Path::new(from), &label) {
-            Ok(added) => added,
-            Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => return Err(error),
-            Err(error) if all_missing(&error) => {
-                return Ok(AccountsImported {
-                    result: ImportResult::NotFound,
-                    account: None,
-                    reason: Some("none of the declared files is in the source".to_owned()),
-                });
-            }
-            Err(error) => {
-                return Ok(AccountsImported {
-                    result: ImportResult::Failed,
-                    account: None,
-                    reason: Some(error.message),
-                });
-            }
-        };
+        valid_label(&label)?;
+        let (account, _) =
+            match self.import_new_account(kind, Path::new(from), &label, ORIGIN_IMPORT) {
+                Ok(added) => added,
+                Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
+                    return Err(error);
+                }
+                Err(error) if all_missing(&error) => {
+                    return Ok(AccountsImported {
+                        result: ImportResult::NotFound,
+                        account: None,
+                        reason: Some("none of the declared files is in the source".to_owned()),
+                    });
+                }
+                Err(error) => {
+                    return Ok(AccountsImported {
+                        result: ImportResult::Failed,
+                        account: None,
+                        reason: Some(error.message),
+                    });
+                }
+            };
         if let Some(AccountState::Expired | AccountState::NeedsSignIn) =
             self.check_imported(kind, &account)
         {
@@ -122,7 +173,8 @@ impl Agents {
         })
     }
 
-    /// Makes an account the kind's active one, or the project's choice for `project` (decision 0059).
+    /// Makes an account the kind's active one, or the project's choice for `project` (decision 0059). An account that is
+    /// being removed, or whose sign-in is still open, is refused with `agent.busy`; one that never signed in is refused.
     pub fn accounts_activate(
         &self,
         kind: &str,
@@ -130,6 +182,21 @@ impl Agents {
         project: Option<&str>,
     ) -> Result<AccountSummary, AgentError> {
         let row = self.account_of(kind, account)?;
+        {
+            let busy_set = self.account_busy();
+            if busy_set.removing.contains(account) {
+                return Err(busy(account, "being removed"));
+            }
+            if busy_set.pending.contains_key(account) {
+                return Err(busy(account, "signing in"));
+            }
+        }
+        if parse_state(&row.state) == AccountState::NeedsSignIn {
+            return Err(AgentError::new(
+                codes::AGENT_CREDENTIALS_INVALID,
+                format!("account {account} has not signed in; sign it in before it is activated"),
+            ));
+        }
         match project {
             None => self.store().set_active_agent_account(kind, account)?,
             Some(project) => {
@@ -147,32 +214,61 @@ impl Agents {
         self.summary(&row, active.as_deref())
     }
 
-    /// Deletes an account (decision 0059). Refused with `agent.busy` while a live run uses it. The kind's sign-out runs
-    /// first when declared; a failed sign-out does not keep the home. Nothing becomes active afterwards.
+    /// Deletes an account (decision 0059), in three steps: under the gate it refuses a busy account (a live run, a sign-in
+    /// still open, or a removal already running) and marks it as being removed; outside the gate the kind's sign-out runs,
+    /// only for a sign-in the service made (an imported login is the person's and is never revoked here); under the gate
+    /// again the home and the row are deleted. A failed sign-out does not keep the home. Nothing becomes active afterwards.
     pub fn accounts_remove(
         &self,
         kind: &str,
         account: &str,
     ) -> Result<AccountsRemoved, AgentError> {
-        self.account_of(kind, account)?;
-        let gate = credentials::lock_homes();
-        if self
-            .live_runs()
-            .values()
-            .any(|run| run.account.as_deref() == Some(account))
+        let row = self.account_of(kind, account)?;
+        let mark = {
+            let _gate = credentials::lock_homes();
+            self.begin_removal(account)?
+        };
+        if row.origin == ORIGIN_SIGN_IN
+            && let Ok((decl, program)) = self.startable_kind(kind)
         {
-            return Err(busy(account));
-        }
-        if let Ok((decl, program)) = self.startable_kind(kind) {
             self.sign_out(&decl, &program, kind, account);
         }
-        credentials::remove_account_locked(self.profile_dir(), kind, account)?;
-        self.store().delete_agent_account(account)?;
-        drop(gate);
+        {
+            let _gate = credentials::lock_homes();
+            credentials::remove_account_locked(self.profile_dir(), kind, account)?;
+            self.store().delete_agent_account(account)?;
+        }
+        drop(mark);
         Ok(AccountsRemoved {
             kind: kind.to_owned(),
             account: account.to_owned(),
             removed: true,
+        })
+    }
+
+    /// Marks `account` as being removed, under the gate. Refused while it is busy. The mark lasts until the returned guard
+    /// is dropped.
+    fn begin_removal(&self, account: &str) -> Result<RemovalMark, AgentError> {
+        {
+            let mut busy_set = self.account_busy();
+            if busy_set.removing.contains(account) {
+                return Err(busy(account, "already being removed"));
+            }
+            if busy_set.pending.contains_key(account) {
+                return Err(busy(account, "signing in"));
+            }
+            if self
+                .live_runs()
+                .values()
+                .any(|run| run.account.as_deref() == Some(account))
+            {
+                return Err(busy(account, "in use by a live session"));
+            }
+            busy_set.removing.insert(account.to_owned());
+        }
+        Ok(RemovalMark {
+            agents: self.clone(),
+            account: account.to_owned(),
         })
     }
 
@@ -222,7 +318,7 @@ impl Agents {
 
     /// The account a run of `kind` in `project` uses, and its home (decision 0059): the project's choice, else the active
     /// account, else none. The home is taken only when it is a plain directory (0056). The caller holds `lock_homes`, so
-    /// the home cannot be swapped before the run is registered.
+    /// the home cannot be swapped before the run is registered. An account being removed is refused.
     pub(crate) fn resolve_home(
         &self,
         gate: &MutexGuard<'_, ()>,
@@ -237,23 +333,26 @@ impl Agents {
         let Some(account) = chosen else {
             return Ok(AccountUse::default());
         };
-        let home = credentials::usable_account_home(self.profile_dir(), kind, &account)?.ok_or_else(|| {
-            AgentError::new(
-                codes::AGENT_CREDENTIALS_INVALID,
-                format!("the account of agent kind {kind} has no credential home; sign in again or remove it"),
-            )
-        })?;
+        if self.account_busy().removing.contains(&account) {
+            return Err(busy(&account, "being removed"));
+        }
+        let home = credentials::usable_account_home(self.profile_dir(), kind, &account)?
+            .ok_or_else(|| {
+                AgentError::new(
+                    codes::AGENT_CREDENTIALS_INVALID,
+                    format!(
+                        "the account of agent kind {kind} has no credential home; sign in again or remove it"
+                    ),
+                )
+            })?;
         Ok(AccountUse {
             home: Some(home),
             account: Some(account),
         })
     }
 
-    /// Whether the kind's active account has a usable home (decision 0059), for the kinds listing.
+    /// Whether the kind's active account has a usable home (decision 0059), for the kinds listing. A read: no migration.
     pub(crate) fn has_usable_account(&self, kind: &str) -> bool {
-        if self.migrate_now(kind).is_err() {
-            return false;
-        }
         let Ok(Some(account)) = self.store().get_active_agent_account(kind) else {
             return false;
         };
@@ -265,7 +364,7 @@ impl Agents {
     }
 
     /// `agent.credentials.import` (deprecated, 0056): imports into a new account that becomes the active one. The active
-    /// account is refused unless `replace` is set, and is then deleted once the new one is in place.
+    /// account is refused unless `replace` is set, and is then removed once the new one is in place.
     pub fn credentials_import(
         &self,
         kind: &str,
@@ -277,7 +376,8 @@ impl Agents {
         if active.is_some() && !replace {
             return Err(already_has_home(kind));
         }
-        let (account, imported) = self.import_new_account(kind, Path::new(from), DEFAULT_LABEL)?;
+        let (account, imported) =
+            self.import_new_account(kind, Path::new(from), DEFAULT_LABEL, ORIGIN_IMPORT)?;
         if let Some(old) = active
             && let Err(error) = self.accounts_remove(kind, &old)
         {
@@ -289,8 +389,8 @@ impl Agents {
     }
 
     /// `agent.credentials.show` (deprecated, 0056): the kind's active account's files, or the empty shape when it has none.
+    /// A read: no migration.
     pub fn credentials_show(&self, kind: &str) -> Result<CredentialsShown, AgentError> {
-        self.migrate_now(kind)?;
         match self.store().get_active_agent_account(kind)? {
             Some(account) => credentials::show_account(self.profile_dir(), kind, &account),
             None => credentials::show(self.profile_dir(), kind),
@@ -310,13 +410,106 @@ impl Agents {
         })
     }
 
-    fn migrate_now(&self, kind: &str) -> Result<(), AgentError> {
-        let gate = credentials::lock_homes();
-        self.migrate_legacy(&gate, kind)
+    /// The service's start-up pass over credential homes (decision 0059), run once before requests are served:
+    ///
+    /// - a `migrated` row whose home is gone is deleted (a crash between recording the row and moving the home);
+    /// - 0056's single home of each kind is moved into an account;
+    /// - an account directory with no row is adopted as `migrated`, active only if its kind has no active account;
+    /// - each sign-in left open by an earlier service is decided by [`Agents::decide_sign_in`], on a thread of its own.
+    pub fn startup_sweep(&self) {
+        let profile = self.profile_dir().to_path_buf();
+        match self.store().list_all_agent_accounts() {
+            Ok(rows) => {
+                for row in rows.iter().filter(|row| row.origin == ORIGIN_MIGRATED) {
+                    let gone = matches!(
+                        credentials::usable_account_home(&profile, &row.kind, &row.id),
+                        Ok(None)
+                    );
+                    if gone {
+                        tracing::warn!(kind = %row.kind, "a migrated account has no home; its row is deleted");
+                        let _ = self.store().delete_agent_account(&row.id);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(code = %error, "the account rows could not be read at startup")
+            }
+        }
+        if let Ok(homes) = fs::read_dir(paths::agents_dir(&profile).join("homes")) {
+            for kind in homes
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+            {
+                let gate = credentials::lock_homes();
+                if let Err(error) = self.migrate_legacy(&gate, &kind) {
+                    tracing::error!(kind = %kind, code = error.code, "the credential home could not be moved");
+                }
+            }
+        }
+        if let Ok(kinds) = fs::read_dir(paths::agents_dir(&profile).join("accounts")) {
+            for kind in kinds
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+            {
+                for account in self.account_dirs(&kind) {
+                    if matches!(self.store().get_agent_account(&account), Ok(None)) {
+                        self.adopt_orphan(&kind, &account);
+                    }
+                }
+            }
+        }
+        let open: Vec<(String, String)> = match self.store().list_all_agent_accounts() {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| parse_state(&row.state) == AccountState::NeedsSignIn)
+                .map(|row| (row.kind, row.id))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        if !open.is_empty() {
+            let agents = self.clone();
+            thread::spawn(move || {
+                for (kind, account) in open {
+                    agents.decide_sign_in(&kind, &account);
+                }
+            });
+        }
+    }
+
+    /// The account directories of `kind` that are plain directories named by a canonical account id.
+    fn account_dirs(&self, kind: &str) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(paths::accounts_dir(self.profile_dir(), kind)) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| paths::valid_account_id(name))
+            .collect()
+    }
+
+    /// Records a directory that has no row as a `migrated` account, active only when the kind has no active account.
+    fn adopt_orphan(&self, kind: &str, account: &str) {
+        let _gate = credentials::lock_homes();
+        let row = AgentAccountRow {
+            id: account.to_owned(),
+            kind: kind.to_owned(),
+            label: MIGRATED_LABEL.to_owned(),
+            created_at: now_ms(),
+            identity: None,
+            state: state_name(AccountState::Migrated).to_owned(),
+            origin: ORIGIN_MIGRATED.to_owned(),
+        };
+        if self.store().insert_agent_account(&row).is_ok() {
+            tracing::info!(kind, "adopted an account directory that had no row");
+            self.make_active_if_none(kind, account);
+        }
     }
 
     /// Moves 0056's single home into an account named `default`, as the kind's active account when it has none (decision
-    /// 0059). A same-volume rename under the gate; nothing happens when there is no legacy home.
+    /// 0059). The row is recorded first, so a crash after the move leaves a row the sweep can see; a move that fails
+    /// deletes the row again. Does nothing when there is no legacy home.
     pub(crate) fn migrate_legacy(
         &self,
         _gate: &MutexGuard<'_, ()>,
@@ -326,7 +519,6 @@ impl Agents {
             return Ok(());
         }
         let account = new_id();
-        credentials::adopt_legacy_home(self.profile_dir(), kind, &account)?;
         let had_active = self.store().get_active_agent_account(kind)?.is_some();
         self.store().insert_agent_account(&AgentAccountRow {
             id: account.clone(),
@@ -335,7 +527,12 @@ impl Agents {
             created_at: now_ms(),
             identity: None,
             state: state_name(AccountState::Migrated).to_owned(),
+            origin: ORIGIN_MIGRATED.to_owned(),
         })?;
+        if let Err(error) = credentials::adopt_legacy_home(self.profile_dir(), kind, &account) {
+            let _ = self.store().delete_agent_account(&account);
+            return Err(error);
+        }
         if !had_active {
             self.store().set_active_agent_account(kind, &account)?;
         }
@@ -343,8 +540,18 @@ impl Agents {
         Ok(())
     }
 
+    /// Runs [`Agents::migrate_legacy`] under the gate, for a write that needs the home in place first.
+    fn migrate_now(&self, kind: &str) -> Result<(), AgentError> {
+        let gate = credentials::lock_homes();
+        self.migrate_legacy(&gate, kind)
+    }
+
     /// The row of an account of `kind`; an account of another kind, or none, is `agent.account_not_found`.
-    fn account_of(&self, kind: &str, account: &str) -> Result<AgentAccountRow, AgentError> {
+    pub(crate) fn account_of(
+        &self,
+        kind: &str,
+        account: &str,
+    ) -> Result<AgentAccountRow, AgentError> {
         self.store()
             .get_agent_account(account)?
             .filter(|row| row.kind == kind)
@@ -366,14 +573,15 @@ impl Agents {
         })
     }
 
-    /// Creates a new account and copies the declared files into it, under the gate. Returns its id and the copy's record.
-    fn import_new_account(
+    /// Creates a new account, copies the declared files into it, and records its row. Returns its id and the copy's record.
+    /// The gate is taken by the copy itself, which is not reentrant, so the caller must not hold it.
+    pub(crate) fn import_new_account(
         &self,
         kind: &str,
         from: &Path,
         label: &str,
+        origin: &str,
     ) -> Result<(String, CredentialsImported), AgentError> {
-        // Not held across the import: `import_account` takes the gate itself (it is not reentrant).
         self.migrate_now(kind)?;
         let account = new_id();
         let imported = credentials::import_account(self.profile_dir(), kind, &account, from)?;
@@ -384,6 +592,7 @@ impl Agents {
             created_at: now_ms(),
             identity: None,
             state: state_name(AccountState::Unknown).to_owned(),
+            origin: origin.to_owned(),
         })?;
         Ok((account, imported))
     }
@@ -401,7 +610,7 @@ impl Agents {
     }
 
     /// Runs the kind's check on an account's home and settles the result against the recorded identity. `None` when the
-    /// kind declares no check, or the account has no home.
+    /// kind declares no check, or the account has no home. The check runs outside the gate.
     pub(crate) fn check_account_home(
         &self,
         decl: &KindDecl,
@@ -427,7 +636,8 @@ impl Agents {
         Some(settle(verdict(check, run.exit, &run.output), recorded))
     }
 
-    /// Runs the kind's sign-out on an account's home, when declared and the home exists. Its failure is only logged.
+    /// Runs the kind's sign-out on an account's home, when declared and the home exists. It runs outside the gate. Its
+    /// failure is only logged.
     fn sign_out(&self, decl: &KindDecl, program: &Path, kind: &str, account: &str) {
         let Some(logout) = decl
             .accounts
@@ -458,9 +668,15 @@ impl Agents {
         }
     }
 
-    /// Deletes an account that is not kept: its home and its row. A failure is logged, never returned.
+    /// Deletes an account that is not kept: its home and its row. Under the gate, and only when nothing is using it, being
+    /// removed, or signing in. A refusal is logged and the account stays.
     pub(crate) fn discard_account(&self, kind: &str, account: &str) {
-        if let Err(error) = credentials::remove_account(self.profile_dir(), kind, account) {
+        let _gate = credentials::lock_homes();
+        if self.account_is_busy(account) {
+            tracing::warn!(kind, "an account to discard is busy; it is kept");
+            return;
+        }
+        if let Err(error) = credentials::remove_account_locked(self.profile_dir(), kind, account) {
             tracing::warn!(
                 kind,
                 code = error.code,
@@ -470,6 +686,17 @@ impl Agents {
         if self.store().delete_agent_account(account).is_err() {
             tracing::warn!(kind, "a discarded account's row could not be deleted");
         }
+    }
+
+    /// Whether `account` is being removed, signing in, or used by a live run.
+    fn account_is_busy(&self, account: &str) -> bool {
+        let busy_set = self.account_busy();
+        busy_set.removing.contains(account)
+            || busy_set.pending.contains_key(account)
+            || self
+                .live_runs()
+                .values()
+                .any(|run| run.account.as_deref() == Some(account))
     }
 
     pub(crate) fn make_active_if_none(&self, kind: &str, account: &str) {

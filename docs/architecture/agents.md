@@ -307,30 +307,51 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   as a plain directory; a link is refused with `agent.credentials_invalid`. A run records its
   account in memory, and `agent.accounts.remove` is refused with `agent.busy` while a live run
   uses it.
-- **Sign-in** (`sign_in.rs`): the empty home is created, and a service-owned terminal runs the
-  kind's `accounts.login` arguments against the kind's program, with the home variable set and
-  `strip_env` applied (set to empty, as in 0056). The terminal is listed under the scope
-  `agent-accounts`, which is no workspace. When it ends, the account is kept as `signed_in` if
-  its declared files exist or its check reports signed in, and deleted otherwise.
-- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s, and keeps
-  at most 64 KiB of output, which is matched and never logged or returned. An expired pattern
-  match means `expired`; the signed-in exit means `signed_in`, with the identity pattern's first
-  group as the identity; another exit means `needs_sign_in`; a check that does not finish means
-  `unknown`. A different identity than the recorded one is `conflict`, and the recorded identity
-  stays.
-- **Import** copies the declared files into a new account and checks it. A check that reports
-  the login is not signed in deletes the new account, and the result is `failed`. `not_found`
-  means none of the declared files is in the source.
-- **Migration**: the first access to a kind moves `homes/<kind>/` into `accounts/<kind>/<new id>/`
-  by one same-volume rename, records it as `default` with state `migrated`, and makes it active when
-  the kind has none. The deprecated `agent.credentials.*` calls act on the active account.
+- **Sign-in** (`sign_in.rs`): the empty home and its row (origin `sign_in`) are created under the
+  gate, and the account is pending until its terminal ends. A service-owned terminal runs the
+  kind's `accounts.login` arguments with the home variable set and `strip_env` applied (set to
+  empty, as in 0056). The terminal is listed under `agent-accounts`, which is no workspace. When it
+  ends, `decide_sign_in` keeps the account only when the check reports `signed_in`, and stores that
+  check's own state and identity. A check that did not finish (`unknown`), or a kind with no check,
+  keeps the account only if its declared files exist, as `unknown`. Any other verdict deletes it.
+  A row that is already gone is left alone, with no event.
+- **Pending and removing accounts**: a pending sign-in refuses removal and activation with
+  `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
+  removing under the gate, so no run starts on it while the sign-out runs.
+- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s. Its whole
+  process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
+  output is read for at most one second after that, so a child that keeps the pipes open cannot
+  hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
+  An expired pattern match means `expired`; the signed-in exit means `signed_in`, with the identity
+  pattern's first group as the identity; another exit means `needs_sign_in`; a check that does not
+  finish means `unknown`. A captured identity is kept only when it is at most 256 characters with no
+  control character. A different identity than the recorded one is `conflict`, and the recorded
+  identity stays.
+- **Import** copies the declared files into a new account (origin `import`) and checks it. A check
+  that reports the login is not signed in deletes the new account, and the result is `failed`.
+  `not_found` means none of the declared files is in the source.
+- **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
+  already running) is refused, and the account is marked removing. Outside the gate, the kind's
+  `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
+  is the person's, so the service never signs it out; its files are only deleted. Under the gate
+  again, the home and the row are deleted.
+- **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
+  `migrated` row whose home is gone (a crash between recording the row and moving the home), moves
+  0056's home of each kind into an account, adopts an account directory that has no row as
+  `migrated` (active only when its kind has no active account), and decides each sign-in left open.
+  The row is recorded before the rename, and a rename that fails deletes it again. The reads
+  `agent.kinds`, `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a
+  resume still moves it as a fallback.
+- **Labels**: at most 256 characters with no control character, refused with
+  `request.invalid_params`. The CLI prints labels and identities without control characters.
 - **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
   bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
   publishes nothing.
 - **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
   (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
   go to the resolved program and are never run at declaration time. Patterns are compiled with
-  the `regex` crate when the kind loads. The four built-in kinds declare no accounts, because
+  the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
+  on the service, as its programs do; they are not a trust boundary for other users. The four built-in kinds declare no accounts, because
   their real login commands are not verified in this phase.
 
 Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,

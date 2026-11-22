@@ -99,6 +99,11 @@ impl Service {
             .await
             .map_err(io::Error::other)?
             .map_err(|error| io::Error::other(error.to_string()))?;
+        // Credential homes and account rows are put in order before requests are served (decision 0059).
+        let sweeper = agents.clone();
+        tokio::task::spawn_blocking(move || sweeper.startup_sweep())
+            .await
+            .map_err(io::Error::other)?;
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));

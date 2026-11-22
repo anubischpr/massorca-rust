@@ -16,10 +16,12 @@ pub struct AgentAccountRow {
     /// The identity the kind's check reported, for example an email. Never read from credential contents.
     pub identity: Option<String>,
     pub state: String,
+    /// How the account came to be: `sign_in`, `import` or `migrated` (decision 0059).
+    pub origin: String,
 }
 
 const SELECT_ACCOUNTS: &str =
-    "SELECT id, kind, label, created_at, identity, state FROM agent_accounts";
+    "SELECT id, kind, label, created_at, identity, state, origin FROM agent_accounts";
 
 fn account_from_row(row: &Row<'_>) -> rusqlite::Result<AgentAccountRow> {
     Ok(AgentAccountRow {
@@ -29,20 +31,22 @@ fn account_from_row(row: &Row<'_>) -> rusqlite::Result<AgentAccountRow> {
         created_at: row.get(3)?,
         identity: row.get(4)?,
         state: row.get(5)?,
+        origin: row.get(6)?,
     })
 }
 
 impl Store {
     pub fn insert_agent_account(&self, row: &AgentAccountRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO agent_accounts (id, kind, label, created_at, identity, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO agent_accounts (id, kind, label, created_at, identity, state, origin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 row.id,
                 row.kind,
                 row.label,
                 row.created_at,
                 row.identity,
-                row.state
+                row.state,
+                row.origin
             ],
         )?;
         Ok(())
@@ -131,6 +135,15 @@ impl Store {
             "SELECT project_id FROM agent_account_choices WHERE account = ?1 ORDER BY project_id",
             [account],
             |row| row.get(0),
+        )
+    }
+
+    /// Every account of every kind, oldest first. The startup sweep reads it.
+    pub fn list_all_agent_accounts(&self) -> Result<Vec<AgentAccountRow>, StoreError> {
+        self.query_all(
+            &format!("{SELECT_ACCOUNTS} ORDER BY created_at, id"),
+            [],
+            account_from_row,
         )
     }
 

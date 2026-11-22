@@ -1,5 +1,6 @@
 //! Sign-in to an account (decision 0059): the account's empty home, a service-owned terminal that runs the kind's login
-//! with the home variable set, and the decision when that terminal ends (keep the account, or delete it).
+//! with the home variable set, and the decision when that terminal ends: keep the account with what its check found, or
+//! delete it. The same decision is made at startup for a sign-in an earlier service left open.
 
 use std::collections::BTreeMap;
 use std::thread;
@@ -15,7 +16,7 @@ use massorca_protocol::methods::agents::{AccountState, AccountsAdded};
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 
 use crate::account_check::state_name;
-use crate::accounts::DEFAULT_LABEL;
+use crate::accounts::{DEFAULT_LABEL, ORIGIN_SIGN_IN, valid_label};
 use crate::credentials;
 use crate::sessions::{AgentError, Agents};
 
@@ -26,13 +27,15 @@ pub const SIGN_IN_SCOPE: &str = "agent-accounts";
 
 impl Agents {
     /// Starts a sign-in (decision 0059): an empty account home, and a service-owned terminal that runs the kind's login
-    /// with the home variable set. When that terminal ends, the account is kept if its declared files exist or its check
-    /// reports signed in, and deleted otherwise.
+    /// with the home variable set. The account is pending until the terminal ends; a pending account cannot be removed or
+    /// activated. When the terminal ends, see [`Agents::decide_sign_in`].
     pub fn accounts_add(
         &self,
         kind: &str,
         label: Option<String>,
     ) -> Result<AccountsAdded, AgentError> {
+        let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
+        valid_label(&label)?;
         let (decl, program) = self.startable_kind(kind)?;
         let credential_decl = decl
             .credentials
@@ -48,10 +51,11 @@ impl Agents {
         let row = AgentAccountRow {
             id: account.clone(),
             kind: kind.to_owned(),
-            label: label.unwrap_or_else(|| DEFAULT_LABEL.to_owned()),
+            label,
             created_at: now_ms(),
             identity: None,
             state: state_name(AccountState::NeedsSignIn).to_owned(),
+            origin: ORIGIN_SIGN_IN.to_owned(),
         };
         let home = {
             let gate = credentials::lock_homes();
@@ -61,6 +65,10 @@ impl Agents {
                 let _ = std::fs::remove_dir_all(&home);
                 return Err(error.into());
             }
+            // Pending from the row's creation, under the same gate hold, so no removal can see the row without it.
+            self.account_busy()
+                .pending
+                .insert(account.clone(), String::new());
             home
         };
         let mut env = BTreeMap::new();
@@ -87,10 +95,14 @@ impl Agents {
         let terminal = match self.terminals().create(spec) {
             Ok(terminal) => terminal,
             Err(error) => {
+                self.account_busy().pending.remove(&account);
                 self.discard_account(kind, &account);
                 return Err(error.into());
             }
         };
+        self.account_busy()
+            .pending
+            .insert(account.clone(), terminal.id.clone());
         let summary = self.summary(
             &row,
             self.store().get_active_agent_account(kind)?.as_deref(),
@@ -106,33 +118,50 @@ impl Agents {
         })
     }
 
-    /// Runs when a sign-in terminal ends: keeps the account signed in, or deletes it (decision 0059).
+    /// Runs when a sign-in terminal ends: the account is no longer pending, and is then decided.
     fn finish_sign_in(&self, kind: &str, account: &str, terminal: &str) {
         wait_for_exit(self.terminals(), terminal);
-        let checked = match self.startable_kind(kind) {
+        self.account_busy().pending.remove(account);
+        self.decide_sign_in(kind, account);
+    }
+
+    /// Keeps a sign-in account or deletes it (decision 0059). With a check that reports signed in, the account is kept as
+    /// signed in, with the check's own identity. A check that reports anything else deletes it. A check that did not finish
+    /// (`unknown`), or a kind with no check, keeps it only if its declared files exist, as `unknown`. A row that is already
+    /// gone is left alone, with no event.
+    pub(crate) fn decide_sign_in(&self, kind: &str, account: &str) {
+        let files =
+            credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
+        let verdict = match self.startable_kind(kind) {
             Ok((decl, program)) => self.check_account_home(&decl, &program, account, None),
             Err(_) => None,
         };
-        let by_check = checked
-            .as_ref()
-            .is_some_and(|found| found.state == AccountState::SignedIn);
-        let files =
-            credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
-        if !by_check && !files {
+        let (keep, state, identity) = match verdict {
+            Some(found) if found.state == AccountState::SignedIn => {
+                (true, AccountState::SignedIn, found.identity)
+            }
+            Some(found) if found.state != AccountState::Unknown => (false, found.state, None),
+            _ => (files, AccountState::Unknown, None),
+        };
+        if !keep {
             self.discard_account(kind, account);
             return;
         }
-        let identity = checked.and_then(|found| found.identity);
-        if let Err(error) = self.store().set_agent_account_check(
-            account,
-            state_name(AccountState::SignedIn),
-            identity.as_deref(),
-        ) {
-            tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
-            return;
+        let gate = credentials::lock_homes();
+        match self
+            .store()
+            .set_agent_account_check(account, state_name(state), identity.as_deref())
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
+                return;
+            }
         }
         self.make_active_if_none(kind, account);
-        self.notify_account(kind, account, AccountState::SignedIn);
+        drop(gate);
+        self.notify_account(kind, account, state);
     }
 }
 
