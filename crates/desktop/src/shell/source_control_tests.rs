@@ -12,7 +12,7 @@ use massorca_protocol::methods::git::status::{BranchState, GitStatus, StatusEntr
 
 use super::service_tests::{Rig, draw, rig};
 use crate::model::regions::Region;
-use crate::model::source_control_flow::DiscardStage;
+use crate::model::source_control_flow::{DiscardStage, DiscardTarget};
 use crate::service::{Command, GitUpdate, Refusal, StoreUpdate};
 
 /// Selects workspace `w1` and opens the Source control tab for it, then draws the window.
@@ -139,9 +139,12 @@ fn discard_asks_then_retries_with_only_the_waiver_its_refusal_names(cx: &mut Tes
     open_panel(&rig, cx);
     next(&mut rig);
 
-    rig.shell.update(cx, |shell, cx| {
-        shell.open_discard(vec!["notes.md".into()], cx)
-    });
+    let tracked = DiscardTarget {
+        path: "README.md".into(),
+        untracked: false,
+    };
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![tracked], cx));
     draw(cx);
     rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
     cx.run_until_parked();
@@ -150,9 +153,9 @@ fn discard_asks_then_retries_with_only_the_waiver_its_refusal_names(cx: &mut Tes
     };
     assert!(!params.delete_untracked && !params.include_staged);
     let _ = reply.send(Err(Refusal::GitRefused {
-        code: codes::GIT_DISCARD_UNTRACKED.into(),
-        message: "Untracked files would be deleted.".into(),
-        paths: vec!["notes.md".into()],
+        code: codes::GIT_DISCARD_STAGED.into(),
+        message: "The file has staged changes.".into(),
+        paths: vec!["README.md".into()],
     }));
     cx.run_until_parked();
     draw(cx);
@@ -164,8 +167,8 @@ fn discard_asks_then_retries_with_only_the_waiver_its_refusal_names(cx: &mut Tes
             .map(|flow| flow.stage().clone());
         assert_eq!(
             stage,
-            Some(DiscardStage::Untracked {
-                paths: vec!["notes.md".into()]
+            Some(DiscardStage::Staged {
+                paths: vec!["README.md".into()]
             })
         );
     });
@@ -175,12 +178,54 @@ fn discard_asks_then_retries_with_only_the_waiver_its_refusal_names(cx: &mut Tes
     let Command::GitDiscard { params, reply } = next(&mut rig) else {
         panic!("the waived discard was expected");
     };
-    assert!(params.delete_untracked && !params.include_staged);
+    assert!(params.include_staged && !params.delete_untracked);
     let _ = reply.send(Ok(GitDiscarded::default()));
     cx.run_until_parked();
     draw(cx);
     rig.shell.read_with(cx, |shell, _| {
         assert!(shell.source_control.discard.is_none(), "the dialog closes");
+    });
+}
+
+#[gpui::test]
+fn the_first_dialog_of_an_untracked_selection_says_delete_and_confirms_once(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    open_panel(&rig, cx);
+    next(&mut rig);
+
+    let untracked = DiscardTarget {
+        path: "notes.md".into(),
+        untracked: true,
+    };
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![untracked], cx));
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        let copy = shell
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| flow.copy())
+            .expect("the dialog is open");
+        assert_eq!(copy.title, "Delete notes.md?");
+        assert_eq!(copy.action, "Delete file");
+    });
+
+    // One confirmation sends the call that deletes the file: there is no second dialog.
+    rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
+    cx.run_until_parked();
+    let Command::GitDiscard { params, reply } = next(&mut rig) else {
+        panic!("the discard call was expected");
+    };
+    assert!(params.delete_untracked && !params.include_staged);
+    assert_eq!(params.paths, ["notes.md"]);
+    let _ = reply.send(Ok(GitDiscarded::default()));
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(shell.source_control.discard.is_none());
     });
 }
 

@@ -21,6 +21,7 @@ use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use super::Shell;
 use super::source_control::{OpenFile, ProjectTab};
 use crate::model::source_control::{ChangeRow, CommitRow, History, Panel, PanelView, panel_view};
+use crate::model::source_control_flow::DiscardTarget;
 
 /// The Project sidebar's body under its header: the tab strip, then the open tab.
 pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> AnyElement {
@@ -411,7 +412,10 @@ fn row_actions(row: &ChangeRow, kind: Group, ctx: &Rows) -> Vec<AnyElement> {
         Group::Conflicted => Vec::new(),
         Group::Staged => vec![stage_button(row, true, ctx)],
         Group::Changed | Group::Untracked => {
-            vec![stage_button(row, false, ctx), discard_button(row, ctx)]
+            vec![
+                stage_button(row, false, ctx),
+                discard_button(row, kind == Group::Untracked, ctx),
+            ]
         }
     }
 }
@@ -439,7 +443,7 @@ fn stage_button(row: &ChangeRow, staged: bool, ctx: &Rows) -> AnyElement {
 }
 
 /// Asks before discarding one file's changes (decision 0013).
-fn discard_button(row: &ChangeRow, ctx: &Rows) -> AnyElement {
+fn discard_button(row: &ChangeRow, untracked: bool, ctx: &Rows) -> AnyElement {
     let path = row.path.clone();
     let handle = ctx.handle.clone();
     IconButton::new(
@@ -449,7 +453,11 @@ fn discard_button(row: &ChangeRow, ctx: &Rows) -> AnyElement {
     )
     .disabled(ctx.busy)
     .on_click(move |_, cx| {
-        let _ = handle.update(cx, |shell, cx| shell.open_discard(vec![path.clone()], cx));
+        let target = DiscardTarget {
+            path: path.clone(),
+            untracked,
+        };
+        let _ = handle.update(cx, |shell, cx| shell.open_discard(vec![target.clone()], cx));
     })
     .into_any_element()
 }

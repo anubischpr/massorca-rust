@@ -15,7 +15,7 @@ use massorca_ui::components::text_field::TextField;
 use super::Shell;
 use crate::model::regions::Region;
 use crate::model::source_control_diff::{diff_status, file_status, parse_patch};
-use crate::model::source_control_flow::{CommitForm, DiscardFlow, DiscardStage};
+use crate::model::source_control_flow::{CommitForm, DiscardFlow, DiscardStage, DiscardTarget};
 use crate::service::Refusal;
 
 /// The Project sidebar's tabs in their fixed order (ProjectSidebarTabs.md).
@@ -319,14 +319,14 @@ impl Shell {
     }
 
     /// Opens the discard dialog for `paths`. Nothing is discarded until the dialog is confirmed.
-    pub(super) fn open_discard(&mut self, paths: Vec<String>, cx: &mut Context<Self>) {
+    pub(super) fn open_discard(&mut self, targets: Vec<DiscardTarget>, cx: &mut Context<Self>) {
         let Some(workspace) = self.source_control.workspace.clone() else {
             return;
         };
         if self.service.is_none() || self.source_control.discard.is_some() {
             return;
         }
-        self.source_control.discard = Some(DiscardFlow::new(workspace, paths));
+        self.source_control.discard = Some(DiscardFlow::new(workspace, targets));
         cx.notify();
     }
 

@@ -32,11 +32,18 @@ pub struct DiscardWaivers {
     pub include_staged: bool,
 }
 
+/// One file a discard covers. An untracked file has no content to restore, so discarding it deletes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscardTarget {
+    pub path: String,
+    pub untracked: bool,
+}
+
 /// One discard of the files the user picked, from the confirmation to the answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscardFlow {
     workspace_id: String,
-    paths: Vec<String>,
+    targets: Vec<DiscardTarget>,
     stage: DiscardStage,
     waivers: DiscardWaivers,
     busy: bool,
@@ -44,19 +51,28 @@ pub struct DiscardFlow {
 }
 
 impl DiscardFlow {
-    pub fn new(workspace_id: impl Into<String>, paths: Vec<String>) -> Self {
+    /// The first dialog names the deletion when a target is untracked, so the first call carries that
+    /// waiver: the user confirms once, for exactly what the dialog says.
+    pub fn new(workspace_id: impl Into<String>, targets: Vec<DiscardTarget>) -> Self {
+        let delete_untracked = targets.iter().any(|target| target.untracked);
         Self {
             workspace_id: workspace_id.into(),
-            paths,
+            targets,
             stage: DiscardStage::Confirm,
-            waivers: DiscardWaivers::default(),
+            waivers: DiscardWaivers {
+                delete_untracked,
+                include_staged: false,
+            },
             busy: false,
             error: None,
         }
     }
 
-    pub fn paths(&self) -> &[String] {
-        &self.paths
+    pub fn paths(&self) -> Vec<String> {
+        self.targets
+            .iter()
+            .map(|target| target.path.clone())
+            .collect()
     }
 
     pub fn stage(&self) -> &DiscardStage {
@@ -75,7 +91,7 @@ impl DiscardFlow {
     pub fn params(&self) -> GitDiscardParams {
         GitDiscardParams {
             workspace: self.workspace_id.clone(),
-            paths: self.paths.clone(),
+            paths: self.paths(),
             all: false,
             delete_untracked: self.waivers.delete_untracked,
             include_staged: self.waivers.include_staged,
@@ -134,13 +150,7 @@ impl DiscardFlow {
     /// What the dialog says at the current stage.
     pub fn copy(&self) -> DialogCopy {
         match &self.stage {
-            DiscardStage::Confirm => DialogCopy {
-                kind: DialogKind::Destructive,
-                title: format!("Discard changes in {}?", files_title(&self.paths)),
-                body: "Edits that are not staged are lost. Staged changes stay.".to_owned(),
-                loss: listed(&self.paths),
-                action: "Discard changes",
-            },
+            DiscardStage::Confirm => self.confirm_copy(),
             DiscardStage::Untracked { paths } => DialogCopy {
                 kind: DialogKind::Destructive,
                 title: format!("Delete untracked {}?", files_title(paths)),
@@ -162,6 +172,48 @@ impl DiscardFlow {
                 body: message.clone(),
                 loss: Vec::new(),
                 action: "Close",
+            },
+        }
+    }
+
+    /// The first dialog. It names exactly what the call will do, so the user confirms once.
+    fn confirm_copy(&self) -> DialogCopy {
+        let paths = self.paths();
+        let untracked = self
+            .targets
+            .iter()
+            .filter(|target| target.untracked)
+            .count();
+        let tracked = self.targets.len() - untracked;
+        match (tracked, untracked) {
+            (0, 1) => DialogCopy {
+                kind: DialogKind::Destructive,
+                title: format!("Delete {}?", files_title(&paths)),
+                body: "Git does not track this file, so it cannot be brought back.".to_owned(),
+                loss: listed(&paths),
+                action: "Delete file",
+            },
+            (0, _) => DialogCopy {
+                kind: DialogKind::Destructive,
+                title: format!("Delete {untracked} untracked files?"),
+                body: "Git does not track these files, so they cannot be brought back.".to_owned(),
+                loss: listed(&paths),
+                action: "Delete files",
+            },
+            (_, 0) => DialogCopy {
+                kind: DialogKind::Destructive,
+                title: format!("Discard changes in {}?", files_title(&paths)),
+                body: "Edits that are not staged are lost. Staged changes stay.".to_owned(),
+                loss: listed(&paths),
+                action: "Discard changes",
+            },
+            _ => DialogCopy {
+                kind: DialogKind::Destructive,
+                title: format!("Discard changes in {}?", files_title(&paths)),
+                body: "Edits that are not staged are lost, and the untracked files are deleted. Staged changes stay."
+                    .to_owned(),
+                loss: listed(&paths),
+                action: "Discard changes",
             },
         }
     }
@@ -241,6 +293,27 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    fn target(path: &str, untracked: bool) -> DiscardTarget {
+        DiscardTarget {
+            path: path.to_owned(),
+            untracked,
+        }
+    }
+
+    fn tracked(names: &[&str]) -> Vec<DiscardTarget> {
+        names.iter().map(|name| target(name, false)).collect()
+    }
+
+    fn tracked_owned(names: Vec<String>) -> Vec<DiscardTarget> {
+        names
+            .into_iter()
+            .map(|name| DiscardTarget {
+                path: name,
+                untracked: false,
+            })
+            .collect()
+    }
+
     fn refused(code: &str, names: &[&str]) -> Refusal {
         Refusal::GitRefused {
             code: code.to_owned(),
@@ -251,7 +324,7 @@ mod tests {
 
     #[test]
     fn a_discard_asks_first_and_gives_no_waiver_until_one_is_asked_for() {
-        let mut flow = DiscardFlow::new("w1", paths(&["src/a.rs"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["src/a.rs"]));
         assert_eq!(flow.stage(), &DiscardStage::Confirm);
         assert!(flow.confirm());
         assert!(flow.busy());
@@ -265,7 +338,7 @@ mod tests {
 
     #[test]
     fn an_untracked_refusal_asks_for_delete_untracked_only() {
-        let mut flow = DiscardFlow::new("w1", paths(&["a.txt", "b.txt"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt", "b.txt"]));
         flow.confirm();
         assert!(!flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["b.txt"]))));
         assert_eq!(
@@ -282,7 +355,7 @@ mod tests {
 
     #[test]
     fn a_staged_refusal_has_its_own_waiver_after_the_untracked_one() {
-        let mut flow = DiscardFlow::new("w1", paths(&["a.txt"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
         flow.confirm();
         flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
         flow.confirm();
@@ -300,7 +373,7 @@ mod tests {
 
     #[test]
     fn a_refusal_that_comes_back_after_its_waiver_does_not_loop() {
-        let mut flow = DiscardFlow::new("w1", paths(&["a.txt"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
         flow.confirm();
         flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
         flow.confirm();
@@ -312,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_conflicted_file_is_a_plain_refusal_with_the_service_text() {
-        let mut flow = DiscardFlow::new("w1", paths(&["Cargo.lock"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["Cargo.lock"]));
         flow.confirm();
         flow.answered(Err(refused(codes::GIT_PATH_CONFLICTED, &["Cargo.lock"])));
         assert_eq!(
@@ -325,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_link_that_is_down_keeps_the_dialog_and_the_call_can_be_tried_again() {
-        let mut flow = DiscardFlow::new("w1", paths(&["a.txt"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
         flow.confirm();
         flow.answered(Err(Refusal::unavailable("The service is not connected.")));
         assert_eq!(flow.stage(), &DiscardStage::Confirm);
@@ -337,7 +410,7 @@ mod tests {
 
     #[test]
     fn a_second_confirm_while_a_call_is_out_does_nothing() {
-        let mut flow = DiscardFlow::new("w1", paths(&["a.txt"]));
+        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
         assert!(flow.confirm());
         assert!(!flow.confirm());
     }
@@ -345,7 +418,7 @@ mod tests {
     #[test]
     fn each_dialog_names_its_loss_and_counts_the_files_past_the_list() {
         let many: Vec<String> = (1..=7).map(|n| format!("dir/f{n}.txt")).collect();
-        let mut flow = DiscardFlow::new("w1", many);
+        let mut flow = DiscardFlow::new("w1", tracked_owned(many));
         let copy = flow.copy();
         assert_eq!(copy.title, "Discard changes in 7 files?");
         assert_eq!(copy.kind, DialogKind::Destructive);
@@ -358,7 +431,7 @@ mod tests {
 
     #[test]
     fn a_single_file_is_named_by_its_name_alone() {
-        let flow = DiscardFlow::new("w1", paths(&["src/deep/a.rs"]));
+        let flow = DiscardFlow::new("w1", tracked(&["src/deep/a.rs"]));
         assert_eq!(flow.copy().title, "Discard changes in a.rs?");
     }
 
@@ -397,5 +470,49 @@ mod tests {
         assert!(!params.amend && !params.allow_published);
         form.committed();
         assert_eq!(form, CommitForm::default());
+    }
+
+    #[test]
+    fn an_untracked_only_selection_is_a_deletion_from_its_first_dialog() {
+        let mut flow = DiscardFlow::new("w1", vec![target("notes.md", true)]);
+        let copy = flow.copy();
+        assert_eq!(copy.title, "Delete notes.md?");
+        assert_eq!(copy.kind, DialogKind::Destructive);
+        assert_eq!(copy.action, "Delete file");
+        assert!(copy.body.contains("cannot be brought back"));
+        assert_eq!(copy.loss, vec!["notes.md".to_owned()]);
+        assert!(
+            flow.params().delete_untracked,
+            "the first call carries the waiver the dialog names"
+        );
+        assert!(flow.confirm());
+        assert!(flow.answered(Ok(())), "one confirmation is enough");
+    }
+
+    #[test]
+    fn several_untracked_files_are_counted_in_the_first_dialog() {
+        let flow = DiscardFlow::new("w1", vec![target("a.md", true), target("b.md", true)]);
+        assert_eq!(flow.copy().title, "Delete 2 untracked files?");
+        assert_eq!(flow.copy().action, "Delete files");
+        assert!(flow.params().delete_untracked);
+    }
+
+    #[test]
+    fn a_mixed_selection_names_both_losses_in_the_first_dialog() {
+        let flow = DiscardFlow::new("w1", vec![target("src/a.rs", false), target("b.txt", true)]);
+        let copy = flow.copy();
+        assert_eq!(copy.title, "Discard changes in 2 files?");
+        assert!(copy.body.contains("untracked files are deleted"));
+        assert_eq!(copy.action, "Discard changes");
+        assert!(flow.params().delete_untracked);
+    }
+
+    #[test]
+    fn a_tracked_selection_names_only_the_edits_and_sends_no_deletion_waiver() {
+        let flow = DiscardFlow::new("w1", vec![target("src/a.rs", false)]);
+        let copy = flow.copy();
+        assert_eq!(copy.title, "Discard changes in a.rs?");
+        assert!(!copy.body.contains("deleted"));
+        assert!(!flow.params().delete_untracked);
     }
 }
