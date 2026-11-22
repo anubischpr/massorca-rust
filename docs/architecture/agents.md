@@ -263,7 +263,11 @@ delete sharing, from before their access changes until the swap is done, so none
 be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. Each pinned directory
 must be owned by the service's user, its token's default owner (the Administrators group for an
 elevated administrator) or SYSTEM, compared as binary SIDs; any other owner refuses the import with
-`agent.credentials_invalid`. The directories it creates name the user as owner. With
+`agent.credentials_invalid`. The directories it creates or restricts (`agents`, run files included)
+are owned by the user, elevated or not, with a DACL for the user and SYSTEM, so elevated and
+non-elevated runs read each other's. An `agents` or `homes` owned by Administrators, left by an
+older elevated run, is refused by a non-elevated run with that reason: run MassOrca elevated once,
+which makes it the user's, or take ownership of it. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
 swap fails (the error names where it is when that fails too), and deleted after it succeeds.
 Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
