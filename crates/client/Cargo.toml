@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+massorca-process.workspace = true
+getrandom.workspace = true
 interprocess.workspace = true
 massorca-net.workspace = true
 massorca-profile.workspace = true

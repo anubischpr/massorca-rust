@@ -42,7 +42,7 @@ const CLEARED_ENV: [&str; 5] = [
 /// The `massorca` binary with `home` on its environment and no profile flag. Its services keep vault keys in a file
 /// inside the temporary profile, never in the developer's keyring.
 pub fn massorca_in(home: &Path) -> Command {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin("massorca"));
+    let mut command = massorca_process::command(assert_cmd::cargo::cargo_bin("massorca"));
     command.env("MASSORCA_HOME", home);
     command.env("MASSORCA_VAULT_PROTECTION", "file");
     for name in CLEARED_ENV {
@@ -120,20 +120,26 @@ pub fn execute_with_stdin(command: &mut Command, input: &str) -> Assert {
 /// A temporary home, and the profiles whose services it stops when dropped.
 #[derive(Debug)]
 pub struct Sandbox {
-    home: TempDir,
+    _temp: TempDir,
+    /// A private home below the temporary folder, which may be shared with other users (ADR 0073).
+    home: PathBuf,
     profiles: RefCell<BTreeSet<String>>,
 }
 
 impl Sandbox {
     pub fn new() -> Self {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let home = temp.path().join("home");
+        massorca_profile::create_home(&home).expect("a private home");
         Self {
-            home: tempfile::tempdir().expect("a temporary home"),
+            _temp: temp,
+            home,
             profiles: RefCell::new(BTreeSet::new()),
         }
     }
 
     pub fn home(&self) -> &Path {
-        self.home.path()
+        &self.home
     }
 
     pub fn profile_dir(&self, profile: &str) -> PathBuf {
@@ -346,7 +352,7 @@ fn processes_in_home(home: &Path) -> Vec<u32> {
 
 #[cfg(unix)]
 fn kill(pid: u32) {
-    let _ = Command::new("kill")
+    let _ = massorca_process::command("kill")
         .args(["-KILL", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -356,7 +362,7 @@ fn kill(pid: u32) {
 
 #[cfg(windows)]
 fn kill(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = massorca_process::command("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -442,7 +448,7 @@ pub fn eventually<T>(what: &str, mut attempt: impl FnMut() -> Option<T>) -> T {
 
 /// Runs git in `dir` with a fixed identity; panics on failure. Returns stdout as text.
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

@@ -2,15 +2,21 @@
 //! handlers run its blocking calls on the blocking pool. `core-agents` announces every status change; the service
 //! turns each into `agent.changed` on the event bus and an item for `agent.watch` (0052).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use massorca_core_agents::{AgentError, Agents, Change, credentials};
+use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps};
+use massorca_core_git::{Git, GitError, MergeOutcome};
+use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent,
-    AgentWatchParams, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
-    CredentialsRemoved, CredentialsShown, PromptReceipt,
+    self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
+    AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
+    AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
+use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
@@ -91,6 +97,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             hook,
         )?,
+        methods.register(
+            Owner::Core,
+            agents::DELEGATE,
+            agents_cap,
+            Permission::Workspace,
+            delegate,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::TREE,
+            agents_cap,
+            Permission::Read,
+            tree,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::BRING_BACK,
+            agents_cap,
+            Permission::Workspace,
+            bring_back,
+        )?,
         methods.register_stream(
             Owner::Core,
             agents::WATCH,
@@ -118,6 +145,48 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             credentials_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_LIST,
+            agents_cap,
+            Permission::Read,
+            accounts_list,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_ADD,
+            agents_cap,
+            Permission::Workspace,
+            accounts_add,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_IMPORT,
+            agents_cap,
+            Permission::Workspace,
+            accounts_import,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_ACTIVATE,
+            agents_cap,
+            Permission::Workspace,
+            accounts_activate,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_REMOVE,
+            agents_cap,
+            Permission::Workspace,
+            accounts_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_CHECK,
+            agents_cap,
+            Permission::Workspace,
+            accounts_check,
         )?,
     ])
 }
@@ -170,6 +239,88 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.
 async fn hook(ctx: RequestCtx, params: AgentHookParams) -> Result<(), ErrorBody> {
     on_agents(&ctx, move |agents| agents.hook(&params)).await
+}
+
+/// Starts a child session of a parent session (0055). The prompt is never logged.
+async fn delegate(
+    ctx: RequestCtx,
+    params: AgentDelegateParams,
+) -> Result<AgentDelegated, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.delegate(params)).await
+}
+
+/// A session's delegation tree: its root and the root's children (0055).
+async fn tree(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentTree, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.tree(&params.session)).await
+}
+
+/// Brings a finished child back into its parent (0055). The parent workspace's git mutation lock is held for the whole
+/// call, so no git command of a client interleaves with the clean check and the merge.
+async fn bring_back(
+    ctx: RequestCtx,
+    params: AgentBringBackParams,
+) -> Result<BringBackResult, ErrorBody> {
+    let child = params.child.clone();
+    let merge = params.merge;
+    // The workspace a merge would go into: only a child with a workspace of its own is merged (0055).
+    let merge_into = on_agents(&ctx, move |agents| {
+        let child = agents.show(&child)?;
+        let Some(parent) = child.parent_id else {
+            return Ok(None);
+        };
+        let parent = agents.show(&parent)?;
+        Ok((merge && parent.workspace_id != child.workspace_id).then_some(parent.workspace_id))
+    })
+    .await?;
+    // A merge never runs unlocked: a workspace that is not a git worktree, is missing or is being removed refuses the
+    // bring-back here.
+    let _guard = match merge_into {
+        Some(workspace) => Some(super::git::repository(&ctx, workspace).await?.lock().await),
+        None => None,
+    };
+    let git = WorktreeGit(ctx.state.workspaces.git().clone());
+    on_agents(&ctx, move |agents| agents.bring_back(&params, &git)).await
+}
+
+/// The bring-back's git operations, through `core-git`.
+struct WorktreeGit(Git);
+
+impl RepoOps for WorktreeGit {
+    fn is_dirty(&self, dir: &Path) -> Result<bool, AgentError> {
+        self.0.status_dirty(dir).map_err(agent_git_error)
+    }
+
+    fn operation_in_progress(&self, dir: &Path) -> Result<Option<String>, AgentError> {
+        let operation = self.0.operation_in_progress(dir).map_err(agent_git_error)?;
+        Ok(operation.map(|operation| {
+            match operation {
+                GitOperation::Merge => "a merge",
+                GitOperation::Rebase => "a rebase",
+                GitOperation::CherryPick => "a cherry-pick",
+                GitOperation::Revert => "a revert",
+                GitOperation::ApplyMailbox => "a mailbox apply",
+                GitOperation::Unknown => "a git operation",
+            }
+            .to_owned()
+        }))
+    }
+
+    fn merge_no_ff(&self, dir: &Path, branch: &str) -> Result<MergeResult, AgentError> {
+        Ok(
+            match self.0.merge_no_ff(dir, branch).map_err(agent_git_error)? {
+                MergeOutcome::Merged { commit } => MergeResult::Merged { commit },
+                MergeOutcome::Conflict { paths } => MergeResult::Conflict { paths },
+            },
+        )
+    }
+}
+
+/// A git failure as the protocol reports it, as `git_error` maps it for the git methods.
+fn agent_git_error(error: GitError) -> AgentError {
+    match massorca_core_git::failure_code(&error) {
+        Some(code) => AgentError::new(code, error.to_string()),
+        None => DomainError::from(error).into(),
+    }
 }
 
 /// The sessions a watcher selected, as ids resolved once when the stream opens.
@@ -261,41 +412,102 @@ async fn watch(ctx: RequestCtx, params: AgentWatchParams) -> Result<StreamSource
 
 /// Copies a kind's declared credential files into the profile's home for it (0056). Only names and sizes come back;
 /// nothing about the files is logged beyond that.
+/// Deprecated (0056, decision 0059): imports into the kind's active account. Refused while a run of the kind is live
+/// when it replaces the account.
 async fn credentials_import(
     ctx: RequestCtx,
     params: CredentialsImportParams,
 ) -> Result<CredentialsImported, ErrorBody> {
-    on_profile(&ctx, move |agents, profile_dir| {
+    on_agents(&ctx, move |agents| {
         if params.replace {
             refuse_live_runs(agents, &params.kind)?;
         }
-        credentials::import(
-            profile_dir,
-            &params.kind,
-            Path::new(&params.from),
-            params.replace,
-        )
+        agents.credentials_import(&params.kind, &params.from, params.replace)
     })
     .await
 }
 
+/// Deprecated (0056): the kind's active account's files, names and sizes only.
 async fn credentials_show(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsShown, ErrorBody> {
-    on_profile(&ctx, move |_agents, profile_dir| {
-        credentials::show(profile_dir, &params.kind)
-    })
-    .await
+    on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await
 }
 
+/// Deprecated (0056): removes the kind's active account. Refused while a run of the kind is live.
 async fn credentials_remove(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsRemoved, ErrorBody> {
-    on_profile(&ctx, move |agents, profile_dir| {
+    on_agents(&ctx, move |agents| {
         refuse_live_runs(agents, &params.kind)?;
-        credentials::remove(profile_dir, &params.kind)
+        agents.credentials_remove(&params.kind)
+    })
+    .await
+}
+
+/// The accounts of a kind (decision 0059).
+async fn accounts_list(
+    ctx: RequestCtx,
+    params: AccountsListParams,
+) -> Result<AccountsList, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents
+            .accounts_list(&params.kind)
+            .map(|accounts| AccountsList { accounts })
+    })
+    .await
+}
+
+/// Sign-in: a new account and the terminal that runs the kind's login (decision 0059).
+async fn accounts_add(
+    ctx: RequestCtx,
+    params: AccountsAddParams,
+) -> Result<AccountsAdded, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_add(&params.kind, params.label)
+    })
+    .await
+}
+
+/// Import into a new account from a directory the person names (decision 0059).
+async fn accounts_import(
+    ctx: RequestCtx,
+    params: AccountsImportParams,
+) -> Result<AccountsImported, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_import(&params.kind, &params.from, params.label)
+    })
+    .await
+}
+
+async fn accounts_activate(
+    ctx: RequestCtx,
+    params: AccountsActivateParams,
+) -> Result<AccountSummary, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_activate(&params.kind, &params.account, params.project.as_deref())
+    })
+    .await
+}
+
+async fn accounts_remove(
+    ctx: RequestCtx,
+    params: AccountsRemoveParams,
+) -> Result<AccountsRemoved, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_remove(&params.kind, &params.account)
+    })
+    .await
+}
+
+async fn accounts_check(
+    ctx: RequestCtx,
+    params: AccountsCheckParams,
+) -> Result<AccountSummary, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_check(&params.kind, params.account.as_deref())
     })
     .await
 }
@@ -321,23 +533,6 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
     );
     error.data = Some(serde_json::json!({ "sessions": live }));
     Err(error)
-}
-
-/// Runs one call on the profile directory on the blocking pool and maps its refusal to the protocol error.
-async fn on_profile<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
-where
-    T: Send + 'static,
-    F: FnOnce(&Agents, &Path) -> Result<T, AgentError> + Send + 'static,
-{
-    let profile_dir: PathBuf = ctx.state.profile.dir().to_path_buf();
-    let agents = ctx.state.agents.clone();
-    match tokio::task::spawn_blocking(move || call(&agents, &profile_dir)).await {
-        Ok(result) => result.map_err(ErrorBody::from),
-        Err(error) => Err(ErrorBody::new(
-            codes::INTERNAL,
-            format!("the credentials task failed: {error}"),
-        )),
-    }
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.

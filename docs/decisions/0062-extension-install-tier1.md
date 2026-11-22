@@ -1,0 +1,244 @@
+# 0062: Installing data-only extensions (tier 1)
+
+Status: accepted, 2026-11-22. Builds on 0001, 0059 (agents come from the
+Marketplace) and 0061 (package format).
+
+## Context
+
+0061 defines what a package is and how the core judges it: manifest, permissions,
+computed risk, uninstall effects and the archive check. It writes nothing to
+disk. Tier 1 is the part that does: install, list, enable, disable and remove
+packages per profile, from the CLI and the protocol. Agent packages (0059) are
+the first real packages, so tier 1 also runs a vendor's CLI installer, the only
+step here that executes anything. Code (tier 2, Wasmtime) is out of scope.
+
+## Decision
+
+### Crate and layout
+
+- New crate `crates/core-extensions` (`massorca-core-extensions`). It depends on
+  `massorca-profile` and `massorca-ext-package`, never on `core-agents`, so
+  `core-agents` can depend on it.
+- Under `<profile>/extensions/`:
+  - `pkgs/<id>/<version>-<hash8>/`: the unpacked package. Read-only for
+    everyone but the installer.
+  - `data/<id>/`: the package's own data, plus `install.log` from the vendor
+    installer.
+  - `lock.json`: the source of truth for what is installed.
+  - `dev/` stays reserved for Creator mode (§11); tier 1 does not use it.
+- `lock.json` is written atomically (temporary file, flush, rename). One
+  service owns a profile, and the service serialises every change with one
+  lock.
+
+```json
+{ "version": 1,
+  "packages": [ {
+    "id": "massorca.claude", "version": "1.0.0",
+    "source": { "kind": "catalogue|dir|file", "ref": "massorca.claude" },
+    "sha256": "<hex of the archive, or of the canonical file list>",
+    "path": "pkgs/massorca.claude/1.0.0-1a2b3c4d",
+    "enabled": true,
+    "consent": "<fingerprint the person accepted>",
+    "installed_at_ms": 0,
+    "cli": [ { "agent": "claude", "binary": "claude",
+               "detected_before_install": false,
+               "installer": { "command": ["..."], "ran_at_ms": 0, "exit_code": 0 },
+               "installed_by_package": true } ] } ] }
+```
+
+Unknown fields are kept on read and write, so a newer service can add fields.
+
+### Sources
+
+Tier 1 installs from three sources:
+
+- `catalogue:<id>`: the built-in catalogue, embedded in the binary. Nothing is
+  downloaded. It holds the four first-party agent packages under
+  `packages/agents/massorca.<id>/`.
+- `dir:<path>`: a folder on the service host holding `extension.json`. It is
+  copied in; later edits to the folder do nothing.
+- `file:<path>` with `--sha256 <hex>`: a package archive, checked with 0061's
+  `archive::open`. The hash is required, and it is pinned the same way an index
+  entry pins it.
+
+A remote index (Marketplace download) arrives with the signed index at M6.
+
+For a folder or catalogue entry, the hash is SHA-256 over the sorted list of
+`path`, NUL, length (decimal), NUL, bytes. An archive's review hashes the
+file as read; its install still needs the pin.
+
+### Review and consent
+
+- `extensions.inspect { source }` returns the review without changing anything:
+  - the manifest summary;
+  - `risk` (level and reasons, from 0061);
+  - the `listing`;
+  - for each agent entry, the CLI plan: `detected` (with its path), or
+    `will_run` with the exact command for this OS, or `unsupported` when no
+    command fits this OS or the entry has no `cli` block. An `unsupported`
+    CLI does not stop the install: the package registers and the CLI stays
+    missing;
+  - a `consent` fingerprint.
+- The fingerprint is SHA-256 over:
+  - the id;
+  - the version;
+  - the package hash;
+  - the sorted permissions;
+  - the planned installer commands.
+
+  They are encoded as one JSON array, never a map, so the fingerprint does not
+  depend on key order.
+- `extensions.install { source, consent, run_installer, sha256? }` refuses with
+  `extension.consent_required` when `consent` is missing. It refuses with
+  `extension.consent_mismatch` when the package or plan changed since the review.
+  A plan that runs an installer also needs `run_installer: true`, or it is
+  refused with `extension.installer_consent_required`. Accepting the permission
+  review does not accept running a program.
+- The CLI never prompts. `massorca extension install <source>` prints the review
+  and exits with `extension.consent_required`. `--yes` accepts the review it just
+  printed. `--yes-run-installer` also accepts running the vendor command. This is
+  the headless-host path from 0059. The desktop sends the same fields from its
+  review dialog.
+
+### Running a vendor installer
+
+- It runs on the service host (the execution host, also over SSH). The argv is
+  exactly the manifest's command for the host OS. There is no shell and no
+  string joining. On Windows no console window opens.
+- It is never elevated by MassOrca. If the vendor's installer asks for elevation
+  itself, that prompt is the vendor's, and the person answers it there.
+- Output goes to `data/<id>/install.log`, capped at 1 MiB. It runs with a
+  15-minute limit, and the child process is killed on timeout.
+- Afterwards the `verify` command must exit 0, and `binary` must resolve.
+  Otherwise the install fails with `extension.installer_failed` or
+  `extension.verify_failed`. Nothing is registered, and the unpacked folder is
+  deleted. What ran is still written to `install.log`.
+- On success, the lockfile records the command, the time, the exit code and
+  `installed_by_package: true`. A CLI that was already detected gets
+  `detected_before_install: true` and no installer entry.
+- Program resolution and process running come into the crate as two small
+  traits, which the service supplies:
+  - `ProgramResolver`, which uses the same PATH and PATHEXT rule as
+    `core-agents`;
+  - `CommandRunner`.
+  Tests replace both, so no test runs a real vendor installer.
+
+### Enable, disable, remove
+
+- `extensions.set_enabled { id, enabled }`. Disabling calls the remove guards
+  first, then unregisters the package's contributions; files and data stay.
+- `extensions.remove { id, delete_agent_homes?, uninstall_cli? }`:
+  1. Runs every registered remove guard. A refusal (for example
+     `agent.busy`) stops here.
+  2. Removes the lockfile entry, then deletes `pkgs/<id>/` and `data/<id>/`.
+  3. Calls every registered remove cleanup, but only when
+     `delete_agent_homes` is true. A cleanup failure is reported in the result
+     and not rolled back.
+  4. Runs the package's `uninstall` command only when `uninstall_cli` is true,
+     and only for CLIs the lockfile says this package installed. That is the
+     same High-risk consent as the installer; the CLI flag is
+     `--uninstall-cli`. Otherwise the result lists the command, for the
+     Danger Zone to offer. Its output goes to `logs/<id>-uninstall.log`,
+     because `data/<id>/` is already deleted.
+- Guards and cleanups are registered with an owner and return a drop handle:
+  `register_remove_guard` and `register_remove_cleanup`. Each is
+  `Fn(&str package_id) -> Result<(), ErrorBody>`.
+- Events, published after the lockfile commit: `extension.installed`,
+  `extension.enabled`, `extension.disabled`, `extension.removed`. Each has
+  `id` equal to the package id.
+
+### Agents
+
+- `installed_agent_kinds(&Profile) -> Result<Vec<InstalledAgentKind>, Error>`
+  returns every installed package's agent kinds, enabled or not, in lockfile
+  order. Each entry carries:
+  - `package_id`, `package_version`, `kind_id`;
+  - `path`: the absolute path of `agents/<id>.json`;
+  - `enabled`;
+  - `cli_installed_by_package`.
+- `catalogue_agent_kinds() -> Vec<CatalogueAgentKind>` returns, for every
+  catalogue entry, the declaration bytes and its `cli` block. Each
+  declaration's content is checked by `core-agents`, not here.
+- An install whose kind id is already installed by another package is refused
+  with `extension.kind_conflict`.
+- The first-party packages copy the kind files from `crates/core-agents/kinds/`
+  at main commit `801d6866`. Until the agents chain switches its loader, its
+  compiled-in copies stay and the catalogue is not read by it.
+
+### Item page
+
+`extensions.catalogue` lists catalogue entries. `extensions.get { id }` returns
+one entry, installed or not. Each entry carries the data for the owner's
+nine-part item page. There is no item-specific code:
+
+1. `logo` (package path)
+2. `name`
+3. host (the client knows which service it asked)
+4. `listing.banner`
+5. `listing.connections`
+6. information: description, developer, category, version, publisher,
+   permissions with risk reasons, CLI source link
+7. Settings `basic`
+8. Advanced Options
+9. Danger Zone: the uninstall effects
+
+The state is one of `available`, `enabled` or `disabled`. For an agent entry it
+also carries the `detected` flag. `extensions.asset { id, path }` returns a
+listed image (logo, banner) as base64, at most 1 MiB, and only for files the
+listing names.
+
+### Protocol and CLI
+
+- Capability `extensions/1`. Methods, owner `core`:
+  - `extensions.list`, `get`, `catalogue`, `inspect` and `asset` require `Read`;
+  - `extensions.install`, `set_enabled` and `remove` require `HostAdmin`,
+    because they can run programs on the host.
+- Error codes are `extension.*` in `protocol::codes`. The format codes from
+  0061 move there as well. `core-extensions` defines them first:
+  `invalid_source`, `not_found` (no catalogue entry), `not_installed`,
+  `already_installed`, `kind_conflict`, `hash_required`, `consent_required`,
+  `consent_mismatch`, `installer_consent_required`, `installer_failed`,
+  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`
+  and `io`. A guard's refusal keeps the guard's own code, such as
+  `agent.busy`.
+- The CLI group is `massorca extension`, with the reserved `massorca ext` as a
+  visible alias:
+  - `list`;
+  - `show <id>`;
+  - `catalogue`;
+  - `inspect <source>`;
+  - `install <source> [--sha256] [--yes] [--yes-run-installer]`;
+  - `enable <id>`;
+  - `disable <id>`;
+  - `remove <id> [--delete-agent-homes] [--uninstall-cli]`.
+
+  Each command has text and `--json` output. Every flow is tested end to end
+  through the CLI.
+
+## Alternatives
+
+- **Prompt in the CLI.** An interactive yes/no reads well, but it hangs on a
+  headless host and in tests. Instead the CLI prints the review and needs an
+  explicit flag, which also leaves a record in shell history of what was
+  accepted.
+- **One consent for permissions and the installer.** Simpler, but it would let
+  accepting a package's permissions also run a program. 0059 asks for running
+  a program to be its own confirmed step.
+- **Run the installer through a shell.** Vendor documentation often shows a
+  piped shell line. A shell would accept any string, so the manifest holds argv
+  only. A vendor whose official route is a script is declared as the
+  interpreter plus its arguments.
+- **Store state in SQLite (`core-store`).** The lockfile is per profile, small,
+  and must be readable without a running service (`installed_agent_kinds`). A
+  JSON file fits, and §5 already names it.
+- **Detect the CLI in `core-agents` and inject it.** That is what the resolver
+  trait does, without a crate dependency loop.
+
+## Consequences
+
+- The agents chain switches its loader to `installed_agent_kinds` and
+  `catalogue_agent_kinds`, and drops its compiled-in kinds.
+- The path that runs a vendor command gets an independent security review
+  before it merges.
+- Updates, rollback, per-permission toggles, logs and dev reload are later
+  `extensions/1` additions.

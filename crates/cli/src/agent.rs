@@ -5,14 +5,16 @@
 use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
-use massorca_client::Client;
+use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentPromptParams, AgentSession, AgentSessionList, AgentStartParams,
-    AgentWatchEvent, AgentWatchParams,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
+use crate::agent_accounts::{self, AccountsCommand};
 use crate::agent_credentials::{self, CredentialsCommand};
+use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
@@ -57,11 +59,59 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
+    /// Starts a child session for a parent session, in a new workspace of its own unless it is read-only.
+    Delegate(AgentDelegateArgs),
+    /// Shows a session's delegation tree: its root and the root's children.
+    Tree {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
+    /// Merges a finished child's branch into its parent's worktree and tells the parent's run about it.
+    BringBack(AgentBringBackArgs),
     /// Copies a kind's login files into this profile, shows them or removes them. Prints names and sizes only.
     Credentials {
         #[command(subcommand)]
         command: CredentialsCommand,
     },
+    /// A kind's accounts: sign in, import, activate for the kind or a project, check and remove (decision 0059).
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct AgentDelegateArgs {
+    /// The parent session. Inside an agent run it defaults to that run's session.
+    #[arg(long, value_name = "SESSION")]
+    pub from: Option<String>,
+    /// The child's first prompt, at most 8 KiB.
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+    pub prompt: String,
+    /// The child's agent kind; the parent's by default.
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+    /// Name of the child workspace and its branch; `<parent workspace>-<n>` by default.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// Run the child in the parent's workspace; it declares that it does not write.
+    #[arg(long, conflicts_with = "name")]
+    pub read_only: bool,
+    /// The child session's title; the first line of the prompt by default.
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentBringBackArgs {
+    /// The child session: id, or a unique prefix of at least 8 characters.
+    pub child: String,
+    /// Do not merge the child's branch into the parent's worktree.
+    #[arg(long)]
+    pub no_merge: bool,
+    /// Do not send the parent's run a prompt about the child.
+    #[arg(long)]
+    pub no_prompt: bool,
 }
 
 #[derive(Debug, Args)]
@@ -268,6 +318,56 @@ pub async fn execute(
                 &[format!("forgot agent session {}", forgotten.id)],
             );
         }
+        AgentCommand::Accounts { command } => {
+            agent_accounts::execute(&client, command, output, json).await?;
+        }
+        AgentCommand::Delegate(args) => {
+            let inside = run_identity();
+            let parent = args
+                .from
+                .or_else(|| inside.as_ref().map(|(session, _)| session.clone()))
+                .ok_or_else(|| {
+                    CliError::new(
+                        "usage.invalid_arguments",
+                        "name the parent session with --from; it defaults to the agent run's own session only inside a run",
+                        exit::USAGE,
+                    )
+                })?;
+            let delegated = client
+                .agent_delegate(&AgentDelegateParams {
+                    token: inside.as_ref().map(|(_, token)| token.clone()),
+                    parent,
+                    prompt: args.prompt,
+                    kind: args.kind,
+                    name: args.name,
+                    title: args.title,
+                    read_only: args.read_only,
+                    request_id: None,
+                })
+                .await?;
+            let mut lines = agent_text::session_details(&delegated.session);
+            if let Some(note) = &delegated.note {
+                lines.push(format!("note: {note}"));
+            }
+            output.success(&delegated, &lines);
+        }
+        AgentCommand::Tree { session } => {
+            let tree = client.agent_tree(&session).await?;
+            output.success(&tree, &agent_text::tree_lines(&tree));
+        }
+        AgentCommand::BringBack(args) => {
+            // Inside a run the run's own token always goes with the call; the service accepts only the parent's (0055).
+            let token = run_identity().map(|(_, token)| token);
+            let brought = client
+                .agent_bring_back(&AgentBringBackParams {
+                    child: args.child,
+                    merge: !args.no_merge,
+                    prompt: !args.no_prompt,
+                    token,
+                })
+                .await?;
+            output.success(&brought, &agent_text::bring_back_lines(&brought));
+        }
         AgentCommand::Credentials { command } => {
             agent_credentials::execute(&client, command, output).await?;
         }
@@ -275,6 +375,17 @@ pub async fn execute(
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),
     }
     Ok(())
+}
+
+/// The session and token of the agent run this command runs in, from the environment the service gives a run. Inside a
+/// run every delegate and bring-back sends this token, whatever session it names, so the service can refuse a run that
+/// acts for a session other than its own.
+fn run_identity() -> Option<(String, String)> {
+    let session = std::env::var(ENV_SESSION)
+        .ok()
+        .filter(|value| !value.is_empty())?;
+    let token = std::env::var(ENV_TOKEN).unwrap_or_default();
+    Some((session, token))
 }
 
 /// Waits on the watch stream until the session reaches `until`; returns its record then.
@@ -347,6 +458,9 @@ async fn watch(client: &Client, session: Option<String>, output: Output) -> Resu
             AgentWatchEvent::Unknown => continue,
         };
         output.success(&item, &lines);
+    }
+    if stream.connection_lost() {
+        return Err(ClientError::Disconnected.into());
     }
     Ok(())
 }

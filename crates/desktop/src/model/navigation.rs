@@ -58,6 +58,8 @@ pub enum Page {
     /// Opened from the rail. Every Marketplace view is a full page.
     Marketplace(MarketplacePage),
     Settings,
+    /// Phones and other hosts: an offer this PC makes, a pairing it accepts, the paired devices (D-PR-01).
+    Pairing,
     /// The setup checklist, a full page opened from Settings, General (D-OB-12).
     Setup,
     /// Opened from the Workspaces Sidebar, not the rail (A9).
@@ -79,6 +81,7 @@ impl Page {
             Page::Calendar => "Calendar",
             Page::Marketplace(_) => "Marketplace",
             Page::Settings => "Settings",
+            Page::Pairing => "Pairing",
             Page::Setup => "Setup",
             Page::Automations => "Automations",
             Page::Team(page) => page.title(),

@@ -29,7 +29,7 @@ pub const RESUME: &str = "agent.resume";
 pub const HOOK: &str = "agent.hook";
 /// Params: [`AgentWatchParams`]. Result: `{ stream }`, as `events.subscribe`; then [`AgentWatchEvent`]s.
 pub const WATCH: &str = "agent.watch";
-/// Params: [`AgentDelegateParams`]. Result: [`AgentSession`], the child.
+/// Params: [`AgentDelegateParams`]. Result: [`AgentDelegated`]: the child's [`AgentSession`] with an optional `note`.
 pub const DELEGATE: &str = "agent.delegate";
 /// Params: [`AgentSessionRef`]. Result: [`AgentTree`].
 pub const TREE: &str = "agent.tree";
@@ -41,6 +41,13 @@ pub const CREDENTIALS_IMPORT: &str = "agent.credentials.import";
 pub const CREDENTIALS_SHOW: &str = "agent.credentials.show";
 /// Params: [`CredentialsKindRef`]. Result: [`CredentialsRemoved`].
 pub const CREDENTIALS_REMOVE: &str = "agent.credentials.remove";
+
+pub const ACCOUNTS_LIST: &str = "agent.accounts.list";
+pub const ACCOUNTS_ADD: &str = "agent.accounts.add";
+pub const ACCOUNTS_IMPORT: &str = "agent.accounts.import";
+pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
+pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
+pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
 
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;
@@ -303,6 +310,9 @@ pub struct AgentDelegateParams {
     /// Name of the child workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The child session's title; the first line of `prompt` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default)]
     pub read_only: bool,
     /// The parent run's token, required when called from inside that run.
@@ -310,6 +320,17 @@ pub struct AgentDelegateParams {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+}
+
+/// Result of `agent.delegate`: the child's record, with its fields at the top level, and an optional note. A reader that
+/// expects an [`AgentSession`] reads it unchanged; `note` was added for the result to say that the parent's uncommitted
+/// changes were not carried over (0055).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDelegated {
+    #[serde(flatten)]
+    pub session: AgentSession,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Result of `agent.tree`.
@@ -499,4 +520,131 @@ pub struct AgentSession {
     /// The last turn's result text, at most [`MAX_RESULT_BYTES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+}
+
+/// The state of an account (decision 0059). A value this build does not know reads as `unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountState {
+    SignedIn,
+    Expired,
+    NeedsSignIn,
+    NotSetUp,
+    /// Made from the single home of 0056, until its first check.
+    Migrated,
+    /// The vendor reports another identity than the one recorded.
+    Conflict,
+    /// The kind declares no check, or the value is unknown to this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One account of a kind, as `agent.accounts.*` returns it. Its files are never part of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountSummary {
+    pub id: String,
+    pub label: String,
+    pub state: AccountState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    /// Whether this is the kind's active account.
+    pub active: bool,
+    /// The projects that chose this account, by id.
+    pub projects: Vec<String>,
+}
+
+/// Params of `agent.accounts.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsListParams {
+    pub kind: String,
+}
+
+/// Result of `agent.accounts.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsList {
+    pub accounts: Vec<AccountSummary>,
+}
+
+/// Params of `agent.accounts.add`, the sign-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsAddParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Result of `agent.accounts.add`: the new account and the terminal that runs the sign-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsAdded {
+    pub account: AccountSummary,
+    pub terminal_id: String,
+}
+
+/// Params of `agent.accounts.import`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsImportParams {
+    pub kind: String,
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// What an import did: `imported`, `failed` (with a reason), or `not_found` (none of the declared files is in `from`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportResult {
+    Imported,
+    Failed,
+    NotFound,
+}
+
+/// Result of `agent.accounts.import`. Never shows a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsImported {
+    pub result: ImportResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Params of `agent.accounts.activate`: makes an account the kind's active one, or the project's choice when `project`
+/// is given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsActivateParams {
+    pub kind: String,
+    pub account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// Params of `agent.accounts.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsRemoveParams {
+    pub kind: String,
+    pub account: String,
+}
+
+/// Result of `agent.accounts.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsRemoved {
+    pub kind: String,
+    pub account: String,
+    pub removed: bool,
+}
+
+/// Params of `agent.accounts.check`. Without `account`, the kind's active account is checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsCheckParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+}
+
+/// Payload of the `agent.accounts_changed` event, whose id is the kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsChanged {
+    pub kind: String,
+    pub account: String,
+    pub state: AccountState,
 }

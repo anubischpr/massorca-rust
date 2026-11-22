@@ -3,6 +3,8 @@
 
 mod client;
 mod connect;
+mod device_calls;
+mod device_name;
 mod error;
 mod git_calls;
 mod handshake;
@@ -21,7 +23,8 @@ mod typed_calls;
 mod windows_handle_inheritance;
 
 pub use client::Client;
-pub use error::ClientError;
+pub use device_name::default_device_name;
+pub use error::{ClientError, profile_refusal};
 pub use handshake::Welcome;
 pub use hosts::{HostRecord, Hosts, validate_host_name};
 pub use options::{Autostart, ConnectOptions};

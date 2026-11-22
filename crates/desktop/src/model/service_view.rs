@@ -4,10 +4,12 @@
 
 use std::time::{Duration, Instant};
 
+use super::agent_sessions::{session_state, sessions_by_workspace};
 use super::shell::{
-    HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone, ShellSnapshot,
-    StatusBarModel, WorkspaceRow,
+    AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
+    ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
+use super::teams::{TeamsState, live_teams};
 use crate::service::{ConnectionState, StoreState};
 
 /// The one host a local service stands for in the tree (A10).
@@ -15,10 +17,11 @@ pub const LOCAL_HOST: &str = "This PC";
 /// The usage colours cycle over workspaces; they are labels, never status (P29).
 const USAGE_SLOTS: usize = 6;
 
-/// The snapshot for a service store: projects with their workspaces under one host row, and the
-/// service's own status. Sessions, usage and prototypes do not exist in the service yet.
+/// The snapshot for a service store: projects with their workspaces under one host row, each with the
+/// agent sessions it runs, and the service's own status. Usage and prototypes do not exist in the service yet.
 pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     let reach = reach_of(state, now);
+    let sessions = sessions_by_workspace(state);
     let projects = state
         .projects
         .iter()
@@ -33,7 +36,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                     name: workspace.name.clone(),
                     branch: workspace.branch.clone(),
                     usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
-                    sessions: Vec::new(),
+                    sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
                 })
                 .collect();
             ProjectGroup {
@@ -50,8 +53,8 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         projects,
         usage: Vec::new(),
         status: StatusBarModel {
-            waiting: 0,
-            running: 0,
+            waiting: count_in(state, AgentState::Waiting),
+            running: count_in(state, AgentState::Running),
             memory: "-".to_owned(),
             terminals: super::terminals::running_count(state),
             ports: 0,
@@ -64,6 +67,16 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
     }
+}
+
+/// How many agent sessions show `wanted`, for the Status bar's agents item.
+fn count_in(state: &StoreState, wanted: AgentState) -> u32 {
+    let count = state
+        .agents
+        .iter()
+        .filter(|session| session_state(session) == wanted)
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Connected, or unreachable for as long as the link has been down (honest state: show the age).
@@ -146,15 +159,28 @@ fn retry_in(retry_at: Instant, now: Instant) -> String {
 /// How long to wait before the notice's text is stale: one second while a timer shows.
 pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 
+/// The Bot Teams of the connected service, as the Teams pages draw them. Without a connection, or before a
+/// read has answered on it, there are no teams and nothing can change.
+pub fn teams_view(state: &StoreState) -> TeamsState {
+    match &state.teams {
+        Some(records) if state.connection.is_connected() => {
+            live_teams(&state.team_ids, LOCAL_HOST, records, &state.team_bots)
+        }
+        _ => TeamsState::unavailable(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::navigation::Mode;
+    use crate::model::shell::AgentState;
     use crate::model::sidebar::{SidebarContent, TreeRow, sidebar_content};
     use crate::service::{
         StoreUpdate,
-        fixtures::{project, workspace},
+        fixtures::{agent, project, workspace},
     };
+    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
 
     fn connected() -> ConnectionState {
         ConnectionState::Connected {
@@ -178,6 +204,37 @@ mod tests {
             now,
         );
         state
+    }
+
+    #[test]
+    fn the_teams_stay_unavailable_until_a_read_answers_on_a_connected_service() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        assert!(!teams_view(&state).is_connected());
+        let connected = ConnectionState::Connected {
+            server: "vps".into(),
+            version: "1".into(),
+        };
+        state.apply(crate::service::StoreUpdate::Connection(connected), now);
+        assert!(
+            !teams_view(&state).is_connected(),
+            "no read has answered yet"
+        );
+        let read = crate::service::TeamsRead {
+            number: 1,
+            teams: Ok(vec![crate::service::fixtures::team("t1", "Desarrollo")]),
+        };
+        state.apply(crate::service::StoreUpdate::Teams(read), now);
+        let view = teams_view(&state);
+        assert!(view.is_connected());
+        assert_eq!(view.hosts()[0].name, LOCAL_HOST);
+        assert_eq!(view.teams()[0].name, "Desarrollo");
+        let lost = ConnectionState::Reconnecting {
+            attempt: 1,
+            retry_at: now,
+        };
+        state.apply(crate::service::StoreUpdate::Connection(lost), now);
+        assert!(!teams_view(&state).is_connected());
     }
 
     #[test]
@@ -326,6 +383,82 @@ mod tests {
         );
         let snapshot = service_snapshot(&state, now);
         assert_eq!(snapshot.status.hosts_text(), "1 of 1 hosts unreachable");
+    }
+
+    #[test]
+    fn live_sessions_sit_under_their_workspace_and_count_in_the_status_bar() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        let report = |state, outcome| Activity {
+            state,
+            outcome,
+            source: ActivitySource::Hook,
+            at_ms: 1,
+        };
+        let mut working = agent("s1", "w1", 10);
+        working.activity = Some(report(ActivityState::Working, None));
+        let mut waiting = agent("s2", "w1", 20);
+        waiting.activity = Some(report(ActivityState::Waiting, None));
+        let mut done = agent("s3", "w3", 30);
+        done.activity = Some(report(ActivityState::Done, Some(Outcome::Success)));
+        state.apply(StoreUpdate::AgentsResync(vec![working, waiting, done]), now);
+
+        let snapshot = service_snapshot(&state, now);
+        let listed = |project: usize, workspace: usize| {
+            snapshot.projects[project].hosts[0].workspaces[workspace]
+                .sessions
+                .iter()
+                .map(|row| (row.id.as_str(), row.state))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            listed(0, 0),
+            vec![("s1", AgentState::Running), ("s2", AgentState::Waiting)]
+        );
+        assert!(listed(0, 1).is_empty(), "a workspace with no session");
+        assert_eq!(listed(1, 0), vec![("s3", AgentState::Done)]);
+        assert_eq!(snapshot.status.running, 1);
+        assert_eq!(snapshot.status.waiting, 1);
+    }
+
+    #[test]
+    fn the_sidebar_indents_children_under_their_parent_and_names_where_they_run() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        let mut plan = agent("p", "w1", 10);
+        plan.title = Some("Plan".into());
+        let mut child = agent("c", "w2", 20);
+        child.parent_id = Some("p".into());
+        let mut check = agent("g", "w2", 30);
+        check.parent_id = Some("c".into());
+        check.title = Some("Check".into());
+        state.apply(StoreUpdate::AgentsResync(vec![plan, child, check]), now);
+
+        let snapshot = service_snapshot(&state, now);
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(&snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        let sessions: Vec<(&str, usize, Option<&str>)> = tree
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Session {
+                    title,
+                    depth,
+                    place,
+                    ..
+                } => Some((title.as_str(), *depth, place.as_deref())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sessions,
+            vec![
+                ("Plan", 0, None),
+                ("Child session", 1, Some("feat/two")),
+                ("Check", 2, Some("Current worktree")),
+            ]
+        );
     }
 
     #[test]

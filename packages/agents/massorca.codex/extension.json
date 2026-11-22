@@ -1,0 +1,45 @@
+{
+  "id": "massorca.codex",
+  "name": "Codex",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "OpenAI's Codex agent, run in your workspaces.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["codex"] }, "reason": "Runs the Codex CLI." },
+    { "kind": "credentials", "scope": { "agents": ["codex"] }, "reason": "Keeps your Codex sign-ins for its sessions." }
+  ],
+  "contributes": {
+    "agentAdapters": [{
+      "id": "codex",
+      "kind": "agents/codex.json",
+      "cli": {
+        "binary": "codex",
+        "verify": ["codex", "--version"],
+        "source": "https://github.com/openai/codex",
+        "install": [
+          { "os": "windows", "command": ["npm", "install", "-g", "@openai/codex"] },
+          { "os": "linux", "command": ["npm", "install", "-g", "@openai/codex"] },
+          { "os": "macos", "command": ["npm", "install", "-g", "@openai/codex"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["npm", "uninstall", "-g", "@openai/codex"] },
+          { "os": "linux", "command": ["npm", "uninstall", "-g", "@openai/codex"] },
+          { "os": "macos", "command": ["npm", "uninstall", "-g", "@openai/codex"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "agents",
+    "developer": { "name": "MassOrca" },
+    "mention": "codex",
+    "banner": {
+      "examples": [{ "kind": "mention", "text": "@codex", "caption": "Ask Codex to fix the failing test" }]
+    },
+    "connections": [{ "id": "account", "kind": "agent-login", "title": "Codex account", "multiple": true }]
+  }
+}

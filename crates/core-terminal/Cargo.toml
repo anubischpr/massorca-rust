@@ -16,13 +16,14 @@ uuid.workspace = true
 vt100.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 
 # A job object per terminal ends its whole process tree (decision 0031).
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true
 
 [dev-dependencies]
+massorca-process.workspace = true
 alacritty_terminal.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }

@@ -22,6 +22,8 @@ fn session(id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow
         title: title.into(),
         agent,
         state,
+        place: None,
+        can_bring_back: false,
         children: Vec::new(),
     }
 }
@@ -79,7 +81,7 @@ impl DataSource for SampleDataSource {
                                 sessions: vec![session(
                                     "s3",
                                     "Headless server smoke test",
-                                    Agent::OpenCode,
+                                    Agent::Antigravity,
                                     AgentState::Unreachable,
                                 )],
                             }],
@@ -120,7 +122,7 @@ impl DataSource for SampleDataSource {
                     resets_in: "5 days".into(),
                 },
                 UsageModel {
-                    agent: Agent::OpenCode,
+                    agent: Agent::Antigravity,
                     status: UsageStatus::Percent(10),
                     slot: 3,
                     resets_in: "6 days".into(),

@@ -4,6 +4,7 @@
 
 pub(crate) mod input;
 pub mod layout;
+pub(crate) mod masking;
 pub mod text_area;
 
 pub use super::text_field::TextBuffer;

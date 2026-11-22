@@ -74,6 +74,7 @@ impl SettingsSection {
             Self::Sources => {
                 Some("Connecting a provider needs your grant on the provider's own page.")
             }
+            Self::Vault => Some("Values never go into a chat, a prompt or a log."),
             _ => None,
         }
     }
@@ -129,8 +130,16 @@ pub enum RowBody {
     ConversationsFolder,
     /// This PC and the state of its service.
     ThisPc,
+    /// Each paired remote host, one row per host, from the store (D-HO-07). The spec only marks the place.
+    PairedHosts,
     /// A link to the setup checklist.
     SetupChecklist,
+    /// A link to the Pairing page: phones and other hosts, and the devices paired with this PC.
+    PairingLink,
+    /// Opens the Add host dialog, its SSH path (D-HO-02).
+    AddHost,
+    /// The secret vault's key and count, read through the service (decision 0071).
+    SecretVault,
     Planned(Planned),
 }
 
@@ -425,14 +434,19 @@ const HOSTS: &[RowSpec] = &[
         body: RowBody::ThisPc,
     },
     RowSpec {
+        label: "Paired hosts",
+        helper: "Remote hosts this PC is paired with.",
+        body: RowBody::PairedHosts,
+    },
+    RowSpec {
         label: "Add host",
-        helper: "Remote hosts over SSH come later.",
-        body: RowBody::Planned(Planned::Action("Add host")),
+        helper: "Install MassOrca on a Linux host over SSH, and pair with it.",
+        body: RowBody::AddHost,
     },
     RowSpec {
         label: "Paired phones",
-        helper: "Phone pairing over the local network comes later.",
-        body: RowBody::Planned(Planned::Link),
+        helper: "Pair a phone or another computer, and see the devices paired with this PC.",
+        body: RowBody::PairingLink,
     },
 ];
 
@@ -481,9 +495,9 @@ const EXTENSIONS: &[RowSpec] = &[RowSpec {
 }];
 
 const VAULT: &[RowSpec] = &[RowSpec {
-    label: "Secrets",
-    helper: "Values never go into a chat, a prompt or a log.",
-    body: RowBody::Planned(Planned::Action("Add secret")),
+    label: "Vault status",
+    helper: "Names and times only. Values are never shown.",
+    body: RowBody::SecretVault,
 }];
 
 const PRIVACY: &[RowSpec] = &[
@@ -707,13 +721,11 @@ mod tests {
     }
 
     #[test]
-    fn the_hosts_list_has_this_pc_only_until_a_remote_host_layer_exists() {
-        assert_eq!(rows(SettingsSection::Hosts)[0].body, RowBody::ThisPc);
-        assert!(
-            rows(SettingsSection::Hosts)
-                .iter()
-                .all(|row| !row.label.contains("VPS"))
-        );
+    fn the_hosts_list_starts_with_this_pc_then_marks_where_the_paired_hosts_go() {
+        let hosts = rows(SettingsSection::Hosts);
+        assert_eq!(hosts[0].body, RowBody::ThisPc);
+        assert_eq!(hosts[1].body, RowBody::PairedHosts);
+        assert_eq!(hosts[2].label, "Add host");
     }
 
     #[test]

@@ -1,12 +1,12 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
+use super::live::agent_of_kind;
 use super::page::TeamPage;
 use super::types::{
     AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
     RoutineId, Task, Team, TeamId,
 };
-use crate::model::shell::Agent;
 
 /// Names hold at most this many characters (screens 4.5, 4.7).
 pub const NAME_LIMIT: usize = 40;
@@ -49,12 +49,12 @@ pub struct NewTeam {
     pub workspaces: bool,
 }
 
-/// What the Add bot dialog sends.
+/// What the Add bot dialog sends. `kind` is the service's id of the agent kind the bot runs on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewBot {
     pub name: String,
     pub role: String,
-    pub agent: Agent,
+    pub kind: String,
 }
 
 /// All Bot Teams data the shell shows. `connected` is false when no service backs it.
@@ -69,6 +69,8 @@ pub struct TeamsState {
     pick: Option<Pick>,
     /// The memory tab the Memory page shows.
     memory_tab: MemoryTab,
+    /// Why the last card move was refused, shown on the Board until the next pick.
+    notice: Option<String>,
     next_id: u32,
 }
 
@@ -88,6 +90,7 @@ impl TeamsState {
             selected: None,
             pick: None,
             memory_tab: MemoryTab::default(),
+            notice: None,
             next_id,
         }
     }
@@ -117,6 +120,22 @@ impl TeamsState {
         if self.team(team).is_some() {
             self.selected = Some(team);
         }
+    }
+
+    /// The state after a service read: `fresh`'s teams, with the team, the memory tab and the picked card
+    /// kept where they still exist.
+    pub fn refreshed(&self, mut fresh: TeamsState) -> TeamsState {
+        let selected = self.selected.filter(|team| fresh.team(*team).is_some());
+        let pick = self.pick.clone().filter(|pick| {
+            fresh
+                .tasks(pick.board)
+                .is_some_and(|tasks| tasks.iter().any(|task| task.id == pick.task))
+        });
+        fresh.selected = selected;
+        fresh.pick = pick;
+        fresh.memory_tab = self.memory_tab;
+        fresh.notice = self.notice.clone();
+        fresh
     }
 
     pub fn pick(&self) -> Option<&Pick> {
@@ -178,7 +197,7 @@ impl TeamsState {
             id,
             name,
             role: new.role.trim().to_owned(),
-            agent: new.agent,
+            agent: agent_of_kind(&new.kind),
         });
         if team.lead.is_none() {
             team.lead = Some(id);
@@ -329,6 +348,20 @@ impl TeamsState {
         self.pick = pick;
     }
 
+    /// Takes the picked card back, leaving the Board as it is.
+    pub fn take_pick(&mut self) -> Option<Pick> {
+        self.pick.take()
+    }
+
+    /// Why the last card move was refused, if it was.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    pub fn set_notice(&mut self, notice: Option<String>) {
+        self.notice = notice;
+    }
+
     /// The team a page shows, when it belongs to a team that exists.
     pub fn page_team(&self, page: TeamPage) -> Option<&Team> {
         self.team(page.team())
@@ -402,6 +435,7 @@ mod tests {
     use super::super::sample::{SampleTeamsSource, TeamsSource};
     use super::super::types::{BoardOwner, TaskId};
     use super::*;
+    use crate::model::shell::Agent;
 
     fn new_team(name: &str, host: usize) -> NewTeam {
         NewTeam {
@@ -450,13 +484,40 @@ mod tests {
                 NewBot {
                     name: "Nora".into(),
                     role: String::new(),
-                    agent: Agent::Codex,
+                    kind: "codex".into(),
                 },
             )
             .unwrap();
         let team = state.team(id).unwrap();
         assert_eq!(team.lead, Some(bot));
         assert_eq!(team.lead_name(), Some("Nora"));
+        let nora = team.bots.iter().find(|b| b.id == bot).unwrap();
+        assert_eq!(nora.agent, Some(Agent::Codex));
+    }
+
+    #[test]
+    fn a_bot_of_a_kind_this_build_has_no_mark_for_gets_the_generic_mark() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state.create_team(new_team("Ops", 0)).unwrap();
+        let bot = state
+            .add_bot(
+                id,
+                NewBot {
+                    name: "Ada".into(),
+                    role: String::new(),
+                    kind: "my-own-kind".into(),
+                },
+            )
+            .unwrap();
+        let ada = state
+            .team(id)
+            .unwrap()
+            .bots
+            .iter()
+            .find(|b| b.id == bot)
+            .unwrap()
+            .clone();
+        assert_eq!(ada.agent, None);
     }
 
     #[test]
@@ -489,6 +550,31 @@ mod tests {
             state.team(team).unwrap().project(project).unwrap().link,
             None
         );
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_selected_team_and_the_picked_card_while_they_exist() {
+        let mut state = SampleTeamsSource.teams();
+        let task = state.team(TeamId(1)).unwrap().tasks[0].id;
+        state.select(TeamId(1));
+        state.pick_task(BoardOwner::Team(TeamId(1)), task).unwrap();
+        let kept = state.refreshed(SampleTeamsSource.teams());
+        assert_eq!(kept.selected(), Some(TeamId(1)));
+        assert_eq!(kept.pick().map(|pick| pick.task), Some(task));
+        let gone = state.refreshed(TeamsState::unavailable());
+        assert_eq!(gone.selected(), None);
+        assert!(gone.pick().is_none());
+    }
+
+    #[test]
+    fn taking_a_pick_leaves_the_board_as_it_was() {
+        let mut state = SampleTeamsSource.teams();
+        let before = state.clone();
+        let task = state.team(TeamId(1)).unwrap().tasks[0].id;
+        state.pick_task(BoardOwner::Team(TeamId(1)), task).unwrap();
+        assert!(state.take_pick().is_some());
+        assert!(state.pick().is_none());
+        assert_eq!(state.teams(), before.teams());
     }
 
     #[test]

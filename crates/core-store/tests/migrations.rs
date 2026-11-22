@@ -215,3 +215,45 @@ fn a_version_1_store_gains_agent_sessions_and_keeps_its_workspaces() {
         "migrating a used store backs it up"
     );
 }
+
+#[test]
+fn every_step_is_plain_sql_and_a_fresh_file_has_the_account_and_vault_columns() {
+    // A step's SQL once swallowed the Rust source of the next step, so the file would not open. Every step is SQL only.
+    for (index, step) in MIGRATIONS.iter().enumerate() {
+        assert!(
+            !step.sql.contains("Migration {") && !step.sql.contains("\n    // "),
+            "step {} holds Rust source instead of SQL only",
+            index + 1
+        );
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = store_path(&dir);
+    drop(Store::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    let has_column = |table: &str, column: &str| -> bool {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+                [table, column],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    };
+    assert!(
+        has_column("agent_accounts", "origin"),
+        "the origin column exists"
+    );
+    assert!(
+        has_column("secret_requests", "requester"),
+        "the vault requester column exists"
+    );
+    assert!(
+        has_column("secret_key_check", "sealed"),
+        "the vault key check table exists"
+    );
+    let found: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(found, latest());
+}
