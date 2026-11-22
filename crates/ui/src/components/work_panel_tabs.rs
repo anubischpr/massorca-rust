@@ -159,6 +159,8 @@ pub struct WorkPanelTabs {
     id: ElementId,
     tabs: Vec<WorkTab>,
     selected: usize,
+    /// Kinds the empty state offers as disabled, each with the reason it is off.
+    unavailable: Vec<(WorkTabKind, SharedString)>,
     on_action: Option<ActionHandler>,
 }
 
@@ -178,6 +180,7 @@ impl WorkPanelTabs {
             id: id.into(),
             tabs,
             selected: 0,
+            unavailable: Vec::new(),
             on_action: None,
         }
     }
@@ -193,6 +196,13 @@ impl WorkPanelTabs {
         listener: impl Fn(WorkTabsAction, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_action = Some(Rc::new(listener));
+        self
+    }
+
+    /// Offers `kind` in the empty state as disabled, with `reason` as its tooltip: its layer does
+    /// not exist or is not ready, so the action waits (A43).
+    pub fn unavailable(mut self, kind: WorkTabKind, reason: impl Into<SharedString>) -> Self {
+        self.unavailable.push((kind, reason.into()));
         self
     }
 }
@@ -215,8 +225,13 @@ fn tab_key(strip: &ElementId, index: usize) -> ElementId {
     ElementId::NamedChild(Arc::new(strip.clone()), format!("tab-{index}").into())
 }
 
-/// The empty state: a centred column of four buttons, each with its icon, and no title.
-fn empty_state(id: &ElementId, handler: &Option<ActionHandler>) -> AnyElement {
+/// The empty state: a centred column of four buttons, each with its icon, and no title. A kind
+/// that is unavailable is drawn disabled, with its reason as the tooltip.
+fn empty_state(
+    id: &ElementId,
+    handler: &Option<ActionHandler>,
+    unavailable: &[(WorkTabKind, SharedString)],
+) -> AnyElement {
     let mut column = div()
         .flex()
         .flex_col()
@@ -225,14 +240,18 @@ fn empty_state(id: &ElementId, handler: &Option<ActionHandler>) -> AnyElement {
         .gap(px(SPACE_2))
         .size_full();
     for kind in WorkTabKind::ALL {
+        let button = Button::new((id.clone(), kind.label()), kind.label())
+            .variant(ButtonVariant::Secondary)
+            .size(ButtonSize::Default)
+            .leading_icon(kind.icon());
+        let button = match unavailable.iter().find(|(offered, _)| *offered == kind) {
+            Some((_, reason)) => button.disabled(true).tooltip(reason.clone()),
+            None => button.on_click(emit(handler, WorkTabsAction::New(kind))),
+        };
         column = column.child(
-            div().debug_selector(move || kind.label().into()).child(
-                Button::new((id.clone(), kind.label()), kind.label())
-                    .variant(ButtonVariant::Secondary)
-                    .size(ButtonSize::Default)
-                    .leading_icon(kind.icon())
-                    .on_click(emit(handler, WorkTabsAction::New(kind))),
-            ),
+            div()
+                .debug_selector(move || kind.label().into())
+                .child(button),
         );
     }
     column.into_any_element()
@@ -353,7 +372,7 @@ impl RenderOnce for WorkPanelTabs {
         let id = self.id.clone();
         let handler = self.on_action.clone();
         if self.tabs.is_empty() {
-            return empty_state(&id, &handler);
+            return empty_state(&id, &handler, &self.unavailable);
         }
         let count = self.tabs.len();
         let selected = self.selected.min(count - 1);
@@ -453,6 +472,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|_, _| StripHarness {
             seen: seen.clone(),
             tabs: 3,
+            unavailable: Vec::new(),
         });
         cx.run_until_parked();
 
@@ -477,6 +497,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|_, _| StripHarness {
             seen: seen.clone(),
             tabs: 0,
+            unavailable: Vec::new(),
         });
         cx.run_until_parked();
 
@@ -491,10 +512,39 @@ mod tests {
         );
     }
 
+    #[gpui::test]
+    fn an_unavailable_kind_is_disabled_and_sends_nothing(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| StripHarness {
+            seen: seen.clone(),
+            tabs: 0,
+            unavailable: vec![(WorkTabKind::Browser, "Browser tabs come later.")],
+        });
+        cx.run_until_parked();
+
+        let browser = cx
+            .debug_bounds("New browser tab")
+            .expect("browser action is drawn")
+            .center();
+        cx.simulate_click(browser, gpui::Modifiers::none());
+        let terminal = cx
+            .debug_bounds("New terminal")
+            .expect("terminal action is drawn")
+            .center();
+        cx.simulate_click(terminal, gpui::Modifiers::none());
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![WorkTabsAction::New(WorkTabKind::Terminal)],
+            "the disabled kind sends nothing; the enabled one still does"
+        );
+    }
+
     /// Hosts a strip of `tabs` terminals, or the empty state, and records its actions.
     struct StripHarness {
         seen: Rc<RefCell<Vec<WorkTabsAction>>>,
         tabs: usize,
+        unavailable: Vec<(WorkTabKind, &'static str)>,
     }
 
     impl Render for StripHarness {
@@ -503,11 +553,13 @@ mod tests {
             let tabs = (0..self.tabs)
                 .map(|index| WorkTab::new(WorkTabKind::Terminal, format!("shell {index}")))
                 .collect();
-            div().child(
+            let strip = self.unavailable.iter().fold(
                 WorkPanelTabs::new("work", tabs)
                     .selected(0)
                     .on_action(move |action, _, _| seen.borrow_mut().push(action)),
-            )
+                |strip, (kind, reason)| strip.unavailable(*kind, *reason),
+            );
+            div().child(strip)
         }
     }
 }

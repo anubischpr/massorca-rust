@@ -244,6 +244,7 @@ Every resolution here is measured in the artboards, which settle conflicts first
 | N14 | Keep the "Delete ignored files" variant? No spec line exists. |
 | Copy without a spec source | PR #102 says the list is in this report. It is not in the PR description and is not reproduced here. |
 | Agent list and neutral swatches in Settings | Named in the brief. No PR description names them. Source needed. |
+| G-71 | Keep running hides a terminal's pane, and its tab stays in the Work panel strip. The spec says the pane closes (D-TM-04, A9, app-flow J5 step 4). No screen lists kept terminals (app-flow G6), and this report does not invent one. Confirm that the tab stays, or name the screen that lists kept terminals. |
 
 ## Real-window and Linux results
 

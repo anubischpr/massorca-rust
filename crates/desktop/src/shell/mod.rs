@@ -14,6 +14,7 @@ mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
 mod zones;
@@ -22,6 +23,7 @@ use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -40,6 +42,7 @@ use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use std::collections::BTreeMap;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -52,6 +55,8 @@ mod settings_tests;
 mod start_page_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_panel_tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).
 #[derive(Debug)]
@@ -91,6 +96,12 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
+    terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal whose closing waits for the stop question.
+    stop_prompt: Option<String>,
+    /// A refused terminal call, as its title and its reason, under the Work panel's strip.
+    terminal_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -142,6 +153,7 @@ impl Shell {
             if store.read(cx).state().connection.is_connected() {
                 shell.settings.folder.forget_read_failure();
             }
+            shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -200,6 +212,9 @@ impl Shell {
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
             team_confirm: None,
+            terminal_views: BTreeMap::new(),
+            stop_prompt: None,
+            terminal_notice: None,
         }
     }
 
@@ -338,6 +353,7 @@ impl Render for Shell {
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
+        let connected = connection.is_connected();
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
@@ -359,7 +375,12 @@ impl Render for Shell {
             .map(|page| start_page::StartFrame {
                 page,
                 shell: shell.clone(),
+                connected,
             });
+        let work_panel = self
+            .model
+            .region_visible(Region::WorkPanel)
+            .then(|| self.work_frame(shell.clone(), cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -367,6 +388,7 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                work_panel,
             },
             window,
             cx,
@@ -472,6 +494,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let stop_terminal = self
+            .stop_prompt
+            .is_some()
+            .then(|| work_panel::stop_dialog(&shell, cx));
         div()
             .size_full()
             .flex()
@@ -529,5 +555,6 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }
