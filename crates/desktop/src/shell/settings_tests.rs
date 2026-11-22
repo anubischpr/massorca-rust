@@ -16,7 +16,7 @@ use crate::service::{
 use gpui::{AppContext, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
-use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretStatus};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -438,6 +438,70 @@ fn a_refused_save_keeps_the_dialog_open_and_drops_the_sent_value(cx: &mut TestAp
             )
         );
     });
+}
+
+#[gpui::test]
+fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    let status = SecretStatus {
+        protection: "file".into(),
+        state: "ready".into(),
+        count: 1,
+        name_clashes: Vec::new(),
+    };
+    let mut shared = owned_secret("global", "SHARED");
+    shared.linked_scopes = vec!["project:p1".to_owned()];
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![shared]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_remove_secret(
+            "global".to_owned(),
+            "SHARED".to_owned(),
+            vec!["project:p1".to_owned()],
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "nothing is sent before the confirm"
+    );
+
+    rig.shell
+        .update(cx, |shell, cx| shell.confirm_remove_secret(cx));
+    cx.run_until_parked();
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Remove { params, reply })) => {
+            assert_eq!(
+                (
+                    params.scope.as_str(),
+                    params.name.as_str(),
+                    params.include_links
+                ),
+                ("global", "SHARED", true),
+                "the confirm named the link, so the link goes too"
+            );
+            reply
+                .send(Ok(SecretRemoved {
+                    scope: "global".to_owned(),
+                    name: "SHARED".to_owned(),
+                    links_removed: vec!["project:p1".to_owned()],
+                }))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.remove was expected"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_remove.is_none()),
+        "the dialog closes once the secret is removed"
+    );
 }
 
 #[gpui::test]

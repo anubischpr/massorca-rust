@@ -2,12 +2,13 @@
 //! name under its scope. Only names and times are drawn; the store never holds a value, so none is drawn.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, SharedString, div};
+use gpui::{AnyElement, SharedString, div, px};
 use massorca_ui::Theme;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::settings_row::RowStatus;
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection as SettingsGroup};
+use massorca_ui::tokens::SPACE_2;
 
 use super::{SettingsFrame, value_box};
 use crate::model::secret_vault::{ScopeGroup, SecretRow, VaultPage};
@@ -82,7 +83,18 @@ fn scope_group(group: &ScopeGroup, frame: &SettingsFrame<'_>) -> AnyElement {
     for row in &group.rows {
         let mut item = name_row(&group.scope, row);
         if row.linked_from.is_none() {
-            item = item.control(rotate_button(&group.scope, &row.name, frame));
+            let actions = div()
+                .flex()
+                .flex_row()
+                .gap(px(SPACE_2))
+                .child(rotate_button(&group.scope, &row.name, frame))
+                .child(delete_button(
+                    &group.scope,
+                    &row.name,
+                    &row.linked_scopes,
+                    frame,
+                ));
+            item = item.control(actions);
         }
         let selector = format!("settings-vault-{}-{}", group.scope, row.name);
         section = section.row(div().debug_selector(move || selector).child(item));
@@ -103,6 +115,29 @@ fn rotate_button(scope: &str, name: &str, frame: &SettingsFrame<'_>) -> AnyEleme
     .on_click(move |_, cx| {
         let _ = shell.update(cx, |shell, cx| {
             shell.open_rotate_secret(scope.clone(), name.clone(), cx)
+        });
+    })
+    .into_any_element()
+}
+
+/// Delete: opens the confirm that names the scopes losing the secret. Off while the service is not connected.
+fn delete_button(
+    scope: &str,
+    name: &str,
+    linked_scopes: &[String],
+    frame: &SettingsFrame<'_>,
+) -> AnyElement {
+    let (scope, name, linked) = (scope.to_owned(), name.to_owned(), linked_scopes.to_vec());
+    let shell = frame.shell.clone();
+    Button::new(
+        SharedString::from(format!("settings-vault-delete-{scope}-{name}")),
+        "Delete",
+    )
+    .variant(ButtonVariant::Danger)
+    .disabled(!frame.connection.is_connected())
+    .on_click(move |_, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.open_remove_secret(scope.clone(), name.clone(), linked.clone(), cx)
         });
     })
     .into_any_element()
