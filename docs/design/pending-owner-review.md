@@ -58,6 +58,15 @@ Design system details
 
 The pv96 comparison changed some journeys the owner validated on 2026-11-12 (J3, J4, J5, J7, J8, J10, J12, J13). The list is at the end of `app-flow.md` under "Changes since owner validation".
 
+## Marketplace item page order (2026-11-22)
+
+Owner direction, binding. Where an artboard or section 7.2 differs from the owner's order, the owner's order wins. The item page has nine parts, top to bottom: logo, name with state chip and Copy link, host, invocation banner, Connection (agents), Information, Settings, Advanced Options (installed items), Danger Zone. The artboards show no banner, Connection or Settings part, and keep About and Permissions apart; section 7.2 now follows the owner's order.
+
+| # | Question | Source | Artboard |
+|---|---|---|---|
+| M1 | The item page follows the owner's nine-part order, with Information holding About and Permissions. Confirm that the artboard layout is replaced by this order. | owner, 2026-11-22; decision 0059 | bt-permission-review (item page behind the dialog) |
+| M2 | Settings lists installed agents only, each linking to its Marketplace page, and has no add entry. Confirm. | owner, 2026-11-22; decision 0059 | Settings > Agents and accounts (D-ST-02) |
+
 ## Consistency pass (2026-11-13)
 
 Every screen was checked against [agreements.md](agreements.md) (93 agreements). Where it was unclear whether an agreement reaches a screen, the most consistent reading was applied and is listed here. Where two agreements conflicted, the later one won.

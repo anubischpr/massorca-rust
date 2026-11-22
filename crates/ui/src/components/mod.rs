@@ -1,5 +1,7 @@
 //! Components of the design system, one module per spec in docs/design/components.
 
+pub mod account_connection_list;
+pub mod account_sign_in_dialog;
 pub mod agent_icon;
 pub mod agent_status;
 pub mod avatar;
@@ -11,6 +13,7 @@ pub mod button;
 pub mod card;
 pub mod checkbox;
 pub mod composer;
+pub mod danger_zone;
 pub mod delegation_tree;
 pub mod dialog;
 pub mod diff_view;
@@ -19,8 +22,10 @@ pub mod error_state;
 pub mod extension_card;
 pub mod file_tree;
 pub mod icon_button;
+pub mod invocation_banner;
 pub mod kbd;
 pub mod list_row;
+pub mod marketplace_item_header;
 pub mod menu;
 pub mod model_picker;
 pub mod notification_card;

@@ -1,6 +1,6 @@
 //! Command palette state: grouping, filtering, the active row (D-CP-01, A13).
 
-use super::navigation::Page;
+use super::navigation::{MarketplacePage, Page};
 use super::regions::Region;
 use super::shell::{Agent, AgentState, SessionRow, ShellSnapshot};
 use std::ops::Range;
@@ -273,7 +273,11 @@ fn command_items() -> Vec<PaletteItem> {
         ),
         ("Open tasks", None, Command::Open(Page::Tasks)),
         ("Open calendar", None, Command::Open(Page::Calendar)),
-        ("Open marketplace", None, Command::Open(Page::Marketplace)),
+        (
+            "Open marketplace",
+            None,
+            Command::Open(Page::Marketplace(MarketplacePage::Discover)),
+        ),
     ];
     commands
         .into_iter()
