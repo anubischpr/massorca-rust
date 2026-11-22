@@ -70,7 +70,7 @@ pub(crate) enum Command {
 #[derive(Debug)]
 pub(crate) struct Script {
     commands: mpsc::UnboundedReceiver<Command>,
-    _connection: watch::Sender<ConnectionState>,
+    connection: watch::Sender<ConnectionState>,
 }
 
 #[cfg(test)]
@@ -78,6 +78,11 @@ impl Script {
     /// The next call the UI sent, if one is waiting.
     pub(crate) fn next(&mut self) -> Option<Command> {
         self.commands.try_recv().ok()
+    }
+
+    /// Moves the link's state, as the bridge does when it connects or loses the service.
+    pub(crate) fn set_connection(&self, state: ConnectionState) {
+        self.connection.send_replace(state);
     }
 }
 
@@ -101,7 +106,7 @@ impl ServiceHandle {
             },
             Script {
                 commands: command_rx,
-                _connection: connection_tx,
+                connection: connection_tx,
             },
         )
     }
