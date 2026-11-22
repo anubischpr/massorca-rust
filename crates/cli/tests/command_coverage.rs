@@ -137,6 +137,14 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "terminal.screen",
             "terminal.send",
             "terminal.show",
+            "team.board",
+            "team.bot.add",
+            "team.bot.rm",
+            "team.create",
+            "team.list",
+            "team.project.add",
+            "team.rm",
+            "team.show",
         ])
     );
     for path in &checked {

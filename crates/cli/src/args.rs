@@ -7,6 +7,7 @@ use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
+use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
@@ -110,6 +111,11 @@ pub enum Commands {
     Git {
         #[command(subcommand)]
         command: crate::git::GitCommand,
+    },
+    /// Creates, lists, shows and removes Bot Teams: teams, their bots and projects, and their Boards.
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
     },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
