@@ -75,6 +75,60 @@ pub fn create_private_dir(dir: &Path) -> io::Result<bool> {
     platform_create_private_dir(dir)
 }
 
+/// A folder of the profile held open without following links. While it is held, the folder cannot be swapped for a
+/// link: on Windows it cannot be renamed or deleted at all; on Unix its parent is the private root, which only the
+/// user can change. Write into it by path while it is held.
+#[derive(Debug)]
+pub struct PrivateDir {
+    #[cfg(windows)]
+    _pin: crate::windows_dir_access::PinnedDir,
+    #[cfg(unix)]
+    _dir: std::fs::File,
+}
+
+/// Creates `dir` private to its owner when it is missing, then opens it without following links. Refuses a link or
+/// a file there with `UnsafeLocation`, and a folder another user owns with `ForeignEntries`. Run `secure_root` first,
+/// so the folder it sits in is checked.
+pub fn open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
+    platform_create_private_dir(dir)?;
+    platform_open_private_dir(dir)
+}
+
+#[cfg(windows)]
+fn platform_open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
+    match crate::windows_dir_access::PinnedDir::open(dir) {
+        Ok(pin) => Ok(PrivateDir { _pin: pin }),
+        Err(error) => Err(refused_open(dir, error)),
+    }
+}
+
+#[cfg(unix)]
+fn platform_open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
+    match crate::unix_profile_root::open_private_dir(dir) {
+        Ok(file) => Ok(PrivateDir { _dir: file }),
+        Err(error) => Err(refused_open(dir, error)),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn platform_open_private_dir(_dir: &Path) -> Result<PrivateDir, RootAccessError> {
+    Ok(PrivateDir {})
+}
+
+/// How a no-follow open failed: a link or a file is an unsafe location, a folder another user owns is foreign.
+#[cfg(any(unix, windows))]
+fn refused_open(dir: &Path, error: io::Error) -> RootAccessError {
+    match error.kind() {
+        io::ErrorKind::InvalidInput => RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        },
+        io::ErrorKind::PermissionDenied => RootAccessError::ForeignEntries {
+            paths: vec![dir.to_path_buf()],
+        },
+        _ => RootAccessError::Io(error),
+    }
+}
+
 /// What `profile secure` changes in one folder of the profile's location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderPlan {

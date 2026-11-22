@@ -81,6 +81,33 @@ fn secure_root_with(
     })
 }
 
+/// Opens `dir` with `O_NOFOLLOW | O_DIRECTORY`, so a symlink or a file is refused, checks that the user owns it, and
+/// sets it `0700` through the descriptor, never through a link. A link or file fails with `InvalidInput`, a folder
+/// another user owns with `PermissionDenied`.
+pub(crate) fn open_private_dir(dir: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(dir)
+        .map_err(|error| match error.raw_os_error() {
+            Some(libc::ELOOP | libc::ENOTDIR) => io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is a link or not a folder", dir.display()),
+            ),
+            _ => error,
+        })?;
+    if file.metadata()?.uid() != current_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} belongs to another user", dir.display()),
+        ));
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o700))?;
+    Ok(file)
+}
+
 /// A home that is itself a symlink is replaceable by whoever can write its parent, so the parent must be as safe as an
 /// ancestor.
 fn check_link_home(home: &Path, uid: u32, owner: Owner) -> Result<(), RootAccessError> {
@@ -89,7 +116,8 @@ fn check_link_home(home: &Path, uid: u32, owner: Owner) -> Result<(), RootAccess
     let Some(parent) = home.parent().filter(|_| is_link) else {
         return Ok(());
     };
-    match check_ancestor(parent, &fs::metadata(parent)?, uid, owner) {
+    // `lstat`: a parent that is itself a symlink is refused, as on Windows.
+    match check_ancestor(parent, &fs::symlink_metadata(parent)?, uid, owner) {
         Err(RootAccessError::UnsafeLocation { .. }) => Err(RootAccessError::UnsafeLocation {
             path: home.to_path_buf(),
         }),
@@ -137,10 +165,26 @@ pub(crate) fn plan_secure(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, Ro
     Ok(plans)
 }
 
+/// Sets each planned folder `0700` through a descriptor: `profiles` and the root are opened with `O_NOFOLLOW`, so a
+/// symlink swapped in after the plan is refused, never followed; the home may be a link the user chose. A failure
+/// part-way leaves the folders already done private; running the command again finishes the job.
 pub(crate) fn apply_secure(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
     for folder in plan_secure(home, dir)? {
-        if folder.changes() {
-            fs::set_permissions(&folder.path, fs::Permissions::from_mode(0o700))?;
+        if !folder.changes() {
+            continue;
+        }
+        if folder.path == home {
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY)
+                .open(home)?
+                .set_permissions(fs::Permissions::from_mode(0o700))?;
+        } else {
+            open_private_dir(&folder.path).map_err(|_| RootAccessError::UnsafeLocation {
+                path: folder.path.clone(),
+            })?;
         }
     }
     Ok(())

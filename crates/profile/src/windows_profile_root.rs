@@ -17,8 +17,9 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-    SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, ProgressInvokeNever,
+    SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
+    TREE_SEC_INFO_RESET_KEEP_EXPLICIT, TreeSetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
@@ -26,9 +27,10 @@ use windows_sys::Win32::Security::{
     UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    CreateDirectoryW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetVolumeInformationW,
-    GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL,
+    GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
 };
 
 use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
@@ -354,6 +356,95 @@ pub(crate) fn set_dacl(path: &Path, dacl: &str, protected: bool) -> io::Result<(
             ptr::null_mut(),
             ptr::null_mut(),
             acl.cast::<ACL>(),
+            ptr::null(),
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(status as i32))
+    }
+}
+
+/// Opens a folder to change its access, without sharing delete, so it cannot be renamed, deleted or replaced while
+/// the handle lives. With `Links::Open` a link is opened itself and refused; anything but a folder is refused too.
+pub(crate) fn pin_for_access_change(
+    path: &Path,
+    links: Links,
+) -> Result<fs::File, RootAccessError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    let flags = match links {
+        Links::Follow => FILE_FLAG_BACKUP_SEMANTICS,
+        Links::Open => FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+    let file = fs::OpenOptions::new()
+        // DELETE makes the share mode bind: Windows checks sharing only against handles with data or delete access.
+        .access_mode(READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(flags)
+        .open(path)?;
+    let attributes = file.metadata()?.file_attributes();
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+    {
+        return Err(RootAccessError::UnsafeLocation {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(file)
+}
+
+/// Replaces the DACL of the folder `file` holds with the protected `dacl`, on exactly that object. It does not pass the
+/// change on to what is below; `set_dacl` by path does that.
+pub(crate) fn set_dacl_through(file: &fs::File, dacl: &str) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    let descriptor = descriptor(dacl)?;
+    let (acl, _) = descriptor
+        .dacl()?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the descriptor has no DACL"))?;
+    // SAFETY: the handle is open with WRITE_DAC for the call, and `acl` points into `descriptor`, which outlives it;
+    // owner, group and SACL are not set, so their null pointers are not read.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            acl.cast::<ACL>(),
+            ptr::null(),
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(status as i32))
+    }
+}
+
+/// Sets the protected `dacl` on `path` and resets the inherited entries of everything below it, keeping their explicit
+/// ones. Unlike a plain set, this walks the tree even when the folder's own DACL is already `dacl`.
+pub(crate) fn reset_inherited_below(path: &Path, dacl: &str) -> io::Result<()> {
+    let descriptor = descriptor(dacl)?;
+    let (acl, _) = descriptor
+        .dacl()?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the descriptor has no DACL"))?;
+    let path = wide_path(path)?;
+    // SAFETY: `path` is NUL-terminated and `acl` points into `descriptor`; both outlive the call, which only reads them.
+    // No progress callback is passed, so the callback argument is never read.
+    let status = unsafe {
+        TreeSetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            acl.cast::<ACL>(),
+            ptr::null(),
+            TREE_SEC_INFO_RESET_KEEP_EXPLICIT,
+            None,
+            ProgressInvokeNever,
             ptr::null(),
         )
     };

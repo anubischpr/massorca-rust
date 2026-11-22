@@ -7,7 +7,8 @@ use std::path::Path;
 
 use crate::root_access::{FolderPlan, RootAccessError, profiles_dir};
 use crate::windows_profile_root::{
-    Disk, Links, RealDisk, check_link_home, owner_only_dir_dacl_sddl, set_dacl,
+    Disk, Links, RealDisk, check_link_home, owner_only_dir_dacl_sddl, pin_for_access_change,
+    reset_inherited_below, set_dacl_through,
 };
 use crate::windows_sddl::Descriptor;
 use crate::windows_trust::Trusted;
@@ -16,14 +17,32 @@ pub(crate) fn plan(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, RootAcces
     plan_with(home, dir, &Trusted::current()?, &RealDisk)
 }
 
+/// Pins every folder of the plan first, without following links (the home may be a link the user chose), so none
+/// can be renamed or swapped while its access changes, and sets each DACL through its handle, on exactly that folder,
+/// home first. Once they are owner-only nobody else can rename them, so the pins are released and the inherited
+/// entries of everything below are reset by path. A failure part-way leaves the folders already done private and the
+/// rest as they were; running the command again finishes the job.
 pub(crate) fn apply(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
     let trusted = Trusted::current()?;
     let dacl = owner_only_dir_dacl_sddl(trusted.user())?;
-    // The home first: what `profiles` and the root inherit from it is already owner-only when they are set.
-    for folder in plan_with(home, dir, &trusted, &RealDisk)? {
+    let plan = plan_with(home, dir, &trusted, &RealDisk)?;
+    let mut pinned = Vec::new();
+    for folder in &plan {
+        let links = if folder.path == home {
+            Links::Follow
+        } else {
+            Links::Open
+        };
+        pinned.push((folder, pin_for_access_change(&folder.path, links)?));
+    }
+    for (folder, pin) in &pinned {
         if folder.changes() {
-            set_dacl(&folder.path, &dacl, true)?;
+            set_dacl_through(pin, &dacl)?;
         }
+    }
+    drop(pinned);
+    for folder in plan.iter().filter(|folder| folder.changes()) {
+        reset_inherited_below(&folder.path, &dacl)?;
     }
     Ok(())
 }
@@ -165,5 +184,64 @@ mod tests {
                 .all(|folder| !folder.changes())
         );
         secure_root(&home, &root).expect("a start accepts the home");
+    }
+
+    fn junction(link: &std::path::Path, target: &std::path::Path) {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("mklink runs");
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+    }
+
+    #[test]
+    fn a_folder_pinned_for_an_access_change_is_never_a_junction_and_cannot_be_moved() {
+        use crate::windows_profile_root::pin_for_access_change;
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let real = temp.path().join("real");
+        fs::create_dir(&real).expect("a folder");
+        let link = temp.path().join("link");
+        junction(&link, &real);
+        assert!(matches!(
+            pin_for_access_change(&link, Links::Open),
+            Err(RootAccessError::UnsafeLocation { .. })
+        ));
+
+        let pin = pin_for_access_change(&real, Links::Open).expect("pinned");
+        assert!(
+            fs::rename(&real, temp.path().join("moved")).is_err(),
+            "a pinned folder stays"
+        );
+        drop(pin);
+        fs::rename(&real, temp.path().join("moved")).expect("released");
+    }
+
+    #[test]
+    fn open_private_dir_creates_an_owner_only_folder_and_refuses_a_junction() {
+        use crate::root_access::open_private_dir;
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let made = temp.path().join("made");
+        let held = open_private_dir(&made).expect("created and opened");
+        let user = current_user().expect("the user");
+        let descriptor = Descriptor::parse(&read_sddl(&made, Links::Open).expect("descriptor"));
+        assert!(descriptor.is_owner_only(&user));
+        drop(held);
+
+        let elsewhere = temp.path().join("elsewhere");
+        fs::create_dir(&elsewhere).expect("a folder");
+        let link = temp.path().join("planted");
+        junction(&link, &elsewhere);
+        assert!(matches!(
+            open_private_dir(&link),
+            Err(RootAccessError::UnsafeLocation { path }) if path == link
+        ));
     }
 }

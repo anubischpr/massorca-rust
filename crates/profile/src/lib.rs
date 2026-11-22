@@ -29,8 +29,8 @@ pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use profile::{Profile, ensure_dir};
 pub use root_access::{
-    FolderPlan, MAX_LISTED_ENTRIES, RootAccess, RootAccessError, apply_secure, create_home,
-    create_private_dir, create_root, plan_secure, secure_root,
+    FolderPlan, MAX_LISTED_ENTRIES, PrivateDir, RootAccess, RootAccessError, apply_secure,
+    create_home, create_private_dir, create_root, open_private_dir, plan_secure, secure_root,
 };
 #[cfg(unix)]
 pub use unix_user::current_uid;
