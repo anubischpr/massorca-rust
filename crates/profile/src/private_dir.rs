@@ -48,38 +48,30 @@ pub fn open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
 #[cfg(windows)]
 fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
     use crate::windows_profile_root::{
-        FolderAccess, entries_others_can_reach, folder_access, make_owner_only,
+        FolderAccess, entries_others_can_reach, folder_access, make_owner_only_below,
     };
 
     let pin = |dir: &Path| {
         crate::windows_dir_access::PinnedDir::open(dir).map_err(|error| refused_open(dir, error))
     };
     let paths = || vec![dir.to_path_buf()];
-    let mut held = pin(dir)?;
+    let held = pin(dir)?;
     match folder_access(dir)? {
         FolderAccess::Private => {}
-        FolderAccess::OwnersOnly => {
-            // Only the accepted owners and Administrators can reach it, so it is released while the change walks the
-            // folders below (the pin would block that walk), then pinned again and checked once more. Entries below
-            // may have inherited a grant the folder only passed on (inherit-only); the reset takes it away, and any
-            // explicit grant that still lets others in is refused.
-            drop(held);
-            make_owner_only(dir)?;
-            held = pin(dir)?;
-            if folder_access(dir)? != FolderAccess::Private {
-                return Err(RootAccessError::ReadableByOthers { paths: paths() });
-            }
-            let exposed = entries_others_can_reach(dir)?;
-            if !exposed.is_empty() {
-                return Err(RootAccessError::ReadableByOthers { paths: exposed });
-            }
-        }
+        // Entries below may have inherited a grant the folder only passed on (inherit-only), so everything below is
+        // made owner-only too, through handles and while the folder stays pinned.
+        FolderAccess::OwnersOnly => make_owner_only_below(dir)?,
         FolderAccess::WritableByOthers => {
             return Err(RootAccessError::WritableByOthers { paths: paths() });
         }
         FolderAccess::ReadableByOthers => {
             return Err(RootAccessError::ReadableByOthers { paths: paths() });
         }
+    }
+    // The folder holds secrets, so anything below it that others can reach is refused on every open.
+    let exposed = entries_others_can_reach(dir)?;
+    if !exposed.is_empty() {
+        return Err(RootAccessError::ReadableByOthers { paths: exposed });
     }
     Ok(PrivateDir {
         path: dir.to_path_buf(),
@@ -621,5 +613,92 @@ mod tests {
             open_private_dir(&hosts),
             Err(RootAccessError::ReadableByOthers { paths }) if paths == vec![office.clone()]
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tightening_refuses_a_junction_below_and_changes_nothing_outside() {
+        use crate::windows_profile_root::{Links, read_sddl};
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let user = crate::windows_trust::current_user().expect("the user");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("an outside folder");
+        fs::write(outside.join("file.txt"), b"x").expect("a file in it");
+        crate::windows_profile_root::set_dacl(
+            &outside,
+            &format!("D:P(A;OICI;FA;;;{user})(A;OICI;FR;;;WD)"),
+            true,
+        )
+        .expect("a known DACL");
+        let before = (
+            read_sddl(&outside, Links::Open).expect("its DACL"),
+            read_sddl(&outside.join("file.txt"), Links::Open).expect("its DACL"),
+        );
+        let hosts = hosts_passing_on_a_read_grant(temp.path());
+        let link = hosts.join("office");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .expect("mklink runs");
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+
+        assert!(matches!(
+            open_private_dir(&hosts),
+            Err(RootAccessError::UnsafeLocation { path }) if path == link
+        ));
+
+        let after = (
+            read_sddl(&outside, Links::Open).expect("its DACL"),
+            read_sddl(&outside.join("file.txt"), Links::Open).expect("its DACL"),
+        );
+        assert_eq!(after, before, "nothing outside the hosts folder changed");
+        assert!(others_can_reach(&outside));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_explicit_read_grant_below_an_owner_only_folder_is_refused_on_every_open() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = temp.path().join("hosts");
+        let parent = open_private_dir(&hosts).expect("an owner-only folder");
+        let office = parent.child("office").expect("a host folder");
+        office.write_file("device.key", b"key").expect("a key");
+        drop(office);
+        drop(parent);
+        let key = hosts.join("office").join("device.key");
+        crate::windows_profile_root::set_dacl(&key, "D:(A;;FR;;;WD)", false)
+            .expect("an explicit grant");
+
+        assert!(matches!(
+            open_private_dir(&hosts),
+            Err(RootAccessError::ReadableByOthers { paths }) if paths == vec![key.clone()]
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sweep_deletes_a_tombstone_holding_a_symlink_without_touching_the_target() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("an outside folder");
+        fs::write(outside.join("secret"), b"x").expect("a file outside");
+        let parent = open_private_dir(&temp.path().join("hosts")).expect("opened");
+        let tombstone = parent.path().join(format!("{TOMBSTONE_PREFIX}office-dead"));
+        fs::create_dir(&tombstone).expect("a tombstone");
+        std::os::unix::fs::symlink(&outside, tombstone.join("link")).expect("a link inside it");
+        std::os::unix::fs::symlink(&outside, parent.path().join(".writing-link"))
+            .expect("a leftover link");
+
+        parent.sweep_leftovers().expect("swept");
+
+        assert!(names(parent.path()).is_empty());
+        assert_eq!(fs::read(outside.join("secret")).expect("still there"), b"x");
     }
 }

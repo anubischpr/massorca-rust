@@ -157,10 +157,17 @@ pub(crate) fn list_names(dir: &File) -> io::Result<Vec<std::ffi::OsString>> {
     // SAFETY: `stream` is an open directory stream.
     unsafe { libc::rewinddir(stream) };
     let mut names = Vec::new();
+    let mut failure = None;
     loop {
-        // SAFETY: `stream` is an open directory stream until closedir below; a null result ends the listing.
+        // readdir returns null both at the end and on an error; only errno tells them apart, so it is cleared first.
+        set_errno(0);
+        // SAFETY: `stream` is an open directory stream until closedir below.
         let entry = unsafe { libc::readdir(stream) };
         if entry.is_null() {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(0) {
+                failure = Some(error);
+            }
             break;
         }
         // SAFETY: `entry` points at a dirent whose name is NUL-terminated and valid until the next readdir.
@@ -172,12 +179,29 @@ pub(crate) fn list_names(dir: &File) -> io::Result<Vec<std::ffi::OsString>> {
     }
     // SAFETY: `stream` came from fdopendir and is closed only here, which also closes `fd`.
     unsafe { libc::closedir(stream) };
-    Ok(names)
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(names),
+    }
 }
 
+/// How deep `remove_entry` goes below the entry it is given before it refuses.
+const MAX_REMOVE_DEPTH: usize = 64;
+
 /// Removes the entry `name` of `parent` and, for a folder, everything in it, never following a link: a link is
-/// removed itself, and each folder is opened with `O_NOFOLLOW | O_DIRECTORY` relative to its parent.
+/// removed itself, and each folder is opened with `O_NOFOLLOW | O_DIRECTORY` relative to its parent. A tree nested
+/// deeper than `MAX_REMOVE_DEPTH` is refused.
 pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+    remove_entry_at(parent, name, 0)
+}
+
+fn remove_entry_at(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::Result<()> {
+    if depth > MAX_REMOVE_DEPTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a folder is nested deeper than {MAX_REMOVE_DEPTH} levels"),
+        ));
+    }
     let c_name = CString::new(name.as_bytes())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
@@ -210,7 +234,7 @@ pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<
         // SAFETY: `fd` was just opened and nothing else owns it.
         let folder = unsafe { File::from_raw_fd(fd) };
         for child in list_names(&folder)? {
-            remove_entry(&folder, &child)?;
+            remove_entry_at(&folder, &child, depth + 1)?;
         }
     }
     let flags = if is_dir { libc::AT_REMOVEDIR } else { 0 };
@@ -220,6 +244,35 @@ pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Sets the calling thread's `errno`.
+fn set_errno(value: libc::c_int) {
+    // SAFETY: the errno location is a valid, thread-local int for the calling thread.
+    unsafe { *errno_location() = value };
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "emscripten"))]
+fn errno_location() -> *mut libc::c_int {
+    // SAFETY: __errno_location takes no arguments and returns the calling thread's errno address.
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "dragonfly"
+))]
+fn errno_location() -> *mut libc::c_int {
+    // SAFETY: __error takes no arguments and returns the calling thread's errno address.
+    unsafe { libc::__error() }
+}
+
+#[cfg(any(target_os = "openbsd", target_os = "netbsd"))]
+fn errno_location() -> *mut libc::c_int {
+    // SAFETY: __errno takes no arguments and returns the calling thread's errno address.
+    unsafe { libc::__errno() }
 }
 
 /// `name` as a C string, once `check_entry_name` accepts it as one folder entry.
@@ -233,4 +286,61 @@ fn c_name(name: &Path) -> io::Result<CString> {
     crate::private_dir::check_entry_name(text)?;
     CString::new(name.as_os_str().as_bytes())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::fs::{self, File};
+    use std::os::unix::fs::symlink;
+
+    use super::{list_names, remove_entry};
+
+    #[test]
+    fn a_listing_names_a_symlink_without_following_it() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("an outside folder");
+        fs::write(outside.join("secret"), b"x").expect("a file outside");
+        let inside = temp.path().join("inside");
+        fs::create_dir(&inside).expect("a folder");
+        symlink(&outside, inside.join("link")).expect("a link");
+
+        let names = list_names(&File::open(&inside).expect("opened")).expect("listed");
+
+        assert_eq!(names, vec![OsStr::new("link").to_os_string()]);
+    }
+
+    #[test]
+    fn removing_a_symlink_or_a_folder_holding_one_never_touches_the_target() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("an outside folder");
+        fs::write(outside.join("secret"), b"x").expect("a file outside");
+        let inside = temp.path().join("inside");
+        fs::create_dir(&inside).expect("a folder");
+        symlink(&outside, inside.join("link")).expect("a link");
+        fs::create_dir(inside.join("tombstone")).expect("a folder to delete");
+        symlink(&outside, inside.join("tombstone").join("link")).expect("a link inside it");
+        let parent = File::open(&inside).expect("opened");
+
+        remove_entry(&parent, OsStr::new("link")).expect("the link removed");
+        remove_entry(&parent, OsStr::new("tombstone")).expect("the folder removed");
+
+        assert!(fs::read_dir(&inside).expect("listed").next().is_none());
+        assert_eq!(fs::read(outside.join("secret")).expect("still there"), b"x");
+    }
+
+    #[test]
+    fn a_tree_nested_deeper_than_the_limit_is_refused() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let mut deep = temp.path().join("deep");
+        for _ in 0..70 {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).expect("a deep tree");
+        let parent = File::open(temp.path()).expect("opened");
+
+        assert!(remove_entry(&parent, OsStr::new("deep")).is_err());
+    }
 }
