@@ -65,6 +65,8 @@ use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
 #[cfg(test)]
+mod add_host_tests;
+#[cfg(test)]
 mod debug_focus_tests;
 #[cfg(test)]
 mod pairing_tests;
