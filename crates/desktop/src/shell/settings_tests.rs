@@ -16,6 +16,7 @@ use crate::service::{
 };
 use gpui::{
     AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext, point, px,
+    size,
 };
 use massorca_client::HostRecord;
 use massorca_protocol::codes;
@@ -367,6 +368,62 @@ fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
             .is_some(),
         "the name is drawn under its project"
     );
+}
+
+/// The panel's centre sits on the window's centre on both axes, whichever row opened the dialog.
+fn assert_centred_in_the_window(cx: &mut VisualTestContext, what: &str) {
+    draw(cx);
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let panel = cx
+        .debug_bounds("dialog-panel")
+        .unwrap_or_else(|| panic!("{what}: the dialog is not drawn"));
+    let centre = panel.center();
+    let off_x = f32::from(centre.x) - f32::from(viewport.width) / 2.0;
+    let off_y = f32::from(centre.y) - f32::from(viewport.height) / 2.0;
+    assert!(
+        off_x.abs() <= 1.0 && off_y.abs() <= 1.0,
+        "{what}: its centre is {off_x:+.1}, {off_y:+.1} px from the window's centre"
+    );
+}
+
+#[gpui::test]
+fn the_vault_dialogs_are_centred_in_the_window_whichever_row_opened_them(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
+            SecretStatus {
+                protection: "file".into(),
+                state: "ready".into(),
+                count: 3,
+                name_clashes: Vec::new(),
+            },
+        ))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("global", "GITHUB_TOKEN"),
+            owned_secret("project:p1", "OPENAI_API_KEY"),
+            owned_secret("project:p1", "DATABASE_URL"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+
+    click(cx, "button:settings-vault-add");
+    assert_centred_in_the_window(cx, "Add secret");
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+
+    click(cx, "button:settings-vault-rotate-project:p1-DATABASE_URL");
+    assert_centred_in_the_window(cx, "Rotate secret");
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+
+    click(cx, "button:settings-vault-delete-project:p1-DATABASE_URL");
+    assert_centred_in_the_window(cx, "Delete secret");
 }
 
 /// Opens Add and types `name` into the name field.
