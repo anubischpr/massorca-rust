@@ -4,10 +4,9 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use interprocess::local_socket::tokio::Stream;
 use massorca_profile::Profile;
 use massorca_protocol::methods::events::Subscribed;
-use massorca_protocol::{MAX_FRAME_LEN_LOCAL, Message, fits_frame};
+use massorca_protocol::{Message, fits_frame};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -19,11 +18,8 @@ use crate::handshake::Welcome;
 use crate::options::ConnectOptions;
 use crate::pump::{self, Pending, Shared};
 use crate::subscription::Subscription;
-use crate::transport;
+use crate::transport::FrameIo;
 
-const INBOUND_CAPACITY: usize = 64;
-/// Requests and cancels queued for the writer. A caller waits for room rather than queueing without limit.
-const OUTBOUND_CAPACITY: usize = 256;
 /// Items a subscriber may leave unread before its stream ends with `stream.overflow`.
 const SUBSCRIPTION_CAPACITY: usize = 256;
 
@@ -118,12 +114,11 @@ impl Client {
             params,
         };
         // Refused before it is registered: the service would close the connection on a frame it cannot read.
-        if !fits_frame(&request, MAX_FRAME_LEN_LOCAL) {
+        let max_frame_len = self.welcome.max_frame_len;
+        if !fits_frame(&request, max_frame_len) {
             return Err(ClientError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "the request is larger than one frame may hold ({MAX_FRAME_LEN_LOCAL} bytes)"
-                ),
+                format!("the request is larger than one frame may hold ({max_frame_len} bytes)"),
             )));
         }
         self.shared.register(id, pending)?;
@@ -135,12 +130,14 @@ impl Client {
     }
 
     /// Starts the tasks of an established connection: the frame reader and writer, and the pump that routes their frames.
-    pub(crate) fn open(stream: Stream, welcome: Welcome) -> Self {
-        let stream = Arc::new(stream);
-        let (inbound_tx, inbound) = mpsc::channel(INBOUND_CAPACITY);
-        let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
-        let reader = tokio::spawn(transport::read_frames(Arc::clone(&stream), inbound_tx));
-        let writer = tokio::spawn(transport::write_frames(stream, outbound_rx));
+    pub(crate) fn open(io: FrameIo, welcome: Welcome) -> Self {
+        let FrameIo {
+            inbound,
+            outbound,
+            reader,
+            writer,
+            ..
+        } = io;
         let shared = Arc::new(Shared::default());
         tokio::spawn(pump::run(Arc::clone(&shared), inbound, reader, writer));
         Self {

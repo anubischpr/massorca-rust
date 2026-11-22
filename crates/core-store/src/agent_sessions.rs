@@ -213,6 +213,30 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Writes a session's activity and result (0052), replacing both, and sets its agent ref from `agent_ref_if_unset`
+    /// only when the row has none. One statement, so a reader never sees half a change. Returns whether a row matched.
+    pub fn set_agent_session_status(
+        &self,
+        id: &str,
+        activity: Option<&StoredActivity>,
+        result: Option<&str>,
+        agent_ref_if_unset: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET activity = ?2, activity_outcome = ?3, activity_source = ?4, activity_at = ?5, result = ?6, agent_ref = COALESCE(agent_ref, ?7) WHERE id = ?1",
+            params![
+                id,
+                activity.map(|activity| activity.state.clone()),
+                activity.and_then(|activity| activity.outcome.clone()),
+                activity.map(|activity| activity.source.clone()),
+                activity.map(|activity| activity.at),
+                result,
+                agent_ref_if_unset
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Marks every session whose run was not seen to end as ended by the service stopping (0051). Returns how many.
     pub fn mark_agent_runs_service_stopped(&self, at: i64) -> Result<u64, StoreError> {
         let changed = self.lock().execute(

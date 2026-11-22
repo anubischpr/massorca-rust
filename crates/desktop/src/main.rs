@@ -75,9 +75,15 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    cx.new(|cx| match client {
-                        Some(source) => Shell::with_client(source, window, cx),
-                        None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
+                    cx.new(|cx| {
+                        let mut shell = match client {
+                            Some(source) => Shell::with_client(source, window, cx),
+                            None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
+                        };
+                        if let Some(field) = launch.debug_focus {
+                            shell.start_debug_input(field, window, cx);
+                        }
+                        shell
                     })
                 },
             );

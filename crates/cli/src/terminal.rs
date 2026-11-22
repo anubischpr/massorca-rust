@@ -9,7 +9,6 @@ use std::time::Duration;
 use clap::{Args, Subcommand};
 use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
 use massorca_core_terminal::screen::SCROLLBACK_ROWS;
-use massorca_profile::Profile;
 use massorca_protocol::methods::terminals::{
     ExitReason, ShellSpec, Terminal, TerminalAttachParams, TerminalCreateParams, TerminalExit,
     TerminalResizeParams, TerminalState,
@@ -19,6 +18,7 @@ use serde::Serialize;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::target::Target;
 use crate::terminal_attach;
 use crate::workspace_text;
 
@@ -144,9 +144,9 @@ struct ScreenDocument {
     lines: Vec<String>,
 }
 
-/// Runs one `terminal` subcommand against the service of `profile`.
+/// Runs one `terminal` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: TerminalCommand,
     output: Output,
@@ -162,11 +162,11 @@ pub async fn execute(
         }
         // Checked before connecting, so a refused attach never starts the service.
         terminal_attach::require_terminal()?;
-        let client = connect(profile, autostart).await?;
+        let client = connect(target, autostart).await?;
         return terminal_attach::attach(&client, terminal).await;
     }
 
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         TerminalCommand::Create(args) => {
             let params = create_params(args)?;

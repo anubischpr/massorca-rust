@@ -1,8 +1,8 @@
 //! Typed helpers over the methods of the core features.
 
 use massorca_protocol::methods::agents::{
-    self, AgentKinds, AgentListParams, AgentSession, AgentSessionList, AgentSessionRef,
-    AgentStartParams, AgentStopParams,
+    self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -219,6 +219,21 @@ impl Client {
     /// `agent.forget`: deletes the record of a session whose run has ended.
     pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::FORGET, &session_ref(session)).await
+    }
+
+    /// `agent.hook`: one status report from a run's hook, with the run's token.
+    pub async fn agent_hook(&self, params: &AgentHookParams) -> Result<(), ClientError> {
+        let _: serde_json::Value = self.call(agents::HOOK, params).await?;
+        Ok(())
+    }
+
+    /// `agent.watch`: a `snapshot` of the selected sessions, then a `changed` item after every change. Read the items
+    /// as [`massorca_protocol::methods::agents::AgentWatchEvent`].
+    pub async fn agent_watch(
+        &self,
+        params: &AgentWatchParams,
+    ) -> Result<Subscription, ClientError> {
+        self.subscribe(agents::WATCH, params).await
     }
 }
 
