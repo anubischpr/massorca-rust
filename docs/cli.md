@@ -55,6 +55,7 @@ letters, digits, `-` or `_`.
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
 | `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
+| `agent resume <SESSION>` | Starts a new run of an exited session with the kind's resume arguments, in a new terminal. The session keeps its id and agent ref. |
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
@@ -133,6 +134,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   with no status mechanism is always ready. `--force` types the text anyway, for example to
   answer a question. The receipt counts the bytes handed to the terminal; it does not say the
   agent read them, and the activity turns `working` only when the agent's hooks report it.
+- `agent resume SESSION` starts a new run of an exited session in a new terminal of its
+  workspace, with the kind's resume arguments and the agent's own ref, so the agent continues
+  its conversation. The session keeps its id and its agent ref; its activity is absent until
+  the new run reports. The arguments and environment of the first start are not kept. A live
+  run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
+  known yet, fails with `agent.resume_unavailable`; another writing session in the workspace
+  fails with `agent.workspace_busy`.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what

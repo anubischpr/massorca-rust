@@ -1,9 +1,9 @@
-//! Typed prompts through the CLI (decision 0054). The fake agent is declared as kinds in the test profile; the tests
-//! wait on observed states (`agent status --until`), never on sleeps.
+//! Typed prompts and resume through the CLI (decision 0054). The fake agent is declared as kinds in the test profile;
+//! the tests wait on observed states (`agent status --until`) or on the agent's screen, never on sleeps.
 
 mod harness;
 
-use harness::{Sandbox, single_document, with_json};
+use harness::{Sandbox, eventually, single_document, with_json};
 use predicates::str::contains;
 use serde_json::{Value, json};
 
@@ -24,33 +24,50 @@ fn status() -> Value {
     })
 }
 
-/// Declares kind `id`, which runs the fake agent, with the given prompt table and status.
-fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value) {
-    let kind = json!({
+/// Declares kind `id`, which runs the fake agent, with the given prompt table and status; `resume` adds its resume form.
+fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value, resume: bool) {
+    let mut kind = json!({
         "id": id,
         "name": format!("Fake agent {id}"),
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
         "prompt": prompt,
         "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
-        "resume": ["--resume", "{ref}"],
         "status": status
     });
+    if resume {
+        kind["resume"] = json!(["--resume", "{ref}"]);
+    }
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
     std::fs::create_dir_all(&dir).expect("create the kinds directory");
     std::fs::write(dir.join(format!("{id}.json")), kind.to_string()).expect("write a kind file");
 }
 
-/// A sandbox with these kinds and a folder workspace `main`: `fake` (argv prompt), `fake-none` (prompt `none`) and
-/// `fake-silent` (prompt `none` and no status mechanism, so it can never report `idle`).
+/// A sandbox with these kinds and a folder workspace `main`: `fake` (argv prompt, resumable), `fake-none` (prompt
+/// `none`), `fake-silent` (prompt `none` and no status mechanism, so it can never report `idle`) and `fake-once` (argv
+/// prompt, no resume form).
 fn sandbox() -> Sandbox {
     let sandbox = Sandbox::new();
-    declare(&sandbox, "fake", json!({ "mode": "argv" }), status());
-    declare(&sandbox, "fake-none", json!({ "mode": "none" }), status());
+    declare(&sandbox, "fake", json!({ "mode": "argv" }), status(), true);
+    declare(
+        &sandbox,
+        "fake-none",
+        json!({ "mode": "none" }),
+        status(),
+        true,
+    );
     declare(
         &sandbox,
         "fake-silent",
         json!({ "mode": "none" }),
         json!({ "mechanism": "none" }),
+        true,
+    );
+    declare(
+        &sandbox,
+        "fake-once",
+        json!({ "mode": "argv" }),
+        status(),
+        false,
     );
     let notes = sandbox.home().join("notes");
     std::fs::create_dir_all(&notes).expect("create folder");
@@ -115,6 +132,21 @@ fn error_code(sandbox: &Sandbox, args: &[&str]) -> String {
         .as_str()
         .expect("an error code")
         .to_owned()
+}
+
+/// Waits until the terminal's screen shows `line`.
+fn wait_for_line(sandbox: &Sandbox, terminal: &str, line: &str) {
+    eventually(&format!("`{line}` on the agent's screen"), || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        screen["lines"]
+            .as_array()
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|shown| shown.as_str().map(str::trim) == Some(line))
+            })
+            .then_some(())
+    });
 }
 
 #[test]
@@ -232,4 +264,81 @@ fn a_first_prompt_for_a_kind_that_reports_no_idle_is_refused_at_launch() {
     );
     let listed = sandbox.json_ok("default", &["agent", "list"]);
     assert_eq!(listed["sessions"], json!([]), "nothing was started");
+}
+
+#[test]
+fn resume_starts_a_new_run_of_the_same_session_with_its_agent_ref() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake", &["--prompt", "finish up"]);
+    let session = session_of(&started);
+    let first_terminal = terminal_of(&started);
+    let agent_ref = started["agent_ref"]
+        .as_str()
+        .expect("the ref is assigned at launch")
+        .to_owned();
+    until(&sandbox, &session, "done");
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+
+    let resumed = sandbox.json_ok("default", &["agent", "resume", &session]);
+    assert_eq!(resumed["id"], session.as_str(), "the session keeps its id");
+    assert_eq!(resumed["agent_ref"], agent_ref.as_str());
+    assert_eq!(resumed["execution"]["state"], "live");
+    let terminal = terminal_of(&resumed);
+    assert_ne!(terminal, first_terminal, "a new run has a new terminal");
+    wait_for_line(
+        &sandbox,
+        &terminal,
+        &format!("fake-agent: resumed {agent_ref}"),
+    );
+
+    // The new run's own hooks are accepted: its start reports idle.
+    let idle = until(&sandbox, &session, "idle");
+    assert_eq!(activity(&idle), ("idle", None, "hook"));
+}
+
+#[test]
+fn resume_of_a_live_session_is_refused_as_busy() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake", &[]);
+    let session = session_of(&started);
+    until(&sandbox, &session, "idle");
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "resume", &session]),
+        "agent.busy"
+    );
+}
+
+#[test]
+fn resume_is_refused_for_a_kind_without_a_resume_form() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-once", &["--prompt", "once"]);
+    let session = session_of(&started);
+    until(&sandbox, &session, "done");
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "resume", &session]),
+        "agent.resume_unavailable"
+    );
+    let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+    assert_eq!(shown["execution"]["state"], "exited", "nothing changed");
+}
+
+#[test]
+fn resume_obeys_the_one_writer_rule() {
+    let sandbox = sandbox();
+    let first = start(&sandbox, "fake", &[]);
+    let first_session = session_of(&first);
+    until(&sandbox, &first_session, "idle");
+    sandbox.json_ok("default", &["agent", "stop", &first_session, "--force"]);
+
+    // Another session takes the workspace's writing slot; the exited one must wait for it.
+    start(&sandbox, "fake", &[]);
+    assert_eq!(
+        error_code(&sandbox, &["agent", "resume", &first_session]),
+        "agent.workspace_busy"
+    );
+    let shown = sandbox.json_ok("default", &["agent", "status", &first_session]);
+    assert_eq!(shown["execution"]["state"], "exited", "still exited");
 }

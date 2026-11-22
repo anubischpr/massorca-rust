@@ -68,6 +68,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         methods.register(
             Owner::Core,
+            agents::RESUME,
+            agents_cap,
+            Permission::Workspace,
+            resume,
+        )?,
+        methods.register(
+            Owner::Core,
             agents::FORGET,
             agents_cap,
             Permission::Workspace,
@@ -120,6 +127,11 @@ async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, 
 
 async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     on_agents(&ctx, move |agents| agents.forget(&params.session)).await
+}
+
+/// Starts a new run of an exited session, which keeps its id (0054).
+async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.resume(&params.session)).await
 }
 
 /// Types a prompt into a run's terminal (0054). The text is never logged.

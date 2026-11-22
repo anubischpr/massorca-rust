@@ -225,6 +225,11 @@ impl Client {
         self.call(agents::PROMPT, params).await
     }
 
+    /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
+    pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::RESUME, &session_ref(session)).await
+    }
+
     /// `agent.hook`: one status report from a run's hook, with the run's token.
     pub async fn agent_hook(&self, params: &AgentHookParams) -> Result<(), ClientError> {
         let _: serde_json::Value = self.call(agents::HOOK, params).await?;

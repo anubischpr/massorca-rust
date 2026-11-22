@@ -285,6 +285,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.resume",
+            "Start a new run of an exited agent session",
+            "agent.resume",
+            selector("session"),
+        ),
+        command(
             "agent.forget",
             "Forget an agent session whose run has ended",
             "agent.forget",

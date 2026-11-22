@@ -39,6 +39,11 @@ pub enum AgentCommand {
     },
     /// Types a prompt into a session's terminal once its agent is idle or done, then submits it.
     Prompt(AgentPromptArgs),
+    /// Starts a new run of an exited session with the agent's resume arguments; the session keeps its id.
+    Resume {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Forgets a session whose run has ended.
     Forget {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -245,6 +250,10 @@ pub async fn execute(
                 .await?;
             let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
             output.success(&receipt, &lines);
+        }
+        AgentCommand::Resume { session } => {
+            let resumed = client.agent_resume(&session).await?;
+            output.success(&resumed, &agent_text::session_details(&resumed));
         }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;
