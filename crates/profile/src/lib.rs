@@ -10,6 +10,10 @@ mod unix_user;
 mod windows_endpoint_access;
 #[cfg(windows)]
 mod windows_profile_root;
+#[cfg(windows)]
+mod windows_sddl;
+#[cfg(windows)]
+mod windows_sid;
 
 pub use endpoint::local_socket_name;
 #[cfg(unix)]
