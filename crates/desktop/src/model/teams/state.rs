@@ -202,6 +202,7 @@ impl TeamsState {
             name,
             role: new.role.trim().to_owned(),
             agent: agent_of_kind(&new.kind),
+            kind_unavailable: None,
         });
         if team.lead.is_none() {
             team.lead = Some(id);

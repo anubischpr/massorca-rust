@@ -14,6 +14,8 @@ pub struct CardView {
     pub time: Option<String>,
     pub note: Option<String>,
     pub reach: HostReach,
+    /// Why the bot on the card cannot run; the card says so. `None` when it can run.
+    pub kind_unavailable: Option<&'static str>,
     /// The card is picked up for a move and drawn raised.
     pub lifted: bool,
 }
@@ -170,6 +172,10 @@ impl TeamsState {
             time: task.time.clone(),
             note: task.note.clone(),
             reach: task.reach,
+            kind_unavailable: task
+                .bot
+                .and_then(|id| team.bot(id))
+                .and_then(|bot| bot.kind_unavailable),
             lifted: pick.is_some_and(|pick| pick.task == task.id),
         };
         let columns = Column::ALL

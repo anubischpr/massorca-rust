@@ -35,7 +35,9 @@ impl Exit {
 /// - `argv[0]` is the program and the rest are its arguments, passed as they are: no shell, no string joining.
 /// - No console window opens on Windows, and nothing is elevated by MassOrca.
 /// - stdout and stderr are appended to `log`, capped at [`MAX_LOG_BYTES`].
-/// - The child process is killed when `timeout` passes, and the result says `timed_out`.
+/// - It runs with an allowlisted environment (`PATH`, home and temporary folders, locale, proxies), never the whole
+///   service environment.
+/// - At `timeout` the child and every process it started are killed, and the result says `timed_out`.
 pub trait CommandRunner: Send + Sync {
     fn run(&self, argv: &[String], log: &Path, timeout: Duration) -> io::Result<Exit>;
 }

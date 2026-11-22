@@ -18,11 +18,12 @@
       "cli": {
         "binary": "agy",
         "verify": ["agy", "--version"],
-        "source": "https://antigravity.google",
+        "source": "https://antigravity.google/docs/getting-started?tab=cli",
+        "sourceChecked": "2026-11-22",
         "install": [
           { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm https://antigravity.google/cli/install.ps1 | iex"] },
-          { "os": "linux", "command": ["bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"] },
-          { "os": "macos", "command": ["bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"] }
+          { "os": "linux", "command": ["bash", "-c", "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh | bash"] },
+          { "os": "macos", "command": ["bash", "-c", "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh | bash"] }
         ]
       }
     }]

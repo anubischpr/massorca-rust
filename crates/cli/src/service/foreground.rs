@@ -1,11 +1,13 @@
 //! `massorca service run`: the service in this process, until it is stopped.
 
+use std::io::Write;
 use std::path::Path;
 
 use massorca_profile::{Profile, RootAccess, ensure_dir, secure_root};
 use massorca_protocol::ErrorBody;
 use massorca_server::{
-    ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig, ServiceError, ShutdownHandle,
+    ListenSpec, NetworkConfig, RunningService, START_TIMING_ENV, Service, ServiceConfig,
+    ServiceError, ShutdownHandle,
 };
 use tokio::runtime::{Builder, Runtime};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -40,12 +42,22 @@ struct Started {
 
 fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
     // Checked before anything is written into the profile, logs included (decision 0073).
+    let checking = std::time::Instant::now();
     let access = secure_root(profile).map_err(ServiceError::from)?;
+    let root_check = checking.elapsed();
     let network = network_config(args)?;
     ensure_dir(profile)?;
     let logging = init_service_logging(profile, args.log_stderr)?;
     if access == RootAccess::Repaired {
         tracing::warn!(path = %profile.dir().display(), "profile directory access was repaired: it is now private to its owner");
+    }
+    tracing::info!(took_ms = root_check.as_millis(), "profile root checked");
+    if std::env::var_os(START_TIMING_ENV).is_some() {
+        let _ = writeln!(
+            std::io::stderr(),
+            "profile root checked in {}ms",
+            root_check.as_millis()
+        );
     }
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let config = ServiceConfig {
@@ -53,7 +65,8 @@ fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
         server_name: "massorca".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
-    let running = runtime.block_on(Service::start_with_network(config, network))?;
+    // The root was checked above, before the logs were written; the service does not check it again.
+    let running = runtime.block_on(Service::start_checked(config, network, access))?;
     Ok(Started {
         runtime,
         running,

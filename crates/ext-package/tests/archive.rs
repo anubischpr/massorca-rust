@@ -130,6 +130,11 @@ fn traversal_absolute_and_drive_paths_are_refused() {
         "/etc/evil.js",
         "C:/evil.js",
         "a//b.js",
+        // Names Windows resolves to another file or a device.
+        "extension.json.",
+        "extension.json ",
+        "EXTENS~1.JSO",
+        "media/nul.svg",
     ] {
         let mut entries = valid_entries();
         entries.push(file(name, b"x"));

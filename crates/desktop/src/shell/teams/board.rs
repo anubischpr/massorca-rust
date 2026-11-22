@@ -157,6 +157,9 @@ fn board_card(
     if let Some((state, word)) = status_of(column) {
         built = built.status(state, word);
     }
+    if let Some(reason) = card.kind_unavailable {
+        built = built.unavailable(reason);
+    }
     if let Some(time) = &card.time {
         built = built.time(time.clone());
     }
