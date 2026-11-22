@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
+use massorca_core_agents::{Agents, AgentsConfig};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -71,6 +72,19 @@ impl Service {
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
+        let agents = Agents::new(AgentsConfig {
+            store: store.clone(),
+            terminals: terminals.clone(),
+            workspaces: Arc::clone(&workspaces),
+            profile_dir: profile.dir().to_path_buf(),
+            massorca_bin: std::env::current_exe()?,
+        });
+        // No run survives the previous service (0051); nothing has started one yet in this service.
+        let marker = agents.clone();
+        tokio::task::spawn_blocking(move || marker.mark_stale_on_startup())
+            .await
+            .map_err(io::Error::other)?
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -79,6 +93,7 @@ impl Service {
             registries,
             workspaces,
             terminals: terminals.clone(),
+            agents,
             server: PeerInfo {
                 name: server_name,
                 version: server_version.clone(),
