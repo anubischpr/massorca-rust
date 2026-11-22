@@ -6,6 +6,8 @@
 pub mod contributes;
 pub mod data;
 mod references;
+pub mod settings;
+pub mod views;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -175,8 +177,12 @@ fn validate_surfaces_modes_views(manifest: &Manifest, problems: &mut Problems) {
             problems.add(here, format!("`{mode}` is listed twice"));
         }
     }
-    if let Some(0) = manifest.views {
-        problems.add("/views", "the view-schema major starts at 1");
+    match manifest.views {
+        Some(0) => problems.add("/views", "the view-schema major starts at 1"),
+        None if !manifest.contributes.views.is_empty() => {
+            problems.add("/views", "is required when views are contributed");
+        }
+        _ => {}
     }
 }
 

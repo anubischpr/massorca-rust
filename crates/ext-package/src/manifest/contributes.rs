@@ -7,6 +7,8 @@ use serde::Deserialize;
 
 use super::Manifest;
 use super::data::{Command, DocumentFile, Keybinding, Skill, ThemeFile};
+use super::settings::Setting;
+use super::views::View;
 use crate::error::{Problems, at};
 use crate::ids;
 
@@ -22,11 +24,15 @@ pub struct Contributes {
     pub skills: Vec<Skill>,
     pub recipes: Vec<DocumentFile>,
     pub agent_rules: Vec<DocumentFile>,
+    pub settings: Vec<Setting>,
+    pub views: Vec<View>,
 }
 
 /// Checks every contribution kind against the manifest.
 pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
     super::data::validate(manifest, problems);
+    super::settings::validate(manifest, problems);
+    super::views::validate(manifest, problems);
 }
 
 /// Checks one list of contributions: each id follows `rule` and is unique within the kind, then `check` runs on it.
