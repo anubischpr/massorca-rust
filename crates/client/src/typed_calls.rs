@@ -2,7 +2,8 @@
 
 use massorca_protocol::methods::agents::{
     self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
+    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -229,6 +230,37 @@ impl Client {
         params: &AgentWatchParams,
     ) -> Result<Subscription, ClientError> {
         self.subscribe(agents::WATCH, params).await
+    }
+
+    /// `agent.credentials.import`: copies the kind's declared files from `params.from` into the profile's home for
+    /// it. The result names the files and their sizes only.
+    pub async fn agent_credentials_import(
+        &self,
+        params: &CredentialsImportParams,
+    ) -> Result<CredentialsImported, ClientError> {
+        self.call(agents::CREDENTIALS_IMPORT, params).await
+    }
+
+    /// `agent.credentials.show`: whether the kind's home exists and which declared files are in it.
+    pub async fn agent_credentials_show(
+        &self,
+        kind: &str,
+    ) -> Result<CredentialsShown, ClientError> {
+        self.call(agents::CREDENTIALS_SHOW, &kind_ref(kind)).await
+    }
+
+    /// `agent.credentials.remove`: deletes the kind's home.
+    pub async fn agent_credentials_remove(
+        &self,
+        kind: &str,
+    ) -> Result<CredentialsRemoved, ClientError> {
+        self.call(agents::CREDENTIALS_REMOVE, &kind_ref(kind)).await
+    }
+}
+
+fn kind_ref(kind: &str) -> CredentialsKindRef {
+    CredentialsKindRef {
+        kind: kind.to_owned(),
     }
 }
 

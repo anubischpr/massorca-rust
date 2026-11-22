@@ -2,10 +2,14 @@
 //! handlers run its blocking calls on the blocking pool. `core-agents` announces every status change; the service
 //! turns each into `agent.changed` on the event bus and an item for `agent.watch` (0052).
 
-use massorca_core_agents::{AgentError, Agents, Change};
+use std::path::{Path, PathBuf};
+
+use massorca_core_agents::{AgentError, Agents, Change, credentials};
 use massorca_protocol::methods::agents::{
     self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
     AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent, AgentWatchParams,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
@@ -78,6 +82,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Read,
             watch,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_IMPORT,
+            agents_cap,
+            Permission::Workspace,
+            credentials_import,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_SHOW,
+            agents_cap,
+            Permission::Read,
+            credentials_show,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_REMOVE,
+            agents_cap,
+            Permission::Workspace,
+            credentials_remove,
         )?,
     ])
 }
@@ -204,6 +229,59 @@ async fn watch(ctx: RequestCtx, params: AgentWatchParams) -> Result<StreamSource
         }
     });
     Ok(source)
+}
+
+/// Copies a kind's declared credential files into the profile's home for it (0056). Only names and sizes come back;
+/// nothing about the files is logged beyond that.
+async fn credentials_import(
+    ctx: RequestCtx,
+    params: CredentialsImportParams,
+) -> Result<CredentialsImported, ErrorBody> {
+    on_profile(&ctx, move |profile_dir| {
+        credentials::import(
+            profile_dir,
+            &params.kind,
+            Path::new(&params.from),
+            params.replace,
+        )
+    })
+    .await
+}
+
+async fn credentials_show(
+    ctx: RequestCtx,
+    params: CredentialsKindRef,
+) -> Result<CredentialsShown, ErrorBody> {
+    on_profile(&ctx, move |profile_dir| {
+        credentials::show(profile_dir, &params.kind)
+    })
+    .await
+}
+
+async fn credentials_remove(
+    ctx: RequestCtx,
+    params: CredentialsKindRef,
+) -> Result<CredentialsRemoved, ErrorBody> {
+    on_profile(&ctx, move |profile_dir| {
+        credentials::remove(profile_dir, &params.kind)
+    })
+    .await
+}
+
+/// Runs one call on the profile directory on the blocking pool and maps its refusal to the protocol error.
+async fn on_profile<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: FnOnce(&Path) -> Result<T, AgentError> + Send + 'static,
+{
+    let profile_dir: PathBuf = ctx.state.profile.dir().to_path_buf();
+    match tokio::task::spawn_blocking(move || call(&profile_dir)).await {
+        Ok(result) => result.map_err(ErrorBody::from),
+        Err(error) => Err(ErrorBody::new(
+            codes::INTERNAL,
+            format!("the credentials task failed: {error}"),
+        )),
+    }
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
