@@ -24,6 +24,11 @@ pub enum TaskCommand {
     },
     /// Changes a task: its title, body, bot or project. An empty bot or project clears it.
     Update(TaskUpdateArgs),
+    /// Starts the task's bot on it, in the team's folder workspace. A failed start keeps the task Open with the reason.
+    Start {
+        /// Task id.
+        task: String,
+    },
     /// Marks a task done by hand, for work that finished outside an agent.
     Done {
         /// Task id.
@@ -159,6 +164,10 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&task, &[text::task_line(&task, "updated")]);
+        }
+        TaskCommand::Start { task } => {
+            let started = client.task_start(&TaskRef { task }).await?;
+            output.success(&started, &[text::task_line(&started, "started")]);
         }
         TaskCommand::Done { task } => {
             let done = client.task_done(&TaskRef { task }).await?;

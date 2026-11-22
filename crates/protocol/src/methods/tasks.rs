@@ -16,6 +16,9 @@ pub const SHOW: &str = "task.show";
 pub const UPDATE: &str = "task.update";
 /// Params: [`TaskRef`]. Result: [`Task`]. Refused while the task's agent session runs.
 pub const DONE: &str = "task.done";
+/// Params: [`TaskRef`]. Result: [`Task`], linked to the agent session that runs it. A failed start keeps the task
+/// Open with the reason in `error`.
+pub const START: &str = "task.start";
 /// Params: [`TaskRef`]. Result: [`Task`]. Clears the outcome and error; refused while the agent session runs.
 pub const REOPEN: &str = "task.reopen";
 /// Params: [`TaskRef`]. Result: [`Task`], the removed task. Refused while the agent session runs.

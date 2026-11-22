@@ -207,6 +207,12 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "task.start",
+            "Start a task's bot on it",
+            "task.start",
+            selector("task"),
+        ),
+        command(
             "task.done",
             "Mark a task done by hand",
             "task.done",

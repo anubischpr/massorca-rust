@@ -1,6 +1,5 @@
 //! `task.create`, `task.list`, `task.show`, `task.update`, `task.done`, `task.reopen` and `task.rm` (capability `teams/1`,
-//! decision 0072). `task.start` is not built yet: it will create the team's folder workspace, start the bot's agent with the
-//! prompt, and record the session on the task once delivery succeeded.
+//! decision 0072). `task.start` is in `task_start`.
 
 use massorca_core_agents::Agents;
 use massorca_core_store::{
@@ -140,7 +139,6 @@ pub(crate) fn any_running(agents: &Agents, rows: &[TaskRow]) -> Result<bool, Err
     Ok(false)
 }
 
-// Later slice: task.start plugs in beside this create, and records `session_id` once the prompt is delivered.
 fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let bot_id = optional_text(params.bot)
@@ -308,7 +306,7 @@ fn save(store: &Store, row: &TaskRow) -> Result<(), ErrorBody> {
 }
 
 /// The protocol view of a stored task, with the state its session gives it.
-fn view_of(row: &TaskRow, session: &Session) -> Task {
+pub(crate) fn view_of(row: &TaskRow, session: &Session) -> Task {
     let standing = standing(row, session);
     Task {
         id: row.id.clone(),

@@ -153,3 +153,44 @@ These later items call `task.create` and the methods above.
 - `task.start` depends on the agents domain landing on main. Teams, bots,
   projects, tasks and the Board land first, and `task.start` follows in its
   own slice once agent sessions are on main.
+
+## Amendment 2026-11-22: where a task runs
+
+The workspace domain lets one agent write in a workspace at a time
+(`agent.workspace_busy`). A team's bots must still be able to work at once.
+
+- **A task with no project:** the bot works in the team's folder workspace,
+  `<workspaces root>/bot-teams/<team id>`. Every team folder belongs to one
+  folder project named "Bot teams", made on the first start. The team's
+  workspace is stored on the team and made again if it was removed.
+- **A team folder has several writers.** This is a property a folder
+  workspace can have and a worktree cannot. A folder has no git index to
+  corrupt, and the team's bots seeing each other's files is the point of a
+  team folder. Every other workspace keeps one writer and
+  `agent.workspace_busy`. pv96 ran a team's bots in one shared folder in the
+  same way.
+- **A busy bot:** a bot works on one task at a time. Another of its tasks still
+  running blocks a second start, and so does one whose session cannot be
+  verified. That start is refused with `bot.busy`. The task stays Open with the
+  reason in `error`, and nothing is queued. Starts are serialised, so two
+  starts for one bot cannot both find it free.
+- **A task on a team project that is a plain folder:** it runs in that folder,
+  with several writers, as in pv96.
+- **A task on a team project that is a git repository:** the bot works in its
+  own git worktree for that task. That worktree is made through the path
+  delegation uses for child agents, and the result comes back as a branch. A
+  task that only reads runs in the main checkout, as in pv96.
+- **What is not built yet:** a team project has no code source yet, so no task
+  reaches either project case today. Both come with the follow-up that lets a
+  team project name its repository or folder.
+- **Who owns the run:** the host that runs the agent owns the run. A card
+  follows its session in the `live`, `unverifiable` and `exited` terms. An
+  unverifiable session counts as running, and losing contact never moves a
+  card to Done or to a failure.
+- **Delivery:** the built-in kinds take the prompt on their command line, so
+  the prompt is delivered once the agent starts, and only then is the session
+  linked. A kind whose prompt mode is `none` gets its prompt at its first idle,
+  and the agents domain drops that prompt after 120 s. Such a kind's task can
+  show Running with a prompt it never received.
+- The bot's model and effort are not passed yet, because `agent.start` has no
+  field for them.

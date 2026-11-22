@@ -197,9 +197,15 @@ pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
 pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
 /// The bot owns open tasks; it can be removed only with `unassign`.
 pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
+/// `task.start` for a bot whose agent is still working on another task. The task stays where it was.
+pub const BOT_BUSY: &str = "bot.busy";
 pub const TASK_NOT_FOUND: &str = "task.not_found";
 /// The task's agent session still runs; stop it first.
 pub const TASK_RUNNING: &str = "task.running";
+/// `task.start` on a task that already has a session or an outcome; reopen it first.
+pub const TASK_STARTED: &str = "task.started";
+/// `task.start` on a task without a bot.
+pub const TASK_NO_BOT: &str = "task.no_bot";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
