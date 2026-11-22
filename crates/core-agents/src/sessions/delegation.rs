@@ -783,6 +783,58 @@ mod tests {
         assert!(status.success(), "git {args:?} failed");
     }
 
+    /// Declares kind `broken`, whose program resolves (a file with execute permission) but cannot be started, so its
+    /// start fails at the spawn on every platform. Windows refuses a file that is not an executable image. On Unix a
+    /// script without a `#!` line would run under `/bin/sh` (the exec fallback), so the file names an interpreter that
+    /// does not exist, which makes the exec fail with the spawn.
+    fn declare_broken_kind(profile: &std::path::Path, dir: &std::path::Path) {
+        let program = dir.join("broken.exe");
+        std::fs::write(
+            &program,
+            "#!/nonexistent/massorca-interpreter\nnot a program\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let kinds = profile.join("agents").join("kinds");
+        std::fs::create_dir_all(&kinds).unwrap();
+        let kind = serde_json::json!({
+            "id": "broken",
+            "name": "Broken",
+            "program": [program.to_string_lossy()],
+            "prompt": { "mode": "argv" },
+            "status": { "mechanism": "none" }
+        });
+        std::fs::write(kinds.join("broken.json"), kind.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_start_whose_program_cannot_run_fails_and_keeps_no_session() {
+        let (agents, workspace_id, profile) = service();
+        let root = tempfile::tempdir().unwrap();
+        declare_broken_kind(profile.path(), root.path());
+
+        let failed = agents
+            .start(AgentStartParams {
+                workspace: workspace_id.clone(),
+                kind: "broken".to_owned(),
+                prompt: None,
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                read_only: true,
+                title: None,
+                cols: None,
+                rows: None,
+                request_id: None,
+            })
+            .unwrap_err();
+        assert_ne!(failed.code, codes::AGENT_NOT_INSTALLED, "{failed}");
+        assert!(agents.list(None).unwrap().is_empty());
+    }
+
     #[test]
     fn a_child_whose_start_fails_keeps_one_workspace_and_names_it() {
         let (agents, _workspace_id, profile) = service();
@@ -813,24 +865,7 @@ mod tests {
             .unwrap();
         let parent = session_row(&lead.id, None);
         agents.store().insert_agent_session(&parent).unwrap();
-        // A kind whose program is a file that is not a program: it resolves, and its start fails at the spawn.
-        let program = root.path().join("broken.exe");
-        std::fs::write(&program, "not a program\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let kinds = profile.path().join("agents").join("kinds");
-        std::fs::create_dir_all(&kinds).unwrap();
-        let kind = serde_json::json!({
-            "id": "broken",
-            "name": "Broken",
-            "program": [program.to_string_lossy()],
-            "prompt": { "mode": "argv" },
-            "status": { "mechanism": "none" }
-        });
-        std::fs::write(kinds.join("broken.json"), kind.to_string()).unwrap();
+        declare_broken_kind(profile.path(), root.path());
         let params = || AgentDelegateParams {
             kind: Some("broken".to_owned()),
             read_only: false,
