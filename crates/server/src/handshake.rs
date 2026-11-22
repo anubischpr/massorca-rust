@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use massorca_core_store::new_id;
 use massorca_protocol::{
-    ErrorBody, Frame, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION,
-    ProtocolRange, codes, negotiate,
+    ErrorBody, Frame, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, ProtocolRange, codes,
+    negotiate,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
