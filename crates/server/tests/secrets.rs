@@ -54,6 +54,25 @@ impl<'a> MakeWriter<'a> for Captured {
     }
 }
 
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
+
 fn profile(home: &Path, name: &str) -> Profile {
     Profile::resolve_with(Some(home.to_path_buf()), Some(name.to_owned()), |_| None)
         .expect("the profile resolves")
@@ -97,7 +116,7 @@ async fn secrets_never_reach_logs_or_error_text() {
         )
         .init();
 
-    let server_home = tempfile::tempdir().expect("a temporary home");
+    let server_home = temp_home();
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -143,7 +162,7 @@ async fn secrets_never_reach_logs_or_error_text() {
     errors.push(format!("{created:?} {offer:?}"));
 
     // A wrong secret, refused.
-    let client_home = tempfile::tempdir().expect("a temporary home");
+    let client_home = temp_home();
     let hosts = Hosts::of(&profile(client_home.path(), "client"));
     let wrong_secret = "a-wrong-secret-that-must-not-be-echoed-0123456789";
     let mut wrong = offer.clone();
@@ -169,7 +188,7 @@ async fn secrets_never_reach_logs_or_error_text() {
         .expect("reconnects");
     drop(again);
     // A replay of the spent offer, refused.
-    let other_home = tempfile::tempdir().expect("a temporary home");
+    let other_home = temp_home();
     let replay = Client::pair(
         &Hosts::of(&profile(other_home.path(), "client")),
         &offer,
