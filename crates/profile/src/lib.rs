@@ -32,7 +32,7 @@ pub use endpoint::local_socket_name;
 #[cfg(unix)]
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
-pub use private_dir::{PrivateDir, TOMBSTONE_PREFIX, is_leftover, open_private_dir};
+pub use private_dir::{LOCK_FILE, PrivateDir, TOMBSTONE_PREFIX, is_leftover, open_private_dir};
 pub use profile::{Profile, ensure_dir};
 pub use root_access::{
     FolderPlan, MAX_LISTED_ENTRIES, RootAccess, RootAccessError, apply_secure, check_location,

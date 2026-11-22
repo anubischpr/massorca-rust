@@ -18,8 +18,11 @@ pub const TOMBSTONE_PREFIX: &str = ".removing-";
 /// Names starting with this are files being written.
 const TEMP_PREFIX: &str = ".writing-";
 
-/// The file whose lock `lock` takes; readers skip it, since it is not a folder.
-const LOCK_FILE: &str = ".lock";
+/// The file whose lock `lock` takes; readers of the folder's entries skip it.
+pub const LOCK_FILE: &str = ".lock";
+
+/// How long `lock` waits for another writer before it gives up.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 /// How often a leftover is deleted before it is left for the next sweep; a virus scanner can hold a file briefly.
 const DELETE_ATTEMPTS: u32 = 3;
@@ -93,6 +96,15 @@ fn pin_waiting(dir: &Path) -> Result<crate::windows_dir_access::PinnedDir, RootA
                 attempts += 1;
                 std::thread::sleep(Duration::from_millis(20));
             }
+            Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => {
+                return Err(RootAccessError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "another command has been changing {} for too long; try again when it is done",
+                        dir.display()
+                    ),
+                )));
+            }
             Err(error) => return Err(refused_open(dir, error)),
         }
     }
@@ -137,10 +149,15 @@ impl PrivateDir {
         open_private_dir(&path)
     }
 
-    /// Takes the exclusive lock on this folder's `.lock` file, waiting while another writer holds it, in this process or
-    /// another; the lock ends when the returned file is dropped. Writers that sweep leftovers take it first, so a sweep
+    /// Takes the exclusive lock on this folder's `.lock` file, waiting up to ten seconds while another writer holds it,
+    /// in this process or another; then it fails with `TimedOut`. The lock ends when the returned file is dropped. Writers that sweep leftovers take it first, so a sweep
     /// never deletes the staged folder of a write still in progress.
     pub fn lock(&self) -> io::Result<fs::File> {
+        self.lock_waiting(LOCK_WAIT)
+    }
+
+    /// `lock`, waiting at most `wait` for another writer.
+    pub fn lock_waiting(&self, wait: Duration) -> io::Result<fs::File> {
         #[cfg(unix)]
         let file = crate::unix_dir_fd::open_or_create(&self.dir, LOCK_FILE)?;
         #[cfg(windows)]
@@ -164,8 +181,26 @@ impl PrivateDir {
             .create(true)
             .truncate(false)
             .open(self.path.join(LOCK_FILE))?;
-        file.lock()?;
-        Ok(file)
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "another command has been changing {} for over {} seconds; try again when it is done",
+                            self.path.display(),
+                            wait.as_secs()
+                        ),
+                    ));
+                }
+                Err(fs::TryLockError::Error(error)) => return Err(error),
+            }
+        }
     }
 
     /// A new, empty, private folder in this one under a random `.writing-` name, to fill and then `publish` under its
@@ -280,14 +315,17 @@ impl PrivateDir {
             crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
                 .map_err(|error| refused_open(&path, error))?;
         }
-        self.delete_entry(&tombstone)?;
+        // The folder is gone from its name either way; a tombstone that could not be deleted is swept later.
+        let _ = self.delete_entry(&tombstone);
         Ok(true)
     }
 
     /// Removes the folder `name` and what it holds. It is opened without following links, so a link there is refused,
     /// then renamed through that open handle to a unique tombstone in this folder, and only the tombstone is deleted.
     /// A tombstone a crash left behind is deleted by the next `sweep_leftovers`.
-    pub fn remove_child_dir(&self, name: &str) -> Result<(), RootAccessError> {
+    /// Returns the tombstone's path when only deleting it failed: the folder is gone from its name, and the next
+    /// `sweep_leftovers` deletes the tombstone.
+    pub fn remove_child_dir(&self, name: &str) -> Result<Option<PathBuf>, RootAccessError> {
         check_entry_name(name)?;
         let tombstone = format!("{TOMBSTONE_PREFIX}{name}-{}", random_hex()?);
         let path = self.path.join(name);
@@ -304,8 +342,10 @@ impl PrivateDir {
             crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
                 .map_err(|error| refused_open(&path, error))?;
         }
-        self.delete_entry(&tombstone)?;
-        Ok(())
+        Ok(self
+            .delete_entry(&tombstone)
+            .err()
+            .map(|_| self.path.join(tombstone)))
     }
 
     /// Deletes the entry `name` of this folder and what it holds, without following links, trying a few times: on
@@ -829,5 +869,30 @@ mod tests {
             Err(RootAccessError::UnsafeLocation { path }) if path == link
         ));
         assert_eq!(read_sddl(&outside, Links::Open).expect("its DACL"), before);
+    }
+
+    #[test]
+    fn a_lock_another_writer_holds_is_waited_for_a_bounded_time_and_then_refused() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = open_private_dir(&temp.path().join("hosts")).expect("opened");
+        drop(hosts.lock().expect("the lock file exists"));
+        // Another process's writer, holding the lock.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp.path().join("hosts").join(super::LOCK_FILE))
+            .expect("the lock file");
+        held.lock().expect("the other writer's lock");
+
+        let started = std::time::Instant::now();
+        let refused = hosts
+            .lock_waiting(std::time::Duration::from_millis(300))
+            .expect_err("the lock is held");
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::TimedOut);
+        assert!(refused.to_string().contains("try again"), "{refused}");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+        drop(held);
+        hosts.lock().expect("free again");
     }
 }

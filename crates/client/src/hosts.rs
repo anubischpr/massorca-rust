@@ -58,12 +58,11 @@ impl Hosts {
         let mut hosts = Vec::new();
         for entry in entries {
             let entry = entry?;
-            // A folder an interrupted removal or write left behind is not a host.
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(massorca_profile::is_leftover)
-            {
+            // The writers' lock file, and what an interrupted removal or write left behind, are not hosts.
+            let name = entry.file_name();
+            if name.to_str().is_some_and(|name| {
+                name == massorca_profile::LOCK_FILE || massorca_profile::is_leftover(name)
+            }) {
                 continue;
             }
             let path = entry.path().join(HOST_FILE);
@@ -114,22 +113,22 @@ impl Hosts {
         validate_host_name(&record.name)?;
         let name = record.name.as_str();
         let dir = self.dir.join(name);
-        if present(&dir.join(HOST_FILE)).map_err(|error| unreadable(name, &error))? {
+        if present(&dir.join(HOST_FILE)).map_err(|error| self.unreadable(name, &error))? {
             return Err(ClientError::HostExists(name.to_owned()));
         }
         massorca_profile::secure_root(&self.profile)?;
-        let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        let hosts = open_hosts(&self.dir)?;
         // One writer at a time, across processes: a sweep then never deletes another add's staged folder.
-        let _lock = hosts.lock()?;
+        let _lock = hosts.lock().map_err(busy)?;
         hosts.sweep_leftovers()?;
         // A host folder without a host file is what an interrupted add of an older build left: it never became a host.
         // It is moved aside only when the host file is certainly absent, checked again under the held folder.
-        if present(&dir).map_err(|error| unreadable(name, &error))? {
+        if present(&dir).map_err(|error| self.unreadable(name, &error))? {
             match hosts.remove_child_dir_unless(name, HOST_FILE) {
                 Ok(true) => {}
                 Ok(false) => return Err(ClientError::HostExists(name.to_owned())),
                 Err(massorca_profile::RootAccessError::Io(error)) => {
-                    return Err(unreadable(name, &error));
+                    return Err(self.unreadable(name, &error));
                 }
                 Err(refused) => return Err(refused.into()),
             }
@@ -161,25 +160,43 @@ impl Hosts {
     /// Forgets a host and deletes its device key. Refuses a profile others could change, and a host folder that is a
     /// link, so nothing outside the profile is deleted. The folder is moved aside through its open handle first, and
     /// only the moved folder is deleted.
-    pub fn remove(&self, name: &str) -> Result<(), ClientError> {
+    /// When only deleting the moved-aside folder failed, the host is gone and `HostRemoved::leftover` says where its old
+    /// files wait for the next host change to delete them.
+    pub fn remove(&self, name: &str) -> Result<HostRemoved, ClientError> {
         validate_host_name(name)?;
         if !present(&self.dir.join(name).join(HOST_FILE))
-            .map_err(|error| unreadable(name, &error))?
+            .map_err(|error| self.unreadable(name, &error))?
         {
             return Err(ClientError::HostNotFound(name.to_owned()));
         }
         massorca_profile::secure_root(&self.profile)?;
-        let hosts = massorca_profile::open_private_dir(&self.dir)?;
-        let _lock = hosts.lock()?;
+        let hosts = open_hosts(&self.dir)?;
+        let _lock = hosts.lock().map_err(busy)?;
         hosts.sweep_leftovers()?;
         if !present(&self.dir.join(name).join(HOST_FILE))
-            .map_err(|error| unreadable(name, &error))?
+            .map_err(|error| self.unreadable(name, &error))?
         {
             return Err(ClientError::HostNotFound(name.to_owned()));
         }
-        hosts.remove_child_dir(name)?;
-        Ok(())
+        let leftover = hosts.remove_child_dir(name)?;
+        Ok(HostRemoved { leftover })
     }
+
+    /// Whether a host's files are there could not be read: nothing changes, and the message names the folder.
+    fn unreadable(&self, name: &str, error: &io::Error) -> ClientError {
+        ClientError::HostUnreadable {
+            name: name.to_owned(),
+            path: self.dir.join(name),
+            reason: error.to_string(),
+        }
+    }
+}
+
+/// What `Hosts::remove` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRemoved {
+    /// Where the host's old files wait when they could not be deleted at once; the next add or remove deletes them.
+    pub leftover: Option<PathBuf>,
 }
 
 /// Host names follow the profile name rules: `[a-z0-9][a-z0-9_-]{0,31}`; `local` is reserved for the local service.
@@ -208,10 +225,20 @@ fn present(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn unreadable(name: &str, error: &io::Error) -> ClientError {
-    ClientError::HostUnreadable {
-        name: name.to_owned(),
-        reason: error.to_string(),
+/// Opens `hosts` without following links; a wait for another writer's hold on it that gave up is `HostsBusy`.
+fn open_hosts(dir: &Path) -> Result<massorca_profile::PrivateDir, ClientError> {
+    massorca_profile::open_private_dir(dir).map_err(|error| match error {
+        massorca_profile::RootAccessError::Io(error) => busy(error),
+        refused => refused.into(),
+    })
+}
+
+/// A lock wait that gave up becomes `HostsBusy`; any other error stays an I/O error.
+fn busy(error: io::Error) -> ClientError {
+    if error.kind() == io::ErrorKind::TimedOut {
+        ClientError::HostsBusy(error.to_string())
+    } else {
+        error.into()
     }
 }
 
@@ -680,7 +707,14 @@ mod tests {
         unblock_host_file(&office_dir);
 
         match refused {
-            Err(crate::ClientError::HostUnreadable { name, .. }) => assert_eq!(name, "office"),
+            Err(error @ crate::ClientError::HostUnreadable { .. }) => {
+                let message = error.to_string();
+                assert!(
+                    message.contains(&office_dir.display().to_string()),
+                    "{message}"
+                );
+                assert!(message.contains("remove that folder by hand"), "{message}");
+            }
             other => panic!("expected the add to be refused, got {other:?}"),
         }
         assert_eq!(
@@ -733,5 +767,53 @@ mod tests {
             );
             assert_eq!(hosts.get("office").expect("the host").name, "office");
         }
+    }
+
+    /// Unix only: Windows refuses to rename a folder while a file in it is held open, so it cannot be made to fail
+    /// only the delete that follows.
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_host_succeeds_with_a_note_when_only_its_old_files_cannot_be_deleted_yet() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        let hosts = Hosts::of(&profile);
+        hosts.add(&office(), &identity).expect("a host");
+        let office_dir = profile.dir().join("hosts").join("office");
+        // A folder that can still be renamed, but whose entries cannot be removed.
+        std::fs::set_permissions(&office_dir, std::fs::Permissions::from_mode(0o500))
+            .expect("chmod");
+
+        let removed = hosts.remove("office").expect("the host is removed");
+
+        let leftover = removed.leftover.expect("the old files are reported");
+        assert!(
+            leftover
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(massorca_profile::TOMBSTONE_PREFIX)),
+            "{}",
+            leftover.display()
+        );
+        assert!(hosts.get("office").is_err(), "the host is gone");
+        assert!(hosts.list().expect("listed").is_empty());
+        std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        hosts
+            .add(&office(), &identity)
+            .expect("the next add sweeps the old files");
+        assert!(!leftover.exists());
+    }
+
+    #[test]
+    fn a_lock_wait_that_gives_up_is_reported_as_busy() {
+        let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "another command is busy");
+        assert!(matches!(
+            super::busy(error),
+            crate::ClientError::HostsBusy(_)
+        ));
+        let other = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(matches!(super::busy(other), crate::ClientError::Io(_)));
     }
 }
