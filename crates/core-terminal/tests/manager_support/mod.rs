@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::shell::EnvSnapshot;
 use massorca_core_terminal::{
-    AttachItem, AttachMode, Attachment, CreateSpec, ManagerConfig, ShellChoice, TerminalInfo,
-    TerminalManager,
+    AttachItem, AttachMode, Attachment, CreateSpec, ManagerConfig, QueryAnswers, ShellChoice,
+    TerminalInfo, TerminalManager,
 };
 
 /// Generous so a loaded machine passes; waits end as soon as their condition holds.
@@ -239,9 +239,11 @@ pub struct Watch {
     queries_scanned: usize,
 }
 
-/// Attaches and reads up to the first byte of live output (the snapshot, if any).
+/// Attaches as an emulator and reads up to the first byte of live output (the snapshot, if any).
 pub async fn watch(manager: &TerminalManager, id: &str, since: Option<u64>) -> Watch {
-    let attachment = manager.attach(id, since).expect("attach");
+    let attachment = manager
+        .attach(id, since, QueryAnswers::Client)
+        .expect("attach");
     let mut watch = Watch::from_attachment(manager, id, attachment);
     match watch.step().await {
         Some(AttachItem::Attached { mode, .. }) => {
@@ -292,7 +294,10 @@ impl Watch {
             // Names the cause: a shell that printed nothing, or bytes the stream never sent.
             // A probe resuming at this watch's offset shows what the ring holds beyond it.
             let mut beyond = String::from("probe failed");
-            if let Ok(mut probe) = self.manager.attach(&self.id, Some(self.offset())) {
+            if let Ok(mut probe) =
+                self.manager
+                    .attach(&self.id, Some(self.offset()), QueryAnswers::Service)
+            {
                 let mut bytes = 0;
                 let mut items = Vec::new();
                 while let Ok(Some(item)) =
