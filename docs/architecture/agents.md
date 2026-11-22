@@ -204,7 +204,9 @@ new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`
 SYSTEM, which the files inherit) and renamed into place after its DACL is checked again.
 On Windows `agents` and `homes` are created the same way, and restricted when they already
 exist. Homes imported before this fix keep their old access until they are imported again
-with `--replace`. With
+with `--replace`. On Windows import holds `agents`, `homes` and the new home open without
+delete sharing, from before their access changes until the swap is done, so none of them can
+be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
 swap fails (the error names where it is when that fails too), and deleted after it succeeds.
 Half-built `.import-` leftovers of an interrupted import are deleted by the next import of

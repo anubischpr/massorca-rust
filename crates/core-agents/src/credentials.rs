@@ -95,16 +95,22 @@ pub fn import(
         return Err(refused_files(&decl.id, problems));
     }
 
-    let homes = homes_dir(profile_dir)?;
+    // `agents` and `homes` stay pinned (Windows) from before their access changes until the swap is done.
+    let (homes, _pinned) = homes_dir(profile_dir)?;
+    #[cfg(test)]
+    tests::run_after_access_change(&paths::agents_dir(profile_dir));
     refuse_replaced_leftover(&homes, &decl.id)?;
     clear_leftovers(&homes, &decl.id);
-    let staging = homes.join(sibling_name(&decl.id, STAGING));
-    let placed = write_home(&staging, &contents)
-        .and_then(|()| check_staging(&staging))
-        .and_then(|()| put_in_place(&staging, &home, &decl.id, replace));
+    let staging_path = homes.join(sibling_name(&decl.id, STAGING));
+    let placed = Staging::create(staging_path.clone()).and_then(|staging| {
+        write_files(&staging.path, &contents)?;
+        check_staging(&staging.path)?;
+        put_in_place(&staging, &home, &decl.id, replace)
+    });
+    // The staging pin was dropped with the closure, so a failed staging directory can be deleted here.
     if let Err(error) = placed {
-        if fs::symlink_metadata(&staging).is_ok() {
-            let _ = fs::remove_dir_all(&staging);
+        if fs::symlink_metadata(&staging_path).is_ok() {
+            let _ = fs::remove_dir_all(&staging_path);
         }
         return Err(error);
     }
@@ -239,10 +245,23 @@ pub fn home_state(home: &Path) -> Result<HomeState, AgentError> {
     }
 }
 
-/// `<profile>/agents/homes`, created when missing; neither it nor `agents` may be a link.
-fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
+/// Directories held open so they cannot be renamed or replaced: on Windows, [`massorca_profile::PinnedDir`]s;
+/// elsewhere nothing, and the link checks stand alone.
+#[cfg(windows)]
+type Pins = Vec<massorca_profile::PinnedDir>;
+#[cfg(not(windows))]
+type Pins = Vec<std::convert::Infallible>;
+
+/// `<profile>/agents/homes`, created when missing; neither it nor `agents` may be a link. On Windows both are pinned
+/// before their access is checked or changed, and stay pinned while the returned [`Pins`] live, so nobody can swap
+/// either for a junction in between.
+fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
     let agents = paths::agents_dir(profile_dir);
     let homes = agents.join("homes");
+    #[cfg(windows)]
+    let mut pins: Pins = Vec::with_capacity(2);
+    #[cfg(not(windows))]
+    let pins = Pins::new();
     for dir in [&agents, &homes] {
         match create_private_dir(dir) {
             Ok(()) => {}
@@ -257,6 +276,8 @@ fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
                 dir.display()
             )));
         }
+        #[cfg(windows)]
+        pins.push(pin(dir)?);
         // A directory made before this service restricted it keeps its inherited access; restrict it now, so no
         // other user can replace an entry in it.
         #[cfg(windows)]
@@ -269,7 +290,51 @@ fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
             })?;
         }
     }
-    Ok(homes)
+    Ok((homes, pins))
+}
+
+/// Pins `dir`, refusing a reparse point or anything but a directory with `agent.credentials_invalid`.
+#[cfg(windows)]
+fn pin(dir: &Path) -> Result<massorca_profile::PinnedDir, AgentError> {
+    massorca_profile::PinnedDir::open(dir).map_err(|error| {
+        if error.kind() == io::ErrorKind::InvalidInput {
+            invalid(format!(
+                "{} is not a plain directory; credential homes are never written through a link",
+                dir.display()
+            ))
+        } else {
+            internal("hold the credential homes directory", &error)
+        }
+    })
+}
+
+/// The new home being built: created owner-only, and on Windows pinned from creation until it is moved into place
+/// through its own handle.
+struct Staging {
+    path: PathBuf,
+    #[cfg(windows)]
+    pin: Option<massorca_profile::PinnedDir>,
+}
+
+impl Staging {
+    fn create(path: PathBuf) -> Result<Self, AgentError> {
+        create_private_dir(&path)
+            .map_err(|error| internal("create the new credential home", &error))?;
+        Ok(Self {
+            #[cfg(windows)]
+            pin: Some(pin(&path)?),
+            path,
+        })
+    }
+
+    /// Moves the new home to `target`: through its pin on Windows, so it stays pinned until the move is done.
+    fn move_to(&self, target: &Path) -> io::Result<()> {
+        #[cfg(windows)]
+        if let Some(pin) = &self.pin {
+            return pin.rename_to(target);
+        }
+        fs::rename(&self.path, target)
+    }
 }
 
 /// Checks, without creating anything, that `<profile>/agents` and `homes` are plain directories when they exist.
@@ -434,8 +499,7 @@ fn same_file(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
 }
 
 /// Creates `dir` and writes each file new in it. Creating fails when anything is at a path, so no link is followed.
-fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError> {
-    create_private_dir(dir).map_err(|error| internal("create the new credential home", &error))?;
+fn write_files(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError> {
     for (name, bytes) in contents {
         write_private_file(&dir.join(name), bytes)
             .map_err(|error| internal("write a credential file", &error))?;
@@ -506,16 +570,22 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Renames the finished `staging` directory to `home`. An existing home is refused without `replace`; with it, the
 /// old home is moved aside, put back when the swap fails, and deleted after it succeeds.
-fn put_in_place(staging: &Path, home: &Path, kind: &str, replace: bool) -> Result<(), AgentError> {
+fn put_in_place(
+    staging: &Staging,
+    home: &Path,
+    kind: &str,
+    replace: bool,
+) -> Result<(), AgentError> {
     match home_state(home)? {
-        HomeState::Missing => fs::rename(staging, home)
+        HomeState::Missing => staging
+            .move_to(home)
             .map_err(|error| internal("move the new credential home into place", &error)),
         HomeState::Directory if !replace => Err(exists(kind)),
         HomeState::Directory => {
             let aside = home.with_file_name(sibling_name(kind, REPLACED));
             fs::rename(home, &aside)
                 .map_err(|error| internal("move the old credential home aside", &error))?;
-            if let Err(error) = fs::rename(staging, home) {
+            if let Err(error) = staging.move_to(home) {
                 if fs::rename(&aside, home).is_err() {
                     return Err(not_put_back(kind, &aside, &error));
                 }
@@ -606,6 +676,24 @@ mod tests {
     use crate::paths;
 
     const FAKE_TOKEN: &str = r#"{"fake":true}"#;
+
+    /// A hook the test seam runs with the `agents` path.
+    type Hook = Box<dyn FnMut(&Path)>;
+
+    thread_local! {
+        /// Test-only seam: runs on the importing thread after `agents` and `homes` got their access, before the new
+        /// home is written and swapped in. Never compiled outside tests.
+        static AFTER_ACCESS_CHANGE: std::cell::RefCell<Option<Hook>> =
+            std::cell::RefCell::new(None);
+    }
+
+    pub(super) fn run_after_access_change(agents: &Path) {
+        AFTER_ACCESS_CHANGE.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().as_mut() {
+                hook(agents);
+            }
+        });
+    }
 
     /// A profile declaring kind `fake` with `files`, and an empty source directory.
     struct Fixture {
@@ -731,6 +819,11 @@ mod tests {
         fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
         fixture.import(false).unwrap();
         let missing_staging = fixture.home().with_file_name(".fake.import-missing");
+        let missing_staging = Staging {
+            path: missing_staging,
+            #[cfg(windows)]
+            pin: None,
+        };
         let error = put_in_place(&missing_staging, &fixture.home(), "fake", true).unwrap_err();
         assert_eq!(error.code, codes::INTERNAL);
         assert_eq!(
@@ -1042,6 +1135,60 @@ mod tests {
         fixture.import(false).unwrap();
         assert!(massorca_profile::has_owner_only_dacl(&homes).unwrap());
         assert!(massorca_profile::has_owner_only_dacl(homes.parent().unwrap()).unwrap());
+    }
+
+    /// The race the pinning closes: between the access change and the swap, another user renames `agents` away and
+    /// plants a junction in its place. The rename must be refused, and nothing may be written behind the junction.
+    #[cfg(windows)]
+    #[test]
+    fn agents_cannot_be_swapped_for_a_junction_during_an_import() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let attacker = tempfile::tempdir().unwrap();
+        fs::create_dir_all(attacker.path().join("homes")).unwrap();
+        let attacker_dir = attacker.path().to_path_buf();
+        let renamed = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let seen = std::rc::Rc::clone(&renamed);
+        AFTER_ACCESS_CHANGE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |agents: &Path| {
+                let moved = agents.with_file_name("agents-moved");
+                let result = fs::rename(agents, &moved);
+                if result.is_ok() {
+                    link_dir(&attacker_dir, agents);
+                }
+                *seen.borrow_mut() = Some(result.map_err(|error| error.raw_os_error()));
+            }));
+        });
+        let outcome = fixture.import(false);
+        AFTER_ACCESS_CHANGE.with(|hook| *hook.borrow_mut() = None);
+
+        let mut planted = Vec::new();
+        let mut pending = vec![attacker.path().to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    planted.push(path);
+                }
+            }
+        }
+        assert!(
+            planted.is_empty(),
+            "credential files were written behind the junction: {planted:?}"
+        );
+        let rename = renamed.borrow_mut().take().expect("the hook ran");
+        assert_eq!(
+            rename,
+            Err(Some(32)),
+            "renaming the pinned `agents` must be a sharing violation"
+        );
+        outcome.unwrap();
+        assert_eq!(
+            fs::read_to_string(fixture.home().join("token.json")).unwrap(),
+            FAKE_TOKEN
+        );
     }
 
     /// A junction needs no privilege on Windows, so this always runs there.
