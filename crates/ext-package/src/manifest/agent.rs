@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use super::contributes::list;
 use super::{Manifest, is_https_url};
+use crate::display_chars;
 use crate::error::{Problems, at};
 use crate::ids;
 use crate::permission::PermissionKind;
@@ -181,6 +182,12 @@ fn check_argv(argv: &[String], pointer: &str, problems: &mut Problems) {
     }
     if argv.iter().any(|part| part.chars().any(char::is_control)) {
         problems.add(pointer, "must not contain a control character");
+    }
+    if argv
+        .iter()
+        .any(|part| part.chars().any(display_chars::is_format))
+    {
+        problems.add(pointer, "must not contain a format character");
     }
 }
 
