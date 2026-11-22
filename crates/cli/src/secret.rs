@@ -34,6 +34,8 @@ pub enum SecretCommand {
     Requests(RequestsArgs),
     /// Declines a pending request.
     Decline(DeclineArgs),
+    /// Forgets the vault key while no secret exists, so the next `set` creates a fresh one.
+    ResetKey,
 }
 
 #[derive(Debug, Args)]
@@ -135,6 +137,7 @@ async fn run(client: &Client, command: SecretCommand, output: Output) -> Result<
         SecretCommand::Request(args) => request(client, args, output).await,
         SecretCommand::Requests(args) => requests(client, args, output).await,
         SecretCommand::Decline(args) => decline(client, args, output).await,
+        SecretCommand::ResetKey => reset_key(client, output).await,
         SecretCommand::Set(args) => {
             let value = secret_input::read_value(&args.target.scope, &args.target.name)?;
             set(client, args, value, output).await
@@ -156,6 +159,15 @@ async fn status(client: &Client, output: Output) -> Result<(), CliError> {
         );
     }
     output.success(&status, &lines);
+    Ok(())
+}
+
+async fn reset_key(client: &Client, output: Output) -> Result<(), CliError> {
+    let status = client.secret_reset_key().await?;
+    output.success(
+        &status,
+        &["the vault key was reset; the next secret creates a fresh one".to_owned()],
+    );
     Ok(())
 }
 

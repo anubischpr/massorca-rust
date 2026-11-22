@@ -13,6 +13,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 const VALUE: &str = "log-redaction-value-9b41d7";
+const NUMERIC_VALUE: u64 = 918_273_645_501;
 const SENTINEL: &str = "log-capture-is-wired";
 
 /// Every formatted line, in memory.
@@ -107,6 +108,22 @@ async fn a_value_sent_through_secret_set_appears_in_no_trace_line() {
     assert_eq!(refused_code(again), codes::SECRET_NAME_IN_USE);
     let bad_scope = client.call(secrets::SET, &set_params("nowhere")).await;
     assert_eq!(refused_code(bad_scope), codes::SECRET_INVALID_SCOPE);
+    // Malformed params: the value as the wrong type, nested, or in a field of another type.
+    for params in [
+        serde_json::json!({ "scope": "global", "name": "NUM", "value": NUMERIC_VALUE }),
+        serde_json::json!({ "scope": "global", "name": "OBJ", "value": { "inner": VALUE } }),
+        serde_json::json!({ "scope": "global", "name": "BOOL", "value": "x", "replace": VALUE }),
+    ] {
+        let reply = client.call(secrets::SET, &params).await;
+        if let Err(ClientError::Remote(body)) = &reply {
+            let text = serde_json::to_string(body).expect("serializes");
+            assert!(
+                !text.contains(VALUE) && !text.contains(&NUMERIC_VALUE.to_string()),
+                "a reply carries the value: {text}"
+            );
+        }
+        assert_eq!(refused_code(reply), codes::REQUEST_INVALID_PARAMS);
+    }
 
     drop(client);
     running.shutdown_handle().shutdown();
@@ -114,6 +131,10 @@ async fn a_value_sent_through_secret_set_appears_in_no_trace_line() {
 
     let text = captured.text();
     assert!(text.contains(SENTINEL), "the capture saw nothing: {text}");
+    assert!(
+        !text.contains(&NUMERIC_VALUE.to_string()),
+        "a log line carries the numeric value: {text}"
+    );
     assert!(
         !text.contains(VALUE),
         "a log line carries the value: {text}"

@@ -23,4 +23,5 @@ mod network;
 mod projects;
 mod registries;
 mod secrets;
+mod secrets_hardening;
 mod workspaces;

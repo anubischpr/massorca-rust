@@ -15,6 +15,7 @@ use massorca_protocol::methods::secrets::{
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
+use super::secret_params::Redacted;
 use super::secret_refusals::{parse_scope, refusal};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
@@ -37,7 +38,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             requests,
         )?,
-        methods.register(Owner::Core, secrets::SET, cap, Permission::HostAdmin, set)?,
+        methods.register(
+            Owner::Core,
+            secrets::SET,
+            cap,
+            Permission::HostAdmin,
+            |ctx, params: Redacted<SecretSet>| set(ctx, params.0),
+        )?,
         methods.register(Owner::Core, secrets::LINK, cap, Permission::HostAdmin, link)?,
         methods.register(
             Owner::Core,
@@ -60,6 +67,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::HostAdmin,
             decline,
         )?,
+        methods.register(
+            Owner::Core,
+            secrets::RESET_KEY,
+            cap,
+            Permission::HostAdmin,
+            reset_key,
+        )?,
         // Asking changes no secret, and agent sessions working in a workspace are the ones who ask.
         methods.register(
             Owner::Core,
@@ -69,6 +83,11 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             request,
         )?,
     ])
+}
+
+async fn reset_key(ctx: RequestCtx, _params: NoParams) -> Result<SecretStatus, ErrorBody> {
+    blocking(&ctx, Vault::reset_key).await?;
+    status(ctx, NoParams {}).await
 }
 
 async fn status(ctx: RequestCtx, _params: NoParams) -> Result<SecretStatus, ErrorBody> {

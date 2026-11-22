@@ -56,6 +56,11 @@ impl Client {
         self.call(secrets::REQUESTS, params).await
     }
 
+    /// `secret.reset_key`: forgets the key of a vault that holds no secret; the next set creates a fresh one.
+    pub async fn secret_reset_key(&self) -> Result<SecretStatus, ClientError> {
+        self.call(secrets::RESET_KEY, &()).await
+    }
+
     /// `secret.decline`: declines a pending request.
     pub async fn secret_decline(
         &self,

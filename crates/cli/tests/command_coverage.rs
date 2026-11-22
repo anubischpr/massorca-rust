@@ -122,6 +122,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "secret.remove",
             "secret.request",
             "secret.requests",
+            "secret.reset-key",
             "secret.set",
             "secret.status",
             "secret.unlink",

@@ -6,6 +6,7 @@ mod devices;
 mod events;
 mod git;
 mod projects;
+mod secret_params;
 mod secret_refusals;
 mod secrets;
 mod service;

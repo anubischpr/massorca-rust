@@ -76,6 +76,28 @@ fn set_from_stdin_then_list_status_and_remove_never_print_the_value() {
 }
 
 #[test]
+fn reset_key_is_refused_while_a_secret_exists_then_frees_the_empty_vault() {
+    let sandbox = Sandbox::new();
+    set_from_stdin(&sandbox, "global", "API_TOKEN");
+    sandbox
+        .run("default", &["secret", "reset-key"])
+        .code(1)
+        .stderr(contains("secret.vault_not_empty"));
+    sandbox
+        .run("default", &["secret", "remove", "global", "API_TOKEN"])
+        .success();
+    sandbox
+        .run("default", &["secret", "reset-key"])
+        .success()
+        .stdout(contains("reset"));
+    let vault = sandbox.profile_dir("default").join("vault");
+    for file in ["key", "protection"] {
+        assert!(!vault.join(file).exists(), "{file} was removed");
+    }
+    set_from_stdin(&sandbox, "global", "API_TOKEN");
+}
+
+#[test]
 fn an_existing_name_needs_replace() {
     let sandbox = Sandbox::new();
     set_from_stdin(&sandbox, "global", "API_TOKEN");

@@ -65,7 +65,7 @@ const AGENT_METHODS: [&str; 8] = [
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 24] = [
+const CLI_COMMAND_IDS: [&str; 25] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -90,6 +90,7 @@ const CLI_COMMAND_IDS: [&str; 24] = [
     "secret.request",
     "secret.requests",
     "secret.decline",
+    "secret.reset-key",
 ];
 
 #[tokio::test]

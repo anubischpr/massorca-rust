@@ -69,6 +69,12 @@ pub(super) fn secret_commands() -> Vec<CommandDescriptor> {
             json!({ "type": "object", "properties": { "all": { "type": "boolean" } } }),
         ),
         command(
+            "secret.reset-key",
+            "Forget the key of a vault that holds no secret, so the next secret creates a fresh one",
+            "secret.reset_key",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        command(
             "secret.decline",
             "Decline a pending request for a secret",
             "secret.decline",

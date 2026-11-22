@@ -22,6 +22,8 @@ pub const REQUEST: &str = "secret.request";
 pub const REQUESTS: &str = "secret.requests";
 /// Params: [`SecretDecline`]. Result: [`SecretRequest`].
 pub const DECLINE: &str = "secret.decline";
+/// Params: none. Result: [`SecretStatus`]. Forgets the key of a vault that holds no secret.
+pub const RESET_KEY: &str = "secret.reset_key";
 
 /// Result of `secret.status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
