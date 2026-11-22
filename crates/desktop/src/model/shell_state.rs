@@ -218,6 +218,12 @@ impl ShellModel {
         }
     }
 
+    /// Closes the open session, so a selected workspace shows its start page again.
+    pub fn close_session(&mut self) {
+        self.snapshot.session_title = None;
+        self.snapshot.active_session = None;
+    }
+
     /// The Canvas content for the current page, mode and open session. A selected workspace shows
     /// its start page on the Workspaces home until a session opens.
     pub fn canvas(&self) -> Canvas {

@@ -2,8 +2,9 @@
 //! automated checks on a desktop someone is using. GPUI on Windows moves bounds whose centre is
 //! on no monitor back onto the primary display, so an off-screen origin cannot be asked for at
 //! open time: the driver shows the hidden window where it wants, without activating it.
-//! `MASSORCA_DESKTOP_DEBUG_FOCUS=search` (read only with the background launch) puts the focus in
-//! the Search field and logs its query, so a check can type into a field it has not activated.
+//! `MASSORCA_DESKTOP_DEBUG_FOCUS=search` or `=composer` (read only with the background launch) puts
+//! the focus in the Search field or the start page composer and logs what it settles on, so a check
+//! can type into a field it has not activated.
 
 use crate::service::truthy;
 
@@ -15,12 +16,15 @@ const DEBUG_FOCUS_ENV: &str = "MASSORCA_DESKTOP_DEBUG_FOCUS";
 pub enum DebugFocus {
     /// The sidebar Search field.
     Search,
+    /// The composer of the first workspace's start page.
+    Composer,
 }
 
 impl DebugFocus {
     fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "search" => Some(Self::Search),
+            "composer" => Some(Self::Composer),
             _ => None,
         }
     }
@@ -110,12 +114,17 @@ mod tests {
             Some(DebugFocus::Search)
         );
         assert_eq!(launch_with("0", "search").debug_focus, None);
+        assert_eq!(
+            launch_with("1", "composer").debug_focus,
+            Some(DebugFocus::Composer)
+        );
+        assert_eq!(launch_with("0", "composer").debug_focus, None);
         assert_eq!(launch(None).debug_focus, None);
     }
 
     #[test]
     fn unknown_debug_focus_values_are_ignored() {
-        for value in ["", "composer", "Search!"] {
+        for value in ["", "chat", "Search!"] {
             assert_eq!(launch_with("1", value).debug_focus, None, "{value:?}");
         }
     }

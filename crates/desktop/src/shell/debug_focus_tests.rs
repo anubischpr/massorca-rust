@@ -46,3 +46,33 @@ fn the_debug_search_focus_takes_hold_on_the_first_frame(cx: &mut TestAppContext)
     let query = shell.read_with(cx, |shell, cx| shell.search.read(cx).text(cx).to_owned());
     assert_eq!(query, "ab");
 }
+
+#[gpui::test]
+fn the_debug_composer_focus_takes_hold_on_the_first_frame(cx: &mut TestAppContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        let mut shell = Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx);
+        shell.start_debug_input(DebugFocus::Composer, window, cx);
+        shell
+    });
+    draw(cx);
+    let workspace = shell
+        .read_with(cx, |shell, _| {
+            shell.model().selected_workspace().map(str::to_owned)
+        })
+        .expect("the debug launch opens the first workspace");
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("start-project-link").is_some(),
+        "the workspace's start page is drawn"
+    );
+    let composer = shell.update(cx, |shell, cx| shell.start_composer(&workspace, cx));
+    cx.simulate_input("ab");
+    assert_eq!(
+        composer.read_with(cx, |composer, cx| composer.draft(cx)),
+        "ab"
+    );
+}

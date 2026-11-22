@@ -5,10 +5,12 @@
 //! workspace or the start page with no workspace.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, SharedString, WeakEntity, Window, div, px};
+use gpui::{
+    AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
+};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
-use massorca_ui::components::composer::Composer;
+use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::popover::OverlayLayer;
@@ -20,9 +22,11 @@ use massorca_ui::tokens::{
     TYPE_HEADING,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use std::io::Write;
 
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
+use crate::launch_options::DebugFocus;
 use crate::model::start_page::{
     GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, WorkspaceStart,
 };
@@ -33,6 +37,13 @@ pub(super) struct StartFrame {
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
+}
+
+/// A workspace's start page composer, with the subscription that logs its drafts in a debug launch.
+#[derive(Debug)]
+pub(super) struct StartComposer {
+    pub entity: Entity<Composer>,
+    _draft_log: Subscription,
 }
 
 /// The start page for one workspace, centred in the Canvas.
@@ -273,6 +284,7 @@ impl Shell {
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
+        let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
         self.start_composers
             .entry(workspace_id.to_owned())
             .or_insert_with(|| {
@@ -284,12 +296,36 @@ impl Shell {
                         fast: false,
                     },
                 );
-                cx.new(|cx| {
+                let entity = cx.new(|cx| {
                     Composer::new(picker, Vec::new(), cx)
                         .leading_control(start_mode_switch())
                         .send_unavailable(SESSIONS_LATER)
-                })
+                });
+                let draft_log =
+                    cx.subscribe(&entity, move |_, composer, event: &ComposerEvent, cx| {
+                        if log_drafts && *event == ComposerEvent::DraftChanged {
+                            let draft = composer.read(cx).draft(cx);
+                            let _ = writeln!(
+                                std::io::stderr(),
+                                "massorca-desktop: debug composer draft={draft:?}"
+                            );
+                        }
+                    });
+                StartComposer {
+                    entity,
+                    _draft_log: draft_log,
+                }
             })
+            .entity
             .clone()
+    }
+
+    /// Puts the focus in the selected workspace's start page composer (the debug focus).
+    pub(super) fn focus_start_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.model.selected_workspace().map(str::to_owned) else {
+            return;
+        };
+        let composer = self.start_composer(&id, cx);
+        composer.update(cx, |composer, cx| composer.focus(window, cx));
     }
 }

@@ -21,6 +21,7 @@ mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
+use crate::launch_options::DebugFocus;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
@@ -37,7 +38,6 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, Render,
     Subscription, WeakEntity, Window, div, prelude::*,
 };
-use massorca_ui::components::composer::Composer;
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
@@ -94,8 +94,10 @@ pub struct Shell {
     _store_changes: Subscription,
     /// Keeps the debug focus's query log alive; only a debug launch sets it.
     _debug_input: Option<Subscription>,
+    /// The debug focus the launch asked for, if any; the start page composer logs for it.
+    debug_focus: Option<DebugFocus>,
     /// Each workspace's start page composer, kept so its draft survives redraws.
-    start_composers: HashMap<String, Entity<Composer>>,
+    start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
@@ -208,6 +210,7 @@ impl Shell {
             _bridge: bridge,
             _store_changes: store_changes,
             _debug_input: None,
+            debug_focus: None,
             start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
