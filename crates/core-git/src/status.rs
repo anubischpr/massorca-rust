@@ -53,8 +53,10 @@ impl Git {
         parse_numstat(&captured)
     }
 
-    /// Reads git's state files: a lone `REBASE_HEAD` can linger after a rebase ends, so the directories decide.
-    fn operation_in_progress(&self, dir: &Path) -> Result<Option<GitOperation>, GitError> {
+    /// The operation git stopped in the middle of in the work tree at `dir`, read from git's state files in that work
+    /// tree's own git directory, so a linked worktree reports its own. A lone `REBASE_HEAD` can linger after a rebase
+    /// ends, so the directories decide.
+    pub fn operation_in_progress(&self, dir: &Path) -> Result<Option<GitOperation>, GitError> {
         let captured = self.run(Some(dir), ["rev-parse", "--absolute-git-dir"])?;
         captured.require_success()?;
         let git_dir = path_from_git(captured.text()?.trim_end_matches(['\r', '\n']));

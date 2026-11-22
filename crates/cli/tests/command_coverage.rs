@@ -81,6 +81,8 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         checked,
         BTreeSet::from([
             "agent.attach",
+            "agent.bring-back",
+            "agent.delegate",
             "agent.credentials.import",
             "agent.credentials.remove",
             "agent.credentials.show",
@@ -93,6 +95,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.start",
             "agent.status",
             "agent.stop",
+            "agent.tree",
             "settings.get",
             "settings.list",
             "settings.reset",

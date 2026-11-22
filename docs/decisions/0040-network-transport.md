@@ -29,9 +29,13 @@ socket; the connection code does not know which transport it runs on.
 **Limits.** Frame limit 1 MiB on the network (0002's default), announced in
 `welcome.max_frame_len`; tungstenite's message and frame limits are set to the
 same value so an oversized message is refused before it is buffered. At most
-128 network connections at a time; over that, new connections are closed
-after the TLS handshake. A connection must finish TLS, the WebSocket upgrade
-and `hello` within 10 seconds.
+128 network connections at a time; over that, a new connection is closed as
+soon as it is accepted, before the TLS handshake, so it costs no handshake
+work. Of those, at most 32 may be unauthenticated (accepted but not yet past
+`welcome`), and at most 4 from one address. Before `welcome` the server reads
+one frame of at most 64 KiB (the `hello`) and nothing else, so an
+unauthenticated peer cannot fill the inbound queue. A connection must finish
+TLS, the WebSocket upgrade and `hello` within 10 seconds.
 
 **Keep-alive.** Both sides send a WebSocket ping every 20 seconds. A side that
 receives nothing at all (no frame, ping or pong) for 60 seconds closes the

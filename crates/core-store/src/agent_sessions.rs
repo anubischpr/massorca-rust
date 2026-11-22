@@ -204,6 +204,25 @@ impl Store {
         )
     }
 
+    /// The sessions delegated from `parent_id` (0055), oldest first.
+    pub fn list_agent_children(&self, parent_id: &str) -> Result<Vec<AgentSessionRow>, StoreError> {
+        self.query_all(
+            &format!("{SELECT_SESSIONS} WHERE parent_id = ?1 ORDER BY created_at, id"),
+            [parent_id],
+            session_from_row,
+        )
+    }
+
+    /// Marks a child as brought back (0055) at `at`, unless it already is. Returns whether the row changed, so of two
+    /// bring-backs only one is recorded.
+    pub fn set_agent_session_brought_back(&self, id: &str, at: i64) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET brought_back_at = ?2 WHERE id = ?1 AND brought_back_at IS NULL",
+            params![id, at],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Records how a run ended, unless an end is already recorded, and only while the row still names `terminal_id`, the
     /// terminal the run ran in (decision 0058): a resumed session has a new terminal, and an earlier run's end must not
     /// land on it. Returns whether the row changed.

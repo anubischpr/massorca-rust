@@ -128,3 +128,40 @@ fn key_file_is_owner_only() {
         .mode();
     assert_eq!(dir_mode & 0o777, 0o700);
 }
+
+/// Asserts the DACL is protected and holds a single allow entry, for the current user.
+#[cfg(windows)]
+fn assert_owner_only(path: &std::path::Path) {
+    let owner_only = massorca_profile::has_owner_only_dacl(path).expect("read the DACL");
+    let dacl = massorca_profile::dacl_sddl(path).unwrap_or_default();
+    assert!(owner_only, "{}: {dacl}", path.display());
+}
+
+#[cfg(windows)]
+#[test]
+fn key_file_is_owner_only_under_a_wide_inheritable_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    massorca_profile::set_dacl_sddl(dir.path(), "D:(A;OICI;GA;;;WD)").expect("widen the directory");
+    let key = dir.path().join("identity.key");
+    let cert = dir.path().join("identity.crt");
+    TlsIdentity::load_or_create(&key, &cert, "server").expect("create");
+    assert_owner_only(&key);
+    assert!(
+        massorca_profile::dacl_sddl(&cert)
+            .expect("the certificate DACL")
+            .contains(";WD)"),
+        "the public certificate keeps the inherited entries"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_created_key_directory_is_owner_only_under_a_wide_inheritable_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    massorca_profile::set_dacl_sddl(dir.path(), "D:(A;OICI;GA;;;WD)").expect("widen the directory");
+    let network = dir.path().join("network");
+    let key = network.join("identity.key");
+    TlsIdentity::load_or_create(&key, &network.join("identity.crt"), "server").expect("create");
+    assert_owner_only(&network);
+    assert_owner_only(&key);
+}
