@@ -2,12 +2,14 @@
 
 use massorca_protocol::methods::agents::{
     Activity, ActivitySource, ActivityState, AgentKind, AgentSession, Execution, Outcome,
+    PackageState,
 };
 
 use crate::terminal;
 use crate::workspace_text;
 
-/// The kinds as a table, then one line per problem of a kind that has any.
+/// The kinds as a table with the package state, the detection and the resolved path, then one line
+/// per problem of a kind that has any.
 pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
     if kinds.is_empty() {
         return vec!["no agent kinds".to_owned()];
@@ -19,11 +21,16 @@ pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
                 kind.id.clone(),
                 kind.name.clone(),
                 kind.owner.clone(),
-                installed_text(kind),
+                package_state_text(kind.package.state).to_owned(),
+                detected_text(kind),
+                kind.program_path.clone().unwrap_or_default(),
             ]
         })
         .collect();
-    let mut lines = workspace_text::table(&["ID", "NAME", "OWNER", "INSTALLED"], rows);
+    let mut lines = workspace_text::table(
+        &["ID", "NAME", "OWNER", "INSTALLED", "DETECTED", "PATH"],
+        rows,
+    );
     for kind in kinds {
         for problem in &kind.problems {
             lines.push(format!("problem: {}: {problem}", kind.id));
@@ -32,11 +39,21 @@ pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
     lines
 }
 
-/// The resolved program, `invalid` for a declaration with problems, or `no`.
-fn installed_text(kind: &AgentKind) -> String {
-    match (&kind.program_path, kind.problems.is_empty()) {
-        (Some(path), _) if kind.installed => path.clone(),
-        (_, false) => "invalid".to_owned(),
+/// The package state of a kind, `unknown` for a value this build does not know.
+fn package_state_text(state: PackageState) -> &'static str {
+    match state {
+        PackageState::Available => "available",
+        PackageState::Enabled => "enabled",
+        PackageState::Disabled => "disabled",
+        PackageState::Unknown => "unknown",
+    }
+}
+
+/// `yes` when a program resolves, `invalid` for a declaration with problems, or `no`.
+fn detected_text(kind: &AgentKind) -> String {
+    match (kind.detected, kind.problems.is_empty()) {
+        (true, _) => "yes".to_owned(),
+        (false, false) => "invalid".to_owned(),
         _ => "no".to_owned(),
     }
 }

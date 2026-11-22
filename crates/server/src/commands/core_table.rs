@@ -272,7 +272,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "agent.kinds",
-            "List agent kinds and whether they are installed",
+            "List agent kinds: package state (installed), whether a program is detected, and problems",
             "agent.kinds",
             no_args(),
         ),

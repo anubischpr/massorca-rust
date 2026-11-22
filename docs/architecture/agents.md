@@ -89,7 +89,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
 | `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
