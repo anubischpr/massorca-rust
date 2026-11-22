@@ -142,6 +142,30 @@ CREATE TABLE team_projects (
 "#,
         foreign_keys_off: false,
     },
+    // Tasks (decision 0072). A task keeps its own lifecycle; the agent session it names is read from the agents domain.
+    // A removed bot or project leaves its tasks without that link; a removed team takes its tasks with it.
+    Migration {
+        sql: r#"
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES team_projects(id) ON DELETE SET NULL,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('room','cli')),
+    session_id TEXT,
+    outcome TEXT CHECK(outcome IN ('success','failure','cancelled','interrupted')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX tasks_by_team ON tasks(team_id, created_at);
+CREATE INDEX tasks_by_bot ON tasks(bot_id);
+CREATE INDEX tasks_by_project ON tasks(project_id);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
