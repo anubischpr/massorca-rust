@@ -99,6 +99,34 @@ CREATE TABLE devices (
 "#,
         foreign_keys_off: false,
     },
+    // Bot Teams core (decision 0072): teams and their bots. A team's removal removes its bots; at most one bot is the lead.
+    Migration {
+        sql: r#"
+CREATE TABLE teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    character TEXT NOT NULL,
+    access TEXT NOT NULL,
+    workspaces INTEGER NOT NULL CHECK(workspaces IN (0,1)),
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE bots (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    job TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    model TEXT,
+    effort TEXT,
+    lead INTEGER NOT NULL CHECK(lead IN (0,1)),
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+CREATE UNIQUE INDEX bots_one_lead ON bots(team_id) WHERE lead = 1;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
