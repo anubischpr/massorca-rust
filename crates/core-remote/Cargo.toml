@@ -13,6 +13,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+# A suspended spawn into a kill-on-close job, shared by core-git and the service (decision 0062).
+[target.'cfg(windows)'.dependencies]
+win32job.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 
