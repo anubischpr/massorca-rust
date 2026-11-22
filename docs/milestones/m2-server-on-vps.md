@@ -456,3 +456,68 @@ Open items, not verified independently:
 To close them: once #162, #165 and #166 are on main, redeploy once from main.
 Then rerun only two checks: a stream open when its device is revoked, and
 reconnecting after a server restart.
+
+## 6. Open items closed (2026-11-22)
+
+The VPS was redeployed once more, from main `672f2653`, which contains #162,
+#165 and #166. The two checks left open were rerun from the Windows client,
+built from the same commit.
+
+| Check | Result |
+|---|---|
+| A stream open when its device is revoked | passed: `git watch` printed `error: this device's access was revoked; pair it again to reconnect (auth.device_revoked)` and exited 1, within 3 s of the revoke. The device is refused afterwards with exit 4 |
+| Reconnecting after a server restart | passed: `git watch --json` printed `unverifiable` (attempt 1, retry in 236 ms), then `live`, then `ready` again, then the change made after the restart, and exited 0 |
+
+### Redeploy
+
+The store only gained new migrations, so the existing database was kept and
+upgrades in place. The service was stopped, and the database and the old
+binary were copied to `~/.massorca/backup-<UTC time>/` before the new binary
+went in. The device list and the server pin did not change. The service was
+down for about a minute, because the first binary copy failed and was redone.
+It then listened on `100.64.0.10:7347` only. The production ports were not
+touched.
+
+### The revoke check
+
+1. Pair a throwaway client home as device `m2-live-revoke` with a standard
+   offer.
+2. Start `massorca --host vps git watch -w w2` there.
+3. Revoke the device from the admin device while the watch runs.
+
+```text
+$ massorca --host vps git watch -w w2          (as m2-live-revoke)
+watching
+error: this device's access was revoked; pair it again to reconnect (auth.device_revoked)
+[exit 1]
+$ massorca --host vps device whoami            (as m2-live-revoke)
+error: this device's access was revoked; pair it again to reconnect (auth.device_revoked)
+[exit 4]
+```
+
+A Windows client home has to be private before it can pair. A folder made
+with `mkdir` is not, so the throwaway home was made private with
+`massorca profile secure --yes` first.
+
+### The restart check
+
+```text
+$ massorca --host vps --json git watch -w w2 --max-events 1
+{"ok":true,"result":{"ready":true}}
+$ systemctl --user restart massorca            (on the VPS)
+{"ok":true,"result":{"attempt":1,"link":"unverifiable","reason":"…","retry_in_ms":236}}
+{"ok":true,"result":{"link":"live"}}
+{"ok":true,"result":{"ready":true}}
+(a file is written in the w2 worktree on the VPS)
+{"ok":true,"result":{"kinds":["worktree"]}}
+[exit 0]
+```
+
+The file written for the check was removed afterwards.
+
+### State left on the VPS
+
+The projects and workspaces are as before. In the device list,
+`win-desktop` is active, and `second-device`, `m2-validate` and
+`m2-live-revoke` are revoked. Revoked devices stay listed: the product has no
+way to delete a device.
