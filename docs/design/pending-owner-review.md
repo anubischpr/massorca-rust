@@ -18,6 +18,7 @@ Decisions taken while the owner was away (night of 2026-11-12). Each follows the
 | 10 | **Light theme**: frame #eeeef2, canvas #fbfbfc (canvas is the lightest surface, as the owner asked). | White canvas #ffffff with frame #ebebed. | Light token values only. |
 | 11 | **Security defaults**: approvals have no keyboard shortcut; terminal clipboard writes (OSC 52) are blocked until the user allows them; a high-risk extension install needs an extra acknowledgement; the composer chip shows a warning glyph in Full access mode. | Shortcut to approve; allow clipboard writes with a notice; no extra acknowledgement; no glyph. | Faster but riskier flows. |
 | 12 | **Terminal keys on Windows and Linux**: while a terminal has focus, the shell keeps Ctrl+F, Ctrl+E, Ctrl+K, Ctrl+P, Ctrl+T and Ctrl+W; app shortcuts work again when focus leaves it. `Mod+W` elsewhere closes the active Work panel tab, never the window. | App shortcuts win inside the terminal. | Shell users lose those keys inside MassOrca. |
+| 13 | **Keep running keeps the tab in the strip**: it hides the terminal's pane, and the process goes on in the service. The spec says the pane closes (D-TM-04, A9, app-flow J5 step 4). No screen lists terminals that run in no pane (app-flow G6), and this design does not invent one, so the tab is the only way back to a kept process. | The pane closes and the tab leaves the strip. | A kept process has no way back in the UI until the owner names a screen that lists kept terminals. |
 
 ## Smaller decisions (confirm in one pass)
 
