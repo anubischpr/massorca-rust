@@ -59,6 +59,8 @@ letters, digits, `-` or `_`.
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--read-only]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. Prints the child. |
+| `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -170,6 +172,20 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent delegate --prompt TEXT` starts a child session of the `--from` session (decision
+  0055). Inside an agent run `--from` defaults to the run's own session, and the run's
+  `MASSORCA_AGENT_TOKEN` goes with the call; a token that is not the parent run's fails with
+  `agent.hook_refused`. The kind is the parent's unless `--kind` names another. A writing
+  child gets a new workspace in the parent's project, named `--name` or `<parent
+  workspace>-<n>` with the first free `n`, on a branch of that name based on the parent
+  workspace's branch; it starts from that branch's last commit, so uncommitted changes in the
+  parent are not carried over, and the result's `note` says so. A parent in a folder workspace
+  fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
+  runs in the parent's workspace and does not hold its writing slot. A delegated session
+  cannot delegate: `agent.depth_exceeded`.
+- `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
+  and the root's children, oldest first, with their execution and activity. `--json` prints
+  `{ root, children }` with each session's result text.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

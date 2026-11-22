@@ -1,7 +1,7 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, Execution, Outcome,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, Execution, Outcome,
 };
 
 use crate::terminal;
@@ -65,7 +65,32 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if let Some(parent) = &session.parent_id {
         lines.push(format!("parent: {parent}"));
     }
+    if session.brought_back_at_ms.is_some() {
+        lines.push("brought back: yes".to_owned());
+    }
     lines
+}
+
+/// A delegation tree: the root, then each child indented under it. Result texts are not printed; `--json` carries them.
+pub fn tree_lines(tree: &AgentTree) -> Vec<String> {
+    let mut lines = vec![tree_line(&tree.root, "")];
+    lines.extend(tree.children.iter().map(|child| tree_line(child, "  ")));
+    lines
+}
+
+fn tree_line(session: &AgentSession, indent: &str) -> String {
+    let brought_back = if session.brought_back_at_ms.is_some() {
+        "  brought back"
+    } else {
+        ""
+    };
+    format!(
+        "{indent}{}  {}  execution: {}  activity: {}{brought_back}",
+        session.id,
+        session.kind,
+        execution_text(&session.execution),
+        activity_text(session.activity.as_ref())
+    )
 }
 
 /// The sessions as a table, newest first.
