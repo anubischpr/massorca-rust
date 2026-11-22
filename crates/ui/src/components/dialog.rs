@@ -6,6 +6,7 @@
 
 use crate::a11y;
 use crate::components::button::{Button, ButtonVariant};
+use crate::components::icon_button::IconButton;
 use crate::components::popover::{DismissHandler, OpenEdge, OpenTracker, overlay_surface};
 use crate::components::switch::ease;
 use crate::icon::{Icon, IconName, IconSize};
@@ -134,6 +135,7 @@ pub struct Dialog {
     return_focus: Option<FocusHandle>,
     dismiss_on_scrim: bool,
     inline: bool,
+    closable: bool,
     on_action: Option<DismissHandler>,
     on_dismiss: Option<DismissHandler>,
 }
@@ -170,6 +172,7 @@ impl Dialog {
             return_focus: None,
             dismiss_on_scrim: false,
             inline: false,
+            closable: false,
             on_action: None,
             on_dismiss: None,
         }
@@ -177,6 +180,12 @@ impl Dialog {
 
     pub fn open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+
+    /// Shows a close button at the title's end, which dismisses the dialog as Escape does.
+    pub fn closable(mut self) -> Self {
+        self.closable = true;
         self
     }
 
@@ -380,13 +389,34 @@ impl RenderOnce for Dialog {
                 }
             });
 
-        panel = panel.child(
-            div()
-                .min_w_0()
-                .text_style(TYPE_TITLE)
-                .text_color(p.text.primary)
-                .child(self.title.clone()),
-        );
+        let title = div()
+            .min_w_0()
+            .text_style(TYPE_TITLE)
+            .text_color(p.text.primary)
+            .child(self.title.clone());
+        if self.closable {
+            let dismiss = self.on_dismiss.clone();
+            let close = div().debug_selector(|| "dialog-close".into()).child(
+                IconButton::new((self.id.clone(), "close"), IconName::X, "Close").on_click(
+                    move |window, cx| {
+                        if let Some(dismiss) = &dismiss {
+                            dismiss(window, cx);
+                        }
+                    },
+                ),
+            );
+            panel = panel.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(SPACE_2))
+                    .child(title)
+                    .child(close),
+            );
+        } else {
+            panel = panel.child(title);
+        }
 
         let body_height = f32::from(window.viewport_size().height) * BODY_HEIGHT_SHARE;
         panel = panel.child(
