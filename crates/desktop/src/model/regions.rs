@@ -129,6 +129,16 @@ impl RegionState {
         }
     }
 
+    /// Makes a region visible: inline when it fits, else as the overlay (handoff 2.5). A region
+    /// that is already open stays as it is.
+    pub fn show(&mut self, region: Region, window_width: f32) {
+        match self.placement(region, window_width) {
+            Placement::Inline => {}
+            Placement::Collapsed => self.overlay = Some(region),
+            Placement::Closed => self.toggle(region, window_width),
+        }
+    }
+
     pub fn placement(&self, region: Region, window_width: f32) -> Placement {
         if !self.is_open(region) {
             Placement::Closed
@@ -166,6 +176,23 @@ mod tests {
             s.placement(Region::SessionSummary, 900.0),
             Placement::Collapsed
         );
+    }
+
+    #[test]
+    fn showing_a_region_opens_it_once_inline_or_as_the_overlay_when_narrow() {
+        let mut s = RegionState::default();
+        s.show(Region::WorkPanel, 1200.0);
+        s.show(Region::WorkPanel, 1200.0);
+        assert_eq!(s.placement(Region::WorkPanel, 1200.0), Placement::Inline);
+        assert_eq!(s.overlay(), None);
+
+        let mut narrow = RegionState::default();
+        narrow.show(Region::WorkPanel, 700.0);
+        assert_eq!(
+            narrow.placement(Region::WorkPanel, 700.0),
+            Placement::Collapsed
+        );
+        assert_eq!(narrow.overlay(), Some(Region::WorkPanel));
     }
 
     #[test]

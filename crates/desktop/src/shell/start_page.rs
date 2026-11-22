@@ -27,16 +27,17 @@ use std::io::Write;
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
-use crate::model::start_page::{
-    GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, VOICE_LATER, WorkspaceStart,
-};
+use crate::model::start_page::{GIT_LATER, KEY_HINTS, SESSIONS_LATER, VOICE_LATER, WorkspaceStart};
+use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 
-/// What the start page draws: the workspace, its composer, and the shell to act through.
+/// What the start page draws: the workspace, its composer, the shell to act through, and whether
+/// the service is connected, which "Open terminal" needs.
 pub(super) struct StartFrame {
     pub page: WorkspaceStart,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
+    pub connected: bool,
 }
 
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch.
@@ -208,6 +209,26 @@ fn fact_row(id: &'static str, label: &'static str, value: String) -> SettingsRow
     SettingsRow::new(id, label).control(div().text_body().child(SharedString::from(value)))
 }
 
+/// "Open terminal": shows the Work panel with a new terminal in this workspace. Off, with its
+/// reason, while the service is not connected.
+fn open_terminal_button(frame: &StartFrame) -> impl IntoElement {
+    let (shell, workspace) = (frame.shell.clone(), frame.page.id.clone());
+    let button = Button::new("start-terminal", "Open terminal")
+        .variant(ButtonVariant::Secondary)
+        .leading_icon(IconName::SquareTerminal);
+    let button = match terminal_unavailable(true, frame.connected) {
+        Some(reason) => button.disabled(true).tooltip(reason),
+        None => button.on_click(move |window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_terminal(workspace.clone(), window, cx);
+            });
+        }),
+    };
+    div()
+        .debug_selector(|| "start-terminal".to_owned())
+        .child(button)
+}
+
 /// The actions the page will have. Removing the workspace uses the existing flow; the rest wait
 /// for the layer they need.
 fn actions(frame: &StartFrame) -> AnyElement {
@@ -218,20 +239,16 @@ fn actions(frame: &StartFrame) -> AnyElement {
         .flex_row()
         .flex_wrap()
         .gap(px(SPACE_2))
-        .child(
-            Button::new("start-terminal", "Open terminal")
-                .variant(ButtonVariant::Secondary)
-                .leading_icon(IconName::SquareTerminal)
-                .disabled(true)
-                .tooltip(TERMINALS_LATER),
-        )
-        .child(
+        .child(open_terminal_button(frame))
+        .child({
+            let shell = shell.clone();
             Button::new("start-source-control", "Source control")
                 .variant(ButtonVariant::Secondary)
                 .leading_icon(IconName::GitBranch)
-                .disabled(true)
-                .tooltip(GIT_LATER),
-        )
+                .on_click(move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.open_source_control(cx));
+                })
+        })
         .child(
             Button::new("start-remove", "Delete workspace…")
                 .variant(ButtonVariant::Ghost)
