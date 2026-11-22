@@ -4,6 +4,7 @@
 use super::Shell;
 use super::tooltip::tooltip;
 use super::zones::region_focus_ring;
+use crate::model::navigation::Mode;
 use crate::model::shell::{ServiceStatus, ServiceTone, StatusBarModel};
 use crate::model::status_items::{StatusItem, StatusItemVisibility};
 use gpui::{
@@ -23,14 +24,17 @@ use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 /// The Status bar: 24 px on the Canvas surface with caption text. Agent status sits at the left;
 /// memory, terminals, ports and hosts at the right (StatusBar spec). Items share one hover and
 /// press treatment and show their full value in a tooltip (StatusItem spec). Right click, or the
-/// menu key, opens the visibility menu; the items it hides are left out (StatusBar spec).
+/// menu key, opens the visibility menu; the items it hides are left out (StatusBar spec). Bot
+/// Teams pages count terminals and ports and name only unreachable hosts (bt-board).
 pub(super) fn status_bar(
     status: &StatusBarModel,
     service: Option<&ServiceStatus>,
     visible: &StatusItemVisibility,
+    mode: Mode,
     shell: &WeakEntity<Shell>,
     theme: &Theme,
 ) -> Stateful<Div> {
+    let bot_teams = mode == Mode::BotTeams;
     let secondary = theme.palette.text.secondary;
     let open_by_mouse = shell.clone();
     let open_by_key = shell.clone();
@@ -86,34 +90,44 @@ pub(super) fn status_bar(
         bar = bar.child(item(
             "status-memory",
             None,
-            status.memory.clone(),
-            format!("Memory {}", status.memory),
+            status.memory_text(),
+            status.memory_text(),
             secondary,
             theme,
         ));
     }
     if visible.is_shown(StatusItem::Terminals) {
+        let text = if bot_teams {
+            status.bot_teams_terminals_text()
+        } else {
+            status.terminals_text()
+        };
         bar = bar.child(item(
             "status-terminals",
             Some(glyph(IconName::SquareTerminal, theme)),
-            status.terminals_text(),
-            status.terminals_text(),
+            text.clone(),
+            text,
             secondary,
             theme,
         ));
     }
     if visible.is_shown(StatusItem::Ports) {
+        let text = if bot_teams {
+            status.bot_teams_ports_text()
+        } else {
+            status.ports_text()
+        };
         bar = bar.child(item(
             "status-ports",
             Some(glyph(IconName::Plug, theme)),
-            status.ports_text(),
-            status.ports_text(),
+            text.clone(),
+            text,
             secondary,
             theme,
         ));
     }
     if visible.is_shown(StatusItem::Hosts) {
-        bar = bar.child(hosts_item(status, service, theme));
+        bar = bar.child(hosts_item(status, service, bot_teams, theme));
     }
     bar
 }
@@ -158,6 +172,7 @@ fn item(
 fn hosts_item(
     status: &StatusBarModel,
     service: Option<&ServiceStatus>,
+    bot_teams: bool,
     theme: &Theme,
 ) -> AnyElement {
     let link = service.filter(|link| link.tone != ServiceTone::Ok);
@@ -178,6 +193,7 @@ fn hosts_item(
     };
     let (text, tip) = match link {
         Some(link) => (link.text.clone(), link.tooltip.clone()),
+        None if bot_teams => (status.bot_teams_hosts_text(), status.hosts_tooltip()),
         None => (status.hosts_text(), status.hosts_tooltip()),
     };
     item(

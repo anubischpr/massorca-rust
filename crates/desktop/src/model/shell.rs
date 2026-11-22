@@ -130,10 +130,38 @@ pub struct StatusBarModel {
 impl StatusBarModel {
     pub fn agents_text(&self) -> String {
         match (self.waiting, self.running) {
-            (0, 0) => "No agents running".into(),
+            (0, 0) => "Agents: idle".into(),
             (0, r) => format!("{r} running"),
             (w, _) => format!("{w} waiting for you"),
         }
+    }
+
+    /// The Memory item carries its label, as sh-empty-app draws it: "Memory 1.22 GB".
+    pub fn memory_text(&self) -> String {
+        format!("Memory {}", self.memory)
+    }
+
+    /// The Bot Teams copy of the terminals item: a count, as bt-board draws it.
+    pub fn bot_teams_terminals_text(&self) -> String {
+        format!("Terminals {}", self.terminals)
+    }
+
+    /// The Bot Teams copy of the ports item: a count, as bt-board draws it.
+    pub fn bot_teams_ports_text(&self) -> String {
+        format!("Ports {}", self.ports)
+    }
+
+    /// The Bot Teams copy of the hosts item: only the unreachable hosts are named, as bt-board draws it.
+    pub fn bot_teams_hosts_text(&self) -> String {
+        if self.hosts_unreachable == 0 {
+            return self.hosts_text();
+        }
+        let noun = if self.hosts_unreachable == 1 {
+            "host"
+        } else {
+            "hosts"
+        };
+        format!("{} {noun} unreachable", self.hosts_unreachable)
     }
 
     pub fn terminals_text(&self) -> String {
@@ -147,7 +175,7 @@ impl StatusBarModel {
     /// The agents item's tooltip, with the running count spelled out (D-SH-05).
     pub fn agents_tooltip(&self) -> String {
         match (self.waiting, self.running) {
-            (0, 0) => "Agents: none running".into(),
+            (0, 0) => "Agents: idle".into(),
             (0, r) => format!("Agents: {r} running"),
             (w, 0) => format!("Agents: {w} waiting for you"),
             (w, r) => format!("Agents: {w} waiting for you, {r} running"),
@@ -283,6 +311,35 @@ mod tests {
         assert_eq!(s.hosts_tooltip(), "Hosts: 2 connected");
         s.hosts_unreachable = 1;
         assert_eq!(s.hosts_tooltip(), "Hosts: 1 connected, 1 disconnected");
+    }
+
+    #[test]
+    fn an_idle_agents_item_reads_agents_idle_as_the_shell_screen_does() {
+        let mut s = status();
+        s.waiting = 0;
+        s.running = 0;
+        assert_eq!(s.agents_text(), "Agents: idle");
+        assert_eq!(s.agents_tooltip(), "Agents: idle");
+    }
+
+    #[test]
+    fn the_memory_item_names_its_value() {
+        assert_eq!(status().memory_text(), "Memory 1.22 GB");
+    }
+
+    #[test]
+    fn bot_teams_copy_counts_terminals_ports_and_unreachable_hosts() {
+        let mut s = status();
+        s.terminals = 0;
+        assert_eq!(s.bot_teams_terminals_text(), "Terminals 0");
+        assert_eq!(s.bot_teams_ports_text(), "Ports 0");
+        s.terminals = 2;
+        assert_eq!(s.bot_teams_terminals_text(), "Terminals 2");
+        assert_eq!(s.bot_teams_hosts_text(), "2 hosts");
+        s.hosts_unreachable = 1;
+        assert_eq!(s.bot_teams_hosts_text(), "1 host unreachable");
+        s.hosts_unreachable = 2;
+        assert_eq!(s.bot_teams_hosts_text(), "2 hosts unreachable");
     }
 
     #[test]

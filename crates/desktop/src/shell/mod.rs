@@ -84,6 +84,8 @@ mod source_control_tests;
 #[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
+mod status_bar_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod title_bar_tests;
@@ -631,6 +633,7 @@ impl Render for Shell {
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
             self.model.status_items(),
+            self.model.navigation().mode,
             &shell,
             &theme,
         )
