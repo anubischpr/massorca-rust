@@ -193,11 +193,12 @@ CREATE INDEX agent_account_choices_by_account ON agent_account_choices(account);
 "#,
         foreign_keys_off: false,
     },
-    // Account origin (decision 0059): a sign-in is signed out when removed; an import or a migrated home is only deleted.
-    // Rows of the earlier step that came from 0056's home are marked `migrated`; the rest are sign-ins.
+    // Account origin (decision 0059): a sign-in is signed out when removed; an import or a migrated home is only deleted. Rows from
+    // before this step default to 'import', so removing them never signs the person out of an original login.
+    // Rows of the earlier step that came from 0056's home are marked `migrated`; the rest keep the 'import' default.
     Migration {
         sql: r#"
-ALTER TABLE agent_accounts ADD COLUMN origin TEXT NOT NULL DEFAULT 'sign_in' CHECK(origin IN ('sign_in','import','migrated'));
+ALTER TABLE agent_accounts ADD COLUMN origin TEXT NOT NULL DEFAULT 'import' CHECK(origin IN ('sign_in','import','migrated'));
 UPDATE agent_accounts SET origin = 'migrated' WHERE state = 'migrated';
 "#,
         foreign_keys_off: false,
