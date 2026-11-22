@@ -1,7 +1,9 @@
 //! Linked worktrees: listing, adding and removing them.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, LazyLock, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -68,8 +70,10 @@ struct AddSnapshot {
 
 /// How long an undo keeps retrying. On Windows a killed add's processes exit asynchronously, and until they
 /// do, a hook whose working directory is the new worktree keeps git from removing it.
-const UNDO_BUDGET: Duration = Duration::from_secs(20);
+const UNDO_BUDGET: Duration = Duration::from_secs(30);
 const UNDO_RETRY: Duration = Duration::from_millis(250);
+/// Each git command of an undo; long enough for a loaded machine, short enough to stay within the budget.
+const UNDO_STEP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `path` in a form two spellings of one directory share; unchanged when it does not exist.
 fn comparable(path: &Path) -> PathBuf {
@@ -122,6 +126,9 @@ impl Git {
             }
         }
         let target = repo.join(path);
+        // Held across the snapshot, the add and its undo: a second add to the same target that took its snapshot
+        // while the first was running would otherwise see an empty path, fail, and undo the first one's worktree.
+        let _claim = TargetClaim::acquire(&target);
         let before = self.add_snapshot(repo, &target, add)?;
         let result = self
             .run_mutation(Some(repo), args)
@@ -164,15 +171,35 @@ impl Git {
     /// add created it, retrying for up to [`UNDO_BUDGET`] while dying processes still hold it; then deletes a
     /// new branch that still points at its base. The add's own error is what the caller sees.
     fn undo_add(&self, repo: &Path, target: &Path, add: WorktreeAdd<'_>, before: &AddSnapshot) {
+        // The add's own mutation timeout may be what cut it short; on a loaded machine every cleanup command would
+        // hit it too, so the undo bounds each command on its own.
+        let undo = self.clone().with_mutation_timeout(Some(UNDO_STEP_TIMEOUT));
         let target = comparable(target);
         let deadline = Instant::now() + UNDO_BUDGET;
-        // The branch goes last: git refuses to delete a branch a worktree still has checked out.
-        while !(self.undo_registration(repo, &target, before)
-            && undo_directory(&target, before)
-            && self.undo_branch(repo, add, before))
-        {
+        loop {
+            // Every step on every pass: a step that keeps failing must not keep the others from running.
+            // The branch delete fails while the worktree is still registered, and succeeds on a later pass.
+            let registration = undo.undo_registration(repo, &target, before);
+            let directory = undo_directory(&target, before);
+            let branch = undo.undo_branch(repo, add, before);
+            if registration && directory && branch {
+                return;
+            }
             if Instant::now() >= deadline {
-                break;
+                let left: Vec<&str> = [
+                    (!registration).then_some("worktree registration"),
+                    (!directory).then_some("directory"),
+                    (!branch).then_some("branch"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                tracing::warn!(
+                    target = %target.display(),
+                    ?left,
+                    "a failed worktree add could not be fully undone"
+                );
+                return;
             }
             thread::sleep(UNDO_RETRY);
         }
@@ -275,5 +302,52 @@ fn undo_directory(target: &Path, before: &AddSnapshot) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(_) => false,
         Ok(_) => std::fs::remove_dir_all(target).is_ok(),
+    }
+}
+
+/// Targets of the adds running in this process.
+static CLAIMED_TARGETS: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
+
+/// One add's exclusive claim on its target path within this process; released on drop. Another process (a user's
+/// terminal) can still race an add, and the snapshot check is what limits the damage then.
+#[derive(Debug)]
+struct TargetClaim {
+    key: PathBuf,
+}
+
+impl TargetClaim {
+    fn acquire(target: &Path) -> Self {
+        let key = claim_key(target);
+        let (claimed, released) = &*CLAIMED_TARGETS;
+        let mut claimed = claimed.lock().unwrap_or_else(PoisonError::into_inner);
+        while claimed.contains(&key) {
+            claimed = released
+                .wait(claimed)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        claimed.insert(key.clone());
+        Self { key }
+    }
+}
+
+impl Drop for TargetClaim {
+    fn drop(&mut self) {
+        let (claimed, released) = &*CLAIMED_TARGETS;
+        claimed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+        released.notify_all();
+    }
+}
+
+/// One key for every spelling of a target that may not exist yet: absolute, and case-folded on Windows.
+fn claim_key(target: &Path) -> PathBuf {
+    let absolute = std::path::absolute(target).unwrap_or_else(|_| target.to_path_buf());
+    if cfg!(windows) {
+        PathBuf::from(absolute.to_string_lossy().to_lowercase())
+    } else {
+        absolute
     }
 }
