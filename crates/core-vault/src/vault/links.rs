@@ -9,10 +9,12 @@ impl Vault {
     /// Links `name` in `scope` to the secret of the same name owned by `from`.
     ///
     /// # Errors
-    /// `NotFound` when `from` owns no such secret, `NameInUse` when `scope` already has the name.
+    /// `NotFound` when `from` owns no such secret, `NameInUse` when `scope` already has the name, or `Locked`.
     pub fn link(&self, scope: &Scope, name: &str, from: &Scope) -> Result<Written, VaultError> {
         check_name(name)?;
-        let guard = self.lock();
+        let mut guard = self.lock();
+        // A locked vault takes no writes, links included.
+        self.key_in(&mut guard)?;
         let (scope_text, from_text, now) = (scope.to_string(), from.to_string(), now_ms());
         let owner =
             self.store

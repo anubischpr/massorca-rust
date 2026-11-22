@@ -65,7 +65,7 @@ switch silently:
 | Host | Key protection |
 |---|---|
 | Windows | DPAPI, current-user scope, with UI forbidden. The wrapped key is the file `<profile>/vault/key`. |
-| Linux, Secret Service reachable and unlocked | The key is an item in the default collection, labelled with the profile id. Unlocking is never requested, because a prompt could hang the service. A Secret Service that is missing, locked or slower than 2 seconds counts as unavailable. |
+| Linux, Secret Service reachable and unlocked | The key is an item in the default collection, labelled `MassOrca vault <id>`, where `<id>` is 16 random bytes in hex kept in `<profile>/vault/id`. No item carries a path. Unlocking is never requested, because a prompt could hang the service. A Secret Service that is missing, locked or slower than 2 seconds counts as unavailable. |
 | Linux without Secret Service, the headless case | An owner-only file `<profile>/vault/key`, mode 0600, in a 0700 directory. `secret.status` reports `protection: "file"`, and the CLI prints that the key sits on disk next to the data. |
 | macOS | Keychain. This is not validated here, because no macOS machine is available. Until it is, macOS uses the file. |
 
@@ -84,6 +84,11 @@ from another host) does not lead to data loss:
 - the vault reports `locked`, with the typed code `secret.vault_locked`;
 - reads and injection fail with that code;
 - the ciphertext is kept, never dropped and never re-keyed.
+
+Secrets with no readable `protection` file, such as a lost vault directory,
+are locked the same way: a key is created only while the vault holds no
+secret. One secret that does not open fails injection with
+`secret.unreadable`, which names its scope and name; nothing is marked used.
 
 The only ways out are restoring the key or `secret.remove` per name, which
 needs `force: true`, because the value cannot be checked.
@@ -117,7 +122,9 @@ screen show.
   - `secret.request` `{ scope, name, reason, session? }`: an agent session, or
     the owner, asks for a name. Name, reason and title are untrusted text: the
     name is validated, the reason is plain text of at most 200 characters, and
-    control characters are refused.
+    the session of at most 128, refused with `secret.invalid_session`. Reason,
+    session and scope ids refuse control characters, Unicode format
+    characters (Cf, bidi controls included) and U+2028/U+2029.
   - `secret.requests`: lists open requests.
   - `secret.decline` `{ request }`: declines one.
   - A request resolves when a matching `set` or `link` lands. Its states are
@@ -155,7 +162,9 @@ carry the name and scope only.
 **In the CLI.** `massorca secret set <scope> <name>` reads the value from stdin
 when stdin is not a terminal, or else from a no-echo prompt. It never reads it
 from an argument or an environment variable: those show up in process listings
-and shell history. `list` and `status` never print values, because the service
+and shell history. The prompt takes one line: input still pending after Enter,
+as from a multi-line paste, is discarded and refused with
+`secret.paste_incomplete`; multi-line values go through stdin. `list` and `status` never print values, because the service
 never has one to give.
 
 **In agent output.** An agent can still echo a value into its own terminal or

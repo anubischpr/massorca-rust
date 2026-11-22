@@ -35,6 +35,10 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
         VaultError::InvalidScope => (codes::SECRET_INVALID_SCOPE, None),
         VaultError::TooLarge => (codes::SECRET_TOO_LARGE, None),
         VaultError::InvalidReason => (codes::SECRET_INVALID_REASON, None),
+        VaultError::InvalidSession => (codes::SECRET_INVALID_SESSION, None),
+        VaultError::Unreadable { scope, name } => {
+            (codes::SECRET_UNREADABLE, Some(named(scope, name)))
+        }
         VaultError::RequestNotFound(id) => (
             codes::SECRET_REQUEST_NOT_FOUND,
             Some(json!({ "request": id })),
@@ -72,6 +76,26 @@ mod tests {
         assert_eq!(body.code, codes::SECRET_HAS_LINKS);
         let data = body.data.expect("data");
         assert_eq!(data["linked"], serde_json::json!(["project:a", "team:b"]));
+    }
+
+    #[test]
+    fn an_unreadable_row_names_its_scope_and_name_and_is_not_internal() {
+        let body = refusal(VaultError::Unreadable {
+            scope: "project:a".to_owned(),
+            name: "TOKEN".to_owned(),
+        });
+        assert_eq!(body.code, codes::SECRET_UNREADABLE);
+        let data = body.data.expect("data");
+        assert_eq!(data["scope"], "project:a");
+        assert_eq!(data["name"], "TOKEN");
+    }
+
+    #[test]
+    fn an_invalid_session_has_its_own_code() {
+        assert_eq!(
+            refusal(VaultError::InvalidSession).code,
+            codes::SECRET_INVALID_SESSION
+        );
     }
 
     #[test]

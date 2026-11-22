@@ -4,6 +4,8 @@
 mod file;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "linux", test))]
+mod vault_id;
 #[cfg(windows)]
 mod windows;
 

@@ -126,6 +126,9 @@ pub const SECRET_INVALID_NAME: &str = "secret.invalid_name";
 pub const SECRET_INVALID_SCOPE: &str = "secret.invalid_scope";
 pub const SECRET_TOO_LARGE: &str = "secret.too_large";
 pub const SECRET_INVALID_REASON: &str = "secret.invalid_reason";
+pub const SECRET_INVALID_SESSION: &str = "secret.invalid_session";
+/// A secret, named in the data, does not open with the vault key; nothing was marked used.
+pub const SECRET_UNREADABLE: &str = "secret.unreadable";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";

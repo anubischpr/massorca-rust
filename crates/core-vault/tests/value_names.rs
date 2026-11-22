@@ -1,4 +1,6 @@
-use massorca_core_vault::{MAX_VALUE_BYTES, Scope, SecretValue, is_valid_name, is_valid_reason};
+use massorca_core_vault::{
+    MAX_VALUE_BYTES, Scope, SecretValue, is_valid_name, is_valid_reason, is_valid_session,
+};
 
 #[test]
 fn secret_value_redacts_debug_and_display() {
@@ -77,4 +79,35 @@ fn request_reasons_are_short_plain_text() {
     assert!(!is_valid_reason(&"x".repeat(201)));
     assert!(!is_valid_reason("line\nbreak"));
     assert!(!is_valid_reason("escape\u{1b}[31m"));
+}
+
+#[test]
+fn reasons_sessions_and_scope_ids_refuse_invisible_and_bidi_characters() {
+    for invisible in [
+        '\u{00AD}',
+        '\u{200B}',
+        '\u{200D}',
+        '\u{200F}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{2028}',
+        '\u{2029}',
+        '\u{FEFF}',
+        '\u{E0041}',
+        '\u{7}',
+    ] {
+        let text = format!("a{invisible}b");
+        assert!(!is_valid_reason(&text), "reason {text:?}");
+        assert!(!is_valid_session(&text), "session {text:?}");
+        assert!(
+            format!("project:{text}").parse::<Scope>().is_err(),
+            "scope {text:?}"
+        );
+    }
+    for visible in ["plain text", "naïve café", "日本語", "emoji 🙂"] {
+        assert!(is_valid_reason(visible), "{visible}");
+        assert!(is_valid_session(visible), "{visible}");
+    }
 }

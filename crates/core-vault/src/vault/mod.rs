@@ -3,7 +3,7 @@
 //! starts.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use massorca_core_store::{
@@ -11,14 +11,16 @@ use massorca_core_store::{
 };
 
 use crate::cipher::{self, Aad};
-use crate::key::{KeyError, KeyStore, LockReason, MasterKey, Protection};
+use crate::key::{KeyError, LockReason, MasterKey, Protection};
 use crate::names::{Scope, is_valid_name};
 use crate::value::SecretValue;
 
+mod environment;
+mod keys;
 mod links;
 mod requests;
 
-const PROTECTION_FILE: &str = "protection";
+use keys::{Recorded, recorded};
 
 /// Why a vault call was refused. Messages name scopes and names only, never a value.
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +53,10 @@ pub enum VaultError {
     TooLarge,
     #[error("the reason must be plain text of at most 200 characters")]
     InvalidReason,
+    #[error("the session must be plain text of at most 128 characters")]
+    InvalidSession,
+    #[error("{name} in {scope} could not be opened; set it again with replace")]
+    Unreadable { scope: String, name: String },
     #[error("there is no secret request {0}")]
     RequestNotFound(String),
     #[error("secret request {id} is already {state}")]
@@ -120,10 +126,15 @@ impl Vault {
     pub fn status(&self) -> Result<VaultStatus, VaultError> {
         let mut guard = self.lock();
         let count = u64::try_from(self.store.list_secrets()?.len()).unwrap_or(u64::MAX);
-        let protection = recorded_protection(&self.dir);
-        let locked = match protection {
-            None => false,
-            Some(_) => self.key_in(&mut guard).is_err(),
+        let recorded = recorded(&self.dir);
+        let protection = match recorded {
+            Recorded::Protection(protection) => Some(protection),
+            Recorded::Nothing | Recorded::Unreadable => None,
+        };
+        let locked = match recorded {
+            // Secrets without a recorded key were sealed by a key that is gone.
+            Recorded::Nothing => count > 0,
+            Recorded::Protection(_) | Recorded::Unreadable => self.key_in(&mut guard).is_err(),
         };
         Ok(VaultStatus {
             protection,
@@ -256,11 +267,8 @@ impl Vault {
                 name: name.to_owned(),
             });
         };
-        if !force
-            && recorded_protection(&self.dir).is_some()
-            && let Err(error) = self.key_in(&mut guard)
-        {
-            return Err(error);
+        if !force {
+            self.key_in(&mut guard)?;
         }
         let linked: Vec<String> = self
             .store
@@ -280,77 +288,8 @@ impl Vault {
         Ok(linked)
     }
 
-    /// The variables an agent started in `project` receives: global secrets, overridden by the project's own or
-    /// linked ones of the same name. Marks each as used. The only path by which a value leaves the vault.
-    ///
-    /// # Errors
-    /// `Locked` when there are secrets and the key will not open; `Cipher` when one does not open.
-    pub fn environment_for(&self, project: &str) -> Result<Vec<(String, SecretValue)>, VaultError> {
-        let mut guard = self.lock();
-        let project_scope = Scope::Project(project.to_owned()).to_string();
-        let mut chosen: BTreeMap<String, SecretRow> = BTreeMap::new();
-        for scope in ["global", project_scope.as_str()] {
-            for meta in self.store.list_secrets()? {
-                if meta.scope == scope
-                    && let Some(row) = self.store.secret_by_id(&meta.id)?
-                {
-                    chosen.insert(row.name.clone(), row);
-                }
-            }
-            for link in self.store.list_secret_links()? {
-                if link.scope == scope
-                    && let Some(row) = self.store.secret_by_id(&link.secret_id)?
-                {
-                    chosen.insert(link.name.clone(), row);
-                }
-            }
-        }
-        if chosen.is_empty() {
-            return Ok(Vec::new());
-        }
-        let key = self.key_in(&mut guard)?;
-        let now = now_ms();
-        let mut variables = Vec::with_capacity(chosen.len());
-        for (name, row) in chosen {
-            let owner: Scope = row.scope.parse().map_err(|_| VaultError::Cipher)?;
-            let aad = Aad::new(&row.id, &owner, &row.name).map_err(|_| VaultError::Cipher)?;
-            let value = cipher::open(key, &aad, &row.nonce, &row.ciphertext)
-                .map_err(|_| VaultError::Cipher)?;
-            self.store.touch_secret(&row.id, now)?;
-            variables.push((name, value));
-        }
-        Ok(variables)
-    }
-
     pub(super) fn lock(&self) -> MutexGuard<'_, Option<MasterKey>> {
         self.key.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The opened key; an existing vault that will not open is `Locked`, and nothing is created.
-    fn key_in<'a>(
-        &self,
-        guard: &'a mut MutexGuard<'_, Option<MasterKey>>,
-    ) -> Result<&'a MasterKey, VaultError> {
-        if recorded_protection(&self.dir).is_none() && guard.is_none() {
-            return Err(VaultError::Locked(LockReason::MissingKey));
-        }
-        self.key_or_create(guard)
-    }
-
-    fn key_or_create<'a>(
-        &self,
-        guard: &'a mut MutexGuard<'_, Option<MasterKey>>,
-    ) -> Result<&'a MasterKey, VaultError> {
-        if guard.is_none() {
-            let (_, key) = KeyStore::open_or_create(&self.dir, self.force_file).map_err(
-                |error| match error {
-                    KeyError::Locked(reason) => VaultError::Locked(reason),
-                    other => VaultError::Key(other),
-                },
-            )?;
-            **guard = Some(key);
-        }
-        guard.as_ref().ok_or(VaultError::Cipher)
     }
 
     pub(super) fn owner_scope(&self, link: &SecretLinkRow) -> Result<String, VaultError> {
@@ -388,13 +327,6 @@ fn seal_row(
 ) -> Result<cipher::Sealed, VaultError> {
     let aad = Aad::new(id, scope, name).map_err(|_| VaultError::InvalidScope)?;
     cipher::seal(key, &aad, value).map_err(|_| VaultError::Cipher)
-}
-
-/// The protection `<dir>/protection` records, without opening anything.
-fn recorded_protection(dir: &Path) -> Option<Protection> {
-    std::fs::read_to_string(dir.join(PROTECTION_FILE))
-        .ok()
-        .and_then(|word| word.trim().parse().ok())
 }
 
 fn owned_entry(secret: &SecretMeta, linked_scopes: Vec<String>) -> VaultEntry {

@@ -49,6 +49,9 @@ pub(super) fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
+    if output.pbData.is_null() {
+        return Err(io::Error::other("DPAPI returned no data"));
+    }
     // SAFETY: on success `output` holds `cbData` bytes at `pbData`, owned by us until LocalFree below.
     let wrapped =
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
@@ -79,6 +82,9 @@ pub(super) fn unprotect(wrapped: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
     };
     if ok == 0 {
         return Err(io::Error::last_os_error());
+    }
+    if output.pbData.is_null() {
+        return Err(io::Error::other("DPAPI returned no data"));
     }
     // SAFETY: on success `output` holds `cbData` writable bytes at `pbData`, owned by us until LocalFree below.
     let plain = unsafe { std::slice::from_raw_parts_mut(output.pbData, output.cbData as usize) };

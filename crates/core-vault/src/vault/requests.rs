@@ -3,13 +3,13 @@
 use massorca_core_store::{SecretRequestRow, new_id, now_ms};
 
 use super::{Vault, VaultError, check_name};
-use crate::names::{Scope, is_valid_reason};
+use crate::names::{Scope, is_valid_reason, is_valid_session};
 
 impl Vault {
-    /// Opens a pending request for `name` in `scope`. Name and reason are untrusted and checked.
+    /// Opens a pending request for `name` in `scope`. Name, reason and session are untrusted and checked.
     ///
     /// # Errors
-    /// `InvalidName`, `InvalidReason`, or a store failure.
+    /// `InvalidName`, `InvalidReason`, `InvalidSession`, or a store failure.
     pub fn request(
         &self,
         scope: &Scope,
@@ -20,6 +20,12 @@ impl Vault {
         check_name(name)?;
         if !is_valid_reason(reason) {
             return Err(VaultError::InvalidReason);
+        }
+        if session
+            .as_deref()
+            .is_some_and(|session| !is_valid_session(session))
+        {
+            return Err(VaultError::InvalidSession);
         }
         let row = SecretRequestRow {
             id: new_id(),

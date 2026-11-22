@@ -2,16 +2,17 @@
 //! prompt could hang a headless service; a missing, locked or slow service counts as unavailable.
 
 use std::future::Future;
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use oo7::Secret;
 use oo7::dbus::{Collection, Service};
 
-use super::{LockReason, MasterKey};
+use super::{LockReason, MasterKey, vault_id};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
-const DIR_ATTRIBUTE: &str = "massorca-vault-dir";
+const ID_ATTRIBUTE: &str = "massorca-vault-id";
 const APPLICATION: (&str, &str) = ("application", "massorca");
 
 pub(super) enum Created {
@@ -41,11 +42,6 @@ fn run<T: Send, F: Future<Output = Option<T>>>(work: impl FnOnce() -> F + Send) 
     })
 }
 
-fn vault_id(vault_dir: &Path) -> Option<String> {
-    let canonical = std::fs::canonicalize(vault_dir).ok()?;
-    canonical.to_str().map(str::to_owned)
-}
-
 /// The default collection, only when it exists and is unlocked.
 async fn unlocked_default() -> Option<Collection> {
     let service = Service::new().await.ok()?;
@@ -57,10 +53,10 @@ async fn unlocked_default() -> Option<Collection> {
 }
 
 pub(super) fn create(vault_dir: &Path, key: &MasterKey) -> Created {
-    let Some(id) = vault_id(vault_dir) else {
+    let Ok(id) = vault_id::read_or_create(vault_dir) else {
         return Created::Unavailable;
     };
-    let attributes = [APPLICATION, (DIR_ATTRIBUTE, id.as_str())];
+    let attributes = [APPLICATION, (ID_ATTRIBUTE, id.as_str())];
     let label = format!("MassOrca vault {id}");
     run(|| async {
         let collection = unlocked_default().await?;
@@ -77,8 +73,11 @@ pub(super) fn create(vault_dir: &Path, key: &MasterKey) -> Created {
 }
 
 pub(super) fn open(vault_dir: &Path) -> Result<MasterKey, LockReason> {
-    let id = vault_id(vault_dir).ok_or(LockReason::ProtectionUnavailable)?;
-    let attributes = [APPLICATION, (DIR_ATTRIBUTE, id.as_str())];
+    let id = vault_id::read(vault_dir).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => LockReason::MissingKey,
+        _ => LockReason::Unwrap,
+    })?;
+    let attributes = [APPLICATION, (ID_ATTRIBUTE, id.as_str())];
     run(|| async {
         let Some(collection) = unlocked_default().await else {
             return Some(Err(LockReason::ProtectionUnavailable));
@@ -99,10 +98,10 @@ pub(super) fn open(vault_dir: &Path) -> Result<MasterKey, LockReason> {
 
 /// Removes this vault's item after a creation that could not record its protection.
 pub(super) fn delete(vault_dir: &Path) {
-    let Some(id) = vault_id(vault_dir) else {
+    let Ok(id) = vault_id::read(vault_dir) else {
         return;
     };
-    let attributes = [APPLICATION, (DIR_ATTRIBUTE, id.as_str())];
+    let attributes = [APPLICATION, (ID_ATTRIBUTE, id.as_str())];
     let _ = run(|| async {
         let collection = unlocked_default().await?;
         for item in collection.search_items(&attributes).await.ok()? {
