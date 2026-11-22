@@ -66,7 +66,7 @@ const AGENT_METHODS: [&str; 8] = [
 ];
 
 /// The Bot Teams methods this build registers (capability `teams/1`).
-const TEAM_METHODS: [&str; 11] = [
+const TEAM_METHODS: [&str; 12] = [
     "team.create",
     "team.list",
     "team.show",
@@ -78,6 +78,7 @@ const TEAM_METHODS: [&str; 11] = [
     "team.project_add",
     "team.project_update",
     "team.project_rm",
+    "team.board",
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).

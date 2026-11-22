@@ -148,5 +148,15 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        command(
+            "team.board",
+            "Show a team's Board",
+            "team.board",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": { "team": { "type": "string" }, "project": { "type": "string" } }
+            }),
+        ),
     ]
 }
