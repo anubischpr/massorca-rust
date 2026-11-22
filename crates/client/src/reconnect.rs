@@ -5,11 +5,13 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::{ErrorBody, codes};
 
 use crate::client::Client;
 use crate::error::ClientError;
 use crate::subscription::{StreamItem, Subscription};
+use crate::terminal_attach::{AttachUpdate, TerminalAttachment};
 
 /// The first pause of the network client (decision 0040).
 pub const RECONNECT_START: Duration = Duration::from_millis(250);
@@ -88,6 +90,11 @@ fn is_transient_body(body: &ErrorBody) -> bool {
     body.code == codes::SERVICE_SHUTTING_DOWN
 }
 
+/// How to reach the service again, once per attempt.
+pub trait Connect {
+    fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send;
+}
+
 /// How to reach the service and open the stream, once per attempt.
 pub trait Reopen {
     fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send;
@@ -118,22 +125,63 @@ pub enum Resilient {
     Link(Link),
 }
 
+/// The pacing shared by every resilient stream: the backoff, when the next attempt may run, and whether a loss was
+/// reported that `Live` has not answered yet.
+#[derive(Debug)]
+struct Retry {
+    backoff: Backoff,
+    retry_at: Option<Instant>,
+    lost: bool,
+}
+
+impl Retry {
+    fn new(backoff: Backoff) -> Self {
+        Self {
+            backoff,
+            retry_at: None,
+            lost: false,
+        }
+    }
+
+    async fn wait(&mut self) {
+        if let Some(at) = self.retry_at.take() {
+            tokio::time::sleep_until(at.into()).await;
+        }
+    }
+
+    /// `Live` when a loss was reported since the last connection.
+    fn back(&mut self) -> Option<Link> {
+        std::mem::take(&mut self.lost).then_some(Link::Live)
+    }
+
+    /// Schedules the next attempt and says so. A connection that had been up long enough starts the backoff over.
+    fn lose(&mut self, error: &ClientError, connected_since: Option<Instant>) -> Link {
+        if connected_since.is_some_and(|since| since.elapsed() >= RECONNECT_RESET_AFTER) {
+            self.backoff.reset();
+        }
+        let retry_in = jittered(self.backoff.next_delay());
+        self.retry_at = Some(Instant::now() + retry_in);
+        self.lost = true;
+        Link::Unverifiable {
+            attempt: self.backoff.failures(),
+            retry_in,
+            reason: error.to_string(),
+        }
+    }
+}
+
 /// A stream that reconnects when its connection drops. The first connection is made by the first `next`.
 pub struct ResilientSubscription<R> {
     reopen: R,
-    backoff: Backoff,
+    retry: Retry,
     current: Option<Current>,
-    retry_at: Option<Instant>,
-    /// A loss was reported and `Live` has not followed yet.
-    lost: bool,
 }
 
 impl<R> std::fmt::Debug for ResilientSubscription<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResilientSubscription")
-            .field("backoff", &self.backoff)
+            .field("retry", &self.retry)
             .field("connected", &self.current.is_some())
-            .field("lost", &self.lost)
             .finish_non_exhaustive()
     }
 }
@@ -149,10 +197,8 @@ impl<R: Reopen> ResilientSubscription<R> {
     pub fn new(reopen: R, backoff: Backoff) -> Self {
         Self {
             reopen,
-            backoff,
+            retry: Retry::new(backoff),
             current: None,
-            retry_at: None,
-            lost: false,
         }
     }
 
@@ -161,18 +207,18 @@ impl<R: Reopen> ResilientSubscription<R> {
     pub async fn next(&mut self) -> Option<Result<Resilient, ClientError>> {
         loop {
             let Some(current) = self.current.as_mut() else {
-                if let Some(at) = self.retry_at.take() {
-                    tokio::time::sleep_until(at.into()).await;
-                }
+                self.retry.wait().await;
                 match self.attempt().await {
                     Ok(current) => {
                         self.current = Some(current);
-                        if std::mem::take(&mut self.lost) {
-                            return Some(Ok(Resilient::Link(Link::Live)));
+                        if let Some(link) = self.retry.back() {
+                            return Some(Ok(Resilient::Link(link)));
                         }
                         continue;
                     }
-                    Err(error) if is_transient(&error) => return Some(Ok(self.lose(&error))),
+                    Err(error) if is_transient(&error) => {
+                        return Some(Ok(Resilient::Link(self.retry.lose(&error, None))));
+                    }
                     Err(error) => return Some(Err(error)),
                 }
             };
@@ -183,11 +229,9 @@ impl<R: Reopen> ResilientSubscription<R> {
                 None if current.subscription.connection_lost() => ClientError::Disconnected,
                 None => return None,
             };
-            if current.since.elapsed() >= RECONNECT_RESET_AFTER {
-                self.backoff.reset();
-            }
+            let since = current.since;
             self.current = None;
-            return Some(Ok(self.lose(&lost)));
+            return Some(Ok(Resilient::Link(self.retry.lose(&lost, Some(since)))));
         }
     }
 
@@ -200,17 +244,110 @@ impl<R: Reopen> ResilientSubscription<R> {
             since: Instant::now(),
         })
     }
+}
 
-    /// Schedules the next attempt and says so.
-    fn lose(&mut self, error: &ClientError) -> Resilient {
-        let retry_in = jittered(self.backoff.next_delay());
-        self.retry_at = Some(Instant::now() + retry_in);
-        self.lost = true;
-        Resilient::Link(Link::Unverifiable {
-            attempt: self.backoff.failures(),
-            retry_in,
-            reason: error.to_string(),
-        })
+/// One item of a resilient terminal attach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttachStep {
+    Update(AttachUpdate),
+    Link(Link),
+}
+
+/// A terminal attach that reconnects when its connection drops and resumes after the output already read, so nothing
+/// is shown twice. When the service no longer holds that output it redraws the screen with a snapshot instead
+/// (decision 0035). The first connection is made by the first `next`.
+pub struct ResilientAttach<C> {
+    connect: C,
+    params: TerminalAttachParams,
+    retry: Retry,
+    current: Option<(Client, TerminalAttachment, Instant)>,
+    /// The output offset read so far, once output has been read.
+    read: Option<u64>,
+}
+
+impl<C> std::fmt::Debug for ResilientAttach<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResilientAttach")
+            .field("terminal", &self.params.terminal)
+            .field("read", &self.read)
+            .field("connected", &self.current.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<C: Connect> ResilientAttach<C> {
+    pub fn new(connect: C, params: TerminalAttachParams, backoff: Backoff) -> Self {
+        let read = params.since;
+        Self {
+            connect,
+            params,
+            retry: Retry::new(backoff),
+            current: None,
+            read,
+        }
+    }
+
+    /// The client of the live connection, for input and resizes. `None` while out of contact.
+    pub fn client(&self) -> Option<&Client> {
+        self.current.as_ref().map(|(client, _, _)| client)
+    }
+
+    /// The size a reattach applies, kept current as the local terminal is resized.
+    pub fn set_size(&mut self, cols: u16, rows: u16) {
+        self.params.cols = Some(cols);
+        self.params.rows = Some(rows);
+    }
+
+    /// The next update or link change. `Some(Err)` is final; `None` once the service ended the attach normally.
+    pub async fn next(&mut self) -> Option<Result<AttachStep, ClientError>> {
+        loop {
+            let Some((_, attachment, since)) = self.current.as_mut() else {
+                self.retry.wait().await;
+                match self.attempt().await {
+                    Ok(current) => {
+                        self.current = Some(current);
+                        if let Some(link) = self.retry.back() {
+                            return Some(Ok(AttachStep::Link(link)));
+                        }
+                        continue;
+                    }
+                    Err(error) if is_transient(&error) => {
+                        return Some(Ok(AttachStep::Link(self.retry.lose(&error, None))));
+                    }
+                    Err(error) => return Some(Err(error)),
+                }
+            };
+            let lost = match attachment.next().await {
+                Some(Ok(update)) => {
+                    if matches!(
+                        update,
+                        AttachUpdate::Output { .. } | AttachUpdate::Snapshot { .. }
+                    ) {
+                        self.read = Some(attachment.next_offset());
+                    }
+                    return Some(Ok(AttachStep::Update(update)));
+                }
+                Some(Err(ClientError::Remote(body))) if is_transient_body(&body) => {
+                    ClientError::Remote(body)
+                }
+                Some(Err(error)) => return Some(Err(error)),
+                None if attachment.connection_lost() => ClientError::Disconnected,
+                None => return None,
+            };
+            let since = *since;
+            self.current = None;
+            return Some(Ok(AttachStep::Link(self.retry.lose(&lost, Some(since)))));
+        }
+    }
+
+    async fn attempt(&mut self) -> Result<(Client, TerminalAttachment, Instant), ClientError> {
+        let client = self.connect.connect().await?;
+        let params = TerminalAttachParams {
+            since: self.read,
+            ..self.params.clone()
+        };
+        let attachment = client.terminal_attach(&params).await?;
+        Ok((client, attachment, Instant::now()))
     }
 }
 
