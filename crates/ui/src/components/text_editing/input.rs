@@ -16,6 +16,10 @@ pub(crate) trait InputHost: Sized + 'static {
     fn text_buffer_mut(&mut self) -> &mut TextBuffer;
     /// Whether typing, paste and composition reach the buffer.
     fn input_accepts(&self) -> bool;
+    /// Whether the input hides its text, so the platform is handed none of it.
+    fn input_masked(&self) -> bool {
+        false
+    }
     /// The focus handle the platform input is bound to.
     fn input_focus(&self) -> &FocusHandle;
     /// Emits the owner-facing `Changed` event.
@@ -68,6 +72,9 @@ pub(crate) fn text_for_range<H: InputHost>(
     range_utf16: Range<usize>,
     adjusted_range: &mut Option<Range<usize>>,
 ) -> Option<String> {
+    if host.input_masked() {
+        return None;
+    }
     let buffer = host.text_buffer();
     let range = buffer.range_from_utf16(&range_utf16);
     adjusted_range.replace(buffer.range_to_utf16(&range));

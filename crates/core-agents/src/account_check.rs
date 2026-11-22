@@ -165,7 +165,7 @@ pub(crate) fn account_command(
     home_env: &str,
     strip: &[String],
 ) -> Command {
-    let mut command = Command::new(program);
+    let mut command = massorca_process::command(program);
     command
         .args(args)
         .env(home_env, home)

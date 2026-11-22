@@ -3,7 +3,6 @@
 
 use std::future::Future;
 use std::path::Path;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -94,7 +93,7 @@ async fn serve(
 
 /// Runs git in `dir` with a fixed identity, and fails when git does.
 pub fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

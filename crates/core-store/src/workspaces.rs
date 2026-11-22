@@ -196,7 +196,6 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Returns whether a row was removed.
     /// Lets several agents write in a folder workspace at once. Returns false for a worktree or an unknown id: a git
     /// index is never shared.
     pub fn share_workspace_writers(&self, id: &str) -> Result<bool, StoreError> {
@@ -218,6 +217,7 @@ impl Store {
             .unwrap_or(false))
     }
 
+    /// Returns whether a row was removed.
     pub fn delete_workspace(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self
             .lock()

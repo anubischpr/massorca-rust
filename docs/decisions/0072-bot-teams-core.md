@@ -201,6 +201,30 @@ The workspace domain lets one agent write in a workspace at a time
   `bot.busy` or `agent.credentials_invalid`, so a client can show its own
   sentence. The field is optional and additive. A start that links a session
   clears it, and so does `task.reopen`.
+- **Targeted task writes:** `task.update` writes only the title, body, bot and
+  project, so it never overwrites a session link that a start wrote after it
+  read the task. `task.done` and `task.reopen` write only if the task still has
+  the session they read. Otherwise they are refused: with `task.running` when
+  the task now runs, and with `task.changed` ("the task changed; try again")
+  otherwise.
+- **Waiting for a start:** `task.rm` and a bot change in `task.update` wait for
+  a start in progress, then apply their usual check. A task whose session runs
+  cannot be removed or change bot; both are refused with `task.running`.
+- **Start attempt:** a start stores an attempt id on the task before it starts
+  the agent, and the agent request is keyed by it. The id is cleared once the
+  attempt is settled: the session is linked, or the start failed with nothing
+  left running. A retry after a start that left a run behind uses the same id,
+  so it finds that run instead of starting a second one.
+- **Stop on failure:** when a start spawned a session but cannot link it, it
+  stops that session at once, and records the error on the task if the task
+  still exists. A session that is not linked never keeps running.
+- **A taken team path:** the "Bot teams" project must be a folder project. When
+  `<workspaces root>/bot-teams` was already added as another kind of project,
+  the start is refused with `team.folder_taken`, recorded on the task like
+  other failed starts. Nothing is written inside that project.
+- **Older hosts:** `task.start` joined `teams/1` without a new capability, so a
+  host from before it answers `method.not_found`. `massorca task start` shows
+  that answer as "this host is too old to run tasks; update it".
 - The bot's model and effort are not passed yet, because `agent.start` has no
   field for them.
 - **Done latch:** a task whose session reports Done with an outcome keeps that outcome in `outcome` once the host can see the run; an unverifiable run latches nothing, so the Board keeps Done after the session is forgotten. Every change of a linked session publishes `task.changed`, and a session that finished before `task.start` linked it latches at the link.

@@ -1,5 +1,5 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
@@ -117,6 +117,15 @@ fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
     })
 }
 
+/// The details `update_task_details` changes; `None` keeps a field as it is.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TaskDetails<'a> {
+    pub project: Option<Option<&'a str>>,
+    pub bot: Option<Option<&'a str>>,
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+}
+
 impl Store {
     /// Inserts a task. Its team, bot and project must exist; a missing one is `StoreError::Constraint`.
     pub fn insert_task(&self, row: &TaskRow) -> Result<(), StoreError> {
@@ -183,7 +192,8 @@ impl Store {
         )
     }
 
-    /// Changes a task's project, bot, title, body, session, outcome, error and update time. Returns whether a row changed.
+    /// Writes every column of a task but its start attempt. Returns whether a row changed. Handlers use the targeted writes
+    /// below, which never overwrite a concurrent link; this one is for fixtures.
     pub fn update_task(&self, row: &TaskRow) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
             "UPDATE tasks SET project_id = ?2, bot_id = ?3, title = ?4, body = ?5, session_id = ?6, outcome = ?7, error = ?8, error_code = ?10, updated_at = ?9 WHERE id = ?1",
@@ -203,8 +213,95 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Links a task that has no session yet to `session_id` and clears its error. Returns false when the task is gone
-    /// or another start linked it first; the whole-row `update_task` would overwrite a concurrent change.
+    /// Changes only the given details: `Some` sets a field (`Some(None)` clears a project or bot), `None` keeps it. The
+    /// session, outcome and error have their own writes, so an update never overwrites a concurrent link or a concurrent
+    /// change to another detail. Returns whether a row changed.
+    pub fn update_task_details(
+        &self,
+        id: &str,
+        changes: &TaskDetails<'_>,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET                 project_id = CASE WHEN ?2 THEN ?3 ELSE project_id END,                 bot_id = CASE WHEN ?4 THEN ?5 ELSE bot_id END,                 title = COALESCE(?6, title), body = COALESCE(?7, body), updated_at = ?8              WHERE id = ?1",
+            params![
+                id,
+                changes.project.is_some(),
+                changes.project.flatten(),
+                changes.bot.is_some(),
+                changes.bot.flatten(),
+                changes.title,
+                changes.body,
+                updated_at
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Latches a task's outcome if its session is still `expected_session`. Returns false when the task is gone or its
+    /// session changed since the caller read it.
+    pub fn set_task_outcome(
+        &self,
+        id: &str,
+        outcome: TaskOutcome,
+        expected_session: Option<&str>,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET outcome = ?2, updated_at = ?4 WHERE id = ?1 AND session_id IS ?3",
+            params![id, outcome, expected_session, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Clears a task's outcome, error and session link if its session is still `expected_session`. Returns false when the
+    /// task is gone or its session changed since the caller read it.
+    pub fn reopen_task(
+        &self,
+        id: &str,
+        expected_session: Option<&str>,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET outcome = NULL, error = NULL, error_code = NULL, session_id = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS ?2",
+            params![id, expected_session, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// The task's start attempt: the one still pending, or `candidate` when none is. `None` for an unknown task.
+    /// A retry of an unsettled attempt reuses it, so it names the same agent request.
+    pub fn begin_task_start_attempt(
+        &self,
+        id: &str,
+        candidate: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let connection = self.lock();
+        connection.execute(
+            "UPDATE tasks SET start_attempt = ?2 WHERE id = ?1 AND start_attempt IS NULL",
+            params![id, candidate],
+        )?;
+        Ok(connection
+            .query_row(
+                "SELECT start_attempt FROM tasks WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Clears a start attempt that ended with no live process. Returns false when the task is gone or holds another one.
+    pub fn end_task_start_attempt(&self, id: &str, attempt: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET start_attempt = NULL WHERE id = ?1 AND start_attempt = ?2",
+            params![id, attempt],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Links a task that has no session yet to `session_id`, clears its error and settles its start attempt. Returns false
+    /// when the task is gone or another start linked it first.
     pub fn link_task_session(
         &self,
         id: &str,
@@ -212,7 +309,7 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
+            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, start_attempt = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
             params![id, session_id, updated_at],
         )?;
         Ok(changed > 0)

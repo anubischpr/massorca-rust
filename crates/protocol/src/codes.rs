@@ -189,6 +189,8 @@ pub const TEAM_NOT_FOUND: &str = "team.not_found";
 /// Another team has this name.
 pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
 pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
+/// `task.start` found the Bot teams folder already added as a project that is not a folder project.
+pub const TEAM_FOLDER_TAKEN: &str = "team.folder_taken";
 pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
@@ -206,6 +208,8 @@ pub const TASK_RUNNING: &str = "task.running";
 pub const TASK_STARTED: &str = "task.started";
 /// `task.start` on a task without a bot.
 pub const TASK_NO_BOT: &str = "task.no_bot";
+/// The task changed between the call reading it and writing it; read it again and retry.
+pub const TASK_CHANGED: &str = "task.changed";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

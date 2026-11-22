@@ -3,7 +3,6 @@
 //! No window opens: the feed is the emulator the desktop surface uses, without GPUI.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::{AttachUpdate, Client, ConnectOptions};
@@ -75,7 +74,7 @@ async fn stop_service(running: RunningService) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

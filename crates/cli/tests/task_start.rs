@@ -5,7 +5,7 @@ mod harness;
 
 use std::path::{Path, PathBuf};
 
-use harness::{Sandbox, eventually, single_document, with_json};
+use harness::{Sandbox, eventually, git_repo, single_document, with_json};
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -240,6 +240,77 @@ fn a_task_without_a_bot_is_refused_and_stays_unchanged() {
     assert_eq!(shown["error"], Value::Null);
     let unknown = error_of(&sandbox, &["task", "start", "no-such-task"]);
     assert_eq!(unknown["code"], "task.not_found");
+}
+
+#[test]
+fn a_running_task_keeps_its_bot_and_its_link_and_cannot_be_removed() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    add_bot(&sandbox, "ada", "fake");
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Start with hold, then stop."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session.as_str(),
+            "--until",
+            "working",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+
+    let rebot = error_of(&sandbox, &["task", "update", task.as_str(), "--bot", "ada"]);
+    assert_eq!(rebot["code"], "task.running");
+    let removal = error_of(&sandbox, &["task", "rm", task.as_str()]);
+    assert_eq!(removal["code"], "task.running");
+
+    // A title change touches only the title: the run stays linked.
+    let renamed = sandbox.json_ok(
+        "default",
+        &[
+            "task",
+            "update",
+            task.as_str(),
+            "--title",
+            "Parse every header",
+        ],
+    );
+    assert_eq!(renamed["title"], "Parse every header");
+    assert_eq!(renamed["session_id"], session.as_str());
+    let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(shown["bot_id"], started["bot_id"]);
+    assert_eq!(shown["column"], "running");
+
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+}
+
+#[test]
+fn a_bot_teams_path_taken_by_a_git_project_refuses_the_start() {
+    let (sandbox, root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let taken = root.join("bot-teams");
+    git_repo(&taken);
+    let taken_text = taken.to_string_lossy().into_owned();
+    sandbox.json_ok("default", &["project", "add", taken_text.as_str()]);
+    let task = create_task(&sandbox, "Parse the headers", &["--bot", "mara"]);
+
+    let refused = error_of(&sandbox, &["task", "start", task.as_str()]);
+    assert_eq!(refused["code"], "team.folder_taken");
+    let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(shown["column"], "open");
+    assert_eq!(shown["session_id"], Value::Null);
+    assert_eq!(shown["error_code"], "team.folder_taken");
 }
 
 /// Answers the question the fake agent asks, then waits until its turn is done. Every task prompt asks: its "Task:" line
