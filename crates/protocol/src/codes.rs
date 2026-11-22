@@ -153,6 +153,8 @@ pub const SECRET_UNREADABLE: &str = "secret.unreadable";
 pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
 /// Too many pending or recent requests from one requester; see decision 0071 for the limits.
 pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
+/// Names stored before case clashes were refused would reach one process together; the data names each one.
+pub const SECRET_NAME_CLASH: &str = "secret.name_clash";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
