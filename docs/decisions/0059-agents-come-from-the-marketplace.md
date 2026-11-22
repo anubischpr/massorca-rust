@@ -124,14 +124,83 @@ and what the agent states mean. The two sessions agreed the format below.
   badge (`detected`) and the `cli` install command. Install and remove are the
   extension runtime's `extensions.install` and `extensions.remove`; the
   agents chain adds the live-session check and the credential-home choice.
-- **For Settings:** installed kinds only, each with:
-  - its credentials state (`agent.credentials.show`) and its import and
-    remove actions (0056);
-  - its login (the next piece: a `login` mechanism per kind, specified
-    with the desktop session, which runs the vendor's own login inside the
-    profile's credential home);
-  - its defaults (launch args, model) as typed `settings` contributions of
-    the package.
+- **For Settings:** installed kinds only, with the same Connection,
+  Settings and Advanced Options parts as the Marketplace page below.
+
+### The agent's Marketplace page
+
+An installed agent is managed from its Marketplace page and from Settings.
+Every Marketplace item page has these parts, in this order. The agent
+parts are rendered from data, with no agent-specific UI code.
+
+| # | Part | Source for an agent |
+|---|---|---|
+| 1 | Logo | manifest `icon` |
+| 2 | Name | manifest `name` |
+| 3 | Host | the host the package is installed in, or would be |
+| 4 | Banner | the `agentAdapters` entry's `examples`: up to 8 `{ text, description }` showing how the agent is invoked in the chat composer. They are display-only, and are in the manifest so the page shows them before install. |
+| 5 | Connection | accounts of the kind on this host (below), when the kind declares `accounts` |
+| 6 | Information | manifest description, version, publisher, permissions, and the `cli` source link |
+| 7 | Settings | the kind's `options` with `section: basic` |
+| 8 | Advanced Options | the kind's `options` with `section: advanced`, when there are any |
+| 9 | Danger Zone | uninstall, under the removal rules above |
+
+**Options.** A kind declaration may list `options`:
+
+```json
+{ "key": "model", "title": "Model", "type": "enum", "choices": ["..."],
+  "default": "...", "section": "basic", "args": ["--model", "{value}"] }
+```
+
+- `type` is `enum`, `string`, `bool` or `integer`.
+- Each option says how it reaches a run: `args` with `{value}`, or `env`
+  with a variable name. A `bool` uses `args` only when true.
+- `core-agents` stores values per profile, with an optional per-project
+  value, and applies them at start before the caller's `args` and `env`,
+  which still win.
+- `agent.options { kind, project? }` returns the declared options with
+  their current values. `agent.options.set { kind, key, value, project? }`
+  changes one value.
+- Option values are never secrets. A secret is a vault name (0071).
+
+**Accounts (Connection).** A kind can have several accounts on a host, and
+one is active.
+
+- An account is a credential home under
+  `<profile>/agents/accounts/<kind>/<account-id>/`. All the rules of 0056
+  apply: owner-only access, copy-only import, and names and sizes only in
+  any output. Its record holds `id`, `label` (chosen by the person),
+  `created_at_ms`, and an optional `identity` (for example an email) taken
+  from the kind's `accounts.check` command output, never from credential
+  file contents.
+- Each kind has one **active** account per host. A project can choose a
+  different one; `agent.accounts.list` shows which projects use each
+  account. A run uses the project's choice, else the active account, else
+  the agent's usual home, as in 0056 today.
+- Methods (permission `workspace`, except `list`, which is `read`):
+  - `agent.accounts.list { kind }`.
+  - `agent.accounts.add { kind, label? }`: this is the login. It creates
+    an empty account home and opens a service-owned terminal that runs
+    the kind's `accounts.login` command with the home variable pointing
+    at it. The client attaches to that terminal, so the vendor's own flow
+    (a URL, a code) works unchanged. Once the declared credential files
+    exist, or `accounts.check` succeeds, the account is kept; if the
+    terminal ends first, it is discarded.
+  - `agent.accounts.import { kind, from, label? }`: 0056's import, into a
+    new account.
+  - `agent.accounts.activate { kind, account, project? }`.
+  - `agent.accounts.remove { kind, account }`: refused with `agent.busy`
+    while a live session uses it. Runs the kind's `accounts.logout` when
+    it is declared, then deletes the home.
+  - Event `agent.accounts_changed` (id = kind) on every change.
+- The kind declaration gains
+  `accounts: { "login": [...], "check"?: [...], "logout"?: [...] }`.
+- **Migration from #121.** The single home `<profile>/agents/homes/<kind>/`
+  becomes the kind's first account, labelled "default" and active. The
+  `agent.credentials.*` methods keep working on the active account and are
+  deprecated in favour of `agent.accounts.*`.
+- The login flow is specified with the desktop session; this part is the
+  shape it plugs into.
 
 ### How the built-in declarations move
 
@@ -143,7 +212,7 @@ and what the agent states mean. The two sessions agreed the format below.
    in the repository (`packages/agents/massorca.<id>/` with `extension.json`
    and `agents/<id>.json`), listed in the built-in catalogue as `available`.
    Installing one copies it from the host and downloads nothing. The
-   The extension runtime embeds them in its catalogue, and the
+   extension runtime embeds them in its catalogue, and the
    compiled-in copies are removed from `core-agents` in the same change.
    `core-agents` reads installed kinds through
    `massorca_core_extensions::installed_agent_kinds(&Profile)`, which
@@ -155,6 +224,15 @@ and what the agent states mean. The two sessions agreed the format below.
    dev-folder install exists. Then they fold into it.
 
 ## Alternatives
+
+- **One credential home per kind** (as 0056 ships). It is enough to run an
+  agent, but the owner's Connection part needs several accounts with one
+  active and per-project choices. 0056's home becomes the first account,
+  so nothing is lost.
+- **Agent options as the package's generic `settings` contributions.**
+  Their launch mapping (args, env) is agent-specific. Keeping options in
+  the kind file keeps the 0050 schema in one place, and the page renders
+  them with the same typed-setting widgets.
 
 - **Show the vendor's install command and never run it (display-only).**
   Installing an agent from the Marketplace would then end with a command to
