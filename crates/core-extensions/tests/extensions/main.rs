@@ -4,6 +4,7 @@ mod agents;
 mod fakes;
 mod fixture;
 mod install;
+mod item;
 mod remove;
 mod review;
 mod service;
