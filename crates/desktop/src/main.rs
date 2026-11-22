@@ -69,6 +69,7 @@ fn main() {
                         .then_some(WindowDecorations::Client),
                     // The window identity Linux shells read; other platforms keep their defaults.
                     app_id: cfg!(target_os = "linux").then(|| window_identity::APP_ID.to_string()),
+                    icon: window_identity::window_icon(),
                     focus: launch.focus(),
                     show: launch.show(),
                     ..Default::default()
