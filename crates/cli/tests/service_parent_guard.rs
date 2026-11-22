@@ -9,7 +9,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness::{ChildGuard, Sandbox, eventually, execute, kill, massorca_in, single_document};
+use harness::{ChildGuard, Sandbox, WAIT, eventually, execute, kill, massorca_in, single_document};
 
 /// Where the helper process writes its sandbox home and its service's pid.
 const HELPER_DIR_ENV: &str = "MASSORCA_PARENT_GUARD_DIR";
@@ -19,19 +19,31 @@ const EXIT_BOUND: Duration = Duration::from_secs(30);
 #[test]
 fn a_service_started_by_a_killed_test_process_stops_without_its_sandbox_drop() {
     let dir = tempfile::tempdir().expect("a temporary folder");
+    let helper_stderr = dir.path().join("helper.stderr");
     let mut helper = ChildGuard::new(
         massorca_process::command(std::env::current_exe().expect("the test binary"))
             .args(["--exact", "parent_guard_helper", "--ignored", "--nocapture"])
             .env(HELPER_DIR_ENV, dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(
+                fs::File::create(&helper_stderr).expect("a file for the helper's stderr"),
+            ))
             .spawn()
             .expect("the helper process starts"),
     );
-    let home = PathBuf::from(eventually("the helper's sandbox home", || {
-        fs::read_to_string(dir.path().join("home")).ok()
-    }));
+    let deadline = Instant::now() + WAIT;
+    let home = loop {
+        if let Ok(text) = fs::read_to_string(dir.path().join("home")) {
+            break PathBuf::from(text);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the helper did not report its sandbox home; its stderr:\n{}",
+            fs::read_to_string(&helper_stderr).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
     let service_pid: u32 = eventually("the helper's service pid", || {
         fs::read_to_string(dir.path().join("service.pid"))
             .ok()?
