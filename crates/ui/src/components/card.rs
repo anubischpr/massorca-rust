@@ -14,9 +14,10 @@ use crate::tokens::{
     SPACE_3, SPACE_4, TYPE_BODY, TYPE_TITLE_SM,
 };
 
+use crate::a11y::{self, framed};
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, ElementId, Empty, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled,
+    Animation, AnimationExt, AnyElement, App, ElementId, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled,
     Window, div, px,
 };
 
@@ -206,12 +207,19 @@ fn isolated_row(id: &ElementId, name: &'static str) -> gpui::Stateful<gpui::Div>
 impl RenderOnce for Card {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         if !self.has_content() {
-            return Empty.into_any_element();
+            // Hidden takes no space, as `Empty` does, and keeps the card's element type.
+            return a11y::disabled(div().id(self.id.clone()).hidden(), self.disabled);
         }
         let theme = *cx.theme();
         let p = theme.palette;
         let fills = Surface::Raised.fills(&theme);
         let interactive = self.variant == CardVariant::Interactive;
+        let role = if interactive {
+            Role::Button
+        } else {
+            Role::Group
+        };
+        let name = self.title.clone();
         let live = interactive && !self.disabled;
         let focus = interactive.then(|| {
             self.focus.clone().unwrap_or_else(|| {
@@ -351,16 +359,27 @@ impl RenderOnce for Card {
             );
         }
 
-        if self.inserting && !cx.reduce_motion() {
-            root.with_animation(
-                (self.id.clone(), "card-insert"),
-                Animation::new(DURATION_CARD_INSERT).with_easing(|t| ease(EASE_ENTER, t)),
-                |card, t| card.opacity(t).top(px(SPACE_2 * (1.0 - t))),
+        // While the card animates in, the role sits on a plain frame outside the animation.
+        let element = if self.inserting && !cx.reduce_motion() {
+            framed(
+                ElementId::from((self.id.clone(), "frame")),
+                role,
+                name,
+                root.with_animation(
+                    (self.id.clone(), "card-insert"),
+                    Animation::new(DURATION_CARD_INSERT).with_easing(|t| ease(EASE_ENTER, t)),
+                    |card, t| card.opacity(t).top(px(SPACE_2 * (1.0 - t))),
+                )
+                .into_any_element(),
             )
-            .into_any_element()
         } else {
-            root.into_any_element()
-        }
+            let root = root.role(role);
+            match name {
+                Some(name) => root.aria_label(name),
+                None => root,
+            }
+        };
+        a11y::disabled(element, self.disabled)
     }
 }
 
@@ -502,5 +521,54 @@ mod tests {
                 ),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_static_card_is_a_group_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Card::new("plan").title("Plan").render(window, cx))
+        })
+        .expect("the card is reported");
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.label(), Some("Plan"));
+    }
+
+    #[gpui::test]
+    fn an_interactive_card_is_a_button_that_reports_disabled(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Card::new("plan")
+                    .title("Plan")
+                    .variant(CardVariant::Interactive)
+                    .disabled(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("the card is reported");
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.label(), Some("Plan"));
+        assert!(node.is_disabled());
+    }
+
+    #[gpui::test]
+    fn an_inserting_card_keeps_its_role_on_the_frame(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                Card::new("plan")
+                    .title("Plan")
+                    .inserting(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("the card is reported");
+        assert_eq!(node.role(), Role::Group);
+        assert_eq!(node.label(), Some("Plan"));
     }
 }

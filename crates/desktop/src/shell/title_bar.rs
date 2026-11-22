@@ -1,6 +1,7 @@
 //! The Title bar: Sidebar toggle, navigation, title, region toggles and window controls (D-SH-03).
 
 use super::tooltip::{tooltip, with_tooltip};
+use super::zones::region_focus_ring;
 use super::{Shell, change};
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
@@ -35,6 +36,7 @@ pub(super) fn title_bar(
         .w_full()
         .pl(px(SPACE_1 + SPACE_HALF))
         .bg(theme.palette.surface.frame)
+        .focus_visible(|style| style.shadow(region_focus_ring(theme)))
         .child(sidebar_toggle(&bar, shell.clone()))
         .child(history(&bar, shell))
         .child(title(&bar, theme))
@@ -65,7 +67,7 @@ fn sidebar_toggle(bar: &TitleBarModel, shell: WeakEntity<Shell>) -> impl IntoEle
     with_tooltip(button, bar.sidebar_label)
 }
 
-/// Back and Forward; a full page shows one labelled Back instead (D-SH-03).
+/// Back and Forward; full pages and Bot Teams screens show one labelled Back instead (D-SH-03).
 fn history(bar: &TitleBarModel, shell: &WeakEntity<Shell>) -> Div {
     let row = div()
         .flex()
@@ -73,12 +75,13 @@ fn history(bar: &TitleBarModel, shell: &WeakEntity<Shell>) -> Div {
         .flex_none()
         .items_center()
         .gap(px(SPACE_1));
-    if bar.full_page.is_some() {
+    if bar.labelled_back {
         let back = shell.clone();
         let page_back = Button::new("back-page", "Back")
             .variant(ButtonVariant::Ghost)
             .size(ButtonSize::Default)
             .leading_icon(IconName::ArrowLeft)
+            .disabled(!bar.can_go_back)
             .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
         row.child(page_back)
     } else {
