@@ -2,7 +2,7 @@
 //! as folders or archives, and a fake vendor program that stands in for every CLI and installer.
 //!
 //! No test runs a real vendor installer: each package's install, verify and uninstall commands point at
-//! `massorca-fake-vendor` (`src/bin/fake_vendor.rs`), and the package ids and agent ids are not the reserved ones.
+//! `massorca-fake-vendor` (`examples/massorca-fake-vendor.rs`), and the package ids and agent ids are not the reserved ones.
 #![allow(dead_code)] // each test binary uses a different subset of these helpers
 
 use std::fs;
@@ -16,8 +16,52 @@ use zip::write::SimpleFileOptions;
 
 use crate::harness::{Sandbox, execute, single_document, with_json};
 
-/// The fake vendor program every test package runs.
-pub const FAKE_VENDOR: &str = env!("CARGO_BIN_EXE_massorca-fake-vendor");
+/// The fake vendor program every test package runs. It is the example `massorca-fake-vendor`, not a shipped binary, so
+/// `cargo test` does not build it: the first call builds it into the same target folder as the test binaries
+/// (decision 0062).
+pub fn fake_vendor() -> String {
+    static BUILT: std::sync::Once = std::sync::Once::new();
+    BUILT.call_once(|| {
+        let status = std::process::Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--locked",
+                "-p",
+                "massorca-cli",
+                "--example",
+                "massorca-fake-vendor",
+            ])
+            .status()
+            .expect("cargo runs");
+        assert!(status.success(), "the fake vendor example builds");
+    });
+    let test_binary = std::env::current_exe().expect("the test binary");
+    let profile = test_binary
+        .parent()
+        .and_then(Path::parent)
+        .expect("the profile folder");
+    profile
+        .join("examples")
+        .join(format!(
+            "massorca-fake-vendor{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The program every vendor command of a test package names: an allowlisted program (0062, second review). The bin folder
+/// holds a copy of the fake vendor under this name, so the command runs the fake and never a real installer.
+pub const VENDOR_PROGRAM: &str = "npm";
+
+/// A fresh bin folder holding the fake vendor as `VENDOR_PROGRAM`.
+fn bin_with_npm() -> tempfile::TempDir {
+    let bin = tempfile::tempdir().expect("a bin folder");
+    let name = format!("{VENDOR_PROGRAM}{}", std::env::consts::EXE_SUFFIX);
+    fs::copy(fake_vendor(), bin.path().join(name))
+        .expect("the fake vendor is copied as the vendor program");
+    bin
+}
 
 /// The package `acme.kit`, whose agent is `kitagent` and whose CLI is `acmecli`.
 pub const KIT: Package = Package::new("acme.kit", "kitagent", "acmecli");
@@ -39,7 +83,7 @@ impl Package {
     /// every operating system. Verify is `<binary> --version`, and uninstall removes the binary from `bin`.
     pub fn manifest(&self, bin: &Path, install: &[&str]) -> Value {
         let step = |os: &str, args: Vec<String>| {
-            let mut command = vec![FAKE_VENDOR.to_owned()];
+            let mut command = vec![VENDOR_PROGRAM.to_owned()];
             command.extend(args);
             json!({ "os": os, "command": command })
         };
@@ -102,7 +146,7 @@ impl Host {
     pub fn new() -> Self {
         Self {
             sandbox: Sandbox::new(),
-            bin: tempfile::tempdir().expect("a bin folder"),
+            bin: bin_with_npm(),
             packages: tempfile::tempdir().expect("a packages folder"),
         }
     }
@@ -131,7 +175,7 @@ impl Host {
 
     /// Puts a copy of the fake vendor program on the service's `PATH` under the name of a CLI.
     pub fn put_cli(&self, binary: &str) {
-        fs::copy(FAKE_VENDOR, self.cli_path(binary)).expect("the fake CLI is copied");
+        fs::copy(fake_vendor(), self.cli_path(binary)).expect("the fake CLI is copied");
     }
 
     pub fn cli_path(&self, binary: &str) -> PathBuf {

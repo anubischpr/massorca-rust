@@ -4,7 +4,7 @@
 mod extension_support;
 mod harness;
 
-use extension_support::{FAKE_VENDOR, Host, KIT};
+use extension_support::{Host, KIT, VENDOR_PROGRAM};
 use predicates::str::contains;
 use serde_json::json;
 
@@ -73,7 +73,7 @@ fn with_both_flags_the_installer_runs_is_recorded_and_verified() {
     assert_eq!(record["detected_before_install"], false);
     assert_eq!(record["installer"]["exit_code"], 0);
     let command = json!([
-        FAKE_VENDOR,
+        VENDOR_PROGRAM,
         "install",
         host.bin.path().to_string_lossy(),
         "acmecli"
@@ -162,7 +162,7 @@ fn removing_offers_the_uninstall_of_a_cli_the_package_installed() {
     assert_eq!(
         removed["cli"][0]["command"],
         json!([
-            FAKE_VENDOR,
+            VENDOR_PROGRAM,
             "uninstall",
             host.bin.path().to_string_lossy(),
             "acmecli"

@@ -6,7 +6,7 @@ mod harness;
 
 use std::fs;
 
-use extension_support::{FAKE_VENDOR, Host, KIT, Package};
+use extension_support::{Host, KIT, Package, VENDOR_PROGRAM};
 use harness::stdout_text;
 use predicates::str::contains;
 use serde_json::{Value, json};
@@ -97,7 +97,7 @@ fn inspect_prints_the_review_and_changes_nothing() {
     assert_eq!(
         review["cli"][0]["command"],
         json!([
-            FAKE_VENDOR,
+            VENDOR_PROGRAM,
             "install",
             host.bin.path().to_string_lossy(),
             "acmecli"

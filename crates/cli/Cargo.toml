@@ -22,12 +22,11 @@ path = "src/bin/fake_agent.rs"
 test = false
 doc = false
 
-# The fake vendor CLI and installer for the extension tests (decision 0062); installers ship `massorca` only.
-[[bin]]
+# The fake vendor CLI and installer for the extension tests (decision 0062). An example, not a binary: `cargo test`
+# builds it next to the test binaries, while `cargo build --release` and the installers never ship it.
+[[example]]
 name = "massorca-fake-vendor"
-path = "src/bin/fake_vendor.rs"
-test = false
-doc = false
+path = "examples/massorca-fake-vendor.rs"
 
 [dependencies]
 clap.workspace = true
