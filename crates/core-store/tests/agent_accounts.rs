@@ -1,10 +1,22 @@
 //! Agent accounts (decision 0059): accounts per kind, the active account per kind, per-project choices, and the
 //! cascades when an account or a project goes.
 
-mod common;
+use massorca_core_store::{
+    AgentAccountRow, ProjectKind, ProjectRow, Store, StoreError, new_id, now_ms,
+};
 
-use common::project_row;
-use massorca_core_store::{AgentAccountRow, Store, StoreError, new_id};
+/// A git project row with a fresh id.
+fn project_row(name: &str, path_key: &str) -> ProjectRow {
+    ProjectRow {
+        id: new_id(),
+        kind: ProjectKind::Git,
+        path: format!("/repos/{name}"),
+        path_key: path_key.to_owned(),
+        name: name.to_owned(),
+        workspaces_root: format!("/repos/{name}-workspaces"),
+        added_at: now_ms(),
+    }
+}
 
 fn account(kind: &str, label: &str, created_at: i64) -> AgentAccountRow {
     AgentAccountRow {
