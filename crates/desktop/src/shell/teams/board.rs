@@ -5,6 +5,7 @@
 use super::super::Shell;
 use super::super::sidebar::row_focus;
 use super::team_pill;
+use crate::model::agent_kinds::NOT_AVAILABLE_ON_HOST;
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
@@ -140,6 +141,9 @@ fn board_card(
         .bot(card.bot.clone().unwrap_or_else(|| "Unassigned".into()));
     if let Some((state, word)) = status_of(column) {
         built = built.status(state, word);
+    }
+    if card.kind_unavailable {
+        built = built.unavailable(NOT_AVAILABLE_ON_HOST);
     }
     if let Some(time) = &card.time {
         built = built.time(time.clone());
