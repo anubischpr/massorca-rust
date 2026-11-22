@@ -24,6 +24,16 @@ fn status() -> Value {
     })
 }
 
+/// A status table that maps no event for a prompt: the fake agent reports `idle` at start and `done` at the end of a turn,
+/// and nothing in between, so an accepted prompt leaves the session idle until the agent reports again.
+fn quiet_status() -> Value {
+    json!({
+        "mechanism": "env-command",
+        "events": { "start": "idle", "stop": "done" },
+        "result_field": "result"
+    })
+}
+
 /// Declares kind `id`, which runs the fake agent, with the given prompt table and status; `resume` adds its resume form.
 fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value, resume: bool) {
     let mut kind = json!({
@@ -75,6 +85,20 @@ fn sandbox() -> Sandbox {
         json!({ "mode": "argv" }),
         status(),
         false,
+    );
+    declare(
+        &sandbox,
+        "fake-quiet",
+        json!({ "mode": "argv" }),
+        quiet_status(),
+        true,
+    );
+    declare(
+        &sandbox,
+        "fake-quiet-none",
+        json!({ "mode": "none" }),
+        quiet_status(),
+        true,
     );
     let notes = sandbox.home().join("notes");
     std::fs::create_dir_all(&notes).expect("create folder");
@@ -348,6 +372,60 @@ fn resume_obeys_the_one_writer_rule() {
     );
     let shown = sandbox.json_ok("default", &["agent", "status", &first_session]);
     assert_eq!(shown["execution"]["state"], "exited", "still exited");
+}
+
+/// After a prompt is accepted, the next one waits for a report from the agent (decision 0058): the quiet agent holds the
+/// first prompt without reporting, so the session stays idle, and the second prompt is refused until a forced one or until
+/// the agent reports after the first.
+#[test]
+fn a_second_prompt_is_refused_until_the_agent_reports_after_the_first() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-quiet", &[]);
+    let session = session_of(&started);
+    let terminal = terminal_of(&started);
+    until(&sandbox, &session, "idle");
+
+    let first = sandbox.json_ok("default", &["agent", "prompt", &session, "hold quiet"]);
+    assert_eq!(first["bytes"], 11, "the text and its carriage return");
+    assert_eq!(
+        error_code(&sandbox, &["agent", "prompt", &session, "second"]),
+        "agent.busy"
+    );
+    let forced = sandbox.json_ok(
+        "default",
+        &["agent", "prompt", &session, "second", "--force"],
+    );
+    assert_eq!(forced["bytes"], 7);
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: hold quiet");
+    let third = sandbox.json_ok("default", &["agent", "prompt", &session, "third"]);
+    assert_eq!(third["bytes"], 6, "accepted again after the agent reported");
+}
+
+/// A held first prompt counts as typed once it is taken at the agent's first idle, so the next prompt waits for a report
+/// (decision 0058).
+#[test]
+fn a_held_first_prompt_also_makes_the_next_prompt_wait_for_a_report() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-quiet-none", &["--prompt", "hold once"]);
+    let session = session_of(&started);
+    let terminal = terminal_of(&started);
+
+    wait_for_line(&sandbox, &terminal, "fake-agent: holding");
+    assert_eq!(
+        error_code(&sandbox, &["agent", "prompt", &session, "again"]),
+        "agent.busy"
+    );
+
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: hold once");
 }
 
 /// Escape sequences, DEL and the C1 controls are refused at launch and in `agent prompt`, in both paste modes; a refused

@@ -135,8 +135,11 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   paste modes (decision 0058). An exited run fails with `agent.not_live`.
   The agent must report `idle` or `done` first, or the call fails with `agent.busy`; a kind
   with no status mechanism is always ready. `--force` types the text anyway, for example to
-  answer a question. The receipt counts the bytes handed to the terminal; it does not say the
-  agent read them, and the activity turns `working` only when the agent's hooks report it.
+  answer a question. After a prompt is accepted, the next one is refused with `agent.busy` until
+  the agent reports something (or `--force`), so two prompts never land on the same idle; a kind
+  with no status mechanism is not affected, since nothing reports back for it. The receipt counts
+  the bytes handed to the terminal; it does not say the agent read them, and the activity turns
+  `working` only when the agent's hooks report it.
 - `agent resume SESSION` starts a new run of an exited session in a new terminal of its
   workspace, with the kind's resume arguments and the agent's own ref, so the agent continues
   its conversation. The session keeps its id and its agent ref; its activity is absent until

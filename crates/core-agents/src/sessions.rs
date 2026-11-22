@@ -200,6 +200,9 @@ struct LiveRun {
     prompt: PromptRules,
     /// A first prompt given at launch, held until the run's first `idle`.
     pending: Option<PendingPrompt>,
+    /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
+    /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
+    typed_since_report: bool,
 }
 
 /// What a prompt needs from its run's kind, copied when the run starts.
@@ -363,6 +366,7 @@ impl Agents {
                 rules: HookRules::of(&decl),
                 prompt: PromptRules::of(&decl),
                 pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
+                typed_since_report: false,
             },
         );
         let agent_ref = plan.agent_ref.clone();
@@ -478,6 +482,7 @@ impl Agents {
                 rules: HookRules::of(&decl),
                 prompt: PromptRules::of(&decl),
                 pending: None,
+                typed_since_report: false,
             },
         );
         let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
@@ -613,14 +618,18 @@ impl Agents {
         if row.agent_ref.is_none() {
             row.agent_ref = learned;
         }
+        // The report answers whatever was typed before it, so the run's typed-since-report flag clears (decision 0058).
+        if let Some(run) = live.get_mut(&params.session) {
+            run.typed_since_report = false;
+        }
         let session = self.view_with(&mut live, row)?;
         // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
-        // lock, and is written after the lock is released.
+        // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
         let first = if first_idle {
             live.get_mut(&params.session).and_then(|run| {
-                run.pending
-                    .take()
-                    .map(|pending| (run.prompt.clone(), pending.text))
+                let pending = run.pending.take()?;
+                run.typed_since_report = true;
+                Some((run.prompt.clone(), pending.text))
             })
         } else {
             None
@@ -651,15 +660,17 @@ impl Agents {
             let mut live = lock(&self.inner.status);
             let row = self.reload(&row.id)?;
             let session = self.view_with(&mut live, row)?;
-            let Some(run) = live.get(&session.id) else {
+            let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
             let state = session.activity.as_ref().map(|activity| activity.state);
-            if !force && !prompt::ready(run.prompt.has_status, state) {
+            // A run that has taken a prompt since its last report is not ready either: its agent may not have read that
+            // prompt yet, so a second one would land on the same idle (decision 0058).
+            if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
                 return Err(AgentError::new(
                     codes::AGENT_BUSY,
                     format!(
-                        "session {} is not ready for a prompt: wait for it to be idle or done, or use force",
+                        "session {} is not ready for a prompt: wait for its agent to report, or use force",
                         session.id
                     ),
                 ));
@@ -668,6 +679,9 @@ impl Agents {
             let Some(terminal) = session.terminal_id.clone() else {
                 return Err(not_live(&session.id));
             };
+            // Accepted under the lock, so a second prompt on the same idle sees the flag. A kind with no status mechanism
+            // never hears back, so it never sets the flag: it stays always ready (0054).
+            run.typed_since_report = run.prompt.has_status;
             (session.id.clone(), terminal, bytes)
         };
         self.inner
@@ -1278,6 +1292,7 @@ mod tests {
                 text: "later".to_owned(),
                 due,
             }),
+            typed_since_report: false,
         };
         let mut live: LiveRuns = HashMap::new();
         live.insert("waiting".to_owned(), run(now + FIRST_PROMPT_WAIT));
@@ -1352,6 +1367,7 @@ mod tests {
                     submit: "\r".to_owned(),
                 },
                 pending: None,
+                typed_since_report: false,
             },
         );
 

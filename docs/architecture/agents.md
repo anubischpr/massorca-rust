@@ -149,7 +149,11 @@ appear inside the text. A run that has exited is `agent.not_live`.
 
 A run takes a prompt when its activity is `idle` or `done`, or when its kind has no status
 mechanism. Absent activity, meaning nothing reported yet, is not ready; `working`, `waiting`
-and unknown states are not either. Otherwise the call is `agent.busy`, unless `force` is set.
+and unknown states are not either. A run that has taken a prompt since its last hook report is not
+ready either (decision 0058): the flag is set when a prompt is accepted or a held first prompt is
+taken, and the next accepted hook report clears it, so two prompts never land on the same idle. A
+kind with no status mechanism never sets it, since nothing reports back, so it stays always ready.
+Otherwise the call is `agent.busy`, unless `force` is set.
 The readiness check and the copy of the kind's input rules happen under the status lock. The
 write happens after the lock is released: a write can wait for the agent to read, and the
 agent's own hook reports need the lock to return.
