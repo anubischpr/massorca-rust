@@ -1,9 +1,9 @@
 //! Typed helpers over the methods of the core features.
 
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
-    PromptReceipt,
+    self, AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentListParams, AgentPromptParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -228,6 +228,27 @@ impl Client {
     /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
     pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::RESUME, &session_ref(session)).await
+    }
+
+    /// `agent.delegate`: starts a child session of a parent session; the child's record and an optional note.
+    pub async fn agent_delegate(
+        &self,
+        params: &AgentDelegateParams,
+    ) -> Result<AgentDelegated, ClientError> {
+        self.call(agents::DELEGATE, params).await
+    }
+
+    /// `agent.tree`: a session's delegation tree, its root and the root's children.
+    pub async fn agent_tree(&self, session: &str) -> Result<AgentTree, ClientError> {
+        self.call(agents::TREE, &session_ref(session)).await
+    }
+
+    /// `agent.bring_back`: merges a finished child into its parent and tells the parent run about it.
+    pub async fn agent_bring_back(
+        &self,
+        params: &AgentBringBackParams,
+    ) -> Result<BringBackResult, ClientError> {
+        self.call(agents::BRING_BACK, params).await
     }
 
     /// `agent.hook`: one status report from a run's hook, with the run's token.

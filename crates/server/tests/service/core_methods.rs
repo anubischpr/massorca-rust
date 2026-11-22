@@ -45,7 +45,7 @@ const TERMINAL_METHODS: [&str; 8] = [
 ];
 
 /// The agent methods this build registers (capability `agents/1`).
-const AGENT_METHODS: [&str; 8] = [
+const AGENT_METHODS: [&str; 11] = [
     "agent.kinds",
     "agent.start",
     "agent.list",
@@ -54,6 +54,9 @@ const AGENT_METHODS: [&str; 8] = [
     "agent.forget",
     "agent.hook",
     "agent.watch",
+    "agent.delegate",
+    "agent.tree",
+    "agent.bring_back",
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).

@@ -2,11 +2,16 @@
 //! handlers run its blocking calls on the blocking pool. `core-agents` announces every status change; the service
 //! turns each into `agent.changed` on the event bus and an item for `agent.watch` (0052).
 
-use massorca_core_agents::{AgentError, Agents, Change};
+use std::path::Path;
+
+use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps};
+use massorca_core_git::{Git, GitError, MergeOutcome};
+use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent,
-    AgentWatchParams, PromptReceipt,
+    self, AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentListParams, AgentPromptParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
+    BringBackResult, PromptReceipt,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
@@ -87,6 +92,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             hook,
         )?,
+        methods.register(
+            Owner::Core,
+            agents::DELEGATE,
+            agents_cap,
+            Permission::Workspace,
+            delegate,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::TREE,
+            agents_cap,
+            Permission::Read,
+            tree,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::BRING_BACK,
+            agents_cap,
+            Permission::Workspace,
+            bring_back,
+        )?,
         methods.register_stream(
             Owner::Core,
             agents::WATCH,
@@ -145,6 +171,71 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.
 async fn hook(ctx: RequestCtx, params: AgentHookParams) -> Result<(), ErrorBody> {
     on_agents(&ctx, move |agents| agents.hook(&params)).await
+}
+
+/// Starts a child session of a parent session (0055). The prompt is never logged.
+async fn delegate(
+    ctx: RequestCtx,
+    params: AgentDelegateParams,
+) -> Result<AgentDelegated, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.delegate(params)).await
+}
+
+/// A session's delegation tree: its root and the root's children (0055).
+async fn tree(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentTree, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.tree(&params.session)).await
+}
+
+/// Brings a finished child back into its parent (0055). The parent workspace's git mutation lock is held for the whole
+/// call, so no git command of a client interleaves with the clean check and the merge.
+async fn bring_back(
+    ctx: RequestCtx,
+    params: AgentBringBackParams,
+) -> Result<BringBackResult, ErrorBody> {
+    let child = params.child.clone();
+    let parent_workspace = on_agents(&ctx, move |agents| {
+        let parent = agents.show(&child)?.parent_id;
+        parent
+            .map(|parent| agents.show(&parent).map(|parent| parent.workspace_id))
+            .transpose()
+    })
+    .await?;
+    // A folder or missing workspace has no lock to take; core-agents refuses what it must for them.
+    let _guard = match parent_workspace {
+        Some(workspace) => match super::git::repository(&ctx, workspace).await {
+            Ok(repository) => Some(repository.lock().await),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let git = WorktreeGit(ctx.state.workspaces.git().clone());
+    on_agents(&ctx, move |agents| agents.bring_back(&params, &git)).await
+}
+
+/// The bring-back's git operations, through `core-git`.
+struct WorktreeGit(Git);
+
+impl RepoOps for WorktreeGit {
+    fn is_dirty(&self, dir: &Path) -> Result<bool, AgentError> {
+        self.0.status_dirty(dir).map_err(agent_git_error)
+    }
+
+    fn merge_no_ff(&self, dir: &Path, branch: &str) -> Result<MergeResult, AgentError> {
+        Ok(
+            match self.0.merge_no_ff(dir, branch).map_err(agent_git_error)? {
+                MergeOutcome::Merged { commit } => MergeResult::Merged { commit },
+                MergeOutcome::Conflict { paths } => MergeResult::Conflict { paths },
+            },
+        )
+    }
+}
+
+/// A git failure as the protocol reports it, as `git_error` maps it for the git methods.
+fn agent_git_error(error: GitError) -> AgentError {
+    match massorca_core_git::failure_code(&error) {
+        Some(code) => AgentError::new(code, error.to_string()),
+        None => DomainError::from(error).into(),
+    }
 }
 
 /// The sessions a watcher selected, as ids resolved once when the stream opens.
