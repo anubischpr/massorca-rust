@@ -21,5 +21,10 @@
     "home_env": "CLAUDE_CONFIG_DIR",
     "files": [".credentials.json", ".claude.json"],
     "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+  },
+  "accounts": {
+    "login": ["auth", "login"],
+    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "logout": ["auth", "logout"]
   }
 }

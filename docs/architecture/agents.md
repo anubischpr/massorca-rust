@@ -351,11 +351,59 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
   go to the resolved program and are never run at declaration time. Patterns are compiled with
   the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
-  on the service, as its programs do; they are not a trust boundary for other users. The four built-in kinds declare no accounts, because
-  their real login commands are not verified in this phase.
+  on the service, as its programs do; they are not a trust boundary for other users. Only `claude`
+  declares accounts among the built-ins; see "Built-in sign-in commands" below.
 
 Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,
 `agent.usage`, `agent.models`, and the vault environment provider.
+
+## Built-in sign-in commands
+
+A built-in kind gets an `accounts` block only when every command in it is confirmed from a primary
+source (the vendor's documentation, the CLI's own `--help`, or, for Gentle Shell, the owner's
+product source). Confirmed on 2026-11-22; the programs were run only with `--help` and `--version`
+under an empty temporary home.
+
+| Kind | Program | Home variable | Login | Check | Logout |
+| :- | :- | :- | :- | :- | :- |
+| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status`, exit 0 signed in, 1 not (confirmed) | `claude auth logout` (confirmed) |
+| `codex` | `codex` | `CODEX_HOME` (documented for file storage only) | `codex login` exists; not confirmed to honour `CODEX_HOME` | `codex login status` exists; exit code and output not documented | `codex logout` exists; not confirmed to honour `CODEX_HOME` |
+| `antigravity` | `agy` | none; credentials are in the OS keyring | no `login` subcommand; sign-in runs when `agy` is first launched | none; no non-interactive status | `/logout` inside the prompt only |
+| `gentle-shell` | `gentle-shell` | `PI_CODING_AGENT_DIR` (as declared today) | `/login` slash command inside its terminal UI; no command-line form | none | none |
+
+Sources:
+
+- Claude: `code.claude.com/docs/en/authentication` (read 2026-11-22). Browser sign-in, with a code
+  pasted into the terminal when the browser shows one; with `CLAUDE_CONFIG_DIR` set, credentials
+  are kept under that directory on Linux and Windows. `code.claude.com/docs/en/cli-reference` (read
+  2026-11-22): `claude auth status` exits 0 when logged in and 1 when not; its JSON carries
+  `configDirectory` (Claude Code 2.1.268 or later). Local `claude --help` and
+  `claude auth {login,status,logout} --help` on 2.1.268.
+- Codex: `developers.openai.com/codex/auth`, which redirects to `learn.chatgpt.com/docs/auth` (read
+  2026-11-22). Lists `codex login`, `codex login --device-auth`, `codex login status` and
+  `codex logout`; `CODEX_HOME` holds `auth.json` in file storage mode; storage modes are file,
+  keyring, auto and ephemeral. The docs state no exit code or identity for `login status`, and do
+  not say whether the commands honour `CODEX_HOME`. Local `codex --help` and the `login`,
+  `login status` and `logout` helps on 0.159.2.
+- Antigravity: `antigravity.google/docs/install?tab=cli` (read 2026-11-22). Sign-in starts on first
+  launch of `agy`; credentials live in the OS keyring; `/logout` signs out; no status command or
+  credential-home variable is documented. Local `agy --help` on 1.5.11 lists no login or logout
+  subcommand.
+- Gentle Shell: the owner's product source, read in the previous app's repository (read-only). Its
+  sign-in table lists a `/login` slash command for the Gentle Shell runtime (internal id `pi`) with
+  no command-line form, and the credential variable in the launch specs. The binary is not
+  installed on this machine, so it was not run.
+
+Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status"],
+signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `identity_pattern` is
+declared, because neither is documented. Without an `expired_pattern`, an expired login probably
+reads as `needs_sign_in`, not `expired`; this is not verified.
+
+Known gap: `claude auth status` may report signed in from credentials that `strip_env` does not
+remove, such as `ANTHROPIC_PROFILE` or the federation variables, which the Claude docs list in the
+credential precedence. Their profile files sit outside the account home. This is not verified and
+is left for a follow-up decision, because changing `strip_env` would also change how existing
+sessions authenticate.
 
 ## Security
 

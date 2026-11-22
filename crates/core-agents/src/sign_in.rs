@@ -178,6 +178,8 @@ fn wait_for_exit(terminals: &TerminalManager, terminal: &str) {
 fn unsupported(kind: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_CREDENTIALS_UNSUPPORTED,
-        format!("agent kind {kind} declares no sign-in, so it has no accounts to add"),
+        format!(
+            "agent kind {kind} has no sign-in in MassOrca: sign in from the vendor's CLI, then import the login"
+        ),
     )
 }

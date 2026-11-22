@@ -762,3 +762,35 @@ fn a_label_with_control_characters_or_too_long_is_refused_as_invalid_params() {
         "nothing is created for a refused label"
     );
 }
+
+/// Declares kind `bare`, which has credential files and a check but no sign-in command.
+fn declare_loginless_kind(sandbox: &Sandbox) {
+    let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    fs::create_dir_all(&dir).expect("create the kinds directory");
+    let bare = json!({
+        "id": "bare",
+        "name": "Bare agent",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "prompt": { "mode": "argv" },
+        "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
+        "accounts": { "check": { "args": ["whoami"] } }
+    });
+    fs::write(dir.join("bare.json"), bare.to_string()).expect("write the bare kind");
+}
+
+#[test]
+fn a_kind_without_a_login_refuses_sign_in_and_names_the_vendor_cli() {
+    let sandbox = Sandbox::new();
+    declare_loginless_kind(&sandbox);
+
+    let error = error_of(
+        &sandbox,
+        &["agent", "accounts", "add", "bare", "--no-attach"],
+    );
+    assert_eq!(error["code"], "agent.credentials_unsupported", "{error}");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("sign in from the vendor's CLI, then import"),
+        "{error}"
+    );
+}
