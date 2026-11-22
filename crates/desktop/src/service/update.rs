@@ -6,10 +6,12 @@ use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::AgentSession;
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -34,6 +36,12 @@ pub enum StoreUpdate {
     /// A terminal the service created, killed or reported; keyed by its id.
     TerminalChanged(Terminal),
     TerminalGone(String),
+    /// Every agent session the service lists, after a connect. Replaces what was held.
+    AgentsResync(Vec<AgentSession>),
+    /// An agent session the service started or changed; keyed by its id.
+    AgentChanged(AgentSession),
+    /// An agent session the service forgot.
+    AgentGone(String),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
@@ -47,6 +55,8 @@ pub enum StoreUpdate {
     Devices(Result<Vec<DeviceInfo>, Refusal>),
     /// The listeners and counts of this computer's service, after a read.
     Network(Result<NetworkStatus, Refusal>),
+    /// What the vault reads learned; each part replaces what it names.
+    Secrets(SecretsUpdate),
 }
 
 /// How a paired host's connection stands, as the last probe or call found it.
@@ -90,6 +100,15 @@ pub struct HostEntry {
     pub last_connected: Option<Instant>,
 }
 
+/// One answer of the vault reads. Names and times only: no answer carries a secret's value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SecretsUpdate {
+    /// The key's state and the count of owned secrets, or why they could not be read.
+    Status(Result<SecretStatus, Refusal>),
+    /// Every name in every scope, owned and linked, or why they could not be read.
+    List(Result<Vec<SecretEntry>, Refusal>),
+}
+
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
 /// it names, so the latest answer wins.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,6 +149,13 @@ pub struct WorkspaceGit {
     pub degraded: Option<String>,
 }
 
+/// The vault as the service last reported it. A part is `None` until its first answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretsState {
+    pub status: Option<Result<SecretStatus, Refusal>>,
+    pub list: Option<Result<Vec<SecretEntry>, Refusal>>,
+}
+
 /// The projects and workspaces the service reported, and how the link to it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreState {
@@ -138,6 +164,8 @@ pub struct StoreState {
     pub workspaces: Vec<Workspace>,
     /// Terminals of every workspace, oldest first (decision 0033).
     pub terminals: Vec<Terminal>,
+    /// Agent sessions of every workspace, oldest first, children included (decision 0055).
+    pub agents: Vec<AgentSession>,
     /// True once the first full list arrived, so an empty tree can tell "none" from "not yet".
     pub loaded: bool,
     /// When the link last stopped being connected, while it is not.
@@ -150,6 +178,8 @@ pub struct StoreState {
     pub devices: Option<Result<Vec<DeviceInfo>, Refusal>>,
     /// This computer's listeners and counts, once read.
     pub network: Option<Result<NetworkStatus, Refusal>>,
+    /// The secret vault: its status and every name it lists.
+    pub secrets: SecretsState,
 }
 
 impl Default for StoreState {
@@ -159,12 +189,14 @@ impl Default for StoreState {
             projects: Vec::new(),
             workspaces: Vec::new(),
             terminals: Vec::new(),
+            agents: Vec::new(),
             loaded: false,
             down_since: None,
             git: BTreeMap::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
+            secrets: SecretsState::default(),
         }
     }
 }
@@ -215,6 +247,15 @@ impl StoreState {
                 self.terminals.sort_by(terminal_order);
             }
             StoreUpdate::TerminalGone(id) => self.terminals.retain(|t| t.id != id),
+            StoreUpdate::AgentsResync(mut sessions) => {
+                sessions.sort_by(agent_order);
+                self.agents = sessions;
+            }
+            StoreUpdate::AgentChanged(session) => {
+                replace_by(&mut self.agents, session, |s| s.id.clone());
+                self.agents.sort_by(agent_order);
+            }
+            StoreUpdate::AgentGone(id) => self.agents.retain(|s| s.id != id),
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
@@ -231,6 +272,12 @@ impl StoreState {
             }
             StoreUpdate::Devices(result) => self.devices = Some(result),
             StoreUpdate::Network(result) => self.network = Some(result),
+            StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
+                self.secrets.status = Some(result);
+            }
+            StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
+                self.secrets.list = Some(result);
+            }
         }
     }
 
@@ -301,6 +348,13 @@ fn terminal_order(a: &Terminal, b: &Terminal) -> std::cmp::Ordering {
         .then_with(|| a.id.cmp(&b.id))
 }
 
+/// Agent sessions by creation time, then id: a new session lands last and a child after its earlier siblings.
+fn agent_order(a: &AgentSession, b: &AgentSession) -> std::cmp::Ordering {
+    a.created_at_ms
+        .cmp(&b.created_at_ms)
+        .then_with(|| a.id.cmp(&b.id))
+}
+
 fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
     a.created_at_ms
         .cmp(&b.created_at_ms)
@@ -310,10 +364,34 @@ fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
+    use massorca_protocol::methods::agents::Execution;
     use massorca_protocol::methods::projects::ProjectKind;
+    use massorca_protocol::methods::terminals::TerminalState;
     use massorca_protocol::methods::workspaces::{WorkspaceKind, WorkspaceState};
 
     use super::*;
+
+    /// A live session of the `claude` kind with no report yet, in workspace `workspace_id`.
+    pub fn agent(id: &str, workspace_id: &str, created: i64) -> AgentSession {
+        AgentSession {
+            id: id.into(),
+            kind: "claude".into(),
+            workspace_id: workspace_id.into(),
+            title: None,
+            read_only: false,
+            parent_id: None,
+            brought_back_at_ms: None,
+            agent_ref: None,
+            terminal_id: None,
+            created_at_ms: created,
+            execution: Execution {
+                state: TerminalState::Live,
+                exit: None,
+            },
+            activity: None,
+            result: None,
+        }
+    }
 
     pub fn project(id: &str, name: &str) -> Project {
         Project {
@@ -345,7 +423,9 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{project, workspace};
+    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState};
+
+    use super::fixtures::{agent, project, workspace};
     use super::*;
 
     fn resynced() -> StoreState {
@@ -426,6 +506,45 @@ mod tests {
         );
         let names: Vec<&str> = state.projects.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "middle", "zeta"]);
+    }
+
+    #[test]
+    fn agent_sessions_resync_replaces_them_oldest_first() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::AgentsResync(vec![agent("s2", "w1", 20), agent("s1", "w1", 10)]),
+            now,
+        );
+        let ids: Vec<&str> = state.agents.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["s1", "s2"]);
+        state.apply(StoreUpdate::AgentsResync(vec![agent("s3", "w1", 30)]), now);
+        assert_eq!(
+            state.agents.len(),
+            1,
+            "a resync drops what the service no longer lists"
+        );
+    }
+
+    #[test]
+    fn a_changed_session_replaces_its_record_and_a_gone_one_is_dropped() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(StoreUpdate::AgentsResync(vec![agent("s1", "w1", 10)]), now);
+        let mut working = agent("s1", "w1", 10);
+        working.activity = Some(Activity {
+            state: ActivityState::Working,
+            outcome: None,
+            source: ActivitySource::Hook,
+            at_ms: 11,
+        });
+        state.apply(StoreUpdate::AgentChanged(working.clone()), now);
+        assert_eq!(state.agents, vec![working]);
+        state.apply(StoreUpdate::AgentChanged(agent("s2", "w1", 20)), now);
+        state.apply(StoreUpdate::AgentGone("s1".into()), now);
+        state.apply(StoreUpdate::AgentGone("nope".into()), now);
+        let ids: Vec<&str> = state.agents.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["s2"]);
     }
 
     #[test]
@@ -560,5 +679,35 @@ mod tests {
         );
         assert_eq!(state.devices, Some(Err(Refusal::unavailable("gone"))));
         assert_eq!(state.network, None);
+    }
+
+    #[test]
+    fn a_vault_answer_replaces_only_the_part_it_names() {
+        let mut state = StoreState::default();
+        let status = SecretStatus {
+            protection: "file".into(),
+            state: "ready".into(),
+            count: 1,
+            name_clashes: Vec::new(),
+        };
+        let now = Instant::now();
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status.clone()))),
+            now,
+        );
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::List(Ok(Vec::new()))),
+            now,
+        );
+        assert_eq!(state.secrets.status, Some(Ok(status)));
+        assert_eq!(state.secrets.list, Some(Ok(Vec::new())));
+
+        let gone = Refusal::unavailable("the service cannot be reached right now");
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::Status(Err(gone.clone()))),
+            now,
+        );
+        assert_eq!(state.secrets.status, Some(Err(gone)));
+        assert_eq!(state.secrets.list, Some(Ok(Vec::new())), "the list stays");
     }
 }

@@ -12,13 +12,15 @@ use std::time::{Duration, Instant};
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord, Subscription};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
+    TOPIC_SECRET_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -31,10 +33,12 @@ use massorca_protocol::methods::workspaces::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
+use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
+use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -65,9 +69,14 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
+    Secret(SecretCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    BringBack {
+        params: AgentBringBackParams,
+        reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -295,6 +304,7 @@ impl ServiceBridge {
             connection: connection_tx,
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
+            secrets_order: Arc::new(SecretsFreshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -346,6 +356,8 @@ struct Link {
     watching: BTreeSet<String>,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
+    /// Orders the vault reads across the connections of this bridge.
+    secrets_order: Arc<SecretsFreshness>,
 }
 
 impl Link {
@@ -473,6 +485,9 @@ impl Link {
         });
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
+        let sessions = agents::list_sessions(client).await?;
+        self.emit(StoreUpdate::AgentsResync(sessions));
+        secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
 
@@ -506,6 +521,9 @@ impl Link {
                             Some(Command::Terminal(command)) => {
                                 terminals::spawn_call(client, &writes, &self.updates, command);
                             }
+                            Some(Command::Secret(command)) => {
+                                secrets::spawn_call(client, command, &self.updates, &self.secrets_order);
+                            }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
                                 self.watching.insert(workspace);
@@ -537,6 +555,11 @@ impl Link {
     async fn on_event(&self, client: &Client, event: ChangeEvent) -> Outcome {
         let ChangeEvent { topic, id } = event;
         let refetched = match topic.as_str() {
+            TOPIC_SECRET_CHANGED => {
+                // The event names a scope and a name; the store takes the whole list again, names only.
+                secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
+                return Outcome::Continue;
+            }
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
@@ -561,6 +584,15 @@ impl Link {
                 }),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
+            TOPIC_AGENT_CHANGED => client
+                .agent_show(&id)
+                .await
+                .map(StoreUpdate::AgentChanged)
+                .or_else(|error| {
+                    gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
+                        StoreUpdate::AgentGone(id.clone())
+                    })
+                }),
             _ => return Outcome::Continue,
         };
         match refetched {
@@ -690,8 +722,11 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::BringBack { params, reply } => {
+            agents::spawn_bring_back(&client, params, reply, updates);
+        }
         // Routed by the session, which owns the terminal writes and store updates.
-        Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
+        Command::Terminal(_) | Command::Secret(_) | Command::RetryNow | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -740,7 +775,11 @@ fn refuse_while_down(command: Command) {
         Command::NetworkStatus { reply } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::BringBack { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Terminal(command) => terminals::refuse_while_down(command),
+        Command::Secret(command) => secrets::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }
