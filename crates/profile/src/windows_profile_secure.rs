@@ -191,7 +191,7 @@ mod tests {
     }
 
     fn junction(link: &std::path::Path, target: &std::path::Path) {
-        let made = std::process::Command::new("cmd")
+        let made = massorca_process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)

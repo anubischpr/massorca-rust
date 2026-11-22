@@ -12,7 +12,7 @@ use predicates::str::contains;
 fn share(home: &Path) {
     #[cfg(windows)]
     {
-        let granted = std::process::Command::new("icacls")
+        let granted = massorca_process::command("icacls")
             .arg(home)
             .args(["/grant", "*S-1-1-0:(OI)(CI)(M)"])
             .output()

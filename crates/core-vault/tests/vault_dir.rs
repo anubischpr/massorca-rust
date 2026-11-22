@@ -39,7 +39,7 @@ fn a_junction_at_the_vault_path_is_refused_and_never_followed() {
     std::fs::write(target.join("key"), [9u8; 32]).expect("key");
     std::fs::write(target.join("protection"), b"file\n").expect("protection");
     let junction = root.path().join("vault");
-    let made = std::process::Command::new("cmd")
+    let made = massorca_process::command("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(&junction)
         .arg(&target)

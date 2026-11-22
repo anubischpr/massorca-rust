@@ -275,7 +275,7 @@ mod tests {
     /// Grants everyone `rights` on `dir`: `M` to change it, `R` to read it.
     #[cfg(windows)]
     fn grant_everyone(dir: &Path, rights: &str) {
-        let granted = std::process::Command::new("icacls")
+        let granted = massorca_process::command("icacls")
             .arg(dir)
             .args(["/grant", &format!("*S-1-1-0:(OI)(CI)({rights})")])
             .output()

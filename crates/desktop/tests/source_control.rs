@@ -4,7 +4,6 @@
 //! temporary repository; no window opens and no user repository is touched.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -73,7 +72,7 @@ async fn stop_service(running: RunningService) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
