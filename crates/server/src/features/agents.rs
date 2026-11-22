@@ -11,6 +11,7 @@ use massorca_protocol::methods::agents::{
     CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
     CredentialsShown,
 };
+use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
@@ -237,7 +238,10 @@ async fn credentials_import(
     ctx: RequestCtx,
     params: CredentialsImportParams,
 ) -> Result<CredentialsImported, ErrorBody> {
-    on_profile(&ctx, move |profile_dir| {
+    on_profile(&ctx, move |agents, profile_dir| {
+        if params.replace {
+            refuse_live_runs(agents, &params.kind)?;
+        }
         credentials::import(
             profile_dir,
             &params.kind,
@@ -252,7 +256,7 @@ async fn credentials_show(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsShown, ErrorBody> {
-    on_profile(&ctx, move |profile_dir| {
+    on_profile(&ctx, move |_agents, profile_dir| {
         credentials::show(profile_dir, &params.kind)
     })
     .await
@@ -262,20 +266,45 @@ async fn credentials_remove(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsRemoved, ErrorBody> {
-    on_profile(&ctx, move |profile_dir| {
+    on_profile(&ctx, move |agents, profile_dir| {
+        refuse_live_runs(agents, &params.kind)?;
         credentials::remove(profile_dir, &params.kind)
     })
     .await
+}
+
+/// Refuses with `agent.busy` while any session of `kind` has a run that has not exited: replacing or removing its home
+/// would pull its login away under it.
+fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
+    let live: Vec<String> = agents
+        .list(None)?
+        .into_iter()
+        .filter(|session| session.kind == kind && session.execution.state != TerminalState::Exited)
+        .map(|session| session.id)
+        .collect();
+    if live.is_empty() {
+        return Ok(());
+    }
+    let mut error = AgentError::new(
+        codes::AGENT_BUSY,
+        format!(
+            "a run of agent kind {kind} is still live (session {}); stop it before replacing or removing its credentials",
+            live.join(", ")
+        ),
+    );
+    error.data = Some(serde_json::json!({ "sessions": live }));
+    Err(error)
 }
 
 /// Runs one call on the profile directory on the blocking pool and maps its refusal to the protocol error.
 async fn on_profile<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,
-    F: FnOnce(&Path) -> Result<T, AgentError> + Send + 'static,
+    F: FnOnce(&Agents, &Path) -> Result<T, AgentError> + Send + 'static,
 {
     let profile_dir: PathBuf = ctx.state.profile.dir().to_path_buf();
-    match tokio::task::spawn_blocking(move || call(&profile_dir)).await {
+    let agents = ctx.state.agents.clone();
+    match tokio::task::spawn_blocking(move || call(&agents, &profile_dir)).await {
         Ok(result) => result.map_err(ErrorBody::from),
         Err(error) => Err(ErrorBody::new(
             codes::INTERNAL,

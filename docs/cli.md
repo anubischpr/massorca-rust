@@ -159,6 +159,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   importing. File contents are never printed or logged.
 - `agent credentials show KIND` and `remove KIND` never follow a link: a home that is a link
   is refused with `agent.credentials_invalid` and must be removed by hand.
+- `agent credentials import KIND --replace` and `remove KIND` are refused with `agent.busy`
+  while a run of the kind is live; stop it first. An old home left aside by a replace that
+  could not finish (`homes/.KIND.old-...`) refuses the next import with
+  `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

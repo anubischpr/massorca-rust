@@ -425,3 +425,64 @@ fn the_home_is_0700_and_its_files_0600() {
     assert_eq!(mode(&home(&sandbox).join("token.json")), 0o600);
     assert_eq!(mode(&home(&sandbox).join("config.toml")), 0o600);
 }
+
+#[test]
+fn replace_and_remove_are_refused_while_a_run_of_the_kind_is_live() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox, &["token.json"]);
+    let source = fake_source(&sandbox);
+    let notes = sandbox.home().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", path_text(&notes), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+    let import = [
+        "agent",
+        "credentials",
+        "import",
+        "fake",
+        "--from",
+        path_text(&source),
+        "--replace",
+    ];
+    sandbox.json_ok("default", &import);
+
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            "main",
+            "--read-only",
+            "--prompt",
+            "hold",
+        ],
+    );
+    let session = started["id"].as_str().expect("a session id").to_owned();
+    let terminal = started["terminal_id"]
+        .as_str()
+        .expect("a terminal id")
+        .to_owned();
+    wait_for_line(&sandbox, &terminal, "fake-agent: holding");
+
+    assert_eq!(error_of(&sandbox, &import)["code"], "agent.busy");
+    assert_eq!(
+        error_of(&sandbox, &["agent", "credentials", "remove", "fake"])["code"],
+        "agent.busy"
+    );
+    assert!(
+        home(&sandbox).join("token.json").is_file(),
+        "the home is untouched"
+    );
+    let shown = sandbox.json_ok("default", &["agent", "credentials", "show", "fake"]);
+    assert_eq!(shown["exists"], true);
+
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+    sandbox.json_ok("default", &import);
+    let removed = sandbox.json_ok("default", &["agent", "credentials", "remove", "fake"]);
+    assert_eq!(removed["removed"], true);
+}
