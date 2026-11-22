@@ -13,10 +13,11 @@ use crate::service::fixtures::{project, workspace};
 use crate::service::{
     Command, ConnectionState, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
 };
-use gpui::{AppContext, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretStatus};
+use massorca_ui::components::text_field::TextField;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -361,8 +362,8 @@ fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
     );
 }
 
-/// Opens Add, types `name`, pastes `value` from the clipboard and saves: what the page sends, and nothing more.
-fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+/// Opens Add and types `name` into the name field.
+fn open_add_named(rig: &mut Rig, cx: &mut VisualTestContext, name: &str) {
     rig.shell.update(cx, |shell, cx| shell.open_add_secret(cx));
     let field = rig.shell.read_with(cx, |shell, _| {
         shell
@@ -372,10 +373,44 @@ fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &s
             .expect("the name field is open")
     });
     field.update_in(cx, |field, window, cx| field.set_text(name, window, cx));
+}
+
+/// The masked value field of the open dialog.
+fn value_of_dialog(rig: &Rig, cx: &mut VisualTestContext) -> Entity<TextField> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .vault_dialog
+            .as_ref()
+            .map(|dialog| dialog.value_field.clone())
+            .expect("the value field is open")
+    })
+}
+
+/// Types `text` into the value field as the keyboard does: the field takes focus, then the keys arrive.
+fn type_value(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
+    let field = value_of_dialog(rig, cx);
+    field.update_in(cx, |field, window, cx| field.focus(window, cx));
+    draw(cx);
+    cx.simulate_input(text);
+}
+
+/// Opens Add, types `name`, pastes `value` from the clipboard and saves: what the page sends, and nothing more.
+fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+    open_add_named(rig, cx, name);
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(value.to_owned())));
     rig.shell
-        .update(cx, |shell, cx| shell.paste_secret_value(cx));
-    rig.shell.update(cx, |shell, cx| shell.save_secret(cx));
+        .update_in(cx, |shell, window, cx| shell.paste_secret_value(window, cx));
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+}
+
+/// Opens Add, types `name`, types `value` into the masked field and saves.
+fn type_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+    open_add_named(rig, cx, name);
+    type_value(rig, cx, value);
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
     cx.run_until_parked();
 }
 
@@ -393,7 +428,7 @@ fn a_pasted_value_is_sent_once_and_the_dialog_closes_when_the_vault_stores_it(
                 ("project:p1", "OPENAI_API_KEY", false),
                 "the first project is preselected and an add never replaces"
             );
-            assert_eq!(params.value, VALUE, "the pasted value is what is sent");
+            assert!(params.value == VALUE, "the pasted value is what is sent");
             reply
                 .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
                 .expect("the page listens");
@@ -406,6 +441,55 @@ fn a_pasted_value_is_sent_once_and_the_dialog_closes_when_the_vault_stores_it(
             .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
         "the dialog closes once the vault stores the secret"
     );
+}
+
+#[gpui::test]
+fn a_typed_value_is_sent_once_and_cleared_from_the_field_as_it_is_sent(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-3a8c";
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    assert!(
+        value_of_dialog(&rig, cx).read_with(cx, |field, _| field.text().is_empty()),
+        "the typed value leaves the field as it is sent"
+    );
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Set { params, reply })) => {
+            assert!(params.value == VALUE, "the typed value is what is sent");
+            reply
+                .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.set was expected"),
+    }
+    assert!(
+        rig.script.next().is_none(),
+        "a second save while the first is in flight sends nothing"
+    );
+}
+
+#[gpui::test]
+fn an_empty_clipboard_is_refused_and_pastes_nothing(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.paste_secret_value(window, cx));
+    cx.run_until_parked();
+    assert!(
+        value_of_dialog(&rig, cx).read_with(cx, |field, _| field.text().is_empty()),
+        "an empty clipboard pastes nothing"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell.vault_dialog.as_ref().expect("the dialog stays open");
+        assert!(
+            matches!(dialog.form.status, FormStatus::Refused(_)),
+            "the refusal says why"
+        );
+    });
+    assert!(rig.script.next().is_none(), "nothing reaches the service");
 }
 
 #[gpui::test]
@@ -429,7 +513,6 @@ fn a_refused_save_keeps_the_dialog_open_and_drops_the_sent_value(cx: &mut TestAp
             .vault_dialog
             .as_ref()
             .expect("a refused save keeps the dialog open");
-        assert!(!dialog.form.has_value(), "the value was sent and is gone");
         assert_eq!(
             dialog.form.status,
             FormStatus::Refused(
@@ -438,6 +521,10 @@ fn a_refused_save_keeps_the_dialog_open_and_drops_the_sent_value(cx: &mut TestAp
             )
         );
     });
+    assert!(
+        value_of_dialog(&rig, cx).read_with(cx, |field, _| field.text().is_empty()),
+        "the value was sent and is gone from the field"
+    );
 }
 
 #[gpui::test]
