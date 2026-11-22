@@ -68,7 +68,7 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
 | `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
-| `agent kinds` | Lists the agent kinds: id, name, owner and the resolved program, or `no` / `invalid`. Problems follow the table. |
+| `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
@@ -135,11 +135,13 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 
 - `agent kinds` lists the built-in kinds (owner `core`: `claude`, `codex`, `antigravity`,
   `gentle-shell`) and the profile's own declarations in `<profile>/agents/kinds/*.json`
-  (owner `user`). The files are read again on every call. A kind is installed when one of
-  its programs resolves: an absolute path that is a file, or a bare name on the service's
-  `PATH` (on Windows also with the `PATHEXT` extensions). A file that does not parse, breaks
-  a rule, or reuses a built-in id is listed with its problems and never started.
-  `--json` prints the `agent.kinds` result.
+  (owner `user`). The files are read again on every call. `INSTALLED` is the kind's package
+  state (`enabled` for every kind until packages land); `DETECTED` is `yes` when one of its
+  programs resolves: an absolute path that is a file, or a bare name on the service's `PATH`
+  (on Windows also with the `PATHEXT` extensions). `PATH` shows the resolved program. A file
+  that does not parse, breaks a rule, or reuses a built-in id is listed with its problems,
+  never detected, and never started. `--json` prints the `agent.kinds` result, where
+  `installed` is deprecated and equals `detected`.
 - `agent start` runs the kind's program directly in a new terminal of the workspace (no
   shell in between), with the first prompt as the kind declares. A workspace holds one live
   session that is not `--read-only`; a second writing start fails with
