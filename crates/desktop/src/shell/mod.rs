@@ -126,6 +126,10 @@ pub struct Shell {
     /// The catalogue's search field; its settled text becomes the Marketplace query.
     marketplace_search: Entity<SearchField>,
     _marketplace_search_changes: Subscription,
+    /// The code field of the account sign-in dialog.
+    marketplace_code: Entity<TextField>,
+    /// The uninstall confirm on screen, if any.
+    marketplace_uninstall: Option<marketplace::UninstallConfirm>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -205,6 +209,11 @@ impl Shell {
                 }
             },
         );
+        let marketplace_code = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Code")
+                .placeholder("Code from the sign-in page")
+        });
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
@@ -272,6 +281,8 @@ impl Shell {
             marketplace,
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
+            marketplace_code,
+            marketplace_uninstall: None,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
@@ -592,6 +603,7 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -658,6 +670,7 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }
