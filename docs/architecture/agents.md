@@ -210,6 +210,9 @@ logs one that fails, by session id and error code, without stopping.
   still live in the store when the service starts. An exit is recorded only while the row still
   names the terminal the run ran in (decision 0058): an end that arrives after a resume moved the
   session onto a new terminal changes nothing, and does not end the resumed run.
+- A terminal is closed after the status lock is released: when a start or a resume fails after its
+  run was registered, and in `agent.forget`. A close can wait for the terminal's kill grace, and
+  the status of the other sessions must not wait with it.
 - `agent.watch` subscribes before it reads the snapshot. A watcher that falls more than
   1024 changes behind gets a fresh `snapshot`; one whose connection reads too slowly
   ends with `stream.overflow` on the client, like any stream. A forgotten session sends

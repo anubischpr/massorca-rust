@@ -400,6 +400,8 @@ impl Agents {
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
+            // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+            drop(live);
             let _ = self.inner.config.terminals.close(&terminal_id);
             remove_dir(&run_dir);
             return Err(error.into());
@@ -499,6 +501,8 @@ impl Agents {
         let restarted = self.store().restart_agent_session(&row.id, &terminal_id);
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
+            // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+            drop(live);
             let _ = self.inner.config.terminals.close(&terminal_id);
             remove_dir(&run_dir);
             restarted?;
@@ -811,12 +815,14 @@ impl Agents {
             ));
         }
         self.store().delete_agent_session(&session.id)?;
+        live.remove(&session.id);
+        self.notify(Change::Forgotten(session.id.clone()));
+        // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+        drop(live);
         if let Some(terminal) = &session.terminal_id {
             let _ = self.inner.config.terminals.close(terminal);
         }
         remove_dir(&paths::run_dir(self.profile_dir(), &session.id));
-        live.remove(&session.id);
-        self.notify(Change::Forgotten(session.id.clone()));
         Ok(session)
     }
 
