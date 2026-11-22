@@ -5,6 +5,7 @@
 use super::super::Shell;
 use super::super::sidebar::row_focus;
 use super::team_pill;
+use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, CardView, Column, PickStep, TaskId};
@@ -14,8 +15,10 @@ use gpui::{
 };
 use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::board_column::{BoardCard, BoardColumn};
+use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::scroll_area::{ScrollArea, ScrollAxis};
 use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
-use massorca_ui::{ActiveTheme, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// The keys a picked card reads: Space, the arrows and Escape.
 const PICK_KEYS: [&str; 6] = ["space", "left", "right", "up", "down", "escape"];
@@ -34,36 +37,58 @@ pub(in crate::shell) fn board_page(
         BoardOwner::Team(team) | BoardOwner::Project(team, _) => team,
     };
     let team_name = state.team(team).map_or("", |team| team.name.as_str());
-    let columns = board_columns(model, shell, owner, window, cx);
+    let header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_style(TYPE_HEADING)
+                .text_color(theme.palette.text.primary)
+                .child("Board"),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .child(team_pill(team_name, team, &theme))
+                .child(
+                    Button::new("board-filter", "Filter")
+                        .variant(ButtonVariant::Ghost)
+                        .leading_icon(IconName::ListFilter)
+                        .disabled(true)
+                        .tooltip(NOT_AVAILABLE),
+                ),
+        );
+    // The header keeps the page inset; the columns run to the window edge and scroll there.
     div()
         .flex()
         .flex_col()
         .gap(px(SPACE_4))
         .size_full()
-        .p(px(SPACE_6))
+        .pt(px(SPACE_6))
+        .pb(px(SPACE_6))
         .child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_style(TYPE_HEADING)
-                        .text_color(theme.palette.text.primary)
-                        .child("Board"),
-                )
-                .child(team_pill(team_name, team, &theme)),
+                .flex_col()
+                .gap(px(SPACE_4))
+                .px(px(SPACE_6))
+                .child(header)
+                .child(note("Tasks come from the Conference room", &theme)),
         )
-        .child(note("Tasks come from the Conference room", &theme))
-        .child(columns)
+        .child(board_columns(model, shell, owner, SPACE_6, window, cx))
         .into_any_element()
 }
 
-/// The four columns of a Board, each with its cards in order (4.3). A project's Board uses it too.
+/// The four columns of a Board, each with its cards in order (4.3). The row scrolls sideways in a
+/// ScrollArea; `inset` keeps the first and last column clear of the edges it scrolls to.
 pub(in crate::shell) fn board_columns(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     owner: BoardOwner,
+    inset: f32,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -71,13 +96,7 @@ pub(in crate::shell) fn board_columns(
     let Some(view) = model.teams().board_view(owner) else {
         return note("This Board is gone.", &theme).into_any_element();
     };
-    let mut columns = div()
-        .id("board-columns")
-        .flex()
-        .gap(px(SPACE_2))
-        .flex_1()
-        .min_h_0()
-        .overflow_x_scroll();
+    let mut columns = div().flex().gap(px(SPACE_2)).h_full().px(px(inset));
     for column in view.columns {
         let mut built = BoardColumn::new(
             format!("board-column-{}", column.column.title()),
@@ -89,7 +108,16 @@ pub(in crate::shell) fn board_columns(
         }
         columns = columns.child(built);
     }
-    columns.into_any_element()
+    div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .child(
+            ScrollArea::new("board-columns")
+                .axis(ScrollAxis::Horizontal)
+                .child(columns),
+        )
+        .into_any_element()
 }
 
 /// One card: its status glyph and word, the bot (or Unassigned), the time, and its key handler.
