@@ -30,6 +30,7 @@ mod zones;
 use crate::data::DataSource;
 use crate::launch_options::DebugFocus;
 use crate::model::canvas::Canvas;
+use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
 };
@@ -108,6 +109,10 @@ pub struct Shell {
     pairing_offer: Entity<TextField>,
     pairing_name: Entity<TextField>,
     _pairing_changes: Subscription,
+    /// Whether the paired devices were asked for since the Pairing page was last shown.
+    devices_asked: bool,
+    /// The revoke confirm on screen, if one is open (D-PR-02).
+    revoke: Option<RevokeFlow>,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -205,8 +210,9 @@ impl Shell {
             let snapshot = store.read(cx).snapshot(Instant::now());
             let connected = store.read(cx).state().connection.is_connected();
             if connected && !shell.service_connected {
-                // A reconnect asks for the paired hosts again while Settings is on screen.
+                // A reconnect asks for the paired hosts and devices again while those pages are on screen.
                 shell.settings_hosts_asked = false;
+                shell.devices_asked = false;
             }
             shell.service_connected = connected;
             if connected {
@@ -295,6 +301,8 @@ impl Shell {
             pairing_offer,
             pairing_name,
             _pairing_changes: pairing_changes,
+            devices_asked: false,
+            revoke: None,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -469,6 +477,7 @@ impl Render for Shell {
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.refresh_settings_hosts();
+        self.refresh_devices(cx);
         self.sync_folder_field(window, cx);
         self.sync_pairing_field(window, cx);
         self.sync_source_control(window, cx);
@@ -514,6 +523,10 @@ impl Render for Shell {
             state: self.pairing.clone(),
             offer_field: self.pairing_offer.clone(),
             name_field: self.pairing_name.clone(),
+            devices: crate::model::devices::devices_view(
+                self.store.read(cx).state().devices.as_ref(),
+                crate::model::pairing::now_ms(),
+            ),
             shell: shell.clone(),
         };
         let setup_rows = crate::model::setup::checklist(
@@ -661,6 +674,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let revoke = self
+            .revoke
+            .as_ref()
+            .map(|flow| pairing::revoke_dialog(flow, &shell));
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
@@ -728,6 +745,7 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
