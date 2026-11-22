@@ -75,7 +75,11 @@ fn network_and_device_paths_are_never_a_source() {
         r"dir:\??\C:\kit",
     ];
     if cfg!(windows) {
-        refused.push("dir://host/share/kit");
+        refused.extend([
+            "dir://host/share/kit",
+            r"file:\/host/share/kit.mxt",
+            r"dir:/\host\share",
+        ]);
     }
     for text in refused {
         let error = Source::parse(text).expect_err(text);
@@ -103,12 +107,7 @@ fn a_fifo_in_a_folder_or_as_an_archive_is_refused_without_blocking() {
     assert!(made.success());
     let error = load(&Source::Dir(dir.path().to_path_buf()), None).expect_err("a fifo entry");
     assert_eq!(error.code(), codes::UNSAFE_ENTRY);
-    // Opening a FIFO with no writer blocks, so the archive check uses one that already has a writer.
-    let writer = std::thread::spawn({
-        let fifo = fifo.clone();
-        move || drop(std::fs::OpenOptions::new().write(true).open(fifo))
-    });
+    // No writer ever opens the FIFO: the check must refuse it without opening it, or this test hangs.
     let error = load(&Source::File(fifo), Some(WRONG)).expect_err("a fifo archive");
-    writer.join().expect("the writer ends");
     assert_eq!(error.code(), codes::INVALID_ARCHIVE);
 }

@@ -234,6 +234,11 @@ impl ProcessTree {
         )
         .ok()
         .filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
+        if job.is_none() {
+            tracing::warn!(
+                "no job object for a vendor command: a timeout ends only the command itself"
+            );
+        }
         Ok((child, Self { job }))
     }
 
@@ -247,14 +252,16 @@ impl ProcessTree {
     fn kill(self, child: &mut Child) {
         #[cfg(unix)]
         {
-            // A negative id names the process group; `--` stops procps `kill` reading it as an option.
-            let _ = Command::new("kill")
-                .args(["-s", "KILL", "--"])
-                .arg(format!("-{}", child.id()))
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            // The child leads its own group (`process_group(0)`), so its id is the group id.
+            if let Some(group) = i32::try_from(child.id())
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+                && let Err(error) =
+                    rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+                && error != rustix::io::Errno::SRCH
+            {
+                tracing::warn!(error = ?error, "a vendor command's process group could not be killed");
+            }
         }
         // Closing a kill-on-close job ends every process in it.
         #[cfg(windows)]

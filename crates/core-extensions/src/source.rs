@@ -60,12 +60,14 @@ impl Source {
     }
 }
 
-/// A UNC share (`\\host\share`, `//host/share` on Windows) or a device namespace path (`\\?\`, `\\.\`, `\??\`):
-/// reading one could reach another machine or a device, so a source never names one.
+/// A UNC share or a device namespace path (`\\?\`, `\\.\`, `\??\`): reading one could reach another machine or a
+/// device, so a source never names one. Windows reads any two leading separators (`\\`, `//`, `\/`, `/\`) as a share.
 fn is_network_or_device_path(path: &str) -> bool {
+    let mut leading = path.chars();
+    let separator = |c: Option<char>| matches!(c, Some('\\' | '/'));
     path.starts_with(r"\\")
         || path.starts_with(r"\??\")
-        || (cfg!(windows) && path.starts_with("//"))
+        || (cfg!(windows) && separator(leading.next()) && separator(leading.next()))
 }
 
 /// A checked package, held in memory.
@@ -166,6 +168,13 @@ fn read_archive(path: &Path) -> Result<Vec<u8>, Error> {
 /// socket, a device). More than `limit` bytes is refused while reading, whatever the size the file reported. An I/O
 /// error names `shown`, the path the caller sent, and never a deeper host path.
 fn read_regular_file(path: &Path, limit: u64, shown: &Path) -> Result<Option<Vec<u8>>, Error> {
+    // Opening a FIFO blocks until a writer comes, so the path is checked before it is opened.
+    if !fs::symlink_metadata(path)
+        .map_err(Error::io("cannot read", shown))?
+        .is_file()
+    {
+        return Ok(None);
+    }
     let file = fs::File::open(path).map_err(Error::io("cannot read", shown))?;
     if !file
         .metadata()
