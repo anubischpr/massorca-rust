@@ -6,9 +6,9 @@ use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::teams::{
-    self, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess, TeamCharacter,
-    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
-    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
+    TeamCharacter, TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use serde_json::Value;
 use tokio::time::timeout;
@@ -580,5 +580,99 @@ async fn team_changes_publish_team_changed_with_the_team_id() {
         .await
         .expect("team.rm");
     assert_eq!(next_event(&mut events).await.topic, TOPIC_TEAM_CHANGED);
+    stop(running).await;
+}
+
+fn team_ref(team: &str) -> TeamRef {
+    TeamRef {
+        team: team.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn a_teams_bots_and_projects_are_listed_in_creation_order_and_only_its_own() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let alpha: Team = client
+        .call(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("beta"))
+        .await
+        .expect("beta");
+
+    let empty: BotList = client
+        .call(teams::BOT_LIST, &team_ref("alpha"))
+        .await
+        .expect("team.bot_list");
+    assert!(empty.bots.is_empty());
+    let no_projects: TeamProjectList = client
+        .call(teams::PROJECT_LIST, &team_ref("alpha"))
+        .await
+        .expect("team.project_list");
+    assert!(no_projects.projects.is_empty());
+
+    for (team, name, lead) in [
+        ("alpha", "zed", true),
+        ("beta", "other", false),
+        ("alpha", "ada", false),
+    ] {
+        client
+            .call::<_, Bot>(teams::BOT_ADD, &bot_params(team, name, lead))
+            .await
+            .expect("team.bot_add");
+    }
+    for (team, name) in [
+        ("alpha", "parser"),
+        ("beta", "elsewhere"),
+        ("alpha", "docs"),
+    ] {
+        client
+            .call::<_, TeamProject>(
+                teams::PROJECT_ADD,
+                &TeamProjectAddParams {
+                    team: team.to_owned(),
+                    name: name.to_owned(),
+                    goal: Some(format!("Ships the {name}")),
+                    brief: None,
+                },
+            )
+            .await
+            .expect("team.project_add");
+    }
+
+    let bots: BotList = client
+        .call(teams::BOT_LIST, &team_ref(&alpha.id))
+        .await
+        .expect("team.bot_list by id");
+    let names: Vec<&str> = bots.bots.iter().map(|bot| bot.name.as_str()).collect();
+    assert_eq!(names, ["zed", "ada"]);
+    assert!(bots.bots[0].lead && !bots.bots[1].lead);
+    assert!(bots.bots.iter().all(|bot| bot.team_id == alpha.id));
+
+    let projects: TeamProjectList = client
+        .call(teams::PROJECT_LIST, &team_ref("alpha"))
+        .await
+        .expect("team.project_list by name");
+    let names: Vec<&str> = projects
+        .projects
+        .iter()
+        .map(|project| project.name.as_str())
+        .collect();
+    assert_eq!(names, ["parser", "docs"]);
+    assert_eq!(projects.projects[0].goal, "Ships the parser");
+
+    let missing = client
+        .call::<_, BotList>(teams::BOT_LIST, &team_ref("gamma"))
+        .await
+        .expect_err("an unknown team");
+    assert_eq!(remote_code(&missing), codes::TEAM_NOT_FOUND);
+    let missing = client
+        .call::<_, TeamProjectList>(teams::PROJECT_LIST, &team_ref("gamma"))
+        .await
+        .expect_err("an unknown team");
+    assert_eq!(remote_code(&missing), codes::TEAM_NOT_FOUND);
     stop(running).await;
 }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use massorca_core_remote::bootstrap::{
     BootstrapError, BootstrapPlan, BootstrapReport, DEFAULT_LISTEN, DEFAULT_OFFER_TTL_SECS,
-    DEFAULT_REMOTE_DIR, bootstrap, uninstall, validate_listen,
+    DEFAULT_REMOTE_DIR, RemoteMachine, bootstrap, probe_machine, uninstall, validate_listen,
 };
 use massorca_core_remote::ssh::{RemoteOutput, RemoteShell, SshError};
 use tempfile::TempDir;
@@ -516,4 +516,39 @@ fn uninstall_never_removes_home_or_the_root() {
         );
         assert!(shell.commands().is_empty(), "{remote_dir}");
     }
+}
+
+#[test]
+fn probing_a_host_names_its_linux_machine_and_runs_nothing_else() {
+    let shell = FakeShell::new(|command| {
+        assert_eq!(command, "uname -sm");
+        ok("Linux aarch64\n")
+    });
+    let machine = probe_machine(&shell).expect("the machine is probed");
+    assert_eq!(
+        machine,
+        RemoteMachine {
+            os: "Linux".to_owned(),
+            arch: "aarch64".to_owned(),
+        }
+    );
+    assert_eq!(shell.commands(), ["uname -sm"]);
+}
+
+#[test]
+fn probing_refuses_a_machine_massorca_does_not_run_on_and_names_what_it_found() {
+    let shell = FakeShell::new(|_| ok("Linux armv7l\n"));
+    let error = probe_machine(&shell).expect_err("armv7l is refused");
+    assert!(matches!(error, BootstrapError::UnsupportedSystem(_)));
+    assert!(error.to_string().contains("armv7l"), "{error}");
+}
+
+#[test]
+fn a_probe_that_fails_names_the_step_that_failed() {
+    let shell = FakeShell::new(|_| fail(255, "Permission denied"));
+    let error = probe_machine(&shell).expect_err("the probe fails");
+    assert!(
+        error.to_string().contains("checking the remote system"),
+        "{error}"
+    );
 }
