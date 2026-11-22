@@ -4,8 +4,7 @@
 
 use super::super::Shell;
 use crate::model::agent_kinds::{
-    KindChoice, NOT_AVAILABLE_ON_HOST, bot_kind_choices, choice_at, first_available,
-    sample_bot_kind_choices,
+    KindChoice, bot_kind_choices, choice_at, first_available, sample_bot_kind_choices,
 };
 use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
@@ -187,21 +186,25 @@ impl Shell {
             None => sample_bot_kind_choices(),
         };
         let agent = first_available(&kinds).unwrap_or(0);
-        // A kind this host cannot run is listed disabled, with why; the form cannot choose it.
+        // A kind this host cannot run, or that is turned off, is listed disabled, with why; the form cannot choose it.
         let agent_select = cx.new(|cx| {
             let mut select = SelectView::new(kinds.iter().map(|kind| kind.name.clone()), cx)
                 .label("Agent")
                 .selected(first_available(&kinds))
                 .layer(OverlayLayer::Dialog);
-            for (index, _) in kinds.iter().enumerate().filter(|(_, kind)| !kind.available) {
-                select = select.option_unavailable(index, NOT_AVAILABLE_ON_HOST);
+            for (index, reason) in kinds
+                .iter()
+                .enumerate()
+                .filter_map(|(index, kind)| kind.unavailable.map(|reason| (index, reason)))
+            {
+                select = select.option_unavailable(index, reason);
             }
             select
         });
         let marketplace = self.model.marketplace();
         let unavailable: Vec<UnavailableKind> = kinds
             .iter()
-            .filter(|kind| !kind.available)
+            .filter(|kind| kind.unavailable.is_some())
             .filter_map(|kind| {
                 let item = marketplace
                     .items
@@ -895,6 +898,61 @@ mod tests {
             .read_with(cx, |shell, _| match &shell.team_dialog {
                 Some(TeamDialog::AddBot(form)) => {
                     assert_eq!(form.agent, 0, "the unavailable kind is refused")
+                }
+                other => panic!("the Add bot form should stay open, found {other:?}"),
+            });
+        click(cx, "button:add-bot-marketplace-codex");
+        rig.shell.read_with(cx, |shell, _| {
+            assert!(shell.team_dialog.is_none(), "the form closes for the page");
+            assert_eq!(
+                shell.model().navigation().page,
+                Page::Marketplace(MarketplacePage::Item(MarketplaceItemId(2)))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_turned_off_kind_is_listed_turned_off_and_its_link_opens_its_page(cx: &mut TestAppContext) {
+        let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::AgentKindsResync(vec![
+                agent_kind("claude", "Claude", PackageState::Enabled),
+                agent_kind("codex", "Codex", PackageState::Disabled),
+            ]))
+            .expect("the store listens");
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team("t1", "Desarrollo")]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_add_bot(TeamId(1), window, cx);
+        });
+        cx.run_until_parked();
+        draw(cx);
+        rig.shell
+            .read_with(cx, |shell, cx| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) => {
+                    let select = form.agent_select.read(cx);
+                    assert_eq!(
+                        select.selected_label().map(ToString::to_string).as_deref(),
+                        Some("Claude")
+                    );
+                    assert_eq!(
+                        select.option_reason(1).map(ToString::to_string).as_deref(),
+                        Some("Turned off")
+                    );
+                }
+                other => panic!("the Add bot form should open, found {other:?}"),
+            });
+        rig.shell
+            .update(cx, |shell, cx| shell.set_add_bot_agent(1, cx));
+        rig.shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::AddBot(form)) => {
+                    assert_eq!(form.agent, 0, "the turned-off kind is refused")
                 }
                 other => panic!("the Add bot form should stay open, found {other:?}"),
             });

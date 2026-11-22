@@ -98,8 +98,8 @@ pub struct Bot {
     pub role: String,
     /// The agent the bot runs as; `None` when the service does not say which one.
     pub agent: Option<Agent>,
-    /// The bot's kind is known and not detected on its host, so the bot cannot run there.
-    pub kind_unavailable: bool,
+    /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.
+    pub kind_unavailable: Option<&'static str>,
 }
 
 /// A task on a Board. Its card shows the column's status word, the bot and the time.
