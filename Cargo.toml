@@ -16,6 +16,7 @@ massorca-profile = { path = "crates/profile" }
 massorca-core-store = { path = "crates/core-store" }
 massorca-core-git = { path = "crates/core-git" }
 massorca-core-terminal = { path = "crates/core-terminal" }
+massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
@@ -32,7 +33,9 @@ base64 = "0.22.1"
 clap = { version = "4.6.9", features = ["derive", "env"] }
 crossterm = "0.29.0"
 directories = "6.0.0"
+embed-resource = "3.0.12"
 libc = "0.2.191"
+notify = "9.0.0"
 dunce = "1.0.5"
 interprocess = { version = "2.4.9", features = ["tokio"] }
 portable-pty = "0.9.0"

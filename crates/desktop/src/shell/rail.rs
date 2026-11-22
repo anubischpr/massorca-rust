@@ -438,7 +438,8 @@ fn usage_ring(
         .into_any_element()
 }
 
-/// The popover's rows: the agent, the reading or the state it is in, and when the window resets.
+/// The popover's rows: the agent, the reading or the state it is in, when the window resets, and
+/// the plan (D-SH-15).
 fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
     let kind = agent_kind(usage.agent);
     let agent = div()
@@ -462,15 +463,24 @@ fn usage_popover_body(usage: &UsageModel, theme: &Theme) -> Div {
             .child(Skeleton::line(LineWidth::Full))
             .child(Skeleton::line(LineWidth::Partial)),
     };
-    if matches!(usage.status, UsageStatus::Percent(_)) && !usage.resets_in.is_empty() {
-        return body.child(
-            div()
-                .text_style(TYPE_BODY_SM)
-                .text_color(theme.palette.text.secondary)
-                .child(format!("Resets in {}", usage.resets_in)),
-        );
+    if !matches!(usage.status, UsageStatus::Percent(_)) {
+        return body;
     }
-    body
+    let body = if usage.resets_in.is_empty() {
+        body
+    } else {
+        body.child(usage_row(format!("Resets in {}", usage.resets_in), theme))
+    };
+    // D-SH-15 lists a Plan row; the usage data does not carry the plan name yet.
+    body.child(usage_row("Plan not reported", theme))
+}
+
+/// One caption row of the usage popover: "Resets in 2 days", "Plan" (D-SH-15).
+fn usage_row(text: impl IntoElement, theme: &Theme) -> impl IntoElement {
+    div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.secondary)
+        .child(text)
 }
 
 /// The ring's reading for the status: a percentage draws its arc; the others draw none.
