@@ -734,7 +734,7 @@ mod tests {
         let target = parent.path().join("target");
         std::fs::create_dir(&target).unwrap();
         let junction = parent.path().join("junction");
-        let made = std::process::Command::new("cmd")
+        let made = massorca_process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(&junction)
             .arg(&target)

@@ -87,6 +87,17 @@ impl TextBuffer {
         self.marked.clone()
     }
 
+    /// Overwrites the text in place before it is released, so a masked value leaves no readable copy behind.
+    pub fn wipe(&mut self) {
+        let len = self.text.len();
+        self.text.clear();
+        self.text.extend((0..len).map(|_| '\0'));
+        self.text.clear();
+        self.selected = 0..0;
+        self.reversed = false;
+        self.marked = None;
+    }
+
     /// Replaces the whole text and puts the cursor at its end; `true` when it changed.
     pub fn set_text(&mut self, text: &str) -> bool {
         if self.text == text {
@@ -466,6 +477,15 @@ impl fmt::Debug for TextField {
     }
 }
 
+impl Drop for TextField {
+    /// Backstop for owners that clear a masked value on close: whatever is left is overwritten as the field goes.
+    fn drop(&mut self) {
+        if self.masked {
+            self.buffer.wipe();
+        }
+    }
+}
+
 impl EventEmitter<TextFieldEvent> for TextField {}
 
 impl Focusable for TextField {
@@ -601,7 +621,7 @@ impl TextField {
         self.edit(window, cx, |buffer| buffer.insert(&text));
     }
 
-    /// Empties the field without moving focus. An owner calls it once the text has been sent.
+    /// Empties the field without moving focus.
     pub fn clear_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let changed = self.buffer.set_text("");
         self.after_edit(changed, window, cx);

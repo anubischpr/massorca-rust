@@ -313,7 +313,7 @@ mod tests {
     fn plant_link(link: &std::path::Path, target: &std::path::Path) {
         #[cfg(windows)]
         {
-            let made = std::process::Command::new("cmd")
+            let made = massorca_process::command("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(link)
                 .arg(target)
@@ -428,7 +428,7 @@ mod tests {
         drop(massorca_profile::open_private_dir(&hosts).expect("hosts"));
         #[cfg(windows)]
         {
-            let granted = std::process::Command::new("icacls")
+            let granted = massorca_process::command("icacls")
                 .arg(&hosts)
                 .args(["/grant", "*S-1-1-0:(OI)(CI)(M)"])
                 .output()
@@ -509,7 +509,7 @@ mod tests {
         let profile = private_profile(temp.path());
         let hosts = profile.dir().join("hosts");
         drop(massorca_profile::open_private_dir(&hosts).expect("hosts"));
-        let granted = std::process::Command::new("icacls")
+        let granted = massorca_process::command("icacls")
             .arg(&hosts)
             .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
             .output()
@@ -621,7 +621,7 @@ mod tests {
             (office.to_path_buf(), "(RD)"),
             (office.join("host.json"), "(RA)"),
         ] {
-            let denied = std::process::Command::new("icacls")
+            let denied = massorca_process::command("icacls")
                 .arg(&path)
                 .args(["/deny", &format!("*S-1-1-0:{right}")])
                 .output()
@@ -643,7 +643,7 @@ mod tests {
     fn unblock_host_file(office: &std::path::Path) {
         #[cfg(windows)]
         for path in [office.join("host.json"), office.to_path_buf()] {
-            let _ = std::process::Command::new("icacls")
+            let _ = massorca_process::command("icacls")
                 .arg(&path)
                 .args(["/remove:d", "*S-1-1-0"])
                 .output();
