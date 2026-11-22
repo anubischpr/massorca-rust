@@ -1,7 +1,7 @@
 //! `massorca service run`: the service in this process, until it is stopped.
 
-use massorca_profile::{Profile, ensure_dir};
-use massorca_server::{Service, ServiceConfig, ShutdownHandle};
+use massorca_profile::{Profile, RootAccess, ensure_dir, secure_root};
+use massorca_server::{Service, ServiceConfig, ServiceError, ShutdownHandle};
 use tokio::runtime::Builder;
 
 use crate::args::RunArgs;
@@ -11,8 +11,13 @@ use crate::output::Output;
 
 /// Runs the service of `profile` until a stop request or a stop signal arrives.
 pub fn run(profile: &Profile, args: &RunArgs, output: Output) -> Result<(), CliError> {
+    // Checked before anything is written into the profile, logs included (decision 0073).
+    let access = secure_root(profile).map_err(ServiceError::from)?;
     ensure_dir(profile)?;
     let _logging = init_service_logging(profile, args.log_stderr)?;
+    if access == RootAccess::Repaired {
+        tracing::warn!(path = %profile.dir().display(), "profile directory access was repaired: it is now private to its owner");
+    }
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(serve(profile, output))
 }

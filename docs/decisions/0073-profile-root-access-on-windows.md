@@ -48,8 +48,8 @@ trusted; the user removes it, or takes ownership, and starts again.
 
 ## Consequences
 
-- `service run` already creates the logs folder before the service starts,
-  so a refused profile can still receive a log file; nothing in it is read.
+- `service run` checks the root before it creates the logs folder, so a refused
+  profile receives nothing, not even a log file.
 - Entries an elevated process created belong to Administrators and are
   accepted. A root owned by Administrators is refused, since a normal user
   could not repair it.
