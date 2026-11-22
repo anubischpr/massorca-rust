@@ -266,6 +266,13 @@ massorca secret reset-key
     resuming it, delegating from it and bringing a child back into it need
     HostAdmin; lower scopes get `permission.denied`. `agent.list` and
     `agent.status` show the mark.
+  - The agent-produced text of a marked run, its `result`, reaches only
+    HostAdmin callers: `agent.status`, `agent.list`, `agent.tree`, the replies
+    of start, resume, delegate, stop, forget and bring-back, and every
+    `agent.watch` item drop it for lower scopes, per subscriber. Lower scopes
+    still see the run, its state and its mark. `agent.changed` carries the
+    session id only. `terminal.show`, `terminal.kill`, `terminal.close`,
+    `agent.stop` and `agent.forget` stay ungated.
   - Residual risk: a HostAdmin client sees whatever the agent prints, its
     environment included.
 - **Dangerous names**, refused when a secret is set, linked or requested

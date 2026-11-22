@@ -1,6 +1,7 @@
 //! Service integration tests: the service runs in-process and is driven through the client crate; raw frames cover
 //! the cases the client cannot produce.
 
+mod agents_redaction;
 mod capabilities;
 mod common;
 mod concurrency;
