@@ -99,7 +99,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.resume` | workspace | `session` | `AgentSession` |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -280,7 +280,7 @@ massorca agent attach <session>
 massorca agent prompt <session> <text> [--force]
 massorca agent resume <session>
 massorca agent hook <event> [<payload>]
-massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--read-only]
+massorca agent delegate [--from <session>] --prompt <text> [--kind <k>] [--name <n>] [--title <t>] [--read-only]
 massorca agent tree <session>
 massorca agent bring-back <child> [--no-merge] [--no-prompt]
 massorca agent credentials import <kind> --from <dir> [--replace]
