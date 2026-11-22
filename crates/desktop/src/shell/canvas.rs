@@ -1,13 +1,21 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::settings::{self, SettingsFrame};
+use super::setup;
+use super::start_page::{self, StartFrame};
+use super::teams;
 use super::zones::ZoneFocus;
 use crate::model::canvas::Canvas;
-use crate::model::navigation::Mode;
+use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
-use gpui::{Context, Div, FocusHandle, IntoElement, MouseButton, div, img, prelude::*, px};
+use crate::model::teams::{BoardOwner, TeamPage};
+use gpui::{
+    AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, Window, div,
+    img, prelude::*, px,
+};
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
@@ -16,9 +24,23 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
 /// The Canvas: the Conversation and the inline regions, with an open overlay on top (D-SH-01).
-pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<Shell>) -> Div {
+/// What the full pages and the start page draw from, gathered by the shell for one frame.
+pub(super) struct PageFrames<'a> {
+    pub settings: SettingsFrame<'a>,
+    pub start: Option<StartFrame>,
+    pub setup_rows: Vec<crate::model::setup::SetupRow>,
+}
+
+pub(super) fn canvas(
+    model: &ShellModel,
+    zones: &ZoneFocus,
+    pages: PageFrames<'_>,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
+    let shell = cx.entity().downgrade();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
@@ -31,7 +53,7 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
         .bg(theme.palette.surface.canvas)
         .rounded_tl(px(RADIUS_CANVAS))
         .overflow_hidden()
-        .child(conversation(&model.canvas(), &theme))
+        .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
             region_column(region, zones.get(Zone::of_region(region)).clone(), &theme)
         }));
@@ -42,15 +64,67 @@ pub(super) fn canvas(model: &ShellModel, zones: &ZoneFocus, cx: &mut Context<She
     )
 }
 
-fn conversation(canvas: &Canvas, theme: &Theme) -> impl IntoElement {
-    let body = match canvas {
+fn conversation(
+    model: &ShellModel,
+    shell: &WeakEntity<Shell>,
+    pages: PageFrames<'_>,
+    window: &mut Window,
+    cx: &mut App,
+    theme: &Theme,
+) -> AnyElement {
+    // The Settings page fills the Canvas, so it is not centred in a box.
+    if model.canvas() == Canvas::Page(Page::Settings) {
+        return settings::settings_page(pages.settings, window, cx);
+    }
+    if model.canvas() == Canvas::Page(Page::Setup) {
+        return setup::setup_page(&pages.setup_rows, cx);
+    }
+    // The start page is laid out from the top, so it is not centred in a box either.
+    if let Canvas::Workspace(_) = model.canvas() {
+        return match pages.start {
+            Some(frame) => start_page::start_page(frame, cx),
+            None => placeholder(
+                "Workspace",
+                "This workspace is not listed by the service.",
+                theme,
+            )
+            .into_any_element(),
+        };
+    }
+    let body: AnyElement = match model.canvas() {
         Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
-        Canvas::Home(Mode::BotTeams) => {
-            placeholder("Bot Teams", "The team list is not built yet.", theme).into_any_element()
+        Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
+        Canvas::Team(TeamPage::Board(team)) => {
+            teams::board_page(model, shell, BoardOwner::Team(team), window, cx)
         }
+        Canvas::Team(TeamPage::Project(team, project)) => {
+            teams::project_page(model, shell, team, project, window, cx)
+        }
+        Canvas::Team(TeamPage::Routines(team)) => teams::routines_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Memory(team)) => teams::memory_page(model, shell, team, cx),
+        Canvas::Team(TeamPage::Files(team)) => match model.teams().team(team) {
+            Some(team) => teams::files_page(team, cx),
+            None => placeholder("Files", "This team is gone.", theme).into_any_element(),
+        },
+        Canvas::Team(TeamPage::Conference(_)) => placeholder(
+            "Conference room",
+            "The Conference room needs live agents and sessions, which are not built yet.",
+            theme,
+        )
+        .into_any_element(),
         Canvas::Session(title) => {
-            placeholder(title, "The conversation is not built yet.", theme).into_any_element()
+            placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
         }
+        Canvas::Team(page) => {
+            placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
+        }
+        // Drawn above: the start page is not centred in the box below.
+        Canvas::Workspace(_) => placeholder(
+            "Workspace",
+            "This workspace is not listed by the service.",
+            theme,
+        )
+        .into_any_element(),
         Canvas::Page(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }
@@ -63,6 +137,7 @@ fn conversation(canvas: &Canvas, theme: &Theme) -> impl IntoElement {
         .items_center()
         .justify_center()
         .child(body)
+        .into_any_element()
 }
 
 /// The start page with no session open: the rose logo and the question (A40).
