@@ -19,7 +19,8 @@ use massorca_protocol::methods::agents::{
 };
 
 use crate::account_check::{
-    MAX_TEXT_CHARS, Verdict, parse_state, run_program, settle, state_name, unknown, verdict,
+    MAX_TEXT_CHARS, Verdict, account_strip_names, parse_state, run_program, settle, state_name,
+    unknown, verdict,
 };
 use crate::credentials;
 use crate::kind::{KindDecl, valid_id};
@@ -651,7 +652,7 @@ impl Agents {
             &check.args,
             &home,
             &credential_decl.home_env,
-            &credential_decl.strip_env,
+            &account_strip_names(decl),
         );
         Some(settle(verdict(check, run.exit, &run.output), recorded))
     }
@@ -678,7 +679,7 @@ impl Agents {
             &logout,
             &home,
             &credential_decl.home_env,
-            &credential_decl.strip_env,
+            &account_strip_names(decl),
         );
         if run.exit != Some(0) {
             tracing::warn!(

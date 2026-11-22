@@ -323,9 +323,18 @@ fn login() -> ExitCode {
     }
 }
 
+/// A credential the vendor would read from the environment (an API key or token). When `FAKE_AGENT_AMBIENT_TOKEN` is
+/// set and not empty, the check reports signed in whatever the home holds.
+const AMBIENT_TOKEN_ENV: &str = "FAKE_AGENT_AMBIENT_TOKEN";
+const AMBIENT_IDENTITY: &str = "ambient@example.com";
+
 /// The check: prints `signed in as <identity>` and exits 0 when the token exists and is not expired; otherwise prints
 /// `expired` and exits 1. A token's `email` names its identity; the default identity is used otherwise.
 fn whoami() -> ExitCode {
+    if env::var_os(AMBIENT_TOKEN_ENV).is_some_and(|value| !value.is_empty()) {
+        let _ = writeln!(io::stdout().lock(), "signed in as {AMBIENT_IDENTITY}");
+        return ExitCode::SUCCESS;
+    }
     let token =
         credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
     match token {
@@ -338,8 +347,13 @@ fn whoami() -> ExitCode {
             let _ = writeln!(io::stdout().lock(), "signed in as {identity}");
             ExitCode::SUCCESS
         }
-        _ => {
+        Some(_) => {
             let _ = writeln!(io::stdout().lock(), "expired");
+            ExitCode::from(1)
+        }
+        // No token at all: a home with nothing in it is not signed in, and is not an expired login.
+        None => {
+            let _ = writeln!(io::stdout().lock(), "not signed in");
             ExitCode::from(1)
         }
     }

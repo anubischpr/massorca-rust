@@ -8,12 +8,14 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::process::excerpt;
-use crate::ssh::{RemoteOutput, RemoteShell, SshError};
+use crate::ssh::{RemoteOutput, RemoteShell, SshError, SystemSsh};
 
 /// Install directory on the host unless the plan says otherwise.
 pub const DEFAULT_REMOTE_DIR: &str = "~/.massorca";
 /// Validity of the pairing offer made during bootstrap (decision 0044).
 pub const DEFAULT_OFFER_TTL_SECS: u32 = 120;
+/// The listen address of an installed service when none is given: this node's Tailscale address (decision 0043).
+pub const DEFAULT_LISTEN: &str = "tailscale";
 
 /// The unit file as the host's shell expands it.
 const UNIT_FILE: &str = "$HOME/.config/systemd/user/massorca.service";
@@ -43,6 +45,19 @@ pub struct BootstrapPlan {
     pub device_name: String,
     /// Validity of the pairing offer, in seconds.
     pub offer_ttl_secs: u32,
+}
+
+impl BootstrapPlan {
+    /// The plan `host add-ssh` and the desktop share: the default install directory and offer lifetime.
+    pub fn for_ssh_host(binary: PathBuf, listen: Vec<String>, device_name: String) -> Self {
+        Self {
+            binary,
+            listen,
+            remote_dir: DEFAULT_REMOTE_DIR.to_owned(),
+            device_name,
+            offer_ttl_secs: DEFAULT_OFFER_TTL_SECS,
+        }
+    }
 }
 
 /// What bootstrap found on the host and installed there.
@@ -204,6 +219,18 @@ pub fn bootstrap(
         offer,
         server_version: version_of(&ready.stdout),
     })
+}
+
+/// Installs or upgrades the service on the SSH host `target` (`[user@]host`) with `ssh` options such as
+/// `-p 2222`. It blocks while ssh runs, so a UI calls it on a thread of its own.
+pub fn install_over_ssh(
+    target: &str,
+    ssh_args: Vec<String>,
+    plan: &BootstrapPlan,
+    progress: &mut dyn FnMut(&str),
+) -> Result<BootstrapReport, BootstrapError> {
+    let shell = SystemSsh::new(target, ssh_args)?;
+    bootstrap(&shell, plan, progress)
 }
 
 /// Stops and disables the service, then removes its unit and the install directory (decision 0045).

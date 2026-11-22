@@ -465,4 +465,27 @@ mod tests {
             wire::StatusMechanism::ClaudeSettings
         );
     }
+
+    #[test]
+    fn only_claude_declares_a_sign_in_among_the_built_ins() {
+        let kinds = built_ins();
+        let with_accounts: Vec<&str> = kinds
+            .iter()
+            .filter(|kind| kind.accounts_supported())
+            .map(|kind| kind.id.as_str())
+            .collect();
+        assert_eq!(with_accounts, ["claude"]);
+        let claude = kinds.iter().find(|kind| kind.id == "claude").unwrap();
+        let accounts = claude.accounts.as_ref().unwrap();
+        assert_eq!(accounts.login, ["auth", "login"]);
+        let check = accounts.check.as_ref().unwrap();
+        assert_eq!(check.args, ["auth", "status"]);
+        assert_eq!(check.signed_in_exit, 0);
+        assert_eq!(check.expired_pattern, None);
+        assert_eq!(check.identity_pattern, None);
+        assert_eq!(
+            accounts.logout,
+            Some(vec!["auth".to_owned(), "logout".to_owned()])
+        );
+    }
 }

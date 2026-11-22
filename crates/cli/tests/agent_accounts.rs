@@ -763,6 +763,38 @@ fn a_label_with_control_characters_or_too_long_is_refused_as_invalid_params() {
     );
 }
 
+/// Declares kind `bare`, which has credential files and a check but no sign-in command.
+fn declare_loginless_kind(sandbox: &Sandbox) {
+    let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    fs::create_dir_all(&dir).expect("create the kinds directory");
+    let bare = json!({
+        "id": "bare",
+        "name": "Bare agent",
+        "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
+        "prompt": { "mode": "argv" },
+        "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
+        "accounts": { "check": { "args": ["whoami"] } }
+    });
+    fs::write(dir.join("bare.json"), bare.to_string()).expect("write the bare kind");
+}
+
+#[test]
+fn a_kind_without_a_login_refuses_sign_in_and_names_the_vendor_cli() {
+    let sandbox = Sandbox::new();
+    declare_loginless_kind(&sandbox);
+
+    let error = error_of(
+        &sandbox,
+        &["agent", "accounts", "add", "bare", "--no-attach"],
+    );
+    assert_eq!(error["code"], "agent.credentials_unsupported", "{error}");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("sign in from the vendor's CLI, then import"),
+        "{error}"
+    );
+}
+
 /// Stops the running service and starts it again with `env`, as a restart does.
 fn restart_service(sandbox: &Sandbox, env: &[(&str, &str)]) -> ChildGuard {
     sandbox.run("default", &["service", "stop"]).success();
@@ -893,4 +925,38 @@ fn a_kind_that_never_had_an_account_starts_on_the_usual_home() {
     let (_, workspace) = project_with_main(&sandbox, "notes");
     let terminal = start_in(&sandbox, &workspace);
     wait_for_line(&sandbox, &terminal, "fake-agent: credentials missing");
+}
+
+/// Declares kind `fake` as `declare_fake` does, and removes `names` from the account commands' environment.
+fn declare_fake_stripping(sandbox: &Sandbox, names: &[&str]) {
+    declare_fake(sandbox);
+    let path = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("kinds")
+        .join("fake.json");
+    let mut kind: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read the fake kind"))
+            .expect("the fake kind is JSON");
+    kind["accounts"]["strip_env"] = json!(names);
+    fs::write(&path, kind.to_string()).expect("write the fake kind");
+}
+
+/// A credential the service's own environment carries must not make an account signed in: the check judges the
+/// account's home only (decision 0059, amended 2026-11-22).
+#[test]
+fn a_check_judges_only_the_account_home_not_a_credential_in_the_environment() {
+    let sandbox = Sandbox::new();
+    declare_fake_stripping(&sandbox, &["FAKE_AGENT_AMBIENT_TOKEN"]);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_AMBIENT_TOKEN", "1")]);
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    fs::remove_file(account_home(&sandbox, &id).join("token.json"))
+        .expect("remove the account's token, leaving an empty home");
+
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "needs_sign_in", "{checked}");
 }
