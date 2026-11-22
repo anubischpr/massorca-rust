@@ -8,13 +8,12 @@ use crate::model::teams::{HostChoice, MemoryId, NewBot, NewTeam, ProjectId, Team
 use gpui::{
     App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
-use massorca_ui::components::dialog::{Dialog, DialogVariant};
+use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use massorca_ui::components::popover::OverlayLayer;
-use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::switch::Switch;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
-use massorca_ui::tokens::{SPACE_1, SPACE_3, TYPE_BODY_SM, TYPE_CAPTION};
+use massorca_ui::tokens::{SPACE_1, SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 /// The agents an Add bot form offers, in the order of its choice (D-AG-33).
@@ -51,6 +50,8 @@ pub(in crate::shell) struct AddBotDialog {
     name: Entity<TextField>,
     role: Entity<TextField>,
     agent: usize,
+    agent_select: Entity<SelectView>,
+    host_select: Entity<SelectView>,
     error: Option<&'static str>,
     _subscriptions: Vec<Subscription>,
 }
@@ -168,13 +169,42 @@ impl Shell {
         let (name, name_events) = watched_field("Name", "Bot name", window, cx);
         let (role, role_events) =
             watched_field("Role", "What this bot is responsible for", window, cx);
+        let agent_select = cx.new(|cx| {
+            SelectView::new(BOT_AGENTS.map(agent_name), cx)
+                .label("Agent")
+                .selected(Some(0))
+                .layer(OverlayLayer::Dialog)
+        });
+        let agent_events = cx.subscribe_in(
+            &agent_select,
+            window,
+            |shell, _, event: &SelectEvent, _, cx| match event {
+                SelectEvent::Changed(index) => shell.set_add_bot_agent(*index, cx),
+            },
+        );
+        // Bots run on the team's host; choosing another host waits for per-bot hosts.
+        let team_host = self
+            .model
+            .teams()
+            .team(team)
+            .map(|team| team.host.clone())
+            .unwrap_or_default();
+        let host_select = cx.new(|cx| {
+            SelectView::new([team_host], cx)
+                .label("Host")
+                .selected(Some(0))
+                .disabled(true)
+                .layer(OverlayLayer::Dialog)
+        });
         self.team_dialog = Some(TeamDialog::AddBot(AddBotDialog {
             team,
             name,
             role,
             agent: 0,
+            agent_select,
+            host_select,
             error: None,
-            _subscriptions: vec![name_events, role_events],
+            _subscriptions: vec![name_events, role_events, agent_events],
         }));
         cx.notify();
     }
@@ -408,34 +438,19 @@ fn new_team_view(form: &NewTeamDialog, shell: &WeakEntity<Shell>, cx: &App) -> D
 }
 
 fn add_bot_view(form: &AddBotDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
-    let theme = *cx.theme();
-    let agent = {
-        let shell = shell.clone();
-        SegmentedControl::new(
-            "add-bot-agent",
-            "Agent",
-            BOT_AGENTS
-                .iter()
-                .map(|agent| Segment::text(agent_name(*agent)))
-                .collect(),
-        )
-        .selected(form.agent)
-        .on_change(move |index, _, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.set_add_bot_agent(index, cx));
-        })
-    };
     let body = div()
         .flex()
         .flex_col()
         .gap(px(SPACE_3))
         .child(form.name.clone())
         .child(form.role.clone())
-        .child(caption("Agent", &theme))
-        .child(agent);
+        .child(form.agent_select.clone())
+        .child(form.host_select.clone());
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
     let mut dialog = Dialog::new("add-bot", "Add bot")
         .open(true)
+        .width(DialogWidth::Large)
         .child(body)
         .field(form.name.read(cx).focus_handle(cx))
         .action("Add bot")
@@ -509,14 +524,6 @@ pub(in crate::shell) fn team_confirm_view(
         })
 }
 
-fn caption(text: &'static str, theme: &massorca_ui::Theme) -> impl IntoElement {
-    div()
-        .pb(px(SPACE_1))
-        .text_style(TYPE_CAPTION)
-        .text_color(theme.palette.text.secondary)
-        .child(text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +575,31 @@ mod tests {
         shell.read_with(cx, |shell, _| {
             assert!(matches!(shell.team_dialog, Some(TeamDialog::AddBot(_))));
             assert_eq!(shell.model().teams().team(TeamId(1)).unwrap().bots.len(), 3);
+        });
+    }
+
+    #[gpui::test]
+    fn add_bot_offers_the_agents_and_the_teams_host(cx: &mut TestAppContext) {
+        let (shell, cx) = shell(cx);
+        shell.update_in(cx, |shell, window, cx| {
+            shell.open_add_bot(TeamId(1), window, cx);
+        });
+        shell.read_with(cx, |shell, cx| match &shell.team_dialog {
+            Some(TeamDialog::AddBot(form)) => {
+                let agent = form
+                    .agent_select
+                    .read(cx)
+                    .selected_label()
+                    .map(ToString::to_string);
+                let host = form
+                    .host_select
+                    .read(cx)
+                    .selected_label()
+                    .map(ToString::to_string);
+                assert_eq!(agent.as_deref(), Some("Claude"));
+                assert_eq!(host.as_deref(), Some("VPS"));
+            }
+            other => panic!("the Add bot form should open, found {other:?}"),
         });
     }
 
