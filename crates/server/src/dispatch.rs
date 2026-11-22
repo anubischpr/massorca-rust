@@ -139,6 +139,7 @@ async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
                     session.outbound.clone(),
                     cancelled,
                     session.streams.downgrade(),
+                    session.max_frame_len,
                 ));
             }
             OpenedSource::Items(items) => {
@@ -148,6 +149,7 @@ async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
                     session.outbound.clone(),
                     cancelled,
                     session.streams.downgrade(),
+                    session.max_frame_len,
                 ));
             }
         }

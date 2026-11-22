@@ -7,8 +7,8 @@ use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
 use crate::model::title_bar::{RegionToggle, TitleBarModel, title_bar as title_bar_model};
 use gpui::{
-    Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window, WindowControlArea, div,
-    prelude::*, px, svg,
+    Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window,
+    WindowControlArea, div, prelude::*, px, svg,
 };
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::icon_button::IconButton;
@@ -18,11 +18,18 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{IconName, TextStyled, Theme};
 
+/// Whether the Title bar draws its own minimise, maximise and close. On Linux the platform frame
+/// has its own controls whenever the platform draws the frame, so the Title bar leaves them out.
+pub(super) fn draws_window_controls(decorations: Decorations, linux: bool) -> bool {
+    !(linux && matches!(decorations, Decorations::Server))
+}
+
 /// The Title bar row, above the Sidebar and the Canvas column (D-SH-03).
 pub(super) fn title_bar(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
     maximized: bool,
+    show_controls: bool,
     theme: &Theme,
 ) -> Div {
     let bar = title_bar_model(model);
@@ -45,7 +52,7 @@ pub(super) fn title_bar(
                 .iter()
                 .map(|toggle| region_toggle(*toggle, shell.clone())),
         );
-    if !cfg!(target_os = "macos") {
+    if show_controls && !cfg!(target_os = "macos") {
         row = row.child(window_controls(maximized, theme));
     }
     row
@@ -246,4 +253,32 @@ fn window_control(
                 .group_hover(id, move |style| style.text_color(hover_icon)),
         );
     with_tooltip(control, label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::Tiling;
+
+    fn app_drawn_frame() -> Decorations {
+        Decorations::Client {
+            tiling: Tiling::default(),
+        }
+    }
+
+    #[test]
+    fn on_linux_a_platform_frame_leaves_the_controls_to_the_frame() {
+        assert!(!draws_window_controls(Decorations::Server, true));
+    }
+
+    #[test]
+    fn on_linux_an_app_drawn_frame_keeps_the_controls() {
+        assert!(draws_window_controls(app_drawn_frame(), true));
+    }
+
+    #[test]
+    fn other_platforms_keep_the_controls_whatever_the_decorations() {
+        assert!(draws_window_controls(Decorations::Server, false));
+        assert!(draws_window_controls(app_drawn_frame(), false));
+    }
 }

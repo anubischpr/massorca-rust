@@ -14,9 +14,9 @@ item will plug into, and nothing is forgotten.
 | Deferred | Lands in | Seam kept in Phase 1 |
 |---|---|---|
 | Capability-changed event: a change event when a capability is offered or withdrawn | M2 | Capabilities are registered and withdrawn through handles (`CapabilityRegistry`); events go through the event bus |
-| Devices and authentication: a device principal, credentials in `hello.auth`, pairing | Phase 3 | `Principal` is non-exhaustive and set per connection at the handshake; `hello` already carries `auth` |
+| Devices and authentication: a device principal, credentials in `hello.auth`, pairing | Phase 3 (decided in 0041) | `Principal` is non-exhaustive and set per connection at the handshake; `hello` already carries `auth` |
 | Extensions as principals and the extension host: packages, dev links, sandboxing | M6 | `Owner::Extension` and the reserved `ext.` prefix are enforced at registration; `extensions/` is reserved |
-| Network transport: WebSocket over TLS with a pinned certificate | Phase 3 | Framing is transport-neutral; `welcome` carries `max_frame_len` |
+| Network transport: WebSocket over TLS with a pinned certificate | Phase 3 (decided in 0040) | Framing is transport-neutral; `welcome` carries `max_frame_len` |
 | The workspace deferrals in 0008: branch prefixes, generated names and their retirement, base-ref fallback order, nested layout options, setup scripts, terminal and agent guards on removal, squash-merge detection, id aliases after a folder rename, remote hosts | A later phase, each with its own tests | 0008's model adds columns and options, not a new model |
 
 The handshake records what the client offered in `hello` and hands it to

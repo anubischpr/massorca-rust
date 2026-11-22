@@ -12,6 +12,7 @@ use crate::connection;
 use crate::context::AppState;
 use crate::registry::RegistrationHandle;
 use crate::shutdown::ShutdownSignal;
+use crate::transport;
 
 /// How long open connections may finish their in-flight requests once shutdown starts.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -36,7 +37,11 @@ pub(crate) async fn run(
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => match accepted {
                 Ok(stream) => {
-                    connections.spawn(connection::serve(stream, Arc::clone(&state), signal.clone()));
+                    connections.spawn(connection::serve(
+                        transport::spawn_local(stream),
+                        Arc::clone(&state),
+                        signal.clone(),
+                    ));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "accepting a connection failed");

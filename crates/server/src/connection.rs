@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use interprocess::local_socket::tokio::Stream;
 use massorca_protocol::{ErrorBody, Frame, Message, codes};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -14,29 +13,28 @@ use crate::handshake;
 use crate::session::Session;
 use crate::shutdown::ShutdownSignal;
 use crate::streams::StreamTable;
-use crate::transport;
+use crate::transport::FrameIo;
 
-const INBOUND_CAPACITY: usize = 64;
-const OUTBOUND_CAPACITY: usize = 256;
 /// Requests one connection may have in flight. At the limit it reads no further frames, so the peer waits on the socket.
 const MAX_REQUESTS_IN_FLIGHT: usize = 64;
 
 /// Serves one accepted connection until the peer leaves or the service stops.
-pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: ShutdownSignal) {
-    let stream = Arc::new(stream);
-    let (inbound_tx, mut inbound) = mpsc::channel(INBOUND_CAPACITY);
-    let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
-
-    // Aborting on drop keeps a cancelled connection from leaving its socket open.
-    let reader = tokio::spawn(transport::read_frames(Arc::clone(&stream), inbound_tx));
+pub(crate) async fn serve(io: FrameIo, state: Arc<AppState>, mut signal: ShutdownSignal) {
+    let FrameIo {
+        mut inbound,
+        outbound,
+        reader,
+        mut writer,
+        max_frame_len,
+    } = io;
+    // Aborting on drop keeps a cancelled connection from leaving its transport open.
     let _reader = AbortOnDrop::new(reader.abort_handle());
-    let mut writer = tokio::spawn(transport::write_frames(Arc::clone(&stream), outbound_rx));
     let _writer = AbortOnDrop::new(writer.abort_handle());
-    // The socket closes once both tasks have dropped their clones.
-    drop(stream);
 
     let serving = async {
-        if let Some(negotiated) = handshake::accept(&mut inbound, &outbound, &state).await {
+        if let Some(negotiated) =
+            handshake::accept(&mut inbound, &outbound, &state, max_frame_len).await
+        {
             let session = Arc::new(Session {
                 state,
                 connection_id: negotiated.connection_id,
@@ -44,6 +42,7 @@ pub(crate) async fn serve(stream: Stream, state: Arc<AppState>, mut signal: Shut
                 client_capabilities: Arc::new(negotiated.client_capabilities),
                 principal: negotiated.principal,
                 outbound: outbound.clone(),
+                max_frame_len,
                 streams: StreamTable::default(),
             });
             run_session(&session, &mut inbound, &mut signal).await;

@@ -49,11 +49,6 @@ impl ErrorStateVariant {
         }
     }
 
-    /// The octagon glyph sits with the title in the panel variants only.
-    fn glyph(self) -> bool {
-        !matches!(self, Self::Inline)
-    }
-
     /// Only the page variant offers Show details.
     fn shows_details(self) -> bool {
         matches!(self, Self::Page)
@@ -176,14 +171,22 @@ impl RenderOnce for ErrorState {
                 .bg(p.status.danger_bg);
         }
 
-        let mut heading = div().flex().items_center().gap(px(SPACE_2)).min_w_0();
-        if self.variant.glyph() {
-            heading = heading.child(
-                Icon::new(IconName::OctagonAlert)
-                    .size(IconSize::Large)
-                    .color(p.status.danger_fg),
+        // The glyph sits with the title in every variant (ErrorState.md, Anatomy).
+        let heading = div()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
+            .min_w_0()
+            .child(
+                div()
+                    .debug_selector(|| "error-glyph".into())
+                    .flex_none()
+                    .child(
+                        Icon::new(IconName::OctagonAlert)
+                            .size(IconSize::Large)
+                            .color(p.status.danger_fg),
+                    ),
             );
-        }
         panel = panel.child(
             heading.child(
                 div()
@@ -277,8 +280,6 @@ mod tests {
         assert_eq!(ErrorStateVariant::Page.title_style(), TYPE_TITLE);
         assert_eq!(ErrorStateVariant::Section.title_style(), TYPE_TITLE_SM);
         assert_eq!(ErrorStateVariant::Inline.title_style(), TYPE_BODY_STRONG);
-        assert!(!ErrorStateVariant::Inline.glyph());
-        assert!(ErrorStateVariant::Section.glyph());
         assert_eq!(ErrorStateVariant::default(), ErrorStateVariant::Section);
     }
 
@@ -343,6 +344,29 @@ mod tests {
             cx.debug_bounds("error-details").is_none(),
             "closes on second click"
         );
+    }
+
+    #[gpui::test]
+    fn an_inline_error_draws_its_glyph_beside_the_title(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| InlineHarness);
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("error-glyph").is_some(),
+            "the glyph is drawn"
+        );
+    }
+
+    /// An inline error state, as a Dialog draws it.
+    struct InlineHarness;
+
+    impl gpui::Render for InlineHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(480.)).child(
+                ErrorState::new("delete", "Could not delete")
+                    .variant(ErrorStateVariant::Inline)
+                    .explanation("The secret is still there."),
+            )
+        }
     }
 
     /// Hosts a page-size error state with details, optionally mid-retry.
