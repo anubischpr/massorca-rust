@@ -24,6 +24,35 @@ pub enum Check {
     Failed { sentence: String, log: Vec<String> },
 }
 
+/// The two ways the Add host dialog adds a host, in the order of its segments.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HostKind {
+    /// An SSH host: checked and installed over ssh.
+    #[default]
+    Ssh,
+    /// A host that already runs MassOrca, paired by its offer. This dialog does not build that path yet (decision 0075).
+    Server,
+}
+
+impl HostKind {
+    /// The segment the kind is on: SSH host first, Server second.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Ssh => 0,
+            Self::Server => 1,
+        }
+    }
+
+    /// The kind of segment `index`, when there is one.
+    pub fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Ssh),
+            1 => Some(Self::Server),
+            _ => None,
+        }
+    }
+}
+
 impl SshTarget {
     /// The target the fields make, or the sentence that says what to fix. A chosen key is the `-i` option.
     pub fn from_fields(
@@ -412,6 +441,19 @@ mod tests {
         assert_eq!(
             key_choice_at(&keys, Some(1)).identity(),
             Some(Path::new("C:/Users/me/.ssh/id_ed25519"))
+        );
+    }
+
+    #[test]
+    fn the_segments_are_ssh_host_then_server() {
+        assert_eq!(HostKind::default(), HostKind::Ssh);
+        assert_eq!(HostKind::Ssh.index(), 0);
+        assert_eq!(HostKind::Server.index(), 1);
+        assert_eq!(HostKind::from_index(1), Some(HostKind::Server));
+        assert_eq!(
+            HostKind::from_index(2),
+            None,
+            "a segment past the two is no kind"
         );
     }
 }

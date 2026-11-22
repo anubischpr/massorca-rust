@@ -297,3 +297,97 @@ fn a_key_changed_after_the_check_needs_a_new_check_before_adding(cx: &mut TestAp
         );
     }
 }
+
+#[gpui::test]
+fn the_address_and_the_port_share_one_row(cx: &mut TestAppContext) {
+    let (_rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    let address = cx
+        .debug_bounds("add-host-address")
+        .expect("the address field is drawn");
+    let port = cx
+        .debug_bounds("add-host-port")
+        .expect("the port field is drawn");
+    assert!(
+        address.origin.x < port.origin.x,
+        "the port is right of the address"
+    );
+    assert!(
+        (f32::from(address.origin.y) - f32::from(port.origin.y)).abs() < 0.5,
+        "the address and the port share one row"
+    );
+    assert_eq!(
+        f32::from(port.size.width),
+        84.0,
+        "the port is 84 px wide, as in sh-add-host"
+    );
+}
+
+#[gpui::test]
+fn the_segments_switch_between_the_ssh_form_and_the_server_note(cx: &mut TestAppContext) {
+    let (_rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    assert!(
+        cx.debug_bounds("add-host-address").is_some(),
+        "SSH host is the first segment, so its form shows"
+    );
+    click(cx, "segment-1");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("add-host-server-note").is_some(),
+        "Server shows the note that its path is not built here"
+    );
+    assert!(
+        cx.debug_bounds("add-host-address").is_none(),
+        "the SSH fields do not show for Server"
+    );
+    assert!(
+        cx.debug_bounds("add-host-test").is_none(),
+        "no check runs for Server"
+    );
+    click(cx, "segment-0");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("add-host-address").is_some(),
+        "back on SSH host, its form returns"
+    );
+}
+
+#[gpui::test]
+fn the_server_segment_adds_nothing_even_after_an_ssh_check_passed(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    type_address(&rig, cx, "100.64.0.10");
+    click(cx, "add-host-test");
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::ProbeSshHost { reply, .. }) => break reply,
+            Some(_) => continue,
+            None => panic!("the host was not checked"),
+        }
+    };
+    reply
+        .send(Ok(RemoteMachine {
+            os: "Linux".to_owned(),
+            arch: "x86_64".to_owned(),
+        }))
+        .expect("the dialog listens");
+    cx.run_until_parked();
+    rig.shell.update(cx, |shell, _| {
+        shell
+            .add_host
+            .as_mut()
+            .expect("the dialog is open")
+            .chosen_program = Some(PathBuf::from("massorca-linux-test"));
+    });
+    rig.shell
+        .update(cx, |shell, cx| shell.set_add_host_kind(1, cx));
+    rig.shell.update(cx, |shell, cx| shell.add_add_host(cx));
+    cx.run_until_parked();
+    while let Some(command) = rig.script.next() {
+        assert!(
+            !matches!(command, Command::AddSshHost { .. }),
+            "the Server segment does not install over SSH"
+        );
+    }
+}

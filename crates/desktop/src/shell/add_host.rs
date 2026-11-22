@@ -10,15 +10,18 @@ use massorca_ui::assets::FONT_MONO;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use massorca_ui::components::popover::OverlayLayer;
+use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::select::SelectView;
 use massorca_ui::components::text_field::TextField;
-use massorca_ui::tokens::{RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
+use massorca_ui::tokens::{
+    RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_LABEL,
+};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use crate::model::add_host::{
-    Check, SshTarget, can_add, key_choice_at, key_labels, list_key_files, no_program_sentence,
-    passed_sentence, program_for,
+    Check, HostKind, SshTarget, can_add, key_choice_at, key_labels, list_key_files,
+    no_program_sentence, passed_sentence, program_for,
 };
 use crate::model::pairing::name_or_none;
 use crate::service::{SshHost, bundled_program};
@@ -26,9 +29,14 @@ use crate::service::{SshHost, bundled_program};
 /// What the dialog says when the app has no service to check a host through.
 const NO_SERVICE_CHECK: &str = "MassOrca is not connected to its service, so no host was checked.";
 
+/// The port field's width in the artboard's Address and Port row.
+const PORT_WIDTH: f32 = 84.0;
+
 /// The dialog's state between frames: its fields, the test's answer, the program and the last add.
 #[derive(Debug)]
 pub(super) struct AddHostFlow {
+    /// The segment the dialog shows: an SSH host, or the Server path.
+    pub kind: HostKind,
     pub name: Entity<TextField>,
     pub address: Entity<TextField>,
     pub port: Entity<TextField>,
@@ -80,6 +88,7 @@ impl Shell {
                 .selected(Some(0))
         });
         self.add_host = Some(AddHostFlow {
+            kind: HostKind::Ssh,
             name: cx.new(|cx| TextField::new(cx).placeholder("The server's name")),
             address: cx.new(|cx| TextField::new(cx).placeholder("vps.example.ts.net").mono()),
             port: cx.new(|cx| TextField::new(cx).placeholder("22").mono()),
@@ -105,6 +114,15 @@ impl Shell {
             .is_some_and(|flow| flow.adding || flow.check == Check::Checking);
         if self.add_host.is_some() && !busy {
             self.add_host = None;
+            cx.notify();
+        }
+    }
+
+    /// The segmented control: SSH host or Server. Server shows its note and runs no check or add from this dialog.
+    pub(super) fn set_add_host_kind(&mut self, index: usize, cx: &mut Context<Self>) {
+        let kind = HostKind::from_index(index);
+        if let (Some(flow), Some(kind)) = (self.add_host.as_mut(), kind) {
+            flow.kind = kind;
             cx.notify();
         }
     }
@@ -144,7 +162,7 @@ impl Shell {
         let Some(flow) = self.add_host.as_mut() else {
             return;
         };
-        if flow.adding || flow.check == Check::Checking {
+        if flow.kind != HostKind::Ssh || flow.adding || flow.check == Check::Checking {
             return;
         }
         let target = match typed_target(flow, cx) {
@@ -202,6 +220,9 @@ impl Shell {
         let Check::Passed { arch } = flow.check.clone() else {
             return;
         };
+        if flow.kind != HostKind::Ssh {
+            return;
+        }
         let typed = typed_target(flow, cx).ok();
         let program = program_for(flow.chosen_program.clone(), bundled_program(&arch));
         let name = name_or_none(flow.name.read(cx).text());
@@ -256,13 +277,14 @@ pub(super) fn add_host_dialog(flow: &AddHostFlow, shell: &WeakEntity<Shell>, cx:
         _ => None,
     };
     let program = program_for(flow.chosen_program.clone(), packaged);
-    let ready = can_add(
-        &flow.check,
-        flow.checked.as_ref(),
-        typed.as_ref(),
-        program.as_deref(),
-        flow.adding,
-    );
+    let ready = flow.kind == HostKind::Ssh
+        && can_add(
+            &flow.check,
+            flow.checked.as_ref(),
+            typed.as_ref(),
+            program.as_deref(),
+            flow.adding,
+        );
     let retry = matches!(flow.check, Check::Failed { .. });
     let busy = flow.adding || flow.check == Check::Checking;
     let body = dialog_body(flow, program.is_some(), shell, &theme);
@@ -296,20 +318,17 @@ fn dialog_body(
     shell: &WeakEntity<Shell>,
     theme: &Theme,
 ) -> AnyElement {
-    let mut body = div().flex().flex_col().gap(px(SPACE_3));
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(host_kind_control(flow, shell));
+    if flow.kind == HostKind::Server {
+        return body.child(server_note(theme)).into_any_element();
+    }
     body = body
         .child(field_row("Name", flow.name.clone().into_any_element()))
-        .child(field_row(
-            "Address",
-            flow.address.clone().into_any_element(),
-        ))
-        .child(field_row(
-            "Port",
-            div()
-                .w(px(84.0))
-                .child(flow.port.clone())
-                .into_any_element(),
-        ))
+        .child(address_and_port(flow))
         .child(field_row("User", flow.user.clone().into_any_element()))
         .child(key_field(flow, theme));
     if let Some(error) = &flow.form_error {
@@ -345,6 +364,63 @@ fn dialog_body(
     body.into_any_element()
 }
 
+/// The segmented control that chooses SSH host or Server (sh-add-host).
+fn host_kind_control(flow: &AddHostFlow, shell: &WeakEntity<Shell>) -> AnyElement {
+    let shell_kind = shell.clone();
+    div()
+        .debug_selector(|| "add-host-kind".into())
+        .flex()
+        .child(
+            SegmentedControl::new(
+                "add-host-kind",
+                "Host type",
+                vec![Segment::text("SSH host"), Segment::text("Server")],
+            )
+            .selected(flow.kind.index())
+            .on_change(move |index, _, cx| {
+                let _ = shell_kind.update(cx, |shell, cx| shell.set_add_host_kind(index, cx));
+            }),
+        )
+        .into_any_element()
+}
+
+/// The Server path's note in place of its form: this dialog does not build that path yet (decision 0075).
+fn server_note(theme: &Theme) -> AnyElement {
+    div()
+        .debug_selector(|| "add-host-server-note".into())
+        .text_style(TYPE_BODY)
+        .text_color(theme.palette.text.secondary)
+        .child(
+            "Pairing with a server that already runs MassOrca is not in this dialog yet. \
+             Accept its offer on the Pairing page.",
+        )
+        .into_any_element()
+}
+
+/// Address and Port on one row: the address takes the room, and the port is 84 px wide (sh-add-host).
+fn address_and_port(flow: &AddHostFlow) -> AnyElement {
+    div()
+        .flex()
+        .gap(px(SPACE_3))
+        .child(
+            div()
+                .debug_selector(|| "add-host-address".into())
+                .flex_1()
+                .min_w_0()
+                .child(field_row(
+                    "Address",
+                    flow.address.clone().into_any_element(),
+                )),
+        )
+        .child(
+            div()
+                .debug_selector(|| "add-host-port".into())
+                .w(px(PORT_WIDTH))
+                .child(field_row("Port", flow.port.clone().into_any_element())),
+        )
+        .into_any_element()
+}
+
 /// The SSH key field: the menu's choice, with the line that says what the menu lists.
 fn key_field(flow: &AddHostFlow, theme: &Theme) -> AnyElement {
     let helper = div()
@@ -369,7 +445,7 @@ fn field_row(label: &'static str, field: AnyElement) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(SPACE_1))
-        .child(div().text_style(TYPE_BODY_SM).child(label))
+        .child(div().text_style(TYPE_LABEL).child(label))
         .child(field)
         .into_any_element()
 }
