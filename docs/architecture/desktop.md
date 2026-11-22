@@ -86,12 +86,17 @@ store follows a service through the bridge (0028).
   forwards its items, and dropping the stream detaches without ending the
   terminal. The service sends no terminal events, so the store takes terminals
   from each resync and from the answers to create, kill and close. A lost
-  connection ends each attach with `Lost`; the UI attaches again without an
-  offset, which gives a snapshot. An attached client must answer the program's queries
-  (cursor reports, 0034): the feed's replies go back as input, which the
-  integration test does; the UI owner must do the same. The status
-  bar counts the terminals that may still run. The work panel does not draw
-  terminals yet.
+  connection ends each attach with `Lost`; the UI waits for the link to come
+  back and attaches again without an offset, which gives a snapshot.
+  The Work panel's strip lists the selected workspace's terminals from the
+  store, and the window keeps only which one is selected. Each shown terminal
+  is a `TerminalSurface` fed by `feed_events`. Its replies go back as input
+  through one function, the place where the declaration that this client
+  answers the program's queries goes (0034). Closing the tab of a running
+  terminal asks in X-DLG-01: "Keep running" drops the view and the tab stays
+  in the strip, and "Stop process" calls `terminal.close`. An unverifiable
+  terminal shows a banner that says it may still run. The status bar counts
+  the terminals that may still run.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.
