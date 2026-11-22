@@ -327,7 +327,18 @@ Each section below lists purpose, rows, states and where its artboard is. Row ty
 
 **Purpose.** One page for each catalogue row: host picker, install or connect on the picked host, who can use it, advanced options, and an uninstall or disconnect action.
 
-**Layout (behind artboard 7).** Full page. Header row: a 56 px plate with the extension glyph, the name in `heading`, the publisher and source and version (`body-sm`, the version in `mono-sm`). At the right: a host chip "Install on: This computer" (a Select when more than one host exists) and the primary button Review and install. Sections in Cards: About (the description and "What it adds" chips), Permissions (one line: what it asks for; the full list is in the review), and below, collapsed: Advanced options (versions, source URL, who can use it: "Only you" or a team), and Danger zone (Uninstall, or Disconnect for connected services, behind X-DLG-01).
+**Layout (behind artboard 7; the order is the owner's, 2026-11-22, see pending-owner-review.md).** Full page with the left navigation of 7.4. The page has nine parts, top to bottom:
+1. Logo: a 56 px plate with the item's glyph.
+2. Name in `heading`, with the state chip (for an agent with an active account: "Connected" when signed in, else the account's state; otherwise the item's state) and a Copy link button. The meta line reads publisher, Marketplace, version (`mono-sm`).
+3. Host: a selector that reads "This computer, Connected". Choosing another host needs the service, so the selector shows the host without opening.
+4. Banner: three example prompts tagged with the item, then "Type @Name in any chat or room to ask it directly." Shown only when the item has examples.
+5. Connection, for agents only: one row per account with its state word, where it is signed in, what uses it, and Active or Make active, Check now and Remove. Add account sits under the list, with the note that sign-in tokens stay in the secret vault.
+6. Information: the description, then Developer, Category, Permissions and "Found on this PC" when present. A tool found on this PC is information; it does not install anything.
+7. Settings: the item's settings. An agent's default agent shows "Not available yet" until the service has `agents.default_kind`. Before install, the part says that settings appear after install.
+8. Advanced Options, collapsed, for installed items: versions, source URL and who can use it ("Only you").
+9. Danger Zone: Uninstall, behind a destructive confirm (X-DLG-01). Disconnect for connected services is not built yet. An item that is not installed has nothing to remove, and the zone says so.
+
+For an item that is not installed, Review and install sits at the right of the host row. It is disabled with "Not available yet", because installing needs the extension runtime (decision 0059).
 
 **States.** Loading (skeleton). Not installed. Installed. Connected (services). Error (fetch failed: ErrorState with Retry). Host unreachable: the install control is disabled with the reason in visible text.
 
