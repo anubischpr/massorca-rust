@@ -3,7 +3,11 @@
 //! Every unsafe call states, in its `SAFETY` comment, the invariant it relies on.
 #![allow(unsafe_code)]
 
+use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr;
 
@@ -18,7 +22,12 @@ use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
 };
-use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateDirectoryW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    FILE_RENAME_INFO, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo,
+    SetFileInformationByHandle,
+};
 
 use crate::windows_endpoint_access::{current_user_sid, wide_to_string};
 
@@ -178,6 +187,78 @@ pub fn dacl_sddl(path: &Path) -> io::Result<String> {
     result
 }
 
+/// A directory held open so that nobody, this process included, can rename, delete or replace it while the guard
+/// lives: it is opened without `FILE_SHARE_DELETE`. It is opened as itself (`FILE_FLAG_OPEN_REPARSE_POINT`), and a
+/// reparse point (a junction or a link) or anything but a directory is refused, so the pinned directory is the real
+/// one. Only [`PinnedDir::rename_to`], through this handle, can still move it.
+#[derive(Debug)]
+pub struct PinnedDir {
+    file: File,
+}
+
+impl PinnedDir {
+    /// Opens and pins `dir`. Fails with `InvalidInput` when it is a reparse point or not a directory, and with a
+    /// sharing violation when another handle already holds it without sharing delete.
+    pub fn open(dir: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(dir)?;
+        let attributes = file.metadata()?.file_attributes();
+        if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is a reparse point", dir.display()),
+            ));
+        }
+        if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a directory", dir.display()),
+            ));
+        }
+        Ok(Self { file })
+    }
+
+    /// Renames the pinned directory to `target` (a full path) through its own handle, so the pin holds until the
+    /// move is done. Fails when anything is at `target`.
+    pub fn rename_to(&self, target: &Path) -> io::Result<()> {
+        let name: Vec<u16> = target.as_os_str().encode_wide().collect();
+        let name_bytes = name.len() * size_of::<u16>();
+        let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let size = header + name_bytes + size_of::<u16>();
+        // A u64 buffer keeps FILE_RENAME_INFO aligned for its handle field.
+        let mut buffer = vec![0_u64; size.div_ceil(size_of::<u64>())];
+        let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        // SAFETY: the buffer is zeroed, aligned for FILE_RENAME_INFO and holds `size` bytes: the header, the name and a
+        // NUL. The fields are written through the raw pointer, and the name is copied into the space after the header.
+        unsafe {
+            (*info).Anonymous.ReplaceIfExists = false;
+            (*info).RootDirectory = ptr::null_mut();
+            (*info).FileNameLength = u32::try_from(name_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "the target is too long")
+            })?;
+            ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+                name.len(),
+            );
+        }
+        let size = u32::try_from(size)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "the target is too long"))?;
+        // SAFETY: the handle is open with DELETE access for the life of `self`, and `info` points at `size` valid bytes
+        // laid out as FILE_RENAME_INFO, which the call only reads.
+        if unsafe {
+            SetFileInformationByHandle(self.file.as_raw_handle(), FileRenameInfo, info.cast(), size)
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
 fn wide_path(path: &Path) -> io::Result<U16CString> {
     U16CString::from_os_str(path.as_os_str())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
@@ -186,9 +267,47 @@ fn wide_path(path: &Path) -> io::Result<U16CString> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_dir_owner_only, dacl_sddl, has_owner_only_dacl, is_owner_only_sddl,
+        PinnedDir, create_dir_owner_only, dacl_sddl, has_owner_only_dacl, is_owner_only_sddl,
         owner_only_dir_sddl, restrict_dir_to_owner,
     };
+
+    #[test]
+    fn a_pinned_directory_cannot_be_renamed_or_deleted_except_through_its_pin() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("pinned");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("file"), b"fake").unwrap();
+        let pin = PinnedDir::open(&dir).unwrap();
+        let refused = std::fs::rename(&dir, parent.path().join("moved")).unwrap_err();
+        assert_eq!(refused.raw_os_error(), Some(32), "{refused}");
+        assert!(
+            std::fs::remove_dir(&dir).is_err(),
+            "the pinned directory itself stays"
+        );
+        assert!(dir.is_dir());
+        pin.rename_to(&parent.path().join("moved")).unwrap();
+        assert!(parent.path().join("moved").join("file").exists());
+    }
+
+    #[test]
+    fn a_junction_or_a_file_is_not_pinned() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let junction = parent.path().join("junction");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+        let error = PinnedDir::open(&junction).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        std::fs::write(parent.path().join("file"), b"fake").unwrap();
+        let error = PinnedDir::open(&parent.path().join("file")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
     use crate::windows_endpoint_access::current_user_sid;
 
     #[test]
