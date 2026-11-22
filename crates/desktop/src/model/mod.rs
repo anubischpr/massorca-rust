@@ -1,5 +1,6 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
+pub mod add_host;
 pub mod canvas;
 pub mod devices;
 pub mod hosts;
