@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,7 +29,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
-use super::git::{self, Watches};
+use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -240,6 +241,7 @@ impl ServiceBridge {
             updates: updates_tx,
             connection: connection_tx,
             watching: BTreeSet::new(),
+            freshness: Arc::new(Freshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -289,6 +291,8 @@ struct Link {
     connection: watch::Sender<ConnectionState>,
     /// The workspaces the UI follows. Kept across connections, so a reconnect watches them again.
     watching: BTreeSet<String>,
+    /// Orders the git answers across the connections of this bridge.
+    freshness: Arc<Freshness>,
 }
 
 impl Link {
@@ -408,7 +412,7 @@ impl Link {
         // The watches end with this connection; the ones the UI still follows start again here.
         let mut watches = Watches::default();
         for workspace in &self.watching {
-            watches.start(client, workspace, &self.updates);
+            watches.start(client, workspace, &self.updates, &self.freshness);
         }
         loop {
             let outcome = tokio::select! {
@@ -428,14 +432,14 @@ impl Link {
                             terminals::spawn_call(client, &writes, &self.updates, command);
                         }
                         Some(Command::GitWatch { workspace }) => {
-                            watches.start(client, &workspace, &self.updates);
+                            watches.start(client, &workspace, &self.updates, &self.freshness);
                             self.watching.insert(workspace);
                         }
                         Some(Command::GitUnwatch { workspace }) => {
                             watches.stop(&workspace);
                             self.watching.remove(&workspace);
                         }
-                        Some(command) => spawn_call(client, command, &self.updates),
+                        Some(command) => spawn_call(client, command, &self.updates, &self.freshness),
                     }
                     Outcome::Continue
                 }
@@ -507,7 +511,12 @@ fn gone_if_missing(
 }
 
 /// Runs a call on its own task so a slow one never holds up events.
-fn spawn_call(client: &Client, command: Command, updates: &mpsc::UnboundedSender<StoreUpdate>) {
+fn spawn_call(
+    client: &Client,
+    command: Command,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    freshness: &Arc<Freshness>,
+) {
     let client = client.clone();
     match command {
         Command::Create { params, reply } => {
@@ -557,7 +566,7 @@ fn spawn_call(client: &Client, command: Command, updates: &mpsc::UnboundedSender
         }
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
-        other => git::spawn(&client, other, updates),
+        other => git::spawn(&client, other, updates, freshness),
     }
 }
 
