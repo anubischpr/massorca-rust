@@ -9,7 +9,9 @@ use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{GetTokenInformation, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER, TokenUser,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -44,27 +46,42 @@ pub(crate) fn current_user_sid() -> io::Result<String> {
 
 /// The SID string of the user a process runs as.
 fn process_token_user(process: HANDLE) -> io::Result<String> {
+    let token = process_token(process)?;
+    token_user_sid(&token)
+}
+
+/// This process's access token, opened for queries.
+pub(crate) fn current_process_token() -> io::Result<Handle> {
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that is valid for this process and needs no closing.
+    process_token(unsafe { GetCurrentProcess() })
+}
+
+fn process_token(process: HANDLE) -> io::Result<Handle> {
     let mut token: HANDLE = ptr::null_mut();
     // SAFETY: `process` is a process handle or pseudo-handle for this call, and `token` is a valid out-pointer.
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let token = Handle(token);
-    token_user_sid(token.0)
+    Ok(Handle(token))
 }
 
-fn token_user_sid(token: HANDLE) -> io::Result<String> {
+/// One class of information about `token`, in a buffer aligned for the structure the class returns; the structure's
+/// pointers point into the same buffer.
+pub(crate) fn token_information(
+    token: &Handle,
+    class: TOKEN_INFORMATION_CLASS,
+) -> io::Result<Vec<usize>> {
     let mut needed = 0_u32;
     // SAFETY: a null buffer of length 0 only asks for the size, which the call writes to `needed`.
-    unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed) };
+    unsafe { GetTokenInformation(token.0, class, ptr::null_mut(), 0, &mut needed) };
     let words = (needed as usize).div_ceil(size_of::<usize>()).max(1);
-    // A usize buffer keeps the TOKEN_USER aligned for its pointer fields.
+    // A usize buffer keeps the structure aligned for its pointer fields.
     let mut buffer = vec![0_usize; words];
-    // SAFETY: the buffer holds `needed` bytes and is aligned for TOKEN_USER; the call fills it with the token user.
+    // SAFETY: the buffer holds `needed` bytes and is aligned for the class's structure; the call fills it.
     if unsafe {
         GetTokenInformation(
-            token,
-            TokenUser,
+            token.0,
+            class,
             buffer.as_mut_ptr().cast(),
             needed,
             &mut needed,
@@ -73,6 +90,11 @@ fn token_user_sid(token: HANDLE) -> io::Result<String> {
     {
         return Err(io::Error::last_os_error());
     }
+    Ok(buffer)
+}
+
+fn token_user_sid(token: &Handle) -> io::Result<String> {
+    let buffer = token_information(token, TokenUser)?;
     let user = buffer.as_ptr().cast::<TOKEN_USER>();
     // SAFETY: on success the buffer starts with a TOKEN_USER, and its SID points into the same buffer, which lives through this call.
     let sid = unsafe { (*user).User.Sid };
@@ -105,7 +127,7 @@ pub(crate) fn wide_to_string(text: *const u16) -> String {
 }
 
 /// Closes a process or token handle on drop; a null handle is left alone.
-struct Handle(HANDLE);
+pub(crate) struct Handle(HANDLE);
 
 impl Drop for Handle {
     fn drop(&mut self) {
