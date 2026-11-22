@@ -20,6 +20,7 @@ use serde_json::json;
 
 use super::{AgentError, Agents, Change, lock, tokens_match};
 use crate::launch;
+use crate::provided_env::SecretGrant;
 
 /// What a merge into the parent's worktree did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +54,11 @@ impl Agents {
     /// cannot delegate (`agent.depth_exceeded`), a writing child of a folder workspace is refused
     /// (`agent.delegate_needs_git`), and a token that does not match the parent's live run is refused
     /// (`agent.hook_refused`). A repeated `request_id` returns the first child.
-    pub fn delegate(&self, params: AgentDelegateParams) -> Result<AgentDelegated, AgentError> {
+    pub fn delegate(
+        &self,
+        params: AgentDelegateParams,
+        grant: SecretGrant,
+    ) -> Result<AgentDelegated, AgentError> {
         launch::check_prompt(&params.prompt)?;
         let parent = self.resolve(&params.parent)?;
         if let Some(token) = &params.token {
@@ -118,7 +123,8 @@ impl Agents {
                 rows: None,
                 request_id: params.request_id,
             },
-            Some(parent.id),
+            Some(&parent),
+            grant,
         );
         let session = match (started, kept) {
             (Ok(session), _) => session,
@@ -662,7 +668,7 @@ then report"
 
     use super::super::tests::service;
     use super::super::{LiveRun, PromptRules, lock};
-    use super::{AgentError, MergeResult, RepoOps};
+    use super::{AgentError, MergeResult, RepoOps, SecretGrant};
     use crate::kind::PasteMode;
     use crate::status::HookRules;
 
@@ -703,6 +709,7 @@ then report"
             activity: None,
             result: None,
             brought_back_at: None,
+            holds_secrets: false,
         }
     }
 
@@ -776,12 +783,12 @@ then report"
         }
 
         let refused = agents
-            .delegate(delegate_params(&other.id, "req-1"))
+            .delegate(delegate_params(&other.id, "req-1"), SecretGrant::Provide)
             .unwrap_err();
         assert_eq!(refused.code, codes::REQUEST_INVALID_PARAMS);
 
         let replayed = agents
-            .delegate(delegate_params(&parent.id, "req-1"))
+            .delegate(delegate_params(&parent.id, "req-1"), SecretGrant::Provide)
             .unwrap();
         assert_eq!(replayed.session.id, child.id);
     }
@@ -794,18 +801,21 @@ then report"
         lock(&agents.inner.merging).insert(workspace_id.clone());
 
         let start = agents
-            .start(AgentStartParams {
-                workspace: workspace_id.clone(),
-                kind: "any".to_owned(),
-                prompt: None,
-                args: Vec::new(),
-                env: BTreeMap::new(),
-                read_only: true,
-                title: None,
-                cols: None,
-                rows: None,
-                request_id: None,
-            })
+            .start(
+                AgentStartParams {
+                    workspace: workspace_id.clone(),
+                    kind: "any".to_owned(),
+                    prompt: None,
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    read_only: true,
+                    title: None,
+                    cols: None,
+                    rows: None,
+                    request_id: None,
+                },
+                SecretGrant::Provide,
+            )
             .unwrap_err();
         assert_eq!(start.code, codes::AGENT_BUSY);
         assert_eq!(
@@ -878,18 +888,21 @@ then report"
         declare_broken_kind(profile.path(), root.path());
 
         let failed = agents
-            .start(AgentStartParams {
-                workspace: workspace_id.clone(),
-                kind: "broken".to_owned(),
-                prompt: None,
-                args: Vec::new(),
-                env: BTreeMap::new(),
-                read_only: true,
-                title: None,
-                cols: None,
-                rows: None,
-                request_id: None,
-            })
+            .start(
+                AgentStartParams {
+                    workspace: workspace_id.clone(),
+                    kind: "broken".to_owned(),
+                    prompt: None,
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    read_only: true,
+                    title: None,
+                    cols: None,
+                    rows: None,
+                    request_id: None,
+                },
+                SecretGrant::Provide,
+            )
             .unwrap_err();
         assert_ne!(failed.code, codes::AGENT_NOT_INSTALLED, "{failed}");
         assert!(agents.list(None).unwrap().is_empty());
@@ -933,7 +946,7 @@ then report"
         };
 
         for _ in 0..2 {
-            let failed = agents.delegate(params()).unwrap_err();
+            let failed = agents.delegate(params(), SecretGrant::Provide).unwrap_err();
             assert!(failed.message.contains("lead-1"), "{failed}");
             let data = failed.data.expect("data names the kept workspace");
             assert_eq!(data["workspace"]["name"], "lead-1");

@@ -80,9 +80,11 @@ pub struct AgentSessionRow {
     pub activity: Option<StoredActivity>,
     pub result: Option<String>,
     pub brought_back_at: Option<i64>,
+    /// The current or last run received vault secrets (decision 0071), or descends from one that did.
+    pub holds_secrets: bool,
 }
 
-const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at FROM agent_sessions";
+const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets FROM agent_sessions";
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
     let exit = match row.get::<_, Option<RunExitReason>>("exit_reason")? {
@@ -120,6 +122,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
         activity,
         result: row.get("result")?,
         brought_back_at: row.get("brought_back_at")?,
+        holds_secrets: row.get("holds_secrets")?,
     })
 }
 
@@ -130,7 +133,7 @@ impl Store {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
         self.lock().execute(
-            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 row.id,
                 row.kind,
@@ -151,7 +154,8 @@ impl Store {
                 activity.map(|activity| activity.source.clone()),
                 activity.map(|activity| activity.at),
                 row.result,
-                row.brought_back_at
+                row.brought_back_at,
+                row.holds_secrets
             ],
         )?;
         Ok(())
@@ -242,10 +246,15 @@ impl Store {
     /// Starts a new run of an exited session (0054): the row names the new run's terminal, and its exit and activity are
     /// cleared, so the activity starts absent until the agent reports. The result and the agent ref stay. One statement,
     /// so a reader never sees the exit cleared with the old terminal. Returns whether an exited row changed.
-    pub fn restart_agent_session(&self, id: &str, terminal_id: &str) -> Result<bool, StoreError> {
+    pub fn restart_agent_session(
+        &self,
+        id: &str,
+        terminal_id: &str,
+        holds_secrets: bool,
+    ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
-            params![id, terminal_id],
+            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = ?3, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            params![id, terminal_id, holds_secrets],
         )?;
         Ok(changed > 0)
     }

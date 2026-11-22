@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps};
+use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps, SecretGrant};
 use massorca_core_git::{Git, GitError, MergeOutcome};
 use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
@@ -26,7 +26,7 @@ use crate::error::ServiceError;
 use crate::features::NoParams;
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
-use crate::permission::Permission;
+use crate::permission::{Permission, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -200,7 +200,8 @@ async fn kinds(ctx: RequestCtx, _params: NoParams) -> Result<AgentKinds, ErrorBo
 }
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.start(params)).await
+    let grant = secret_grant(&ctx);
+    on_agents(&ctx, move |agents| agents.start(params, grant)).await
 }
 
 async fn list(ctx: RequestCtx, params: AgentListParams) -> Result<AgentSessionList, ErrorBody> {
@@ -225,11 +226,14 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
 
 /// Starts a new run of an exited session, which keeps its id (0054).
 async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.resume(&params.session)).await
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let grant = secret_grant(&ctx);
+    on_agents(&ctx, move |agents| agents.resume(&params.session, grant)).await
 }
 
 /// Types a prompt into a run's terminal (0054). The text is never logged.
 async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
     on_agents(&ctx, move |agents| {
         agents.prompt(&params.session, &params.text, params.force)
     })
@@ -246,7 +250,9 @@ async fn delegate(
     ctx: RequestCtx,
     params: AgentDelegateParams,
 ) -> Result<AgentDelegated, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.delegate(params)).await
+    require_admin_for_session(&ctx, params.parent.clone()).await?;
+    let grant = secret_grant(&ctx);
+    on_agents(&ctx, move |agents| agents.delegate(params, grant)).await
 }
 
 /// A session's delegation tree: its root and the root's children (0055).
@@ -260,6 +266,17 @@ async fn bring_back(
     ctx: RequestCtx,
     params: AgentBringBackParams,
 ) -> Result<BringBackResult, ErrorBody> {
+    // A bring-back reads the child's result and types into the parent's run.
+    require_admin_for_session(&ctx, params.child.clone()).await?;
+    let parent = on_agents(&ctx, {
+        let child = params.child.clone();
+        move |agents| agents.show(&child)
+    })
+    .await?
+    .parent_id;
+    if let Some(parent) = parent {
+        require_admin_for_session(&ctx, parent).await?;
+    }
     let child = params.child.clone();
     let merge = params.merge;
     // The workspace a merge would go into: only a child with a workspace of its own is merged (0055).
@@ -536,6 +553,27 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
+/// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
+fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+    if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
+        SecretGrant::Provide
+    } else {
+        SecretGrant::Withhold("vault secrets go only to runs started by a host-admin caller")
+    }
+}
+
+/// Refuses a caller below host-admin scope when `session`'s run holds vault secrets (decision 0071).
+async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<(), ErrorBody> {
+    if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
+        return Ok(());
+    }
+    let holds = on_agents(ctx, move |agents| Ok(agents.show(&session)?.holds_secrets)).await?;
+    if holds {
+        return authorize(&ctx.principal, Permission::HostAdmin);
+    }
+    Ok(())
+}
+
 async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,

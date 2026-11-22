@@ -41,6 +41,8 @@ fn live_session() -> AgentSession {
         },
         activity: None,
         result: None,
+        holds_secrets: false,
+        secrets_withheld: None,
     }
 }
 
@@ -115,6 +117,8 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
             at_ms: 1_767_225_602_000,
         }),
         result: Some("all green".to_owned()),
+        holds_secrets: false,
+        secrets_withheld: None,
         ..live_session()
     };
     assert_wire(

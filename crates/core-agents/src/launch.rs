@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::kind::{KindDecl, PromptMode, REF_PLACEHOLDER, StatusMechanism};
 use crate::paths;
-use crate::provided_env::{ProvidedEnv, reserved_name, same_name};
+use crate::provided_env::{ProvidedEnv, dangerous_caller_name, reserved_name, same_name};
 
 /// The session id, for `massorca agent hook` and other commands run by the agent.
 pub const ENV_SESSION: &str = "MASSORCA_AGENT_SESSION";
@@ -101,8 +101,12 @@ pub enum LaunchError {
     PromptHasControl,
     #[error("the kind declares no resume form")]
     NotResumable,
-    #[error("the vault provides {0}, which the run sets itself; rename that secret")]
+    #[error(
+        "the vault provides {0}, which the run sets itself or which may not carry a secret; rename that secret"
+    )]
     ReservedName(String),
+    #[error("the caller's env sets {0}, which a run holding vault secrets may not receive")]
+    DangerousCallerEnv(String),
 }
 
 /// Refuses prompts over the size limit, with a NUL, or with a control character other than tab, line feed and carriage
@@ -129,6 +133,11 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     let decl = input.decl;
     if let Some(name) = reserved_name(input.provided_env, decl) {
         return Err(LaunchError::ReservedName(name.to_owned()));
+    }
+    if !input.provided_env.is_empty()
+        && let Some(name) = dangerous_caller_name(input.caller_env)
+    {
+        return Err(LaunchError::DangerousCallerEnv(name.to_owned()));
     }
     let mut args = decl.args.clone();
     let mut files = Vec::new();
@@ -614,7 +623,13 @@ mod tests {
 
     #[test]
     fn a_provided_massorca_or_home_variable_is_refused() {
-        for name in ["MASSORCA_X", "MASSORCA_AGENT_TOKEN", "CLAUDE_CONFIG_DIR"] {
+        for name in [
+            "MASSORCA_X",
+            "MASSORCA_AGENT_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+            "NODE_OPTIONS",
+            "ANTHROPIC_BASE_URL",
+        ] {
             let mut fixture = Fixture::new(built_in("claude"));
             fixture.provided = provided(&[(name, "placeholder-value")]);
             let refused = fixture
@@ -626,6 +641,31 @@ mod tests {
             assert_eq!(refused, LaunchError::ReservedName(name.to_owned()));
             assert!(!refused.to_string().contains("placeholder-value"));
         }
+    }
+
+    #[test]
+    fn a_run_holding_secrets_refuses_a_dangerous_caller_variable() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.caller_env = BTreeMap::from([("NODE_OPTIONS".to_owned(), "--x".to_owned())]);
+        assert!(
+            fixture
+                .plan(Run::First {
+                    prompt: None,
+                    new_ref: "r-1"
+                })
+                .is_ok()
+        );
+        fixture.provided = provided(&[("API_URL", "from-vault")]);
+        let refused = fixture
+            .plan(Run::First {
+                prompt: None,
+                new_ref: "r-1",
+            })
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            LaunchError::DangerousCallerEnv("NODE_OPTIONS".to_owned())
+        );
     }
 
     #[test]
