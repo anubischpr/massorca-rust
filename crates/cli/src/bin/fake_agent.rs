@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -243,7 +243,7 @@ impl Agent {
 
     /// Runs git in the working directory and reports whether it succeeded. Its output is discarded.
     fn git(&self, args: &[&str]) -> bool {
-        Command::new("git")
+        massorca_process::command("git")
             .args(args)
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
@@ -266,7 +266,7 @@ impl Agent {
         if let Some(result) = result {
             payload.insert("result".to_owned(), Value::String(result));
         }
-        let _ = Command::new(program)
+        let _ = massorca_process::command(program)
             .args(["agent", "hook", event])
             .arg(Value::Object(payload).to_string())
             .stdin(Stdio::null())
@@ -443,7 +443,7 @@ fn logout() -> ExitCode {
 /// must take its child with it, or the pipes stay open and its output is never read to the end.
 fn hang() -> ExitCode {
     if let Ok(me) = env::current_exe() {
-        let _ = Command::new(me)
+        let _ = massorca_process::command(me)
             .arg("hang-child")
             .stdin(Stdio::null())
             .spawn();

@@ -3537,6 +3537,7 @@ dependencies = [
  "massorca-core-remote",
  "massorca-core-terminal",
  "massorca-net",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
@@ -3559,6 +3560,7 @@ dependencies = [
  "getrandom 0.4.3",
  "interprocess",
  "massorca-net",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "serde",
@@ -3579,6 +3581,7 @@ dependencies = [
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-workspace",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "regex",
@@ -3592,10 +3595,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-core-extensions"
+version = "0.1.0"
+dependencies = [
+ "massorca-ext-package",
+ "massorca-profile",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "massorca-process",
  "massorca-protocol",
  "tempfile",
  "thiserror 2.0.21",
@@ -3608,6 +3626,7 @@ dependencies = [
 name = "massorca-core-remote"
 version = "0.1.0"
 dependencies = [
+ "massorca-process",
  "serde",
  "serde_json",
  "tempfile",
@@ -3630,6 +3649,7 @@ name = "massorca-core-terminal"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "massorca-process",
  "portable-pty",
  "rustix",
  "tempfile",
@@ -3650,6 +3670,7 @@ dependencies = [
  "interprocess",
  "libc",
  "massorca-core-store",
+ "massorca-process",
  "massorca-profile",
  "oo7 0.7.3",
  "tempfile",
@@ -3664,6 +3685,7 @@ name = "massorca-core-watch"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "massorca-process",
  "notify",
  "tempfile",
  "thiserror 2.0.21",
@@ -3676,6 +3698,7 @@ dependencies = [
  "dunce",
  "massorca-core-git",
  "massorca-core-store",
+ "massorca-process",
  "massorca-protocol",
  "rusqlite",
  "tempfile",
@@ -3693,6 +3716,7 @@ dependencies = [
  "image",
  "massorca-client",
  "massorca-core-remote",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
@@ -3737,6 +3761,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-process"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "massorca-profile"
 version = "0.1.0"
 dependencies = [
@@ -3744,6 +3775,7 @@ dependencies = [
  "getrandom 0.4.3",
  "interprocess",
  "libc",
+ "massorca-process",
  "tempfile",
  "thiserror 2.0.21",
  "widestring",
@@ -3779,6 +3811,7 @@ dependencies = [
  "massorca-core-watch",
  "massorca-core-workspace",
  "massorca-net",
+ "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "ring",

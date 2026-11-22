@@ -15,8 +15,15 @@ use crate::subscription::StreamItem;
 /// The outcome of a call: its result, or the error the service sent.
 pub(crate) type Reply = Result<Value, ErrorBody>;
 
-/// One item of a subscription: an event or bytes, or the error that ended the stream.
-pub(crate) type Item = Result<StreamItem, ErrorBody>;
+/// One item of a subscription's queue.
+pub(crate) enum Item {
+    /// An event or bytes.
+    Next(StreamItem),
+    /// The error the service ended the stream with.
+    Failed(ErrorBody),
+    /// The connection ended while the stream was open.
+    Lost,
+}
 
 /// A request waiting for its answer.
 pub(crate) enum Pending {
@@ -78,12 +85,15 @@ impl Shared {
         }
     }
 
-    /// Ends the connection for every waiter: pending calls fail as disconnected, and open streams end.
+    /// Ends the connection for every waiter: pending calls fail as disconnected, and open streams end as lost.
     pub(crate) fn close(&self) {
         let mut routes = lock(&self.routes);
         routes.closed = true;
         routes.pending.clear();
-        routes.streams.clear();
+        // The slot `deliver` keeps back is free while a stream is routed, so the marker always fits.
+        for (_, items) in routes.streams.drain() {
+            let _ = items.try_send(Item::Lost);
+        }
     }
 
     fn answer(&self, id: u64, reply: Reply) {
@@ -112,9 +122,9 @@ impl Shared {
     fn deliver(&self, stream: u64, item: StreamItem) {
         let mut routes = lock(&self.routes);
         let ended = match routes.streams.get(&stream) {
-            Some(items) if items.capacity() > 1 => items.try_send(Ok(item)).is_err(),
+            Some(items) if items.capacity() > 1 => items.try_send(Item::Next(item)).is_err(),
             Some(items) => {
-                let _ = items.try_send(Err(overflow()));
+                let _ = items.try_send(Item::Failed(overflow()));
                 true
             }
             None => false,
@@ -128,7 +138,7 @@ impl Shared {
         let ended = lock(&self.routes).streams.remove(&stream);
         // Dropping the sender ends the subscription; an error is delivered just before that, in the slot kept for it.
         if let (Some(items), Some(error)) = (ended, error) {
-            let _ = items.try_send(Err(error));
+            let _ = items.try_send(Item::Failed(error));
         }
     }
 }

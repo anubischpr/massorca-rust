@@ -2,10 +2,12 @@
 //!
 //! Each call connects on its own; a session keeps running after the command that started it exits.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
-use massorca_client::Client;
+use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
     AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
@@ -19,6 +21,7 @@ use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::stream_reconnect;
 use crate::target::Target;
 use crate::terminal_attach;
 
@@ -280,7 +283,7 @@ pub async fn execute(
             session,
             watch: true,
             ..
-        }) => watch(&client, session, output).await?,
+        }) => watch(target, &client, session, output).await?,
         AgentCommand::Status(AgentStatusArgs {
             session: Some(session),
             ..
@@ -443,15 +446,21 @@ async fn wait_until(
 
 /// Prints the selected sessions, then every change, until the stream ends or the command is interrupted. With
 /// `--json` each item is its own `{"ok":true,"result":...}` line.
-async fn watch(client: &Client, session: Option<String>, output: Output) -> Result<(), CliError> {
-    let mut stream = client
-        .agent_watch(&AgentWatchParams {
-            workspace: None,
-            session,
-        })
-        .await?;
-    while let Some(item) = stream.next_as::<AgentWatchEvent>().await {
-        let item = item?;
+async fn watch(
+    target: &Target,
+    client: &Client,
+    session: Option<String>,
+    output: Output,
+) -> Result<(), CliError> {
+    let params = AgentWatchParams {
+        workspace: None,
+        session,
+    };
+    // After a reconnect the service sends a fresh snapshot, so states seen during the gap are never guessed.
+    let mut stream = stream_reconnect::resilient(target, client, open_agent_watch, params);
+    while let Some(item) = stream_reconnect::next_item(&mut stream, output).await {
+        let item: AgentWatchEvent = serde_json::from_value(item?)
+            .map_err(|error| CliError::from(ClientError::Protocol(error.to_string())))?;
         let lines = match &item {
             AgentWatchEvent::Snapshot { sessions } => agent_text::sessions_lines(sessions),
             AgentWatchEvent::Changed { session } => vec![agent_text::change_line(session)],
@@ -460,6 +469,13 @@ async fn watch(client: &Client, session: Option<String>, output: Output) -> Resu
         output.success(&item, &lines);
     }
     Ok(())
+}
+
+fn open_agent_watch<'a>(
+    client: &'a Client,
+    params: &'a AgentWatchParams,
+) -> Pin<Box<dyn Future<Output = Result<Subscription, ClientError>> + Send + 'a>> {
+    Box::pin(client.agent_watch(params))
 }
 
 /// The terminal of a session whose run is still there; an exited run is refused with how to read its last screen.

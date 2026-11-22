@@ -395,7 +395,7 @@ fn no_merge_and_no_prompt_each_skip_their_step() {
 
 /// Whether `ancestor` is an ancestor of `of` in the repository at `dir`.
 fn is_ancestor(dir: &Path, ancestor: &str, of: &str) -> bool {
-    let status = std::process::Command::new("git")
+    let status = massorca_process::command("git")
         .args(["merge-base", "--is-ancestor", ancestor, of])
         .current_dir(dir)
         .status()
@@ -465,7 +465,7 @@ fn bring_back_into_a_parent_with_a_stopped_rebase_is_refused() {
     let child = finished_child(&sandbox, &parent, "write:result.txt");
     git(&lead, &["commit", "-q", "--allow-empty", "-m", "second"]);
     // An exec that fails stops the rebase and leaves the work tree clean.
-    let stopped = std::process::Command::new("git")
+    let stopped = massorca_process::command("git")
         .args([
             "-c",
             "core.editor=true",
