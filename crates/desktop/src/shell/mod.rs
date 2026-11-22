@@ -11,6 +11,7 @@ mod rail;
 mod resize_edges;
 mod service_banner;
 mod settings;
+mod settings_secret_dialog;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
@@ -121,6 +122,8 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
+    vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
     marketplace: Box<dyn MarketplaceSource>,
     /// The catalogue's search field; its settled text becomes the Marketplace query.
@@ -280,6 +283,7 @@ impl Shell {
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            vault_dialog: None,
             marketplace,
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
@@ -611,6 +615,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
+            let connected = self.store.read(cx).state().connection.is_connected();
+            settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
+        });
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
@@ -678,6 +686,7 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(vault_dialog, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }

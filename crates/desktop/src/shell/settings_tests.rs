@@ -5,12 +5,15 @@
 use super::settings::host_word;
 use super::*;
 use crate::model::navigation::{MarketplacePage, Page};
+use crate::model::secret_form::FormStatus;
 use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
-use crate::service::{Command, ConnectionState, Refusal, Script, SecretsUpdate, StoreUpdate};
-use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
+use crate::service::{
+    Command, ConnectionState, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
+};
+use gpui::{AppContext, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
@@ -356,6 +359,85 @@ fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
             .is_some(),
         "the name is drawn under its project"
     );
+}
+
+/// Opens Add, types `name`, pastes `value` from the clipboard and saves: what the page sends, and nothing more.
+fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+    rig.shell.update(cx, |shell, cx| shell.open_add_secret(cx));
+    let field = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .vault_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.name_field.clone())
+            .expect("the name field is open")
+    });
+    field.update_in(cx, |field, window, cx| field.set_text(name, window, cx));
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(value.to_owned())));
+    rig.shell
+        .update(cx, |shell, cx| shell.paste_secret_value(cx));
+    rig.shell.update(cx, |shell, cx| shell.save_secret(cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_pasted_value_is_sent_once_and_the_dialog_closes_when_the_vault_stores_it(
+    cx: &mut TestAppContext,
+) {
+    const VALUE: &str = "settings-test-value-7b2d";
+    let (mut rig, cx) = settings_rig(cx);
+    add_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Set { params, reply })) => {
+            assert_eq!(
+                (params.scope.as_str(), params.name.as_str(), params.replace),
+                ("project:p1", "OPENAI_API_KEY", false),
+                "the first project is preselected and an add never replaces"
+            );
+            assert_eq!(params.value, VALUE, "the pasted value is what is sent");
+            reply
+                .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.set was expected"),
+    }
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the dialog closes once the vault stores the secret"
+    );
+}
+
+#[gpui::test]
+fn a_refused_save_keeps_the_dialog_open_and_drops_the_sent_value(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    add_and_save(&mut rig, cx, "OPENAI_API_KEY", "settings-test-value-9c4e");
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Set { reply, .. })) => {
+            reply
+                .send(Err(Refusal::Failed {
+                    code: codes::SECRET_NAME_IN_USE.to_owned(),
+                    message: "OPENAI_API_KEY already exists in project:p1".to_owned(),
+                }))
+                .expect("the page listens");
+        }
+        _ => panic!("a secret.set was expected"),
+    }
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("a refused save keeps the dialog open");
+        assert!(!dialog.form.has_value(), "the value was sent and is gone");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Refused(
+                "Not saved: OPENAI_API_KEY already exists in this scope. Pick another name. Nothing was stored."
+                    .to_owned()
+            )
+        );
+    });
 }
 
 #[gpui::test]

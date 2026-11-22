@@ -338,7 +338,7 @@ fn setup_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
 }
 
 /// A read-only value in a sunken box, as a row shows what it holds.
-fn value_box(text: impl Into<SharedString>, theme: &Theme) -> AnyElement {
+pub(super) fn value_box(text: impl Into<SharedString>, theme: &Theme) -> AnyElement {
     div()
         .px(px(SPACE_2))
         .py(px(SPACE_1))
