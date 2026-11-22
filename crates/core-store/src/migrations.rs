@@ -83,6 +83,33 @@ CREATE INDEX agent_sessions_by_parent ON agent_sessions(parent_id);
 "#,
         foreign_keys_off: false,
     },
+    // Agent accounts (decision 0059): several credential homes per kind, one active per kind, and per-project choices.
+    // Deleting an account clears its active mark and its choices; deleting a project clears its choices.
+    Migration {
+        sql: r#"
+CREATE TABLE agent_accounts (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    identity TEXT,
+    state TEXT NOT NULL CHECK(state IN ('signed_in','expired','needs_sign_in','not_set_up','migrated','conflict','unknown'))
+);
+CREATE INDEX agent_accounts_by_kind ON agent_accounts(kind, created_at);
+CREATE TABLE agent_account_active (
+    kind TEXT PRIMARY KEY,
+    account TEXT NOT NULL REFERENCES agent_accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE agent_account_choices (
+    kind TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    account TEXT NOT NULL REFERENCES agent_accounts(id) ON DELETE CASCADE,
+    PRIMARY KEY(kind, project_id)
+);
+CREATE INDEX agent_account_choices_by_account ON agent_account_choices(account);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

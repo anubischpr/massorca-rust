@@ -1,6 +1,7 @@
 //! SQLite persistence for MassOrca's durable state (ADR 0005): projects, workspaces, settings and agent sessions,
 //! with versioned migrations and a backup taken before each migration.
 
+mod agent_accounts;
 mod agent_sessions;
 mod backup;
 mod error;
@@ -12,6 +13,7 @@ mod workspaces;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use agent_accounts::AgentAccountRow;
 pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, StoredActivity};
 pub use error::StoreError;
 pub use migrations::{MIGRATIONS, Migration};
