@@ -13,7 +13,7 @@ use crate::model::teams::TeamId;
 use gpui::{IntoElement, ParentElement, Styled, div, px};
 use massorca_ui::components::avatar::{Avatar, AvatarSize};
 use massorca_ui::tokens::{SPACE_1, TYPE_BODY_STRONG};
-use massorca_ui::{TextStyled, Theme};
+use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
 pub(super) use board::{board_columns, board_page};
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
@@ -38,6 +38,11 @@ fn team_pill(name: &str, team: TeamId, theme: &Theme) -> impl IntoElement {
                 .text_style(TYPE_BODY_STRONG)
                 .text_color(theme.palette.text.primary)
                 .child(name.to_owned()),
+        )
+        .child(
+            Icon::new(IconName::ChevronDown)
+                .size(IconSize::XSmall)
+                .color(theme.palette.text.secondary),
         )
 }
 
