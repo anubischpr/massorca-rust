@@ -165,6 +165,12 @@ const SHOTS: &[Shot] = &[
     sample("tasks-page", tasks_page),
     sample("calendar-page", calendar_page),
     sample("marketplace-page", marketplace_page),
+    Shot {
+        name: "marketplace-narrow-880",
+        width: 880.0,
+        data: Data::Sample,
+        reach: marketplace_page,
+    },
     sample("prototypes-page", prototypes_page),
     sample("automations-page", automations_page),
     sample("settings-general", settings_section::<0>),

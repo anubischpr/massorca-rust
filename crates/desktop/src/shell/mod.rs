@@ -461,6 +461,7 @@ impl Render for Shell {
             shell: shell.clone(),
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
+            agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
         };
         let setup_rows = crate::model::setup::checklist(
             self.store.read(cx).state(),
