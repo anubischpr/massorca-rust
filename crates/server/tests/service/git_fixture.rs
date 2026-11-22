@@ -1,7 +1,6 @@
 //! A running service with one git project and one worktree workspace, for the `git/1` method tests.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::common::{TempHome, connect, start, stop, temp_home};
 use massorca_client::Client;
@@ -116,7 +115,7 @@ impl GitService {
 
 /// Runs git in `dir` with a fixed identity and returns stdout; panics on failure.
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

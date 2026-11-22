@@ -2,14 +2,13 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use massorca_core_watch::{WatchKind, WatchSpec, watch};
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
@@ -149,7 +148,7 @@ fn a_burst_of_writes_is_reported_once_and_a_quiet_tree_is_silent() {
 fn reading_the_repository_reports_nothing() {
     let watched = watched_repo();
     // A status read under GIT_OPTIONAL_LOCKS=0 must not wake the watcher (decision 0012).
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args(["status", "--porcelain=v2"])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .current_dir(&watched.repo)

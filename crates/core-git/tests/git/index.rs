@@ -242,7 +242,7 @@ fn directories_and_conflicts_are_refused_and_ignored_files_are_never_touched() {
     commit_file(&repo, "README.md", "theirs\n", "theirs");
     run_git(&repo, &["checkout", "-q", "main"]);
     commit_file(&repo, "README.md", "ours\n", "ours");
-    let merge = std::process::Command::new("git")
+    let merge = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

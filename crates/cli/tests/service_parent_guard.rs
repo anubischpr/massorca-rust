@@ -5,7 +5,7 @@ mod harness;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ const EXIT_BOUND: Duration = Duration::from_secs(30);
 fn a_service_started_by_a_killed_test_process_stops_without_its_sandbox_drop() {
     let dir = tempfile::tempdir().expect("a temporary folder");
     let mut helper = ChildGuard::new(
-        Command::new(std::env::current_exe().expect("the test binary"))
+        massorca_process::command(std::env::current_exe().expect("the test binary"))
             .args(["--exact", "parent_guard_helper", "--ignored", "--nocapture"])
             .env(HELPER_DIR_ENV, dir.path())
             .stdin(Stdio::null())

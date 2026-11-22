@@ -42,12 +42,10 @@ mod imp {
     use std::ffi::c_void;
     use std::io;
     use std::os::windows::io::AsRawHandle;
-    use std::os::windows::process::CommandExt;
     use std::process::{Child, Command};
 
+    use massorca_process::CREATE_SUSPENDED;
     use win32job::{ExtendedLimitInfo, Job};
-
-    const CREATE_SUSPENDED: u32 = 0x0000_0004;
 
     // One system call resumes every thread of a process. On 32-bit x86 a raw-dylib import is decorated unless told
     // otherwise, and ntdll exports this one bare (the same import core-git uses for its git processes).
@@ -68,7 +66,8 @@ mod imp {
     pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, Tree)> {
         let job = Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())
             .map_err(|error| io::Error::other(format!("{error:?}")))?;
-        command.creation_flags(CREATE_SUSPENDED);
+        // The helper keeps CREATE_NO_WINDOW: the service has no console, so a console program would open a window.
+        massorca_process::creation_flags(command, CREATE_SUSPENDED);
         let mut child = command.spawn()?;
         if let Err(error) = job.assign_process(child.as_raw_handle() as isize) {
             let _ = child.kill();

@@ -46,7 +46,7 @@ const SERVICE_LOG_TAIL_LINES: usize = 200;
 /// The `massorca` binary with `home` on its environment and no profile flag. Its services keep vault keys in a file
 /// inside the temporary profile, never in the developer's keyring.
 pub fn massorca_in(home: &Path) -> Command {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin("massorca"));
+    let mut command = massorca_process::command(assert_cmd::cargo::cargo_bin("massorca"));
     command.env("MASSORCA_HOME", home);
     command.env("MASSORCA_VAULT_PROTECTION", "file");
     for name in CLEARED_ENV {
@@ -433,7 +433,7 @@ fn processes_in_home(home: &Path) -> Vec<u32> {
 /// Kills the process `pid` by id, never by name.
 #[cfg(unix)]
 pub fn kill(pid: u32) {
-    let _ = Command::new("kill")
+    let _ = massorca_process::command("kill")
         .args(["-KILL", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -444,7 +444,7 @@ pub fn kill(pid: u32) {
 /// Kills the process `pid` by id, never by name.
 #[cfg(windows)]
 pub fn kill(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = massorca_process::command("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -536,7 +536,7 @@ pub fn eventually<T>(what: &str, mut attempt: impl FnMut() -> Option<T>) -> T {
 
 /// Runs git in `dir` with a fixed identity; panics on failure. Returns stdout as text.
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
