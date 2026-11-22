@@ -9,9 +9,11 @@ pub mod host;
 pub mod layout;
 pub mod lockfile;
 pub mod review;
+pub mod service;
 pub mod source;
 pub mod views;
 
 pub use error::{Error, HookError, codes};
 pub use layout::Layout;
 pub use lockfile::Lockfile;
+pub use service::Extensions;

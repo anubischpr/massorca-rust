@@ -2,5 +2,7 @@
 
 mod fakes;
 mod fixture;
+mod install;
 mod review;
+mod service;
 mod source;

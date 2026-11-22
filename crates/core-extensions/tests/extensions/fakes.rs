@@ -16,7 +16,7 @@ pub struct FakeHost {
     /// Exit codes by the argv's second item (`install`, `remove`, `--version`); missing means 0.
     exits: Mutex<HashMap<String, i32>>,
     /// Whether a successful `<binary>-setup install` makes `<binary>` resolve.
-    pub installs_binary: bool,
+    installs_binary: bool,
 }
 
 impl FakeHost {
@@ -30,6 +30,24 @@ impl FakeHost {
     pub fn with_program(self, name: &str) -> Self {
         self.add_program(name);
         self
+    }
+
+    /// The installer succeeds but the program still does not resolve.
+    pub fn without_binary(mut self) -> Self {
+        self.installs_binary = false;
+        self
+    }
+
+    pub fn exit_for(self, verb: &str, code: i32) -> Self {
+        self.exits
+            .lock()
+            .expect("exits")
+            .insert(verb.to_owned(), code);
+        self
+    }
+
+    pub fn runs(&self) -> Vec<Vec<String>> {
+        self.runs.lock().expect("runs").clone()
     }
 
     pub fn add_program(&self, name: &str) {
