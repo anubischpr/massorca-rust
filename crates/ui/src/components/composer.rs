@@ -79,6 +79,8 @@ pub enum ComposerEvent {
     RemoveAttachment(u64),
     /// The user asked to send the failed message again.
     RetrySend,
+    /// The user pressed "Sign in" on a signed-out composer.
+    SignIn,
     /// Files dropped on the composer.
     DroppedFiles(Vec<PathBuf>),
 }
@@ -99,6 +101,8 @@ pub struct Composer {
     agent_busy: bool,
     host_confirmed: bool,
     disabled_reason: Option<SharedString>,
+    /// The disabled composer offers "Sign in" beside its reason.
+    sign_in: bool,
     error: Option<SharedString>,
     enter_inserts_newline: bool,
     hint_shown: bool,
@@ -154,6 +158,7 @@ impl Composer {
             agent_busy: false,
             host_confirmed: true,
             disabled_reason: None,
+            sign_in: false,
             error: None,
             enter_inserts_newline: false,
             hint_shown: false,
@@ -206,10 +211,21 @@ impl Composer {
     pub fn set_disabled_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
         let disabled = reason.is_some();
         self.disabled_reason = reason;
+        self.sign_in = false;
         self.text
             .update(cx, |area, cx| area.set_disabled(disabled, cx));
         cx.notify();
     }
+    /// The agent account needs sign-in: the composer is disabled with "Sign in to <agent> to
+    /// continue" and a "Sign in" action (Composer.md States, disabled).
+    pub fn set_signed_out(&mut self, signed_out: bool, cx: &mut Context<Self>) {
+        let reason =
+            signed_out.then(|| format!("Sign in to {} to continue", self.agent_name).into());
+        self.set_disabled_reason(reason, cx);
+        self.sign_in = signed_out;
+        cx.notify();
+    }
+
     pub fn set_enter_inserts_newline(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.enter_inserts_newline = enabled;
         cx.notify();
@@ -384,6 +400,36 @@ mod tests {
 
     fn draft_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
         composer.read_with(cx, |composer, cx| composer.draft(cx))
+    }
+
+    #[gpui::test]
+    fn a_signed_out_composer_offers_sign_in(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        composer.update(cx, |composer, cx| composer.set_signed_out(true, cx));
+        cx.run_until_parked();
+        let reason = composer.read_with(cx, |composer, _| composer.disabled_reason.clone());
+        assert_eq!(reason.as_deref(), Some("Sign in to Claude to continue"));
+        let button = cx
+            .debug_bounds("composer-sign-in")
+            .expect("Sign in is drawn")
+            .center();
+        cx.simulate_click(button, gpui::Modifiers::none());
+        assert_eq!(*events.borrow(), vec![ComposerEvent::SignIn]);
+    }
+
+    #[gpui::test]
+    fn the_send_failed_line_sits_above_the_text(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_error(Some("offline".into()), cx)
+        });
+        cx.run_until_parked();
+        let error = cx
+            .debug_bounds("composer-error")
+            .expect("the line is drawn");
+        // Above the text, the line starts within the text area's own minimum height.
+        assert!(error.top() < gpui::px(SIZE_COMPOSER_MIN_HEIGHT));
     }
 
     #[gpui::test]

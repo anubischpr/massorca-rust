@@ -590,9 +590,14 @@ impl RenderOnce for NotificationStack {
             column = column.max_h(px(height)).overflow_y_scroll();
         }
         if let (true, Some(expand)) = (folded > 0, on_expand) {
+            // The row is as wide as the cards, not the stack's container.
+            let row_width = width
+                .unwrap_or(LAYOUT_TOAST_WIDTH_DEFAULT)
+                .clamp(LAYOUT_TOAST_WIDTH_MIN, LAYOUT_TOAST_WIDTH_MAX);
             column = column.child(
                 div()
                     .debug_selector(|| "folded".into())
+                    .w(px(row_width))
                     .flex()
                     .justify_center()
                     .rounded(px(RADIUS_LG))
