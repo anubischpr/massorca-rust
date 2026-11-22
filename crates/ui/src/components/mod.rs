@@ -23,6 +23,7 @@ pub mod icon_button;
 pub mod invocation_banner;
 pub mod kbd;
 pub mod list_row;
+pub mod marketplace_item_header;
 pub mod menu;
 pub mod model_picker;
 pub mod notification_card;

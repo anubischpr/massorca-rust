@@ -391,8 +391,11 @@ impl RenderOnce for Button {
 
         let (name, tooltip) = (self.label.clone(), self.tooltip.clone());
         let (disabled, loading) = (self.disabled, self.loading);
+        // Tests find a button by its id, as `button:<id>`, wherever a parent slot puts it.
+        let debug_id = format!("button:{}", self.id);
         let mut root = div()
             .id(self.id.clone())
+            .debug_selector(move || debug_id)
             .role(Role::Button)
             .aria_label(name)
             .track_focus(&focus)
