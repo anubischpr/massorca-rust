@@ -406,6 +406,54 @@ mod tests {
         );
     }
 
+    /// A service starting at the same time creates and removes files in the root, such as the store's journal, while
+    /// this scan lists it. The listing is read before the first entry is checked, so the removal happens in between.
+    #[test]
+    fn entries_removed_while_the_scan_lists_them_are_skipped() {
+        let (_temp, home, root) = layout();
+        secure_root(&home, &root).expect("created");
+        for name in ["a", "b", "c"] {
+            fs::write(root.join(name), b"x").expect("a file");
+        }
+        fs::create_dir(root.join("d")).expect("a folder");
+        let removed = std::cell::Cell::new(false);
+        let root_for_owner = root.clone();
+        let owner = move |path: &Path, metadata: &fs::Metadata| {
+            if path.parent() == Some(root_for_owner.as_path()) && !removed.replace(true) {
+                for name in ["a", "b", "c", "d"] {
+                    let other = root_for_owner.join(name);
+                    if other != path {
+                        let _ = fs::remove_file(&other).or_else(|_| fs::remove_dir(&other));
+                    }
+                }
+            }
+            metadata.uid()
+        };
+
+        let scanned = secure_root_with(&home, &root, current_uid(), &owner);
+
+        assert!(matches!(scanned, Ok(RootAccess::Private)), "{scanned:?}");
+    }
+
+    #[test]
+    fn a_folder_removed_before_the_scan_lists_it_is_skipped_not_refused() {
+        let (_temp, home, root) = layout();
+        secure_root(&home, &root).expect("created");
+        let gone = root.join("gone");
+        fs::create_dir_all(gone.join("inner")).expect("folders");
+        let gone_for_owner = gone.clone();
+        let owner = move |path: &Path, metadata: &fs::Metadata| {
+            if path == gone_for_owner {
+                fs::remove_dir_all(path).expect("removed");
+            }
+            metadata.uid()
+        };
+
+        let scanned = secure_root_with(&home, &root, current_uid(), &owner);
+
+        assert!(matches!(scanned, Ok(RootAccess::Private)), "{scanned:?}");
+    }
+
     #[test]
     fn a_deep_entry_owned_by_another_uid_is_refused() {
         let (_temp, home, root) = layout();
