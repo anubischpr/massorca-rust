@@ -103,14 +103,23 @@ fn an_exit_is_recorded_once() {
         reason: RunExitReason::Killed,
         at: 11,
     };
-    assert!(store.set_agent_session_exit(&row.id, &killed).unwrap());
+    let terminal = row.terminal_id.clone().expect("the row's terminal");
+    assert!(
+        store
+            .set_agent_session_exit(&row.id, &terminal, &killed)
+            .unwrap()
+    );
     let later = RunExit {
         code: Some(0),
         signal: None,
         reason: RunExitReason::Exited,
         at: 12,
     };
-    assert!(!store.set_agent_session_exit(&row.id, &later).unwrap());
+    assert!(
+        !store
+            .set_agent_session_exit(&row.id, &terminal, &later)
+            .unwrap()
+    );
     assert_eq!(
         store.get_agent_session(&row.id).unwrap().unwrap().exit,
         Some(killed)
@@ -306,4 +315,37 @@ fn a_live_session_is_not_restarted() {
 
     assert!(!store.restart_agent_session(&row.id, &new_id()).unwrap());
     assert_eq!(store.get_agent_session(&row.id).unwrap(), Some(row));
+}
+
+/// An exit records only against the terminal the run ran in: an exit for another terminal changes nothing, so an end of
+/// an earlier run cannot land on a session that a resume moved onto a new terminal (decision 0058).
+#[test]
+fn an_exit_for_another_terminal_changes_nothing() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+    let end = RunExit {
+        code: Some(1),
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: 20,
+    };
+
+    assert!(
+        !store
+            .set_agent_session_exit(&row.id, &new_id(), &end)
+            .unwrap(),
+        "an exit for another terminal is not recorded"
+    );
+    assert_eq!(
+        store.get_agent_session(&row.id).unwrap().unwrap().exit,
+        None
+    );
+
+    let own = row.terminal_id.clone().expect("the row's terminal");
+    assert!(store.set_agent_session_exit(&row.id, &own, &end).unwrap());
+    assert_eq!(
+        store.get_agent_session(&row.id).unwrap().unwrap().exit,
+        Some(end)
+    );
 }

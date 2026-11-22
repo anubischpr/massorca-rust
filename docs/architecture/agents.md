@@ -203,7 +203,9 @@ logs one that fails, by session id and error code, without stopping.
 - Exits: a sweep checks the terminals of live runs every 200 ms; `agent.stop` applies
   the exit it gets back from the terminal at once. A run that exits while `working` or
   `waiting` becomes `done` / `interrupted` with source `process`, also for runs found
-  still live in the store when the service starts.
+  still live in the store when the service starts. An exit is recorded only while the row still
+  names the terminal the run ran in (decision 0058): an end that arrives after a resume moved the
+  session onto a new terminal changes nothing, and does not end the resumed run.
 - `agent.watch` subscribes before it reads the snapshot. A watcher that falls more than
   1024 changes behind gets a fresh `snapshot`; one whose connection reads too slowly
   ends with `stream.overflow` on the client, like any stream. A forgotten session sends

@@ -772,7 +772,7 @@ impl Agents {
                         let mut live = lock(&self.inner.status);
                         let mut row = self.reload(&row.id)?;
                         if row.exit.is_none() {
-                            self.record_exit(&mut live, &mut row, run_exit_of(&exit))?;
+                            self.record_exit(&mut live, &mut row, terminal, run_exit_of(&exit))?;
                         }
                     }
                 }
@@ -913,32 +913,42 @@ impl Agents {
                 state: TerminalState::Exited,
                 exit: None,
             },
-            (None, Some(terminal)) => match self.inner.config.terminals.get(terminal) {
-                Ok(info) => match info.state {
-                    CoreState::Live => running(TerminalState::Live),
-                    CoreState::Unverifiable => running(TerminalState::Unverifiable),
-                    CoreState::Exited => {
-                        let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
-                        self.record_exit(live, &mut row, exit)?
+            (None, Some(terminal)) => {
+                let terminal = terminal.clone();
+                match self.inner.config.terminals.get(&terminal) {
+                    Ok(info) => match info.state {
+                        CoreState::Live => running(TerminalState::Live),
+                        CoreState::Unverifiable => running(TerminalState::Unverifiable),
+                        CoreState::Exited => {
+                            let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
+                            self.record_exit(live, &mut row, &terminal, exit)?
+                        }
+                    },
+                    Err(TerminalError::NotFound) => {
+                        self.record_exit(live, &mut row, &terminal, gone())?
                     }
-                },
-                Err(TerminalError::NotFound) => self.record_exit(live, &mut row, gone())?,
-                Err(error) => return Err(error.into()),
-            },
+                    Err(error) => return Err(error.into()),
+                }
+            }
         };
         Ok(record(row, execution))
     }
 
-    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once.
+    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once. The end is
+    /// recorded only while the row still names `terminal`, the terminal the run ran in (decision 0058): a resumed session
+    /// has a new terminal, and an earlier run's end must neither land on it nor end its live run.
     fn record_exit(
         &self,
         live: &mut LiveRuns,
         row: &mut AgentSessionRow,
+        terminal: &str,
         exit: RunExit,
     ) -> Result<Execution, AgentError> {
-        let changed = self.store().set_agent_session_exit(&row.id, &exit)?;
-        live.remove(&row.id);
+        let changed = self
+            .store()
+            .set_agent_session_exit(&row.id, terminal, &exit)?;
         if changed {
+            live.remove(&row.id);
             // The exit rule reads the activity and result as they are now, under the status lock.
             if let Some(fresh) = self.store().get_agent_session(&row.id)? {
                 *row = fresh;
@@ -1287,5 +1297,73 @@ mod tests {
         let (agents, _workspace_id, _profile) = service();
         let error = agents.resume("no-such-session").unwrap_err();
         assert_eq!(error.code, codes::AGENT_NOT_FOUND);
+    }
+
+    /// An end recorded for an earlier run's terminal changes nothing once the session runs on another terminal: the
+    /// resumed run stays live and unrecorded (decision 0058).
+    #[test]
+    fn an_end_of_an_earlier_terminal_does_not_end_the_resumed_run() {
+        let (agents, workspace_id, _profile) = service();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: Some("t-1".to_owned()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+        let end = RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: 5,
+        };
+        // The first run ends on t-1; the resume then moves the session onto t-2, where its new run is live.
+        assert!(
+            agents
+                .store()
+                .set_agent_session_exit(&row.id, "t-1", &end)
+                .unwrap()
+        );
+        assert!(
+            agents
+                .store()
+                .restart_agent_session(&row.id, "t-2")
+                .unwrap()
+        );
+        let mut live: LiveRuns = HashMap::new();
+        live.insert(
+            row.id.clone(),
+            LiveRun {
+                token: "t".to_owned(),
+                rules: HookRules::default(),
+                prompt: PromptRules {
+                    has_status: true,
+                    paste: PasteMode::Plain,
+                    submit: "\r".to_owned(),
+                },
+                pending: None,
+            },
+        );
+
+        // A late record of the first run's end, as a stop that outlived the resume would apply it.
+        let mut current = agents.store().get_agent_session(&row.id).unwrap().unwrap();
+        agents
+            .record_exit(&mut live, &mut current, "t-1", end)
+            .unwrap();
+
+        let stored = agents.store().get_agent_session(&row.id).unwrap().unwrap();
+        assert_eq!(stored.exit, None);
+        assert_eq!(stored.terminal_id.as_deref(), Some("t-2"));
+        assert!(live.contains_key(&row.id), "the resumed run stays live");
     }
 }
