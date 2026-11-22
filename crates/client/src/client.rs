@@ -118,9 +118,7 @@ impl Client {
         if !fits_frame(&request, max_frame_len) {
             return Err(ClientError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "the request is larger than one frame may hold ({max_frame_len} bytes)"
-                ),
+                format!("the request is larger than one frame may hold ({max_frame_len} bytes)"),
             )));
         }
         self.shared.register(id, pending)?;
