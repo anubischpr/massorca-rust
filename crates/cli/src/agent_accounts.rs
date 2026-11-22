@@ -1,0 +1,246 @@
+//! `massorca agent accounts ...`: a kind's accounts (decision 0059): sign-in, import, activation, checks and removal.
+//!
+//! Only account ids, labels, states and identities are printed, never credential contents.
+
+use std::path::PathBuf;
+
+use clap::Subcommand;
+use massorca_client::Client;
+use massorca_protocol::methods::agents::{
+    AccountState, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
+    AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList,
+    AccountsRemoveParams, AccountsRemoved, ImportResult,
+};
+
+use crate::cwd_path;
+use crate::error::CliError;
+use crate::output::Output;
+use crate::terminal_attach;
+use crate::workspace_text;
+
+#[derive(Debug, Subcommand)]
+pub enum AccountsCommand {
+    /// Lists the kind's accounts: label, state, identity, whether active, and the projects that chose each.
+    List {
+        /// Agent kind, for example claude.
+        kind: String,
+    },
+    /// Signs a new account in: runs the kind's login in a terminal, then attaches to it unless `--no-attach`.
+    Add {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The account's label, for example work.
+        #[arg(long)]
+        label: Option<String>,
+        /// Prints the account and its sign-in terminal, and returns without attaching.
+        #[arg(long)]
+        no_attach: bool,
+    },
+    /// Imports the kind's declared login files from a directory into a new account, then checks it.
+    Import {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The directory holding the kind's login files.
+        #[arg(long, value_name = "DIR")]
+        from: PathBuf,
+        /// The account's label, for example work.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Makes an account the kind's active one, or the account a project uses with `--project`.
+    Activate {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The account id, as `accounts list` prints it.
+        account: String,
+        /// A project id; the choice then applies to that project only.
+        #[arg(long, value_name = "PROJECT")]
+        project: Option<String>,
+    },
+    /// Deletes an account. Refused while a live run uses it; the kind's sign-out runs first when it declares one.
+    Remove {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The account id.
+        account: String,
+    },
+    /// Checks an account now, or the kind's active account when none is named, and prints its state.
+    Check {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The account id; the active account when absent.
+        account: Option<String>,
+    },
+}
+
+/// Runs one `agent accounts` subcommand. `json` is the output mode: sign-in attaches to a terminal, which has no JSON
+/// form, so it needs `--no-attach` there.
+pub async fn execute(
+    client: &Client,
+    command: AccountsCommand,
+    output: Output,
+    json: bool,
+) -> Result<(), CliError> {
+    match command {
+        AccountsCommand::List { kind } => {
+            let listed = client.agent_accounts_list(&kind).await?;
+            output.success(&listed, &list_lines(&listed));
+        }
+        AccountsCommand::Add {
+            kind,
+            label,
+            no_attach,
+        } => {
+            if !no_attach {
+                if json {
+                    return Err(CliError::new(
+                        "usage.invalid_arguments",
+                        "sign-in attaches to a terminal, which has no --json form; pass --no-attach",
+                        crate::error::exit::USAGE,
+                    ));
+                }
+                // Checked before the sign-in starts, so a refused attach leaves no account behind.
+                terminal_attach::require_terminal()?;
+            }
+            let added = client
+                .agent_accounts_add(&AccountsAddParams { kind, label })
+                .await?;
+            output.success(&added, &added_lines(&added));
+            if !no_attach {
+                terminal_attach::attach(client, &added.terminal_id).await?;
+            }
+        }
+        AccountsCommand::Import { kind, from, label } => {
+            let imported = client
+                .agent_accounts_import(&AccountsImportParams {
+                    kind,
+                    from: cwd_path::absolute(&from)?,
+                    label,
+                })
+                .await?;
+            output.success(&imported, &import_lines(&imported));
+        }
+        AccountsCommand::Activate {
+            kind,
+            account,
+            project,
+        } => {
+            let summary = client
+                .agent_accounts_activate(&AccountsActivateParams {
+                    kind,
+                    account,
+                    project,
+                })
+                .await?;
+            output.success(&summary, &summary_lines(&summary));
+        }
+        AccountsCommand::Remove { kind, account } => {
+            let removed = client
+                .agent_accounts_remove(&AccountsRemoveParams { kind, account })
+                .await?;
+            output.success(&removed, &[removed_line(&removed)]);
+        }
+        AccountsCommand::Check { kind, account } => {
+            let checked = client
+                .agent_accounts_check(&AccountsCheckParams { kind, account })
+                .await?;
+            output.success(&checked, &summary_lines(&checked));
+        }
+    }
+    Ok(())
+}
+
+/// The wire name of a state, as the docs and the tests spell it.
+pub fn state_word(state: AccountState) -> &'static str {
+    match state {
+        AccountState::SignedIn => "signed_in",
+        AccountState::Expired => "expired",
+        AccountState::NeedsSignIn => "needs_sign_in",
+        AccountState::NotSetUp => "not_set_up",
+        AccountState::Migrated => "migrated",
+        AccountState::Conflict => "conflict",
+        AccountState::Unknown => "unknown",
+    }
+}
+
+fn list_lines(listed: &AccountsList) -> Vec<String> {
+    if listed.accounts.is_empty() {
+        return vec!["no accounts; sign in with `agent accounts add <kind>`".to_owned()];
+    }
+    let rows = listed
+        .accounts
+        .iter()
+        .map(|account| {
+            vec![
+                account.id.clone(),
+                printable(&account.label),
+                state_word(account.state).to_owned(),
+                printable(&account.identity.clone().unwrap_or_default()),
+                if account.active { "yes" } else { "no" }.to_owned(),
+                account.projects.join(", "),
+            ]
+        })
+        .collect();
+    workspace_text::table(
+        &[
+            "ACCOUNT", "LABEL", "STATE", "IDENTITY", "ACTIVE", "PROJECTS",
+        ],
+        rows,
+    )
+}
+
+fn added_lines(added: &AccountsAdded) -> Vec<String> {
+    let mut lines = summary_lines(&added.account);
+    lines.push(format!("sign-in terminal {}", added.terminal_id));
+    lines
+}
+
+fn summary_lines(summary: &AccountSummary) -> Vec<String> {
+    let identity = summary
+        .identity
+        .as_deref()
+        .map(|identity| format!(", {}", printable(identity)))
+        .unwrap_or_default();
+    vec![format!(
+        "account {} ({}): {}{identity}{}",
+        printable(&summary.label),
+        summary.id,
+        state_word(summary.state),
+        if summary.active { ", active" } else { "" }
+    )]
+}
+
+fn import_lines(imported: &AccountsImported) -> Vec<String> {
+    match (imported.result, &imported.account, &imported.reason) {
+        (ImportResult::Imported, Some(account), _) => summary_lines(account),
+        (ImportResult::NotFound, _, reason) => vec![format!(
+            "not imported: {}",
+            reason
+                .as_deref()
+                .unwrap_or("none of the declared files is in the source")
+        )],
+        (_, _, reason) => vec![format!(
+            "not imported: {}",
+            reason.as_deref().unwrap_or("the import failed")
+        )],
+    }
+}
+
+fn removed_line(removed: &AccountsRemoved) -> String {
+    if removed.removed {
+        format!("removed account {} of {}", removed.account, removed.kind)
+    } else {
+        format!(
+            "there was no account {} of {}",
+            removed.account, removed.kind
+        )
+    }
+}
+
+/// Text as the terminal shows it: control characters removed, so a label or identity cannot move the cursor or clear the
+/// screen. Labels are at most 256 characters, and identities are checked by the service the same way.
+fn printable(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}

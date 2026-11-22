@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use massorca_protocol::methods::agents::{
-    self, Activity, ActivitySource, ActivityState, AgentBringBackParams, AgentHookParams,
-    AgentKind, AgentKinds, AgentSession, AgentStartParams, AgentWatchEvent, Execution,
-    KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt, ReceiptKind,
-    StatusMechanism,
+    self, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
+    AgentBringBackParams, AgentHookParams, AgentKind, AgentKinds, AgentSession, AgentStartParams,
+    AgentWatchEvent, Execution, KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt,
+    ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -63,6 +63,12 @@ fn method_names_match_the_wire_table() {
         (agents::CREDENTIALS_IMPORT, "agent.credentials.import"),
         (agents::CREDENTIALS_SHOW, "agent.credentials.show"),
         (agents::CREDENTIALS_REMOVE, "agent.credentials.remove"),
+        (agents::ACCOUNTS_LIST, "agent.accounts.list"),
+        (agents::ACCOUNTS_ADD, "agent.accounts.add"),
+        (agents::ACCOUNTS_IMPORT, "agent.accounts.import"),
+        (agents::ACCOUNTS_ACTIVATE, "agent.accounts.activate"),
+        (agents::ACCOUNTS_REMOVE, "agent.accounts.remove"),
+        (agents::ACCOUNTS_CHECK, "agent.accounts.check"),
     ];
     for (constant, expected) in names {
         assert_eq!(constant, expected);
@@ -339,4 +345,35 @@ fn values_from_a_newer_peer_decode_as_unknown() {
     assert_eq!(activity.source, ActivitySource::Unknown);
     let mechanism: StatusMechanism = serde_json::from_value(json!("acp-stream")).expect("decodes");
     assert_eq!(mechanism, StatusMechanism::Unknown);
+}
+
+#[test]
+fn an_account_state_the_build_does_not_know_reads_as_unknown() {
+    let known: AccountState = serde_json::from_value(json!("signed_in")).unwrap();
+    assert_eq!(known, AccountState::SignedIn);
+    let future: AccountState = serde_json::from_value(json!("refreshing")).unwrap();
+    assert_eq!(future, AccountState::Unknown);
+    assert_wire(&AccountState::NeedsSignIn, &json!("needs_sign_in"));
+}
+
+#[test]
+fn an_account_summary_omits_an_absent_identity() {
+    let summary = AccountSummary {
+        id: "0195c0de-0000-7000-8000-000000000001".to_owned(),
+        label: "work".to_owned(),
+        state: AccountState::Migrated,
+        identity: None,
+        active: true,
+        projects: vec!["p1".to_owned()],
+    };
+    assert_wire(
+        &summary,
+        &json!({
+            "id": "0195c0de-0000-7000-8000-000000000001",
+            "label": "work",
+            "state": "migrated",
+            "active": true,
+            "projects": ["p1"]
+        }),
+    );
 }

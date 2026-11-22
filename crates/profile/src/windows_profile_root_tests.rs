@@ -101,10 +101,21 @@ struct TestDisk {
     /// Repairs are recorded here and not applied.
     record_repairs: bool,
     repairs: RefCell<Vec<(PathBuf, String)>>,
+    /// Removed when the scan reads them, as a service starting at the same time removes files: a folder after its
+    /// descriptor is read, so the scan goes on to list it; a file before, so its read fails.
+    vanish: Vec<PathBuf>,
 }
 
 impl Disk for TestDisk {
     fn read(&self, path: &Path, links: Links) -> io::Result<String> {
+        if self.vanish.iter().any(|gone| gone == path) {
+            if path.is_dir() {
+                let sddl = RealDisk.read(path, links);
+                fs::remove_dir_all(path).expect("removed");
+                return sddl;
+            }
+            fs::remove_file(path).expect("removed");
+        }
         let mut sddl = RealDisk.read(path, links)?;
         if self.as_administrator {
             sddl = sddl.replace(&user_string(), "LA");
@@ -311,6 +322,26 @@ fn an_entry_below_a_private_root_that_others_can_write_is_refused() {
     let (kind, paths) = refused_paths(layout.secure());
 
     assert_eq!((kind, paths), ("writable", vec![file]));
+}
+
+/// A service starting at the same time creates and removes files in the root, such as the store's journal, while
+/// this scan lists it.
+#[test]
+fn entries_removed_while_the_scan_lists_them_are_skipped() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let file = layout.root.join("store.db-journal");
+    fs::write(&file, b"x").expect("a file");
+    let folder = layout.root.join("gone");
+    fs::create_dir_all(folder.join("inner")).expect("folders");
+    let disk = TestDisk {
+        vanish: vec![file, folder],
+        ..TestDisk::default()
+    };
+
+    let scanned = layout.secure_as(user(), &disk);
+
+    assert!(matches!(scanned, Ok(RootAccess::Private)), "{scanned:?}");
 }
 
 #[test]

@@ -53,6 +53,45 @@ pub fn import(
     replace: bool,
 ) -> Result<CredentialsImported, AgentError> {
     let decl = declared(profile_dir, kind)?;
+    let home = home_of(profile_dir, &decl.id)?;
+    import_at(profile_dir, &decl, &["homes"], &home, from, replace)
+}
+
+/// Copies a new account's declared files into `<profile>/agents/accounts/<kind>/<account>` (decision 0059). An account
+/// is always new, so an existing one is refused and never replaced.
+pub fn import_account(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+    from: &Path,
+) -> Result<CredentialsImported, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = account_home_of(profile_dir, &decl.id, account)?;
+    import_at(
+        profile_dir,
+        &decl,
+        &["accounts", decl.id.as_str()],
+        &home,
+        from,
+        false,
+    )
+}
+
+/// The shared import: the declared files of `decl`, read from `from`, written into a new `home` made in the directory
+/// `chain` names under `<profile>/agents`. Nothing but `home` is created or replaced.
+fn import_at(
+    profile_dir: &Path,
+    decl: &KindDecl,
+    chain: &[&str],
+    home: &Path,
+    from: &Path,
+    replace: bool,
+) -> Result<CredentialsImported, AgentError> {
+    let name = home
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(decl.id.as_str())
+        .to_owned();
     let names = decl
         .credentials
         .as_ref()
@@ -61,7 +100,10 @@ pub fn import(
         .ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_CREDENTIALS_UNSUPPORTED,
-                format!("agent kind {kind} declares no credential files to import"),
+                format!(
+                    "agent kind {} declares no credential files to import",
+                    decl.id
+                ),
             )
         })?;
     if !from.is_absolute() {
@@ -78,9 +120,8 @@ pub fn import(
     }
 
     let _gate = lock_homes();
-    let home = home_of(profile_dir, &decl.id)?;
-    if home_state(&home)? == HomeState::Directory && !replace {
-        return Err(exists(&decl.id));
+    if home_state(home)? == HomeState::Directory && !replace {
+        return Err(exists(&name));
     }
 
     let mut contents = Vec::with_capacity(names.len());
@@ -96,16 +137,16 @@ pub fn import(
     }
 
     // `agents` and `homes` stay pinned (Windows) from before their access changes until the swap is done.
-    let (homes, _pinned) = homes_dir(profile_dir)?;
+    let (root, _pinned) = root_dir(profile_dir, chain)?;
     #[cfg(test)]
     tests::run_after_access_change(&paths::agents_dir(profile_dir));
-    refuse_replaced_leftover(&homes, &decl.id)?;
-    clear_leftovers(&homes, &decl.id);
-    let staging_path = homes.join(sibling_name(&decl.id, STAGING));
+    refuse_replaced_leftover(&root, &name)?;
+    clear_leftovers(&root, &name);
+    let staging_path = root.join(sibling_name(&name, STAGING));
     let placed = Staging::create(staging_path.clone()).and_then(|staging| {
         write_files(&staging.path, &contents)?;
         check_staging(&staging.path)?;
-        put_in_place(&staging, &home, &decl.id, replace)
+        put_in_place(&staging, home, &name, replace)
     });
     // The staging pin was dropped with the closure, so a failed staging directory can be deleted here.
     if let Err(error) = placed {
@@ -138,8 +179,28 @@ pub fn import(
 pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
     let decl = declared(profile_dir, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
-    check_homes_dir(profile_dir)?;
-    let exists = home_state(&home)? == HomeState::Directory;
+    show_at(profile_dir, &decl, &["homes"], &home)
+}
+
+/// Whether one account's home exists, and each declared file in it (decision 0059); names, sizes and times only.
+pub fn show_account(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<CredentialsShown, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = account_home_of(profile_dir, &decl.id, account)?;
+    show_at(profile_dir, &decl, &["accounts", decl.id.as_str()], &home)
+}
+
+fn show_at(
+    profile_dir: &Path,
+    decl: &KindDecl,
+    chain: &[&str],
+    home: &Path,
+) -> Result<CredentialsShown, AgentError> {
+    check_chain(profile_dir, chain)?;
+    let exists = home_state(home)? == HomeState::Directory;
     let names = decl
         .credentials
         .as_ref()
@@ -172,23 +233,146 @@ pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentErr
 /// refused, never followed.
 pub fn remove(profile_dir: &Path, kind: &str) -> Result<CredentialsRemoved, AgentError> {
     let home = home_of(profile_dir, kind)?;
+    remove_at(profile_dir, &["homes"], &home, kind)
+}
+
+/// Deletes one account's home (decision 0059). Its kind's other accounts and the 0056 home are left alone.
+pub fn remove_account(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<CredentialsRemoved, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    remove_at(profile_dir, &["accounts", kind], &home, account)
+}
+
+/// The shared removal: deletes `home` when it is a plain directory, after checking the directories of `chain`.
+fn remove_at(
+    profile_dir: &Path,
+    chain: &[&str],
+    home: &Path,
+    name: &str,
+) -> Result<CredentialsRemoved, AgentError> {
     let _gate = lock_homes();
-    check_homes_dir(profile_dir)?;
-    let removed = match home_state(&home)? {
+    remove_at_locked(profile_dir, chain, home, name)
+}
+
+/// [`remove_at`] for a caller that already holds [`lock_homes`]: the gate is not reentrant.
+fn remove_at_locked(
+    profile_dir: &Path,
+    chain: &[&str],
+    home: &Path,
+    name: &str,
+) -> Result<CredentialsRemoved, AgentError> {
+    check_chain(profile_dir, chain)?;
+    let removed = match home_state(home)? {
         HomeState::Missing => false,
         HomeState::Directory => {
-            fs::remove_dir_all(&home)
+            fs::remove_dir_all(home)
                 .map_err(|error| internal("delete the credential home", &error))?;
             true
         }
     };
     if removed {
-        tracing::info!(kind, "removed agent credentials");
+        tracing::info!(kind = name, "removed agent credentials");
     }
     Ok(CredentialsRemoved {
-        kind: kind.to_owned(),
+        kind: name.to_owned(),
         removed,
     })
+}
+
+/// [`remove_account`] for a caller that already holds [`lock_homes`].
+pub(crate) fn remove_account_locked(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<CredentialsRemoved, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    remove_at_locked(profile_dir, &["accounts", kind], &home, account)
+}
+
+/// The account's home when its kind's directory and it exist as plain directories, `None` when it does not exist yet
+/// (decision 0059). Launch uses this under [`lock_homes`] instead of `is_dir`, so a link is refused, never followed.
+pub fn usable_account_home(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<Option<PathBuf>, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    check_chain(profile_dir, &["accounts", kind])?;
+    Ok((home_state(&home)? == HomeState::Directory).then_some(home))
+}
+
+/// Creates an empty, owner-only home for a new account, so a sign-in can write into it (decision 0059). The caller holds
+/// [`lock_homes`].
+pub(crate) fn create_account_home(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<PathBuf, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    let (_root, _pins) = root_dir(profile_dir, &["accounts", kind])?;
+    if home_state(&home)? == HomeState::Directory {
+        return Err(exists(account));
+    }
+    create_private_dir(&home)
+        .map_err(|error| internal("create the account's credential home", &error))?;
+    Ok(home)
+}
+
+/// Moves 0056's single home of `kind` into the account directory `account`: one same-volume rename, so the files are
+/// never copied (decision 0059). The caller holds [`lock_homes`]; nothing is moved when the legacy home is absent.
+pub(crate) fn adopt_legacy_home(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<(), AgentError> {
+    let legacy = home_of(profile_dir, kind)?;
+    let target = account_home_of(profile_dir, kind, account)?;
+    // `agents` is pinned once, by the accounts chain; `homes` is pinned on top of it (Windows), so neither can be
+    // swapped for a junction while the home moves.
+    let (_root, _root_pin) = root_dir(profile_dir, &["accounts", kind])?;
+    #[cfg(windows)]
+    let _homes_pin = pin(&paths::agents_dir(profile_dir).join("homes"))?;
+    if home_state(&legacy)? != HomeState::Directory {
+        return Ok(());
+    }
+    if home_state(&target)? != HomeState::Missing {
+        return Err(exists(account));
+    }
+    fs::rename(&legacy, &target)
+        .map_err(|error| internal("move the credential home into an account", &error))?;
+    tracing::info!(kind, "moved the credential home into an account");
+    Ok(())
+}
+
+/// Whether every file the kind declares is present in the account's home as a regular file, never a link. The caller
+/// holds [`lock_homes`] or accepts that a concurrent change may follow.
+pub(crate) fn account_files_present(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<bool, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = account_home_of(profile_dir, &decl.id, account)?;
+    let names = decl
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.files.clone())
+        .unwrap_or_default();
+    if names.is_empty() || home_state(&home)? != HomeState::Directory {
+        return Ok(false);
+    }
+    Ok(names.iter().all(|name| {
+        fs::symlink_metadata(home.join(name)).is_ok_and(|meta| meta.is_file() && !is_link(&meta))
+    }))
+}
+
+/// The home of an account of a valid kind and id; anything else is refused before the disk is touched.
+fn account_home_of(profile_dir: &Path, kind: &str, account: &str) -> Result<PathBuf, AgentError> {
+    paths::valid_account_home(profile_dir, kind, account)
+        .ok_or_else(|| invalid(format!("{account:?} is not an account id")))
 }
 
 /// The kind's declaration, when it is known and valid.
@@ -252,17 +436,28 @@ type Pins = Vec<massorca_profile::PinnedDir>;
 #[cfg(not(windows))]
 type Pins = Vec<std::convert::Infallible>;
 
-/// `<profile>/agents/homes`, created when missing; neither it nor `agents` may be a link. On Windows both are pinned
-/// before their access is checked or changed, and stay pinned while the returned [`Pins`] live, so nobody can swap
-/// either for a junction in between.
-fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
-    let agents = paths::agents_dir(profile_dir);
-    let homes = agents.join("homes");
+/// The directories from `<profile>/agents` down through `chain`, in order.
+fn dir_chain(profile_dir: &Path, chain: &[&str]) -> Vec<PathBuf> {
+    let mut current = paths::agents_dir(profile_dir);
+    let mut dirs = vec![current.clone()];
+    for part in chain {
+        current = current.join(part);
+        dirs.push(current.clone());
+    }
+    dirs
+}
+
+/// The directory a credential home is made in, the last of `<profile>/agents` and `chain` (`homes` for 0056, or
+/// `accounts/<kind>` for an account), created when missing. None of those directories may be a link. On Windows each
+/// is pinned before its access is checked or changed, and stays pinned while the returned [`Pins`] live, so nobody can
+/// swap one for a junction in between.
+fn root_dir(profile_dir: &Path, chain: &[&str]) -> Result<(PathBuf, Pins), AgentError> {
+    let dirs = dir_chain(profile_dir, chain);
     #[cfg(windows)]
-    let mut pins: Pins = Vec::with_capacity(2);
+    let mut pins: Pins = Vec::with_capacity(dirs.len());
     #[cfg(not(windows))]
     let pins = Pins::new();
-    for dir in [&agents, &homes] {
+    for dir in &dirs {
         match create_private_dir(dir) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -295,7 +490,8 @@ fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
         #[cfg(windows)]
         pins.push(pinned);
     }
-    Ok((homes, pins))
+    let last = dirs.last().cloned().unwrap_or_default();
+    Ok((last, pins))
 }
 
 /// Creates `<profile>/agents` when it is missing. On Windows it is created owner-only and owned by the token user
@@ -364,10 +560,15 @@ impl Staging {
     }
 }
 
-/// Checks, without creating anything, that `<profile>/agents` and `homes` are plain directories when they exist.
+/// Checks the 0056 homes directory, see [`check_chain`].
 fn check_homes_dir(profile_dir: &Path) -> Result<(), AgentError> {
-    let agents = paths::agents_dir(profile_dir);
-    for dir in [agents.clone(), agents.join("homes")] {
+    check_chain(profile_dir, &["homes"])
+}
+
+/// Checks, without creating anything, that `<profile>/agents` and the directories of `chain` are plain directories
+/// when they exist.
+fn check_chain(profile_dir: &Path, chain: &[&str]) -> Result<(), AgentError> {
+    for dir in dir_chain(profile_dir, chain) {
         match fs::symlink_metadata(&dir) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(internal("read the credential homes directory", &error)),
@@ -1343,5 +1544,89 @@ mod tests {
         let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&fixture.home()), 0o700);
         assert_eq!(mode(&fixture.home().join("token.json")), 0o600);
+    }
+
+    const ACCOUNT: &str = "0195c0de-0000-7000-8000-000000000001";
+    const OTHER_ACCOUNT: &str = "0195c0de-0000-7000-8000-000000000002";
+
+    fn account_home(fixture: &Fixture, account: &str) -> PathBuf {
+        paths::account_home(fixture.profile.path(), "fake", account)
+    }
+
+    #[test]
+    fn an_account_is_imported_into_its_own_directory_and_never_replaced() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let imported = import_account(
+            fixture.profile.path(),
+            "fake",
+            ACCOUNT,
+            fixture.source.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            imported.home,
+            account_home(&fixture, ACCOUNT).display().to_string()
+        );
+        assert!(account_home(&fixture, ACCOUNT).join("token.json").is_file());
+        assert!(
+            !fixture.home().exists(),
+            "the kind's 0056 home is not touched"
+        );
+        let again = import_account(
+            fixture.profile.path(),
+            "fake",
+            ACCOUNT,
+            fixture.source.path(),
+        )
+        .unwrap_err();
+        assert_eq!(again.code, codes::AGENT_CREDENTIALS_EXIST);
+    }
+
+    #[test]
+    fn an_account_home_is_usable_only_once_it_exists() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let profile = fixture.profile.path();
+        assert_eq!(usable_account_home(profile, "fake", ACCOUNT).unwrap(), None);
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        assert_eq!(
+            usable_account_home(profile, "fake", ACCOUNT).unwrap(),
+            Some(account_home(&fixture, ACCOUNT))
+        );
+    }
+
+    #[test]
+    fn remove_account_deletes_only_that_account() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let profile = fixture.profile.path();
+        import_account(profile, "fake", ACCOUNT, fixture.source.path()).unwrap();
+        import_account(profile, "fake", OTHER_ACCOUNT, fixture.source.path()).unwrap();
+        assert!(remove_account(profile, "fake", ACCOUNT).unwrap().removed);
+        assert!(!account_home(&fixture, ACCOUNT).exists());
+        assert!(
+            account_home(&fixture, OTHER_ACCOUNT)
+                .join("token.json")
+                .is_file()
+        );
+        assert!(!remove_account(profile, "fake", ACCOUNT).unwrap().removed);
+    }
+
+    #[test]
+    fn an_account_id_that_is_not_a_canonical_uuid_is_refused_before_anything_is_written() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let profile = fixture.profile.path();
+        for bad in [
+            "../escape",
+            ".hidden",
+            "not-a-uuid",
+            "0195C0DE-0000-7000-8000-000000000001",
+        ] {
+            let error = import_account(profile, "fake", bad, fixture.source.path()).unwrap_err();
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID, "{bad}");
+        }
+        assert!(!paths::agents_dir(profile).join("accounts").exists());
     }
 }
