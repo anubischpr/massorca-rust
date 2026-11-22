@@ -38,6 +38,8 @@ use tokio::time::sleep;
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
+use massorca_core_remote::bootstrap::RemoteMachine;
+
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
@@ -116,6 +118,12 @@ pub(crate) enum Command {
     AddSshHost {
         host: SshHost,
         reply: oneshot::Sender<Result<SshAdded, SshFailed>>,
+    },
+    /// Checks an SSH host's machine, installing nothing. Needs no connection to this computer's service.
+    ProbeSshHost {
+        target: String,
+        ssh_args: Vec<String>,
+        reply: oneshot::Sender<Result<RemoteMachine, SshFailed>>,
     },
     /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
     AcceptOffer {
@@ -439,7 +447,10 @@ impl Link {
     /// Hands back every other command.
     fn host_call(&self, command: Command) -> Option<Command> {
         match command {
-            Command::RefreshHosts | Command::AddSshHost { .. } | Command::AcceptOffer { .. } => {
+            Command::RefreshHosts
+            | Command::AddSshHost { .. }
+            | Command::ProbeSshHost { .. }
+            | Command::AcceptOffer { .. } => {
                 hosts::spawn(self.profile.clone(), command, self.updates.clone());
                 None
             }
@@ -521,6 +532,9 @@ impl Link {
         self.emit(StoreUpdate::TerminalsResync(terminals));
         let sessions = agents::list_sessions(client).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
+        // The protocol has no event for a change in the kinds, so they are read again on each connect.
+        let kinds = agents::list_kinds(client).await?;
+        self.emit(StoreUpdate::AgentKindsResync(kinds));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }

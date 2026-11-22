@@ -1,11 +1,11 @@
-//! `team.bot_add`, `team.bot_update` and `team.bot_rm` (capability `teams/1`, decision 0072).
+//! `team.bot_list`, `team.bot_add`, `team.bot_update` and `team.bot_rm` (capability `teams/1`, decision 0072).
 
 use massorca_core_agents::Agents;
 use massorca_core_store::{BotRow, Store, new_id, now_ms};
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::tasks::Column;
 use massorca_protocol::methods::teams::{
-    self, Bot, BotAddParams, BotRemoveParams, BotUpdateParams,
+    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, TeamRef,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -22,6 +22,13 @@ use super::{blocking, non_blank, optional_text, selectors, store_error};
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
     Ok(vec![
+        methods.register(
+            Owner::Core,
+            teams::BOT_LIST,
+            capabilities::TEAMS,
+            Permission::Read,
+            list,
+        )?,
         methods.register(
             Owner::Core,
             teams::BOT_ADD,
@@ -44,6 +51,17 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             remove,
         )?,
     ])
+}
+
+async fn list(ctx: RequestCtx, params: TeamRef) -> Result<BotList, ErrorBody> {
+    blocking(&ctx, move |store, _agents| {
+        let team = selectors::team(store, &params.team)?;
+        let rows = store.list_bots(&team.id).map_err(store_error)?;
+        Ok(BotList {
+            bots: rows.iter().map(bot_view).collect(),
+        })
+    })
+    .await
 }
 
 async fn add(ctx: RequestCtx, params: BotAddParams) -> Result<Bot, ErrorBody> {

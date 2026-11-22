@@ -406,7 +406,7 @@ fn a_root_that_is_a_junction_is_refused() {
     let layout = Layout::new();
     let target = layout.home.join("profiles").join("seed");
     secure_root(&layout.home, &target).expect("safe ancestors");
-    let made = std::process::Command::new("cmd")
+    let made = massorca_process::command("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(&layout.root)
         .arg(&target)
@@ -587,7 +587,7 @@ fn link_home(parent_dacl: &str) -> (TempDir, PathBuf, PathBuf) {
     let real = parent.join("real-home");
     crate::root_access::create_home(&real).expect("a private home");
     let home = parent.join("home");
-    let made = std::process::Command::new("cmd")
+    let made = massorca_process::command("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(&home)
         .arg(&real)

@@ -4,7 +4,9 @@
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentBringBackParams, AgentSession, BringBackResult};
+use massorca_protocol::methods::agents::{
+    AgentBringBackParams, AgentKind, AgentSession, BringBackResult,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
@@ -16,6 +18,16 @@ use super::update::StoreUpdate;
 pub(super) async fn list_sessions(client: &Client) -> Result<Vec<AgentSession>, ClientError> {
     match client.agent_list(None).await {
         Ok(list) => Ok(list.sessions),
+        Err(ClientError::Remote(_)) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Lists every agent kind the service declares. A service that predates `agent.kinds` lists none, as
+/// `list_sessions` does for agents; a lost link is passed on.
+pub(super) async fn list_kinds(client: &Client) -> Result<Vec<AgentKind>, ClientError> {
+    match client.agent_kinds().await {
+        Ok(listed) => Ok(listed.kinds),
         Err(ClientError::Remote(_)) => Ok(Vec::new()),
         Err(error) => Err(error),
     }

@@ -1,7 +1,6 @@
 //! Projects over the wire: add, list, show and remove, their events, their refusals, and the default root read per call.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use massorca_protocol::codes;
@@ -25,7 +24,7 @@ fn git_repo(dir: &Path) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

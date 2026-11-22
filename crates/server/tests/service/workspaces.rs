@@ -2,7 +2,6 @@
 //! and their refusals.
 
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use massorca_client::Subscription;
@@ -30,7 +29,7 @@ fn git_repo(dir: &Path) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

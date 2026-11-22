@@ -1,15 +1,16 @@
 //! The bridge against a real service in a temporary profile, driven headlessly: no window opens. The
-//! agent sessions the service lists reach the store on connect, the way workspaces and terminals do.
+//! agent sessions and the agent kinds the service lists reach the store on connect, the way workspaces and
+//! terminals do.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_client::Client;
 use massorca_desktop::model::agent_sessions::bring_back_refusal;
-use massorca_desktop::service::{ServiceBridge, StoreUpdate, connect_options};
+use massorca_desktop::service::{ServiceBridge, StoreState, StoreUpdate, connect_options};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::AgentBringBackParams;
+use massorca_protocol::methods::agents::{AgentBringBackParams, PackageState};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -91,6 +92,44 @@ async fn the_agent_sessions_the_service_lists_reach_the_store_on_connect() {
         .await
         .expect("the service answers agent.list");
     assert!(direct.sessions.is_empty());
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let mut updates = bridge.take_updates().expect("the updates are there");
+
+    let declared = timeout(WAIT, async {
+        loop {
+            let update = updates.recv().await.expect("the bridge is alive");
+            if let StoreUpdate::AgentKindsResync(kinds) = update {
+                return kinds;
+            }
+        }
+    })
+    .await
+    .expect("the agent kinds arrive after the connect");
+    // The four built-in kinds, in the order the service lists them, each with its package enabled.
+    let ids: Vec<&str> = declared.iter().map(|kind| kind.id.as_str()).collect();
+    assert_eq!(ids, ["claude", "codex", "antigravity", "gentle-shell"]);
+    assert!(
+        declared
+            .iter()
+            .all(|kind| kind.package.state == PackageState::Enabled)
+    );
+
+    let mut store = StoreState::default();
+    store.apply(
+        StoreUpdate::AgentKindsResync(declared.clone()),
+        Instant::now(),
+    );
+    assert_eq!(store.agent_kinds, declared);
 
     drop(bridge);
     stop_service(service).await;

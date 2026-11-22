@@ -477,14 +477,11 @@ pub fn is_gone(pid: u32) -> bool {
 
 #[cfg(windows)]
 pub fn is_gone(pid: u32) -> bool {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let output = Command::new("tasklist")
+    let output = massorca_process::command("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
         .stdin(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .expect("run tasklist");
     !String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))

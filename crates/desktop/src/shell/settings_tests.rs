@@ -4,6 +4,7 @@
 
 use super::settings::host_word;
 use super::*;
+use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_form::FormStatus;
 use crate::model::settings::FolderStatus;
@@ -11,12 +12,16 @@ use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{
-    Command, ConnectionState, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
+    Command, ConnectionState, HostLink, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
 };
-use gpui::{AppContext, ClipboardItem, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{
+    AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext, point, px,
+};
+use massorca_client::HostRecord;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
-use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretStatus};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretSet, SecretStatus};
+use massorca_ui::components::text_field::TextField;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -47,24 +52,24 @@ const ABANDONED: &str = if cfg!(windows) {
     "/srv/abandoned"
 };
 
-struct Rig {
-    shell: Entity<Shell>,
-    _updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) _updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
     let bounds = cx
         .debug_bounds(selector)
@@ -73,7 +78,7 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// A connected shell on a scripted service with one project, opened on the Settings page.
-fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
+pub(super) fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
@@ -127,15 +132,18 @@ fn config_value(path: &str, is_default: bool) -> ConfigValue {
 /// Answers the `config.list` the page sends once the service is connected.
 fn answer_config_list(rig: &mut Rig, cx: &mut VisualTestContext, stored: &str) {
     cx.run_until_parked();
-    match rig.script.next() {
-        Some(Command::ListConfig { reply }) => {
-            let values = vec![config_value(stored, stored == DEFAULT)];
-            reply
-                .send(Ok(ConfigList { values }))
-                .expect("the page listens");
+    let reply = loop {
+        match rig.script.next() {
+            // Opening Settings also asks for the paired hosts, sent before the folder read is.
+            Some(Command::RefreshHosts) => {}
+            Some(Command::ListConfig { reply }) => break reply,
+            _ => panic!("a config.list call was expected"),
         }
-        _ => panic!("a config.list call was expected"),
-    }
+    };
+    let values = vec![config_value(stored, stored == DEFAULT)];
+    reply
+        .send(Ok(ConfigList { values }))
+        .expect("the page listens");
     cx.run_until_parked();
     draw(cx);
 }
@@ -361,8 +369,8 @@ fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
     );
 }
 
-/// Opens Add, types `name`, pastes `value` from the clipboard and saves: what the page sends, and nothing more.
-fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+/// Opens Add and types `name` into the name field.
+fn open_add_named(rig: &mut Rig, cx: &mut VisualTestContext, name: &str) {
     rig.shell.update(cx, |shell, cx| shell.open_add_secret(cx));
     let field = rig.shell.read_with(cx, |shell, _| {
         shell
@@ -372,10 +380,44 @@ fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &s
             .expect("the name field is open")
     });
     field.update_in(cx, |field, window, cx| field.set_text(name, window, cx));
+}
+
+/// The masked value field of the open dialog.
+fn value_of_dialog(rig: &Rig, cx: &mut VisualTestContext) -> Entity<TextField> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .vault_dialog
+            .as_ref()
+            .map(|dialog| dialog.value_field.clone())
+            .expect("the value field is open")
+    })
+}
+
+/// Types `text` into the value field as the keyboard does: the field takes focus, then the keys arrive.
+fn type_value(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
+    let field = value_of_dialog(rig, cx);
+    field.update_in(cx, |field, window, cx| field.focus(window, cx));
+    draw(cx);
+    cx.simulate_input(text);
+}
+
+/// Opens Add, types `name`, pastes `value` from the clipboard and saves: what the page sends, and nothing more.
+fn add_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+    open_add_named(rig, cx, name);
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(value.to_owned())));
     rig.shell
-        .update(cx, |shell, cx| shell.paste_secret_value(cx));
-    rig.shell.update(cx, |shell, cx| shell.save_secret(cx));
+        .update_in(cx, |shell, window, cx| shell.paste_secret_value(window, cx));
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+}
+
+/// Opens Add, types `name`, types `value` into the masked field and saves.
+fn type_and_save(rig: &mut Rig, cx: &mut VisualTestContext, name: &str, value: &str) {
+    open_add_named(rig, cx, name);
+    type_value(rig, cx, value);
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
     cx.run_until_parked();
 }
 
@@ -393,7 +435,7 @@ fn a_pasted_value_is_sent_once_and_the_dialog_closes_when_the_vault_stores_it(
                 ("project:p1", "OPENAI_API_KEY", false),
                 "the first project is preselected and an add never replaces"
             );
-            assert_eq!(params.value, VALUE, "the pasted value is what is sent");
+            assert!(params.value == VALUE, "the pasted value is what is sent");
             reply
                 .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
                 .expect("the page listens");
@@ -409,35 +451,25 @@ fn a_pasted_value_is_sent_once_and_the_dialog_closes_when_the_vault_stores_it(
 }
 
 #[gpui::test]
-fn a_refused_save_keeps_the_dialog_open_and_drops_the_sent_value(cx: &mut TestAppContext) {
+fn an_empty_clipboard_is_refused_and_pastes_nothing(cx: &mut TestAppContext) {
     let (mut rig, cx) = settings_rig(cx);
-    add_and_save(&mut rig, cx, "OPENAI_API_KEY", "settings-test-value-9c4e");
-    match rig.script.next() {
-        Some(Command::Secret(SecretCommand::Set { reply, .. })) => {
-            reply
-                .send(Err(Refusal::Failed {
-                    code: codes::SECRET_NAME_IN_USE.to_owned(),
-                    message: "OPENAI_API_KEY already exists in project:p1".to_owned(),
-                }))
-                .expect("the page listens");
-        }
-        _ => panic!("a secret.set was expected"),
-    }
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.paste_secret_value(window, cx));
     cx.run_until_parked();
+    assert!(
+        value_of_dialog(&rig, cx).read_with(cx, |field, _| field.text().is_empty()),
+        "an empty clipboard pastes nothing"
+    );
     rig.shell.read_with(cx, |shell, _| {
-        let dialog = shell
-            .vault_dialog
-            .as_ref()
-            .expect("a refused save keeps the dialog open");
-        assert!(!dialog.form.has_value(), "the value was sent and is gone");
-        assert_eq!(
-            dialog.form.status,
-            FormStatus::Refused(
-                "Not saved: OPENAI_API_KEY already exists in this scope. Pick another name. Nothing was stored."
-                    .to_owned()
-            )
+        let dialog = shell.vault_dialog.as_ref().expect("the dialog stays open");
+        assert!(
+            matches!(dialog.form.status, FormStatus::Refused(_)),
+            "the refusal says why"
         );
     });
+    assert!(rig.script.next().is_none(), "nothing reaches the service");
 }
 
 #[gpui::test]
@@ -504,6 +536,338 @@ fn a_delete_names_its_links_and_removes_the_secret_only_after_the_confirm(cx: &m
     );
 }
 
+/// Takes the `secret.set` the page sent next, or fails the test.
+fn next_set(
+    rig: &mut Rig,
+) -> (
+    SecretSet,
+    tokio::sync::oneshot::Sender<Result<SecretEntry, Refusal>>,
+) {
+    match rig.script.next() {
+        Some(Command::Secret(SecretCommand::Set { params, reply })) => (params, reply),
+        _ => panic!("a secret.set was expected"),
+    }
+}
+
+/// Saves the open dialog, then answers the request with a refusal that names no value.
+fn save_and_refuse(rig: &mut Rig, cx: &mut VisualTestContext) {
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    let (_, reply) = next_set(rig);
+    reply
+        .send(Err(Refusal::Failed {
+            code: codes::SECRET_NAME_IN_USE.to_owned(),
+            message: "OPENAI_API_KEY already exists in project:p1".to_owned(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_typed_value_stays_in_the_locked_field_while_it_is_sent(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-3a8c";
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    let field = value_of_dialog(&rig, cx);
+    type_value(&rig, cx, "-typed-over");
+    assert!(
+        field.read_with(cx, |field, _| field.text() == VALUE),
+        "the field is locked while the save is in flight"
+    );
+    let (params, reply) = next_set(&mut rig);
+    assert!(params.value == VALUE, "the typed value is what is sent");
+    reply
+        .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "one value is sent, and no second request follows"
+    );
+}
+
+#[gpui::test]
+fn a_refused_save_keeps_the_value_in_the_field_and_says_why(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, "settings-test-value-9c4e");
+    save_and_refuse(&mut rig, cx);
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("a refused save keeps the dialog open");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Refused(
+                "Not saved: OPENAI_API_KEY already exists in this scope. Pick another name. Nothing was stored."
+                    .to_owned()
+            )
+        );
+    });
+    let field = value_of_dialog(&rig, cx);
+    assert!(
+        field.read_with(cx, |field, _| field.text() == "settings-test-value-9c4e"),
+        "a refused save keeps the value for the retry"
+    );
+    type_value(&rig, cx, "-typed");
+    assert!(
+        field.read_with(cx, |field, _| field.text().ends_with("-typed")),
+        "the field is unlocked once the service has refused the save"
+    );
+}
+
+#[gpui::test]
+fn retry_sends_the_same_value_once_more_and_success_clears_it(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-4d1f";
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    let (_, refused) = next_set(&mut rig);
+    refused
+        .send(Err(Refusal::Failed {
+            code: codes::SECRET_VAULT_LOCKED.to_owned(),
+            message: "the vault is locked".to_owned(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+
+    let field = value_of_dialog(&rig, cx);
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    let (retried, stored) = next_set(&mut rig);
+    assert!(retried.value == VALUE, "the retry sends the same value");
+    assert!(rig.script.next().is_none(), "the retry is the only request");
+    stored
+        .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the dialog closes once the vault stores the value"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.text().is_empty()),
+        "success clears the value"
+    );
+}
+
+#[gpui::test]
+fn cancel_clears_the_typed_value_and_sends_nothing(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-6e0a";
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, VALUE);
+    let field = value_of_dialog(&rig, cx);
+    click(cx, "dialog-cancel");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "cancel closes the dialog"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.text().is_empty()),
+        "cancel clears the value"
+    );
+    assert!(rig.script.next().is_none(), "cancel sends nothing");
+}
+
+#[gpui::test]
+fn escape_clears_the_typed_value_and_sends_nothing(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-7f2b";
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, VALUE);
+    let field = value_of_dialog(&rig, cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "escape closes the dialog"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.text().is_empty()),
+        "closing clears the value"
+    );
+    assert!(rig.script.next().is_none(), "closing sends nothing");
+}
+
+#[gpui::test]
+fn tearing_the_dialog_down_leaves_no_value_field_behind(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, "settings-test-value-2b9d");
+    let field = value_of_dialog(&rig, cx).downgrade();
+    rig.shell.update(cx, |shell, _| shell.vault_dialog = None);
+    // The last frame still holds the field's paint handlers until the next draw replaces it.
+    draw(cx);
+    cx.run_until_parked();
+    assert!(
+        field.upgrade().is_none(),
+        "the masked field and its buffer go with the dialog"
+    );
+}
+
+/// The Debug text of the open dialog and of its value field.
+fn debug_text(rig: &Rig, cx: &mut VisualTestContext) -> String {
+    let dialog = rig
+        .shell
+        .read_with(cx, |shell, _| format!("{:?}", shell.vault_dialog));
+    let field = value_of_dialog(rig, cx).read_with(cx, |field, _| format!("{field:?}"));
+    format!("{dialog}{field}")
+}
+
+#[gpui::test]
+fn the_value_stays_out_of_debug_output_at_every_step(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-5c7e";
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, VALUE);
+    assert!(!debug_text(&rig, cx).contains(VALUE), "while typing");
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    assert!(!debug_text(&rig, cx).contains(VALUE), "while in flight");
+    let (_, reply) = next_set(&mut rig);
+    reply
+        .send(Err(Refusal::Failed {
+            code: codes::SECRET_NAME_IN_USE.to_owned(),
+            message: "OPENAI_API_KEY already exists in project:p1".to_owned(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(!debug_text(&rig, cx).contains(VALUE), "after a refusal");
+}
+
+/// The value the open dialog's field holds, or `None` once no dialog is open.
+fn dialog_value(rig: &Rig, cx: &mut VisualTestContext) -> Option<String> {
+    let field = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .vault_dialog
+            .as_ref()
+            .map(|dialog| dialog.value_field.clone())
+    })?;
+    Some(field.read_with(cx, |field, _| field.text().to_owned()))
+}
+
+#[gpui::test]
+fn a_scrim_press_during_a_save_keeps_the_dialog_and_a_late_success_closes_it(
+    cx: &mut TestAppContext,
+) {
+    const VALUE: &str = "settings-test-value-e41a";
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "OPENAI_API_KEY", VALUE);
+    draw(cx);
+    cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some(VALUE),
+        "a scrim press neither closes the busy dialog nor clears its value"
+    );
+    let (_, reply) = next_set(&mut rig);
+    reply
+        .send(Ok(owned_secret("project:p1", "OPENAI_API_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the late success closes the dialog that sent it"
+    );
+}
+
+#[gpui::test]
+fn a_late_success_does_not_close_a_newer_dialog(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "FIRST_KEY", "settings-test-value-a1");
+    let (_, reply) = next_set(&mut rig);
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+    open_add_named(&mut rig, cx, "SECOND_KEY");
+    type_value(&rig, cx, "settings-test-value-b2");
+    reply
+        .send(Ok(owned_secret("project:p1", "FIRST_KEY")))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some("settings-test-value-b2"),
+        "the newer dialog stays open with its value"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("the newer dialog is open");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Idle,
+            "its own status is untouched"
+        );
+    });
+    assert!(rig.script.next().is_none(), "nothing else is sent");
+}
+
+#[gpui::test]
+fn a_late_refusal_does_not_touch_a_newer_dialog(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    type_and_save(&mut rig, cx, "FIRST_KEY", "settings-test-value-c3");
+    let (_, reply) = next_set(&mut rig);
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+    open_add_named(&mut rig, cx, "SECOND_KEY");
+    type_value(&rig, cx, "settings-test-value-d4");
+    reply
+        .send(Err(Refusal::Failed {
+            code: codes::SECRET_NAME_IN_USE.to_owned(),
+            message: "FIRST_KEY already exists in project:p1".to_owned(),
+        }))
+        .expect("the page listens");
+    cx.run_until_parked();
+    assert_eq!(
+        dialog_value(&rig, cx).as_deref(),
+        Some("settings-test-value-d4"),
+        "the newer dialog keeps its value"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        let dialog = shell
+            .vault_dialog
+            .as_ref()
+            .expect("the newer dialog is open");
+        assert_eq!(
+            dialog.form.status,
+            FormStatus::Idle,
+            "a refusal for an older save is not shown in the newer dialog"
+        );
+    });
+}
+
+#[gpui::test]
+fn closing_the_window_clears_the_typed_value_before_the_window_goes(cx: &mut TestAppContext) {
+    const VALUE: &str = "settings-test-value-f5c2";
+    let (mut rig, cx) = settings_rig(cx);
+    open_add_named(&mut rig, cx, "OPENAI_API_KEY");
+    type_value(&rig, cx, VALUE);
+    let field = value_of_dialog(&rig, cx);
+    assert!(cx.simulate_close(), "the window allows its close");
+    assert!(
+        field.read_with(cx, |field, _| field.text().is_empty()),
+        "the window's close clears the value before the window goes"
+    );
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the dialog goes with its window"
+    );
+}
+
 #[gpui::test]
 fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
     let (rig, cx) = settings_rig(cx);
@@ -512,5 +876,62 @@ fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
         rig.shell
             .read_with(cx, |shell, _| shell.model().navigation().page),
         Page::Marketplace(MarketplacePage::Installed)
+    );
+}
+
+pub(super) fn paired_host(name: &str) -> HostRecord {
+    HostRecord {
+        name: name.into(),
+        server: "vps-server".into(),
+        addresses: vec!["100.64.0.10:7347".into()],
+        pin: "sha256:test".into(),
+        device_id: "dev-1".into(),
+        device_name: "laptop".into(),
+        scopes: vec!["read".into()],
+        paired_at_ms: 1,
+    }
+}
+
+#[gpui::test]
+fn each_opening_of_settings_asks_the_bridge_for_the_paired_hosts_once(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_page(Page::Home));
+    draw(cx);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_page(Page::Settings));
+    draw(cx);
+    draw(cx);
+    let mut asks = 0;
+    while let Some(command) = rig.script.next() {
+        if matches!(command, Command::RefreshHosts) {
+            asks += 1;
+        }
+    }
+    assert_eq!(asks, 1, "one request each time the page is shown");
+}
+
+#[gpui::test]
+fn a_paired_host_is_a_row_in_the_hosts_section(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    let link = HostLink::Connected {
+        server: "vps-server".into(),
+        version: "0.1.0".into(),
+    };
+    rig._updates
+        .send(StoreUpdate::HostsResync(vec![paired_host("vps")]))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::HostLinkChanged {
+            name: "vps".into(),
+            link,
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Hosts");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-host-vps").is_some(),
+        "the paired host has its row, after This PC"
     );
 }
