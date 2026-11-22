@@ -106,10 +106,16 @@ impl From<&ClientError> for Refusal {
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)
             | ClientError::UntrustedEndpoint(_)
-            | ClientError::Handshake { .. } => Self::Unavailable {
+            | ClientError::Handshake { .. }
+            | ClientError::HostUnreachable(_) => Self::Unavailable {
                 message: "The service cannot be reached right now.".to_owned(),
             },
-            ClientError::Protocol(_) | ClientError::Io(_) => Self::Failed {
+            ClientError::Protocol(_)
+            | ClientError::Io(_)
+            | ClientError::ServerIdentityMismatch
+            | ClientError::HostNotFound(_)
+            | ClientError::HostExists(_)
+            | ClientError::InvalidHostName(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
             },
@@ -197,6 +203,18 @@ mod tests {
         assert!(matches!(
             Refusal::from(&ClientError::Disconnected),
             Refusal::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unreachable_host_is_unavailable_and_a_key_mismatch_is_a_failure() {
+        assert!(matches!(
+            Refusal::from(&ClientError::HostUnreachable("timed out".into())),
+            Refusal::Unavailable { .. }
+        ));
+        assert!(matches!(
+            Refusal::from(&ClientError::ServerIdentityMismatch),
+            Refusal::Failed { code, .. } if code == "client.failed"
         ));
     }
 

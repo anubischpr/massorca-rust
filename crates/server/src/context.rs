@@ -16,6 +16,7 @@ use crate::capability::CapabilityRegistry;
 use crate::commands::CommandRegistry;
 use crate::event_bus::EventBus;
 use crate::method::MethodRegistry;
+use crate::network::NetworkState;
 use crate::permission::Principal;
 use crate::settings::SettingsRegistry;
 use crate::shutdown::ShutdownHandle;
@@ -46,6 +47,8 @@ pub struct AppState {
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,
+    /// Listeners, pairing offers and open device connections; empty when the service is local only.
+    pub network: NetworkState,
     pub started_at_ms: i64,
     /// Handlers and store calls still running; shutdown waits for them before it releases the profile.
     pub(crate) activity: Activity,
