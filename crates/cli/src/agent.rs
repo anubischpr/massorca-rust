@@ -22,7 +22,7 @@ use crate::terminal_attach;
 
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
-    /// Lists the agent kinds: built in and declared in the profile, whether each is installed, and any problems.
+    /// Lists the agent kinds: built in and declared in the profile, each one's package state, whether its program is detected, and any problems.
     Kinds,
     /// Starts an agent in a workspace. The agent keeps running after this command exits.
     Start(AgentStartArgs),
