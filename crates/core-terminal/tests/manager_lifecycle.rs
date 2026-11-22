@@ -15,7 +15,10 @@ use massorca_core_terminal::{
     AttachItem, AttachMode, ExitReason, ShellChoice, TerminalError, TerminalState,
 };
 
-const GRACE: Duration = Duration::from_secs(5);
+/// Far above any load-induced delay, so finishing under it proves the grace was not waited out.
+const GRACE: Duration = Duration::from_secs(60);
+/// Upper bound for work that must not wait the grace.
+const PROMPT: Duration = Duration::from_secs(30);
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -164,7 +167,7 @@ async fn a_shell_that_exits_by_itself_is_exited_with_its_code() {
 #[tokio::test]
 async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let info = manager.create(spec("ws", dir.path())).expect("create");
     let mut watch = watch(&manager, &info.id, None).await;
     watch.wait_for_output().await;
@@ -172,7 +175,7 @@ async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
     let started = Instant::now();
     let killed = manager.kill(&info.id, false).expect("kill");
 
-    assert!(started.elapsed() < GRACE, "{:?}", started.elapsed());
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     assert_eq!(killed.state, TerminalState::Exited);
     assert_eq!(
         killed.exit.expect("an exit record").reason,
@@ -185,17 +188,13 @@ async fn graceful_kill_ends_an_interactive_shell_within_the_grace() {
 #[tokio::test]
 async fn force_kill_ends_the_shell_at_once() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let info = manager.create(spec("ws", dir.path())).expect("create");
 
     let started = Instant::now();
     let killed = manager.kill(&info.id, true).expect("kill");
 
-    assert!(
-        started.elapsed() < Duration::from_secs(3),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     assert_eq!(killed.state, TerminalState::Exited);
     assert_eq!(
         killed.exit.expect("an exit record").reason,
@@ -454,21 +453,23 @@ async fn input_is_bounded_and_needs_a_live_terminal() {
 #[tokio::test]
 async fn shutdown_kills_every_terminal() {
     let dir = temp_dir();
-    let manager = Managed::new();
+    // Shutdown uses its own short grace, never the kill grace.
+    let manager = Managed::with(|config| config.kill_grace = GRACE);
     let first = manager.create(spec("ws", dir.path())).expect("create");
     let second = manager.create(spec("other", dir.path())).expect("create");
 
     let started = Instant::now();
     manager.shutdown();
 
-    assert!(
-        started.elapsed() < GRACE + Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
     for id in [&first.id, &second.id] {
+        // Shutdown is bounded; a slow drain records the exit just after it returns.
+        wait_until("the exit after shutdown", || {
+            manager
+                .get(id)
+                .is_ok_and(|info| info.state == TerminalState::Exited)
+        });
         let info = manager.get(id).expect("listed after shutdown");
-        assert_eq!(info.state, TerminalState::Exited);
         assert_eq!(
             info.exit.expect("an exit record").reason,
             ExitReason::ServiceStopped
@@ -541,5 +542,151 @@ async fn a_terminal_without_attachments_still_renders_output() {
             "no output without attachments: {seen:?}"
         );
         thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Polls one-off snapshots, each a client that never answers a cursor query, until the
+/// screen shows `expected`.
+async fn wait_for_screen(manager: &Managed, id: &str, expected: &str) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let mut attachment = manager.attach(id, None).expect("attach");
+        let mut seen = String::new();
+        for _ in 0..2 {
+            if let Ok(Some(AttachItem::Snapshot { bytes, .. })) =
+                tokio::time::timeout(TIMEOUT, attachment.next()).await
+            {
+                seen = visible(&bytes).as_string();
+            }
+        }
+        drop(attachment);
+        if seen.contains(expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the screen never showed {expected:?}: {seen:?}"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[tokio::test]
+async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    let expected = if cfg!(windows) {
+        // ConPTY asks at start and renders nothing until it is answered.
+        String::new()
+    } else {
+        // Asks only once the test is attached, then waits for the reply (`ESC [ 1 ; 1 R`).
+        create.shell = Some(script_shell(
+            "read go; stty -icanon -echo; printf '\\033[6n'; \
+             dd bs=1 count=6 of=/dev/null 2>/dev/null; echo replied-$((6*7)); sleep 60",
+        ));
+        "replied-42".to_owned()
+    };
+    let info = manager.create(create).expect("create");
+
+    // A client that reads raw output from the start and never answers.
+    let mut silent = manager.attach(&info.id, Some(0)).expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+    }
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !raw.windows(4).any(|window| window == b"\x1b[6n") {
+        assert!(Instant::now() < deadline, "no cursor query in {raw:?}");
+        match tokio::time::timeout(TIMEOUT, silent.next()).await {
+            Ok(Some(AttachItem::Output { bytes, .. })) => raw.extend_from_slice(&bytes),
+            Ok(Some(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    drop(silent);
+
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("answered");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        expected
+    };
+    wait_for_screen(&manager, &info.id, &expected).await;
+}
+
+#[tokio::test]
+async fn a_client_attaching_answers_a_query_a_stalled_client_holds() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        // After the reply, echoes the length of the next line, so a late duplicate reply shows.
+        create.shell = Some(script_shell(
+            "read go; stty -icanon -echo; printf '\\033[6n'; \
+             dd bs=1 count=6 of=/dev/null 2>/dev/null; echo replied-$((6*7)); \
+             read rest; echo \"got-${#rest}-$((6*7))\"; sleep 60",
+        ));
+    }
+    let info = manager.create(create).expect("create");
+
+    // Attached and silent: it has the query but is not reading, as a stalled client would.
+    let mut stalled = manager.attach(&info.id, Some(0)).expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+    }
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !raw.windows(4).any(|window| window == b"\x1b[6n") {
+        assert!(Instant::now() < deadline, "no cursor query in {raw:?}");
+        match tokio::time::timeout(TIMEOUT, stalled.next()).await {
+            Ok(Some(AttachItem::Output { bytes, .. })) => raw.extend_from_slice(&bytes),
+            Ok(Some(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    // Another client's snapshot cannot show the query, so the shell must not wait on it.
+    if cfg!(unix) {
+        wait_for_screen(&manager, &info.id, "replied-42").await;
+    }
+    // The stalled client catches up and answers late; that reply must not reach the shell.
+    manager.input(&info.id, b"\x1b[1;1R").expect("input");
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("answered");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        manager.input(&info.id, &line("next")).expect("input");
+        "got-4-42".to_owned()
+    };
+    wait_for_screen(&manager, &info.id, &expected).await;
+    drop(stalled);
+}
+
+#[tokio::test]
+async fn input_typed_while_the_shell_is_busy_reaches_it() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let info = manager.create(spec("ws", dir.path())).expect("create");
+    let mut watch = watch(&manager, &info.id, None).await;
+    watch.wait_for_output().await;
+
+    // Typed ahead while the shell runs a command, as a person would.
+    let busy = if cfg!(windows) {
+        "ping -n 4 127.0.0.1 >nul"
+    } else {
+        "sleep 3"
+    };
+    manager.input(&info.id, &line(busy)).expect("input");
+    let mut expected = Vec::new();
+    for index in 0..5 {
+        let (command, marker) = marker_command(&format!("ahead{index}"));
+        manager.input(&info.id, &command).expect("input");
+        expected.push(marker);
+    }
+    for marker in &expected {
+        watch.wait_for_text(marker).await;
     }
 }

@@ -42,6 +42,11 @@ impl Workspaces {
         }
     }
 
+    /// The git runner the domain uses; git features run their commands through it.
+    pub fn git(&self) -> &Git {
+        &self.git
+    }
+
     /// Every workspace, or only those of `project` (a selector), oldest first.
     pub fn list_workspaces(&self, project: Option<&str>) -> Result<Vec<Workspace>, DomainError> {
         let project_id = match project {

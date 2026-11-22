@@ -2,12 +2,15 @@
 //! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
-use super::navigation::{Navigation, Page};
-use super::palette::{Command, PaletteAction, PaletteModel, palette_items};
+use super::navigation::{Mode, Navigation, Page};
+use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
+use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
 use super::sidebar::{SidebarContent, sidebar_content};
+use super::status_items::{StatusItem, StatusItemVisibility};
+use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
 
 /// The regions that sit inline beside the Conversation, in the order A5 gives them.
 const INLINE_ORDER: [Region; 3] = [
@@ -22,9 +25,19 @@ pub struct ShellModel {
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
+    /// The Bot Teams data the Bot Teams pages and Sidebar show (screens 4).
+    teams: TeamsState,
     window_width: f32,
     /// Present while the command palette is open.
     palette: Option<PaletteModel>,
+    /// The ring whose usage popover is open, by its position in the snapshot.
+    usage_popover: Option<usize>,
+    /// The Status bar items this window hides.
+    status_items: StatusItemVisibility,
+    /// The commands and workspaces the palette ran last, for its Recent rows.
+    recent: RecentActions,
+    /// The workspace the Sidebar opened; its start page shows while no session is open.
+    selected_workspace: Option<String>,
 }
 
 impl ShellModel {
@@ -34,13 +47,33 @@ impl ShellModel {
             snapshot,
             navigation: Navigation::default(),
             regions: RegionState::default(),
+            teams: TeamsState::unavailable(),
             window_width,
             palette: None,
+            usage_popover: None,
+            status_items: StatusItemVisibility::default(),
+            recent: RecentActions::default(),
+            selected_workspace: None,
         }
     }
 
     pub fn snapshot(&self) -> &ShellSnapshot {
         &self.snapshot
+    }
+
+    /// Swaps in a new snapshot from the store. The open session stays open while it still exists.
+    pub fn set_snapshot(&mut self, mut snapshot: ShellSnapshot) {
+        let open = self
+            .snapshot
+            .active_session
+            .as_deref()
+            .and_then(|id| find_session(&snapshot.projects, id))
+            .map(|session| (session.title.clone(), session.id.clone()));
+        if let Some((title, id)) = open {
+            snapshot.session_title = Some(title);
+            snapshot.active_session = Some(id);
+        }
+        self.snapshot = snapshot;
     }
 
     pub fn navigation(&self) -> &Navigation {
@@ -49,6 +82,24 @@ impl ShellModel {
 
     pub fn regions(&self) -> &RegionState {
         &self.regions
+    }
+
+    pub fn teams(&self) -> &TeamsState {
+        &self.teams
+    }
+
+    pub fn teams_mut(&mut self) -> &mut TeamsState {
+        &mut self.teams
+    }
+
+    /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
+    pub fn set_teams(&mut self, teams: TeamsState) {
+        self.teams = teams;
+    }
+
+    /// The Bot Teams Sidebar for the page on screen.
+    pub fn bot_teams_sidebar(&self) -> TeamsSidebar {
+        teams_sidebar(&self.teams, self.navigation.page)
     }
 
     pub fn window_width(&self) -> f32 {
@@ -67,6 +118,10 @@ impl ShellModel {
     /// Whether a region is on screen now, inline or as the open overlay. Full pages hide them all.
     pub fn region_visible(&self, region: Region) -> bool {
         if self.navigation.page.is_full_page() {
+            return false;
+        }
+        // Bot Teams has no Workspaces regions: the Sidebar is the only one on screen there.
+        if self.navigation.mode == Mode::BotTeams && region != Region::Sidebar {
             return false;
         }
         match self.placement(region) {
@@ -123,7 +178,15 @@ impl ShellModel {
     }
 
     pub fn open_page(&mut self, page: Page) {
+        self.teams.cancel_pick();
         self.navigation.open(page);
+    }
+
+    /// Opens a Bot Teams page and makes its team the one the Sidebar lists projects for.
+    pub fn open_team_page(&mut self, page: TeamPage) {
+        self.teams.cancel_pick();
+        self.teams.select(page.team());
+        self.navigation.open(Page::Team(page));
     }
 
     pub fn go_back(&mut self) {
@@ -136,6 +199,7 @@ impl ShellModel {
 
     /// The mode button (P6). Returns true when the mode changed.
     pub fn press_mode_switch(&mut self) -> bool {
+        self.teams.cancel_pick();
         self.navigation.press_mode_switch()
     }
 
@@ -149,13 +213,37 @@ impl ShellModel {
         }
     }
 
-    /// The Canvas content for the current page, mode and open session.
+    /// The Canvas content for the current page, mode and open session. A selected workspace shows
+    /// its start page on the Workspaces home until a session opens.
     pub fn canvas(&self) -> Canvas {
+        let on_start_page = self.navigation.page == Page::Home
+            && self.navigation.mode == Mode::Workspaces
+            && self.snapshot.session_title.is_none();
+        if let (true, Some(id)) = (on_start_page, &self.selected_workspace) {
+            return Canvas::Workspace(id.clone());
+        }
         Canvas::of(
             self.navigation.page,
             self.navigation.mode,
             self.snapshot.session_title.as_deref(),
         )
+    }
+
+    /// The workspace the Sidebar or the start page chose, if any.
+    pub fn selected_workspace(&self) -> Option<&str> {
+        self.selected_workspace.as_deref()
+    }
+
+    /// A click on a workspace opens its start page, leaving any full page first (D-WS-01).
+    pub fn open_workspace(&mut self, id: impl Into<String>) {
+        self.selected_workspace = Some(id.into());
+        self.navigation.open(Page::Home);
+    }
+
+    /// Chooses the workspace whose start page shows, or none for the start page with no workspace.
+    pub fn select_workspace(&mut self, id: Option<String>) {
+        self.selected_workspace = id;
+        self.navigation.open(Page::Home);
     }
 
     /// The zones F6 cycles through now: the frame's parts, and the regions on screen.
@@ -172,6 +260,35 @@ impl ShellModel {
             .collect()
     }
 
+    /// Which Status bar items this window shows (StatusBar spec).
+    pub fn status_items(&self) -> &StatusItemVisibility {
+        &self.status_items
+    }
+
+    /// Shows a hidden Status bar item or hides a shown one, as the visibility menu does.
+    pub fn toggle_status_item(&mut self, item: StatusItem) {
+        self.status_items.toggle(item);
+    }
+
+    /// The ring whose usage popover is open, if it still exists in the snapshot.
+    pub fn usage_popover(&self) -> Option<usize> {
+        self.usage_popover
+            .filter(|&position| position < self.snapshot.usage.len())
+    }
+
+    /// Opens a ring's usage popover, or closes it when that one is open (D-SH-15). Only one is
+    /// open at a time.
+    pub fn toggle_usage_popover(&mut self, position: usize) {
+        self.usage_popover = match self.usage_popover() {
+            Some(open) if open == position => None,
+            _ => Some(position),
+        };
+    }
+
+    pub fn close_usage_popover(&mut self) {
+        self.usage_popover = None;
+    }
+
     /// The palette while it is open.
     pub fn palette(&self) -> Option<&PaletteModel> {
         self.palette.as_ref()
@@ -182,8 +299,23 @@ impl ShellModel {
         if self.palette.is_some() {
             self.palette = None;
         } else {
-            self.palette = Some(PaletteModel::new(palette_items(&self.snapshot)));
+            self.open_palette(PaletteMode::Commands);
         }
+    }
+
+    /// Opens the palette in a mode over the current snapshot. The commands come with their Recent
+    /// rows; "Go to file" has no files to list yet (D-CP-02).
+    pub fn open_palette(&mut self, mode: PaletteMode) {
+        let items = match mode {
+            PaletteMode::Commands => {
+                let all = palette_items(&self.snapshot);
+                let mut items = self.recent.rows(&all);
+                items.extend(all);
+                items
+            }
+            PaletteMode::GoToFile => Vec::new(),
+        };
+        self.palette = Some(PaletteModel::new(items).with_mode(mode));
     }
 
     pub fn close_palette(&mut self) {
@@ -212,6 +344,7 @@ impl ShellModel {
     /// palette open and returns nothing.
     pub fn confirm_palette(&mut self) -> Option<PaletteAction> {
         let action = self.palette.as_ref()?.confirm()?.clone();
+        self.recent.record(&action);
         self.palette = None;
         Some(action)
     }
@@ -242,6 +375,7 @@ mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
     use crate::model::navigation::Mode;
+    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell(width: f32) -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), width)
@@ -284,11 +418,33 @@ mod tests {
     }
 
     #[test]
+    fn bot_teams_keeps_only_the_sidebar_and_shows_no_workspaces_session() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        assert!(model.press_mode_switch());
+        assert_eq!(model.canvas(), Canvas::Home(Mode::BotTeams));
+        assert!(model.region_visible(Region::Sidebar));
+        assert!(!model.region_visible(Region::WorkPanel));
+        assert!(model.inline_regions().is_empty());
+    }
+
+    #[test]
+    fn a_team_page_takes_the_canvas_selects_its_team_and_keeps_the_sidebar() {
+        let mut model = shell(1440.0);
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        assert_eq!(model.canvas(), Canvas::Team(TeamPage::Board(TeamId(1))));
+        assert!(model.sidebar_inline());
+        assert_eq!(model.teams().selected(), Some(TeamId(1)));
+    }
+
+    #[test]
     fn the_sidebar_lists_the_content_of_the_current_mode() {
         let mut model = shell(1440.0);
         assert!(matches!(model.sidebar(), SidebarContent::Workspaces { .. }));
         assert!(model.press_mode_switch());
-        assert!(matches!(model.sidebar(), SidebarContent::BotTeams { .. }));
+        assert!(matches!(model.sidebar(), SidebarContent::BotTeams));
     }
 
     #[test]
@@ -360,6 +516,21 @@ mod tests {
                 Zone::StatusBar
             ]
         );
+    }
+
+    #[test]
+    fn a_new_snapshot_keeps_the_open_session_while_it_still_exists() {
+        let mut model = shell(1440.0);
+        model.open_session("s1a");
+        let mut fresh = SampleDataSource.snapshot();
+        fresh.session_title = None;
+        fresh.active_session = None;
+        model.set_snapshot(fresh.clone());
+        assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
+        fresh.projects.clear();
+        model.set_snapshot(fresh);
+        assert_eq!(model.snapshot().active_session, None, "the session is gone");
+        assert!(model.snapshot().projects.is_empty());
     }
 
     #[test]

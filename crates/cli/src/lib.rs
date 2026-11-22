@@ -10,6 +10,7 @@ pub mod cwd_path;
 pub mod device;
 pub mod error;
 pub mod ext;
+pub mod git;
 pub mod host;
 pub mod logging;
 pub mod output;

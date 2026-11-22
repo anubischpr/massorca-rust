@@ -23,6 +23,13 @@ pub enum GitError {
     /// The command succeeded but its output did not have the expected shape.
     #[error("unexpected output from git {}: {reason}", .args.join(" "))]
     InvalidOutput { args: Vec<String>, reason: String },
+    /// A working-tree file a diff needed could not be read.
+    #[error("cannot read {path:?}: {source}")]
+    File {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     /// The path has a line break, which `git worktree list --porcelain` cannot report
     /// back unambiguously before Git 2.36.
     #[error("unsupported worktree path {path:?}: it contains a line break")]
