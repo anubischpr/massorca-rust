@@ -546,11 +546,136 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_swap_puts_the_old_home_back() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.import(false).unwrap();
+        let missing_staging = fixture.home().with_file_name(".fake.import-missing");
+        let error = put_in_place(&missing_staging, &fixture.home(), "fake", true).unwrap_err();
+        assert_eq!(error.code, codes::INTERNAL);
+        assert_eq!(
+            fs::read_to_string(fixture.home().join("token.json")).unwrap(),
+            FAKE_TOKEN
+        );
+        assert_eq!(fixture.homes_entries(), ["fake"]);
+    }
+
+    #[test]
     fn a_missing_first_import_leaves_no_home() {
         let fixture = Fixture::new(&["token.json"]);
         let error = fixture.import(false).unwrap_err();
         assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
         assert_eq!(error.data.unwrap()["files"][0]["reason"], "missing");
         assert!(!fixture.home().exists());
+    }
+
+    #[test]
+    fn a_file_over_the_limit_or_a_directory_is_refused() {
+        let fixture = Fixture::new(&["token.json", "config.toml"]);
+        fixture.source_file("token.json", &vec![b'x'; MAX_FILE_BYTES as usize + 1]);
+        fs::create_dir(fixture.source.path().join("config.toml")).unwrap();
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        let files = error.data.unwrap()["files"].clone();
+        assert_eq!(files[0]["name"], "token.json");
+        assert_eq!(files[0]["reason"], "larger than 1 MiB");
+        assert_eq!(files[1]["reason"], "a directory");
+        assert!(!fixture.home().exists());
+
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", &vec![b'x'; MAX_FILE_BYTES as usize]);
+        assert_eq!(
+            fixture.import(false).unwrap().files[0].bytes,
+            MAX_FILE_BYTES
+        );
+    }
+
+    #[test]
+    fn the_source_must_be_an_absolute_existing_directory() {
+        let fixture = Fixture::new(&["token.json"]);
+        for from in [
+            PathBuf::from("relative"),
+            fixture.source.path().join("absent"),
+        ] {
+            let error = import(fixture.profile.path(), "fake", &from, false).unwrap_err();
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID, "{from:?}");
+        }
+    }
+
+    #[test]
+    fn kinds_without_files_or_unknown_kinds_are_refused() {
+        let fixture = Fixture::new(&[]);
+        assert_eq!(
+            fixture.import(false).unwrap_err().code,
+            codes::AGENT_CREDENTIALS_UNSUPPORTED
+        );
+        let error = import(
+            fixture.profile.path(),
+            "antigravity",
+            fixture.source.path(),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_UNSUPPORTED);
+        let error =
+            import(fixture.profile.path(), "nope", fixture.source.path(), false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_KIND_NOT_FOUND);
+    }
+
+    #[test]
+    fn a_declared_name_that_could_leave_the_source_is_refused() {
+        for name in [
+            "../token.json",
+            "a/b",
+            "a\\b",
+            "/etc/token",
+            "C:token",
+            "..",
+        ] {
+            let fixture = Fixture::new(&[name]);
+            let error = fixture.import(false).unwrap_err();
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_UNSUPPORTED, "{name}");
+            assert!(
+                error.message.contains("plain file name"),
+                "{name}: {}",
+                error.message
+            );
+        }
+    }
+
+    /// A file symlink needs Developer Mode or a privilege on Windows; without it the test says so and passes.
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::print_stderr,
+        reason = "a skipped test must name why it skipped"
+    )]
+    fn a_source_symlink_is_refused_when_one_can_be_made() {
+        let fixture = Fixture::new(&["token.json"]);
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
+        if let Err(error) = std::os::windows::fs::symlink_file(
+            elsewhere.path().join("real.json"),
+            fixture.source.path().join("token.json"),
+        ) {
+            eprintln!("skipped: symbolic links cannot be made here ({error})");
+            return;
+        }
+        let error = fixture.import(false).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert_eq!(error.data.unwrap()["files"][0]["reason"], "a link");
+        assert!(!fixture.home().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_home_is_0700_and_its_files_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.import(false).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&fixture.home()), 0o700);
+        assert_eq!(mode(&fixture.home().join("token.json")), 0o600);
     }
 }
