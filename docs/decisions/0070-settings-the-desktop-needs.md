@@ -126,8 +126,9 @@ desktop owns (SET-11):
   pair is unambiguous. The event carries no value. A client re-reads with
   `config.get`, so a value never travels to a subscriber that did not ask for
   it.
-- **`config.list` gains optional fields.** Each entry gets `kind` and, for a
-  choice or a set, `choices`. The desktop can then build its controls from the
+- **`config.get` and `config.list` gain optional fields.** Each value gets
+  `kind`; a choice, set or colour gets `choices`; a ranged integer gets `min`
+  and `max`. The desktop can then build its controls from the
   service. Older clients ignore the new fields.
 - `config/1` stays the capability. Older services reject `config.reset` as an
   unknown method, which a client can tell apart from a refusal.

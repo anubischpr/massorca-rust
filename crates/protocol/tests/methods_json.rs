@@ -76,6 +76,7 @@ fn sample_config_value() -> config::ConfigValue {
         value: json!(2),
         default: json!(1),
         is_default: false,
+        ..Default::default()
     }
 }
 

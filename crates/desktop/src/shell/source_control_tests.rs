@@ -457,3 +457,74 @@ fn a_late_discard_answer_does_not_reshape_the_dialog_of_another_workspace(cx: &m
     assert_eq!(params.paths, ["b.txt"]);
     assert!(!params.include_staged, "b.txt's staged changes stay");
 }
+
+#[gpui::test]
+fn a_late_answer_does_not_reach_a_reopened_discard_of_the_same_file(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    open_panel(&rig, cx);
+    next(&mut rig);
+
+    // A discard of a.txt is confirmed, and its call is out.
+    let a = DiscardTarget {
+        path: "a.txt".into(),
+        untracked: false,
+    };
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![a.clone()], cx));
+    draw(cx);
+    rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
+    cx.run_until_parked();
+    let Command::GitDiscard {
+        reply: first_reply, ..
+    } = next(&mut rig)
+    else {
+        panic!("a discard call for a.txt was expected");
+    };
+
+    // The dialog is cancelled while that call is out, and a.txt is opened for discard again in the same workspace.
+    rig.shell.update(cx, |shell, cx| shell.close_discard(cx));
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![a], cx));
+    draw(cx);
+    let reopened = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| (flow.id(), flow.stage().clone(), flow.copy()))
+    });
+    assert!(reopened.is_some(), "the reopened dialog is open");
+
+    // The first call's answer arrives late: it asked for the staged waiver.
+    let _ = first_reply.send(Err(Refusal::GitRefused {
+        code: codes::GIT_DISCARD_STAGED.into(),
+        message: "a.txt has staged changes.".into(),
+        paths: vec!["a.txt".into()],
+    }));
+    cx.run_until_parked();
+    draw(cx);
+
+    // The reopened dialog is unchanged: same id, same stage, same words, and nothing in flight.
+    rig.shell.read_with(cx, |shell, _| {
+        let flow = shell
+            .source_control
+            .discard
+            .as_ref()
+            .expect("the reopened dialog is still open");
+        assert_eq!(
+            (flow.id(), flow.stage().clone(), flow.copy()),
+            reopened.clone().expect("the reopened dialog was open"),
+        );
+        assert_eq!(flow.stage(), &DiscardStage::Confirm);
+        assert!(!flow.busy(), "the late answer sent nothing");
+    });
+
+    // Confirming it sends a.txt alone, with no staged waiver.
+    rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
+    cx.run_until_parked();
+    let Command::GitDiscard { params, .. } = next(&mut rig) else {
+        panic!("a discard call for a.txt was expected");
+    };
+    assert_eq!(params.paths, ["a.txt"]);
+    assert!(!params.include_staged && !params.delete_untracked);
+}
