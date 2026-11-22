@@ -63,6 +63,7 @@ fn agent_icon(_: &mut Window, cx: &mut App) -> AnyElement {
         .items_center()
         .gap(px(SPACE_2))
         .text_body()
+        .text_color(cx.theme().palette.text.primary)
         .child(AgentIcon::new(AgentKind::GentleShell).size(AgentIconSize::Name))
         .child("Gentle Shell session");
     div()
@@ -133,7 +134,7 @@ fn agent_status(_: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Waiting and error tint the row", tinted, cx))
         .child(variant(
             "Unreachable dims the row by text colour",
-            row(AgentState::Unreachable, "Last known running, 5 min ago"),
+            row(AgentState::Unreachable, "Last known: running, 5 min ago"),
             cx,
         ))
         .into_any_element()

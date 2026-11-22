@@ -28,6 +28,9 @@ pub(super) fn nav_row(row: &NavRow, focus: &FocusHandle, shell: &WeakEntity<Shel
     if let Some(count) = row.count {
         item = item.count(count);
     }
+    if row.chevron {
+        item = item.expanded(false);
+    }
     if let Some(page) = row.page {
         let shell = shell.clone();
         item = item.on_click(move |_, _, cx| {

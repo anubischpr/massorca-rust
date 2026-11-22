@@ -13,10 +13,8 @@ use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::components::search_field::SearchField;
-use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::RowStatus;
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection as SettingsGroup};
-use massorca_ui::components::switch::Switch;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{
     LAYOUT_PAGE_SETTINGS, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TYPE_BODY_SM,
@@ -30,11 +28,15 @@ use crate::model::settings::{
     folder_request,
 };
 use crate::model::settings_sections::{
-    CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, Planned, RowBody, RowSpec, SettingsSection,
+    CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, RowBody, RowSpec, SettingsSection,
     WORKSPACE_FOLDER_KEY, hit_line, rows, search,
 };
 use crate::service::ConnectionState;
 use massorca_protocol::methods::config::ConfigSet;
+
+#[path = "settings_planned.rs"]
+mod settings_planned;
+use settings_planned::planned_row;
 
 /// The navigation column's width (`layout.settings.nav`, 232 px, owner 2026-11-13).
 const NAV_WIDTH: f32 = 232.0;
@@ -214,14 +216,17 @@ fn group(
         SharedString::from(format!("settings-group-{section:?}")),
         section.label(),
     );
+    if let Some(note) = section.note() {
+        group = group.description(note);
+    }
     for (index, spec) in listed {
         group = group.row(row(section, *index, spec, frame, cx));
     }
     group.into_any_element()
 }
 
-/// One row: the spec's name and helper, and the control its body calls for. Planned controls are
-/// drawn off with "Not available yet"; the rows with a backing show their value.
+/// One row: the spec's name and helper, and the control its body calls for. Planned settings keep
+/// the spec's control, drawn off with its status; the rows with a backing show their value.
 fn row(
     section: SettingsSection,
     index: usize,
@@ -233,49 +238,22 @@ fn row(
     let id = SharedString::from(format!("settings-{section:?}-{index}"));
     let row = SettingsRow::new(id.clone(), spec.label).helper(spec.helper);
     let (row, control) = match spec.body {
-        RowBody::Planned(Planned::Switch) => (
-            row.disabled_reason(NOT_AVAILABLE),
-            Switch::new(id.clone(), false)
-                .label(spec.label)
-                .disabled(true)
-                .into_any_element(),
-        ),
-        RowBody::Planned(Planned::Choice(options)) => (
-            row.disabled_reason(NOT_AVAILABLE),
-            SegmentedControl::new(
-                id.clone(),
-                spec.label,
-                options
-                    .iter()
-                    .map(|option| Segment::text(*option))
-                    .collect(),
-            )
-            .disabled(true)
-            .into_any_element(),
-        ),
-        RowBody::Planned(Planned::Action(label)) => (
-            row.disabled_reason(NOT_AVAILABLE),
-            Button::new(id.clone(), label)
-                .variant(ButtonVariant::Secondary)
-                .disabled(true)
-                .into_any_element(),
-        ),
-        RowBody::Planned(Planned::Link) => (
-            row.disabled_reason(NOT_AVAILABLE),
-            link_button(id.clone()).into_any_element(),
-        ),
-        RowBody::Planned(Planned::Text(value) | Planned::ReadOnly(value)) => {
-            (row.disabled_reason(NOT_AVAILABLE), value_box(value, &theme))
-        }
+        RowBody::Planned(planned) => planned_row(row, planned, &id, spec.label, &theme),
         RowBody::ConversationsFolder => (
-            row.disabled_reason(NOT_AVAILABLE),
-            value_box(CONVERSATIONS_FOLDER, &theme),
+            row.status(RowStatus::Unavailable(NOT_AVAILABLE.into())),
+            Some(value_box(CONVERSATIONS_FOLDER, &theme)),
         ),
-        RowBody::WorkspaceFolder => folder_row(row, frame),
-        RowBody::ThisPc => (row, value_box(host_word(&frame.connection), &theme)),
-        RowBody::SetupChecklist => (row, setup_link(id.clone(), frame)),
+        RowBody::WorkspaceFolder => {
+            let (row, control) = folder_row(row, frame);
+            (row, Some(control))
+        }
+        RowBody::ThisPc => (row, Some(value_box(host_word(&frame.connection), &theme))),
+        RowBody::SetupChecklist => (row, Some(setup_link(id.clone(), frame))),
     };
-    row.control(control).into_any_element()
+    match control {
+        Some(control) => row.control(control).into_any_element(),
+        None => row.into_any_element(),
+    }
 }
 
 /// Opens the setup checklist, a full page (D-OB-12).
@@ -296,14 +274,6 @@ fn setup_link(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
         .into_any_element()
 }
 
-/// The disabled "Open" button of a link row.
-fn link_button(id: SharedString) -> Button {
-    Button::new(id, "Open")
-        .variant(ButtonVariant::Ghost)
-        .trailing_icon(IconName::ChevronRight)
-        .disabled(true)
-}
-
 /// A read-only value in a sunken box, as a row shows what it holds.
 fn value_box(text: impl Into<SharedString>, theme: &Theme) -> AnyElement {
     div()
@@ -317,8 +287,9 @@ fn value_box(text: impl Into<SharedString>, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// This PC's service in words, in the Hosts section (D-ST-07, honest state).
-fn host_word(connection: &ConnectionState) -> &'static str {
+/// This PC's service in words, in the Hosts section (D-ST-07, honest state). It reads the store's
+/// connection, the same state the status bar reports.
+pub(super) fn host_word(connection: &ConnectionState) -> &'static str {
     match connection {
         ConnectionState::Connecting => "Connecting",
         ConnectionState::Connected { .. } => "Connected",

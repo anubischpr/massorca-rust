@@ -408,6 +408,7 @@ pub struct TextField {
     comfortable: bool,
     mono: bool,
     clearable: bool,
+    clear_when_filled: bool,
     disabled: bool,
     read_only: bool,
     /// A search box: its root carries the searchbox role instead of the textbox role.
@@ -440,6 +441,7 @@ impl TextField {
             comfortable: false,
             mono: false,
             clearable: false,
+            clear_when_filled: false,
             disabled: false,
             read_only: false,
             search: false,
@@ -495,6 +497,12 @@ impl TextField {
     /// Shows a clear action while the field has a value and is focused or hovered.
     pub fn clearable(mut self) -> Self {
         self.clearable = true;
+        self
+    }
+
+    /// Keeps the clear action shown whenever the field has a value (SearchField.md), not only on hover or focus.
+    pub fn clear_when_filled(mut self) -> Self {
+        self.clear_when_filled = true;
         self
     }
 
@@ -732,6 +740,7 @@ impl TextField {
                 button.group_hover(FIELD_GROUP, |style| style.visible())
             })
             .when(filled && focused, |button| button.visible())
+            .when(filled && self.clear_when_filled, |button| button.visible())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.clear(window, cx)))
             .child(
@@ -1504,6 +1513,21 @@ mod tests {
         field.update_in(cx, |field, window, cx| {
             field.replace_text_in_range(None, "你", window, cx);
             assert_eq!(field.text(), "你");
+            assert_eq!(field.marked_text_range(window, cx), None);
+        });
+    }
+
+    #[gpui::test]
+    fn a_dead_accent_then_a_letter_commits_the_composed_letter(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.replace_and_mark_text_in_range(None, "´", None, window, cx);
+            assert_eq!(field.marked_text_range(window, cx), Some(0..1));
+        });
+        field.update_in(cx, |field, window, cx| {
+            field.replace_text_in_range(None, "á", window, cx);
+            assert_eq!(field.text(), "á");
             assert_eq!(field.marked_text_range(window, cx), None);
         });
     }
