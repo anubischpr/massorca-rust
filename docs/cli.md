@@ -49,6 +49,7 @@ letters, digits, `-` or `_`.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `agent kinds` | Lists the agent kinds: id, name, owner and the resolved program, or `no` / `invalid`. Problems follow the table. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -96,6 +97,18 @@ connect and disconnect on their own.
   0 when the terminal ends. `--json` is refused, because the output is the terminal's.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
+
+### Agents
+
+Agents run as programs in service-owned terminals (`docs/architecture/agents.md`).
+
+- `agent kinds` lists the built-in kinds (owner `core`: `claude`, `codex`, `antigravity`,
+  `gentle-shell`) and the profile's own declarations in `<profile>/agents/kinds/*.json`
+  (owner `user`). The files are read again on every call. A kind is installed when one of
+  its programs resolves: an absolute path that is a file, or a bare name on the service's
+  `PATH` (on Windows also with the `PATHEXT` extensions). A file that does not parse, breaks
+  a rule, or reuses a built-in id is listed with its problems and never started.
+  `--json` prints the `agent.kinds` result.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

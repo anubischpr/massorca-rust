@@ -224,6 +224,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "terminal.close",
             selector("terminal"),
         ),
+        command(
+            "agent.kinds",
+            "List agent kinds and whether they are installed",
+            "agent.kinds",
+            no_args(),
+        ),
     ]
 }
 

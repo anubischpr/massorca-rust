@@ -88,6 +88,33 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TERMINAL_INPUT_TOO_LARGE, "terminal.input_too_large"),
     (codes::TERMINAL_INVALID_SIZE, "terminal.invalid_size"),
     (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
+    (codes::AGENT_NOT_FOUND, "agent.not_found"),
+    (codes::AGENT_KIND_NOT_FOUND, "agent.kind_not_found"),
+    (codes::AGENT_NOT_INSTALLED, "agent.not_installed"),
+    (codes::AGENT_WORKSPACE_BUSY, "agent.workspace_busy"),
+    (codes::AGENT_NOT_LIVE, "agent.not_live"),
+    (codes::AGENT_BUSY, "agent.busy"),
+    (codes::AGENT_PROMPT_INVALID, "agent.prompt_invalid"),
+    (codes::AGENT_RESUME_UNAVAILABLE, "agent.resume_unavailable"),
+    (codes::AGENT_HOOK_REFUSED, "agent.hook_refused"),
+    (codes::AGENT_DELEGATE_NEEDS_GIT, "agent.delegate_needs_git"),
+    (codes::AGENT_DEPTH_EXCEEDED, "agent.depth_exceeded"),
+    (codes::AGENT_PARENT_BUSY, "agent.parent_busy"),
+    (codes::AGENT_PARENT_DIRTY, "agent.parent_dirty"),
+    (codes::AGENT_MERGE_CONFLICT, "agent.merge_conflict"),
+    (
+        codes::AGENT_ALREADY_BROUGHT_BACK,
+        "agent.already_brought_back",
+    ),
+    (
+        codes::AGENT_CREDENTIALS_UNSUPPORTED,
+        "agent.credentials_unsupported",
+    ),
+    (codes::AGENT_CREDENTIALS_EXIST, "agent.credentials_exist"),
+    (
+        codes::AGENT_CREDENTIALS_INVALID,
+        "agent.credentials_invalid",
+    ),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -114,4 +141,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::CONFIG, "config/1");
     assert_eq!(capabilities::TERMINALS, "terminals/1");
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
+    assert_eq!(capabilities::AGENTS, "agents/1");
 }
