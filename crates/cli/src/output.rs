@@ -33,6 +33,13 @@ impl Output {
         }
     }
 
+    /// Prints a progress line on stderr in text mode; JSON mode stays silent, so stdout holds one document.
+    pub fn progress(self, line: &str) {
+        if !self.json {
+            write_stderr(line);
+        }
+    }
+
     /// Prints a failure: `error: <message> (<code>)` on stderr, or the error document in JSON mode.
     pub fn failure(self, error: &CliError) {
         if self.json {

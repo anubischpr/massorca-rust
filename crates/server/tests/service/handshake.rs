@@ -30,10 +30,13 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENTS,
             capabilities::BINARY_FRAMES,
             capabilities::CONFIG,
+            capabilities::DEVICES,
             capabilities::EVENTS,
             capabilities::GIT,
+            capabilities::NETWORK,
             capabilities::PROJECTS,
             capabilities::SERVICE,
+            capabilities::TEAMS,
             capabilities::TERMINALS,
             capabilities::WORKSPACES,
         ]

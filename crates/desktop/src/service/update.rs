@@ -1,13 +1,17 @@
 //! What the service reported, and the reducer that folds it into one state (decision 0028).
 //! The store changes only through these updates, never optimistically.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
+use massorca_protocol::methods::git::log::GitLog;
+use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
+use super::refusal::Refusal;
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +31,48 @@ pub enum StoreUpdate {
     /// A terminal the service created, killed or reported; keyed by its id.
     TerminalChanged(Terminal),
     TerminalGone(String),
+    /// What the git watch and the git calls learned about one workspace.
+    Git(GitUpdate),
+}
+
+/// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
+/// it names, so the latest answer wins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitUpdate {
+    /// The status, or why it could not be read (`git.not_a_repository` for a folder workspace).
+    Status {
+        workspace: String,
+        result: Result<GitStatus, Refusal>,
+    },
+    /// The first page of history.
+    Log {
+        workspace: String,
+        result: Result<GitLog, Refusal>,
+    },
+    /// Whether working-tree edits are observed; `Some` carries why they are not.
+    Watch {
+        workspace: String,
+        degraded: Option<String>,
+    },
+}
+
+impl GitUpdate {
+    pub fn workspace(&self) -> &str {
+        match self {
+            Self::Status { workspace, .. }
+            | Self::Log { workspace, .. }
+            | Self::Watch { workspace, .. } => workspace,
+        }
+    }
+}
+
+/// The git state the store holds for one workspace. A part is `None` until its first answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceGit {
+    pub status: Option<Result<GitStatus, Refusal>>,
+    pub log: Option<Result<GitLog, Refusal>>,
+    /// Why working-tree edits are not observed, while they are not.
+    pub degraded: Option<String>,
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
@@ -41,6 +87,8 @@ pub struct StoreState {
     pub loaded: bool,
     /// When the link last stopped being connected, while it is not.
     pub down_since: Option<Instant>,
+    /// The git state of each workspace the store holds, by workspace id.
+    pub git: BTreeMap<String, WorkspaceGit>,
 }
 
 impl Default for StoreState {
@@ -52,6 +100,7 @@ impl Default for StoreState {
             terminals: Vec::new(),
             loaded: false,
             down_since: None,
+            git: BTreeMap::new(),
         }
     }
 }
@@ -76,6 +125,8 @@ impl StoreState {
                 self.workspaces = workspaces;
                 self.projects.sort_by(project_order);
                 self.workspaces.sort_by(workspace_order);
+                self.git
+                    .retain(|id, _| self.workspaces.iter().any(|w| &w.id == id));
                 self.loaded = true;
             }
             StoreUpdate::ProjectChanged(project) => {
@@ -87,7 +138,10 @@ impl StoreState {
                 replace_by(&mut self.workspaces, workspace, |w| w.id.clone());
                 self.workspaces.sort_by(workspace_order);
             }
-            StoreUpdate::WorkspaceGone(id) => self.workspaces.retain(|w| w.id != id),
+            StoreUpdate::WorkspaceGone(id) => {
+                self.workspaces.retain(|w| w.id != id);
+                self.git.remove(&id);
+            }
             StoreUpdate::TerminalsResync(mut terminals) => {
                 terminals.sort_by(terminal_order);
                 self.terminals = terminals;
@@ -97,7 +151,26 @@ impl StoreState {
                 self.terminals.sort_by(terminal_order);
             }
             StoreUpdate::TerminalGone(id) => self.terminals.retain(|t| t.id != id),
+            StoreUpdate::Git(update) => self.apply_git(update),
         }
+    }
+
+    /// An update for a workspace the store does not hold (removed, or not listed yet) changes nothing.
+    fn apply_git(&mut self, update: GitUpdate) {
+        if self.workspace(update.workspace()).is_none() {
+            return;
+        }
+        let git = self.git.entry(update.workspace().to_owned()).or_default();
+        match update {
+            GitUpdate::Status { result, .. } => git.status = Some(result),
+            GitUpdate::Log { result, .. } => git.log = Some(result),
+            GitUpdate::Watch { degraded, .. } => git.degraded = degraded,
+        }
+    }
+
+    /// The git state of workspace `id`, once the store has heard of it.
+    pub fn git(&self, id: &str) -> Option<&WorkspaceGit> {
+        self.git.get(id)
     }
 
     pub fn workspace(&self, id: &str) -> Option<&Workspace> {

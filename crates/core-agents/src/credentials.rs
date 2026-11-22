@@ -277,11 +277,14 @@ fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
             )));
         }
         #[cfg(windows)]
-        pins.push(pin(dir)?);
-        // A directory made before this service restricted it keeps its inherited access; restrict it now, so no
-        // other user can replace an entry in it.
+        let pinned = pin(dir)?;
+        // A directory made before this service restricted it keeps its inherited access, and one an elevated run
+        // made is owned by Administrators; restrict it now, which also makes the user its owner, so no other user can
+        // replace an entry in it and a non-elevated run accepts it later.
         #[cfg(windows)]
-        if !massorca_profile::has_owner_only_dacl(dir).unwrap_or(false) {
+        if !massorca_profile::has_owner_only_dacl(dir).unwrap_or(false)
+            || !pinned.owned_by_token_user().unwrap_or(false)
+        {
             massorca_profile::restrict_dir_to_owner(dir).map_err(|error| {
                 internal(
                     "restrict the credential homes directory to its owner",
@@ -289,8 +292,24 @@ fn homes_dir(profile_dir: &Path) -> Result<(PathBuf, Pins), AgentError> {
                 )
             })?;
         }
+        #[cfg(windows)]
+        pins.push(pinned);
     }
     Ok((homes, pins))
+}
+
+/// Creates `<profile>/agents` when it is missing. On Windows it is created owner-only and owned by the token user
+/// (see [`create_private_dir`]), so a run's files never leave it owned by Administrators after an elevated run;
+/// elsewhere nothing is done here, and the caller's own directory creation applies.
+pub fn create_agents_dir(profile_dir: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    match create_private_dir(&paths::agents_dir(profile_dir)) {
+        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
+        _ => {}
+    }
+    #[cfg(not(windows))]
+    let _ = profile_dir;
+    Ok(())
 }
 
 /// Pins `dir`, refusing a reparse point or anything but a directory with `agent.credentials_invalid`.
@@ -309,8 +328,7 @@ fn pin_refusal(dir: &Path, error: &io::Error) -> AgentError {
             dir.display()
         )),
         io::ErrorKind::PermissionDenied => invalid(format!(
-            "{} is owned by another user ({error}); credential homes are only written into directories this user \
-             owns, so move it away by hand",
+            "{} cannot hold credentials: {error}",
             dir.display()
         )),
         _ => internal("hold the credential homes directory", error),
@@ -1113,23 +1131,61 @@ mod tests {
         fixture.import(false).unwrap();
         let homes = fixture.home().parent().unwrap().to_path_buf();
         let agents = homes.parent().unwrap().to_path_buf();
+        let user = massorca_profile::Sid::parse(&current_user()).unwrap();
+        let user_and_system = [user.clone(), massorca_profile::Sid::parse("SY").unwrap()];
         for dir in [&agents, &homes, &fixture.home()] {
-            let sddl = massorca_profile::dacl_sddl(dir).unwrap();
-            assert!(sddl.starts_with("D:P"), "{}: {sddl}", dir.display());
             assert!(
                 massorca_profile::has_owner_only_dacl(dir).unwrap(),
-                "{}: {sddl}",
+                "{}",
+                dir.display()
+            );
+            let owner = massorca_profile::PinnedDir::open(dir)
+                .unwrap()
+                .owner_sid()
+                .unwrap();
+            assert!(
+                massorca_profile::owner_matches(&owner, std::slice::from_ref(&user)),
+                "{} is owned by {owner}",
                 dir.display()
             );
         }
-        let file = massorca_profile::dacl_sddl(&fixture.home().join("token.json")).unwrap();
-        for dir in [&agents, &homes, &fixture.home()] {
-            let granted = massorca_profile::dacl_sddl(dir).unwrap();
-            for other in [";AU)", ";BU)", ";WD)"] {
-                assert!(!granted.contains(other), "{granted}");
-                assert!(!file.contains(other), "{file}");
-            }
+        let file = massorca_profile::dacl_grantees(&fixture.home().join("token.json")).unwrap();
+        assert!(!file.is_empty());
+        for grantee in &file {
+            assert!(
+                massorca_profile::owner_matches(grantee, &user_and_system),
+                "{grantee}"
+            );
         }
+    }
+
+    /// The token user's SID: the owner `create_dir_owner_only` names.
+    #[cfg(windows)]
+    fn current_user() -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let owned = dir.path().join("owned");
+        massorca_profile::create_dir_owner_only(&owned).unwrap();
+        massorca_profile::PinnedDir::open(&owned)
+            .unwrap()
+            .owner_sid()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Run files create `agents` the same way: owner-only and owned by the token user.
+    #[cfg(windows)]
+    #[test]
+    fn the_agents_directory_is_created_owner_only() {
+        let profile = tempfile::tempdir().unwrap();
+        create_agents_dir(profile.path()).unwrap();
+        let agents = paths::agents_dir(profile.path());
+        assert!(massorca_profile::has_owner_only_dacl(&agents).unwrap());
+        let owner = massorca_profile::PinnedDir::open(&agents)
+            .unwrap()
+            .owner_sid()
+            .unwrap();
+        assert_eq!(owner.to_string(), current_user());
+        create_agents_dir(profile.path()).unwrap();
     }
 
     /// `agents` and `homes` that already exist with inherited access are restricted by the next import.
@@ -1213,8 +1269,8 @@ mod tests {
         let error = pin_refusal(dir, &refused);
         assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
         assert!(
-            error.message.contains("owned by another user"),
-            "{}",
+            error.message.contains("owned by S-1-5-21-9-9-9-1005"),
+            "the pin's reason is kept: {}",
             error.message
         );
         let link = io::Error::new(io::ErrorKind::InvalidInput, "a reparse point");

@@ -16,12 +16,14 @@ mod handshake;
 mod instance_lock;
 mod method;
 mod names;
+mod network;
 mod owner;
 mod permission;
 mod registry;
 mod service;
 mod service_json;
 mod session;
+mod setting_values;
 mod settings;
 mod shutdown;
 mod store_blocking;
@@ -36,8 +38,9 @@ pub use event_bus::{EventBus, EventSubscription};
 pub use method::{
     ByteStreamSource, MethodError, MethodInfo, MethodRegistry, StreamItem, StreamSource,
 };
+pub use network::{ListenSpec, ListenSpecError, NetworkConfig, NetworkState, identity_paths};
 pub use owner::Owner;
-pub use permission::{Permission, Principal, authorize};
+pub use permission::{Permission, Principal, Scopes, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
 pub use service::{RunningService, Service, ServiceConfig};
 pub use settings::{SettingDecl, SettingKind, SettingsRegistry};

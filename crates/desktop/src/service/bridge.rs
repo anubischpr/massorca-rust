@@ -3,7 +3,9 @@
 //! socket: it sends commands, awaits oneshot answers, and receives `StoreUpdate`s on an unbounded
 //! channel, none of which needs a reactor.
 
+use std::collections::BTreeSet;
 use std::io;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,6 +16,9 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
     TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
+use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
+use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
+use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
@@ -24,6 +29,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
+use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
@@ -62,6 +68,33 @@ pub(crate) enum Command {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
     },
+    GitDiffFile {
+        params: GitDiffFileParams,
+        reply: oneshot::Sender<Result<GitDiffFile, Refusal>>,
+    },
+    GitStage {
+        params: GitPathsParams,
+        reply: oneshot::Sender<Result<(), Refusal>>,
+    },
+    GitUnstage {
+        params: GitPathsParams,
+        reply: oneshot::Sender<Result<(), Refusal>>,
+    },
+    GitDiscard {
+        params: GitDiscardParams,
+        reply: oneshot::Sender<Result<GitDiscarded, Refusal>>,
+    },
+    GitCommit {
+        params: GitCommitParams,
+        reply: oneshot::Sender<Result<GitCommitted, Refusal>>,
+    },
+    /// Follows a workspace's git state until `GitUnwatch`, across reconnects.
+    GitWatch {
+        workspace: String,
+    },
+    GitUnwatch {
+        workspace: String,
+    },
     Stop,
 }
 
@@ -70,7 +103,7 @@ pub(crate) enum Command {
 #[derive(Debug)]
 pub(crate) struct Script {
     commands: mpsc::UnboundedReceiver<Command>,
-    _connection: watch::Sender<ConnectionState>,
+    connection: watch::Sender<ConnectionState>,
 }
 
 #[cfg(test)]
@@ -78,6 +111,11 @@ impl Script {
     /// The next call the UI sent, if one is waiting.
     pub(crate) fn next(&mut self) -> Option<Command> {
         self.commands.try_recv().ok()
+    }
+
+    /// Moves the link's state, as the bridge does when it connects or loses the service.
+    pub(crate) fn set_connection(&self, state: ConnectionState) {
+        self.connection.send_replace(state);
     }
 }
 
@@ -101,7 +139,7 @@ impl ServiceHandle {
             },
             Script {
                 commands: command_rx,
-                _connection: connection_tx,
+                connection: connection_tx,
             },
         )
     }
@@ -159,6 +197,11 @@ impl ServiceHandle {
         self.ask(|reply| Command::SetConfig { params, reply }).await
     }
 
+    /// Sends one command without waiting for an answer. A bridge that has stopped takes it nowhere.
+    pub(super) fn send(&self, command: Command) {
+        let _ = self.commands.send(command);
+    }
+
     /// Sends one command and waits for its answer. A bridge that has stopped answers as unavailable.
     pub(super) async fn ask<T>(
         &self,
@@ -197,6 +240,8 @@ impl ServiceBridge {
             commands: command_rx,
             updates: updates_tx,
             connection: connection_tx,
+            watching: BTreeSet::new(),
+            freshness: Arc::new(Freshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -244,6 +289,10 @@ struct Link {
     commands: mpsc::UnboundedReceiver<Command>,
     updates: mpsc::UnboundedSender<StoreUpdate>,
     connection: watch::Sender<ConnectionState>,
+    /// The workspaces the UI follows. Kept across connections, so a reconnect watches them again.
+    watching: BTreeSet<String>,
+    /// Orders the git answers across the connections of this bridge.
+    freshness: Arc<Freshness>,
 }
 
 impl Link {
@@ -310,7 +359,7 @@ impl Link {
                 result = &mut attempt => return Some(result),
                 command = self.commands.recv() => match command {
                     None | Some(Command::Stop) => return None,
-                    Some(command) => refuse_while_down(command),
+                    Some(command) => decline_while_down(&mut self.watching, command),
                 },
                 () = self.updates.closed() => return None,
             }
@@ -330,7 +379,7 @@ impl Link {
                         backoff.reset();
                         return true;
                     }
-                    Some(command) => refuse_while_down(command),
+                    Some(command) => decline_while_down(&mut self.watching, command),
                 },
                 () = self.updates.closed() => return false,
             }
@@ -360,6 +409,11 @@ impl Link {
             return SessionEnd::Lost;
         };
         let writes = terminals::spawn_writes(client.clone());
+        // The watches end with this connection; the ones the UI still follows start again here.
+        let mut watches = Watches::default();
+        for workspace in &self.watching {
+            watches.start(client, workspace, &self.updates, &self.freshness);
+        }
         loop {
             let outcome = tokio::select! {
                 event = events.next_as::<ChangeEvent>() => match event {
@@ -377,7 +431,15 @@ impl Link {
                         Some(Command::Terminal(command)) => {
                             terminals::spawn_call(client, &writes, &self.updates, command);
                         }
-                        Some(command) => spawn_call(client, command),
+                        Some(Command::GitWatch { workspace }) => {
+                            watches.start(client, &workspace, &self.updates, &self.freshness);
+                            self.watching.insert(workspace);
+                        }
+                        Some(Command::GitUnwatch { workspace }) => {
+                            watches.stop(&workspace);
+                            self.watching.remove(&workspace);
+                        }
+                        Some(command) => spawn_call(client, command, &self.updates, &self.freshness),
                     }
                     Outcome::Continue
                 }
@@ -449,7 +511,12 @@ fn gone_if_missing(
 }
 
 /// Runs a call on its own task so a slow one never holds up events.
-fn spawn_call(client: &Client, command: Command) {
+fn spawn_call(
+    client: &Client,
+    command: Command,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    freshness: &Arc<Freshness>,
+) {
     let client = client.clone();
     match command {
         Command::Create { params, reply } => {
@@ -499,6 +566,20 @@ fn spawn_call(client: &Client, command: Command) {
         }
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
+        other => git::spawn(&client, other, updates, freshness),
+    }
+}
+
+/// While the link is down a watch still changes what the bridge follows; the next connection starts it.
+fn decline_while_down(watching: &mut BTreeSet<String>, command: Command) {
+    match command {
+        Command::GitWatch { workspace } => {
+            watching.insert(workspace);
+        }
+        Command::GitUnwatch { workspace } => {
+            watching.remove(&workspace);
+        }
+        other => refuse_while_down(other),
     }
 }
 
@@ -522,6 +603,6 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
-        Command::RetryNow | Command::Stop => {}
+        other => git::refuse(other, refusal),
     }
 }

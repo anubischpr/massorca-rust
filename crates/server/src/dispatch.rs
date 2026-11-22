@@ -56,7 +56,7 @@ pub(crate) async fn run(session: Arc<Session>, id: u64, method: String, params: 
     }
 
     let ctx = RequestCtx {
-        principal: session.principal,
+        principal: session.principal.clone(),
         state: Arc::clone(&session.state),
         connection_id: session.connection_id.clone(),
         client_capabilities: Arc::clone(&session.client_capabilities),
@@ -139,6 +139,7 @@ async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
                     session.outbound.clone(),
                     cancelled,
                     session.streams.downgrade(),
+                    session.max_frame_len,
                 ));
             }
             OpenedSource::Items(items) => {
@@ -148,6 +149,7 @@ async fn open_stream(session: &Session, id: u64, source: OpenedSource) {
                     session.outbound.clone(),
                     cancelled,
                     session.streams.downgrade(),
+                    session.max_frame_len,
                 ));
             }
         }

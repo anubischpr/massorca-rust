@@ -7,18 +7,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use manager_support::{
-    Managed, SIZE, TIMEOUT, Watch, is_gone, line, marker_command, script_shell, spec, visible,
-    wait_until, watch,
+    Managed, SIZE, TIMEOUT, Watch, contains, is_gone, line, marker_command, script_shell, spec,
+    visible, wait_until, watch,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
-    AttachItem, AttachMode, ExitReason, ShellChoice, TerminalError, TerminalState,
+    AttachItem, AttachMode, Attachment, ExitReason, QueryAnswers, ShellChoice, TerminalError,
+    TerminalState,
 };
 
 /// Far above any load-induced delay, so finishing under it proves the grace was not waited out.
 const GRACE: Duration = Duration::from_secs(60);
 /// Upper bound for work that must not wait the grace.
 const PROMPT: Duration = Duration::from_secs(30);
+/// How long a held query is watched for an answer that must not come.
+const HELD_FOR: Duration = Duration::from_millis(500);
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -353,7 +356,7 @@ async fn close_kills_and_forgets() {
         Err(TerminalError::NotFound)
     ));
     assert!(matches!(
-        manager.attach(&info.id, None),
+        manager.attach(&info.id, None, QueryAnswers::Service),
         Err(TerminalError::NotFound)
     ));
 }
@@ -520,7 +523,9 @@ async fn a_terminal_without_attachments_still_renders_output() {
 
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        let mut attachment = manager.attach(&info.id, None).expect("attach");
+        let mut attachment = manager
+            .attach(&info.id, None, QueryAnswers::Service)
+            .expect("attach");
         let mut seen = String::new();
         for _ in 0..2 {
             match tokio::time::timeout(TIMEOUT, attachment.next()).await {
@@ -550,7 +555,9 @@ async fn a_terminal_without_attachments_still_renders_output() {
 async fn wait_for_screen(manager: &Managed, id: &str, expected: &str) {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        let mut attachment = manager.attach(id, None).expect("attach");
+        let mut attachment = manager
+            .attach(id, None, QueryAnswers::Service)
+            .expect("attach");
         let mut seen = String::new();
         for _ in 0..2 {
             if let Ok(Some(AttachItem::Snapshot { bytes, .. })) =
@@ -572,7 +579,7 @@ async fn wait_for_screen(manager: &Managed, id: &str, expected: &str) {
 }
 
 #[tokio::test]
-async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
+async fn a_query_held_for_a_silent_emulator_is_answered_when_it_detaches() {
     let dir = temp_dir();
     let manager = Managed::new();
     let mut create = spec("ws", dir.path());
@@ -589,8 +596,10 @@ async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
     };
     let info = manager.create(create).expect("create");
 
-    // A client that reads raw output from the start and never answers.
-    let mut silent = manager.attach(&info.id, Some(0)).expect("attach");
+    // An emulator that reads raw output from the start and never answers.
+    let mut silent = manager
+        .attach(&info.id, Some(0), QueryAnswers::Client)
+        .expect("attach");
     if cfg!(unix) {
         manager.input(&info.id, &line("go")).expect("input");
     }
@@ -631,8 +640,10 @@ async fn a_client_attaching_answers_a_query_a_stalled_client_holds() {
     }
     let info = manager.create(create).expect("create");
 
-    // Attached and silent: it has the query but is not reading, as a stalled client would.
-    let mut stalled = manager.attach(&info.id, Some(0)).expect("attach");
+    // Attached and silent: it has the query but is not reading, as a stalled emulator would.
+    let mut stalled = manager
+        .attach(&info.id, Some(0), QueryAnswers::Client)
+        .expect("attach");
     if cfg!(unix) {
         manager.input(&info.id, &line("go")).expect("input");
     }
@@ -663,6 +674,173 @@ async fn a_client_attaching_answers_a_query_a_stalled_client_holds() {
     };
     wait_for_screen(&manager, &info.id, &expected).await;
     drop(stalled);
+}
+
+/// Reads raw output, answering nothing, until `needle` has arrived.
+async fn read_until_seen(attachment: &mut Attachment, needle: &[u8]) {
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !contains(&raw, needle) {
+        assert!(Instant::now() < deadline, "no {needle:?} in {raw:?}");
+        match tokio::time::timeout(TIMEOUT, attachment.next()).await {
+            Ok(Some(AttachItem::Output { bytes, .. })) => raw.extend_from_slice(&bytes),
+            Ok(Some(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+/// Reads raw output, answering nothing, for `window`; `needle` must not arrive in that time.
+async fn stays_absent(attachment: &mut Attachment, window: Duration, needle: &[u8]) {
+    let mut raw = Vec::new();
+    let end = tokio::time::Instant::now() + window;
+    while let Ok(item) = tokio::time::timeout_at(end, attachment.next()).await {
+        match item {
+            Some(AttachItem::Output { bytes, .. }) => raw.extend_from_slice(&bytes),
+            Some(_) => {}
+            None => panic!("the attach ended while the query was held"),
+        }
+    }
+    assert!(
+        !contains(&raw, needle),
+        "{needle:?} arrived while its query was held: {raw:?}"
+    );
+}
+
+/// A shell that asks for the cursor position once it is told to go, and echoes the answer.
+fn query_shell(then: &str) -> ShellChoice {
+    script_shell(&format!(
+        "read go; stty -icanon -echo; printf '\\033[6n'; \
+         dd bs=1 count=6 of=/dev/null 2>/dev/null; echo replied-$((6*7)); {then} sleep 60"
+    ))
+}
+
+#[tokio::test]
+async fn a_client_that_never_answers_does_not_stall_the_shell() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        create.shell = Some(query_shell(""));
+    }
+    let info = manager.create(create).expect("create");
+
+    // A log tail: attached and reading, but it never answers a query.
+    let mut log = manager
+        .attach(&info.id, Some(0), QueryAnswers::Service)
+        .expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+        read_until_seen(&mut log, b"\x1b[6n").await;
+        // The service answered for the shell, so the shell goes on with the log still attached.
+        read_until_seen(&mut log, b"replied-42").await;
+    } else {
+        // ConPTY asks at start and renders nothing until it is answered.
+        let (command, expected) = marker_command("logged");
+        manager.input(&info.id, &command).expect("input");
+        read_until_seen(&mut log, expected.as_bytes()).await;
+    }
+}
+
+#[tokio::test]
+async fn a_declared_emulator_holds_its_query_until_it_replies_and_the_reply_counts_once() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        // After the reply, echoes the length of the next line, so a duplicate reply shows.
+        create.shell = Some(query_shell("read rest; echo \"got-${#rest}-$((6*7))\";"));
+    }
+    let info = manager.create(create).expect("create");
+    let mut emulator = manager
+        .attach(&info.id, Some(0), QueryAnswers::Client)
+        .expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+        read_until_seen(&mut emulator, b"\x1b[6n").await;
+        // Held: nothing has answered, so the shell has not moved past the query.
+        stays_absent(&mut emulator, HELD_FOR, b"replied-").await;
+        manager.input(&info.id, b"\x1b[1;1R").expect("input");
+        read_until_seen(&mut emulator, b"replied-42").await;
+        // The reply was taken once: the next line is the one the shell reads.
+        manager.input(&info.id, &line("next")).expect("input");
+        read_until_seen(&mut emulator, b"got-4-42").await;
+    } else {
+        read_until_seen(&mut emulator, b"\x1b[6n").await;
+        manager.input(&info.id, b"\x1b[1;1R").expect("input");
+        let (command, expected) = marker_command("answered");
+        manager.input(&info.id, &command).expect("input");
+        read_until_seen(&mut emulator, expected.as_bytes()).await;
+    }
+}
+
+#[tokio::test]
+async fn a_log_client_detaching_leaves_a_query_held_for_the_emulator() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        create.shell = Some(query_shell(""));
+    }
+    let info = manager.create(create).expect("create");
+    let mut emulator = manager
+        .attach(&info.id, Some(0), QueryAnswers::Client)
+        .expect("attach");
+    // Attached before the query arrives, so the log is never one of its witnesses.
+    let log = manager
+        .attach(&info.id, Some(0), QueryAnswers::Service)
+        .expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+    }
+    read_until_seen(&mut emulator, b"\x1b[6n").await;
+    drop(log);
+    if cfg!(unix) {
+        // The log's detach answers nothing: the emulator still holds the query.
+        stays_absent(&mut emulator, HELD_FOR, b"replied-").await;
+    }
+    manager.input(&info.id, b"\x1b[1;1R").expect("input");
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("after-log");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        "replied-42".to_owned()
+    };
+    read_until_seen(&mut emulator, expected.as_bytes()).await;
+}
+
+#[tokio::test]
+async fn the_last_emulator_detaching_answers_its_query_while_a_log_client_stays() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        create.shell = Some(query_shell(""));
+    }
+    let info = manager.create(create).expect("create");
+    let emulator = manager
+        .attach(&info.id, Some(0), QueryAnswers::Client)
+        .expect("attach");
+    let mut log = manager
+        .attach(&info.id, Some(0), QueryAnswers::Service)
+        .expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+        read_until_seen(&mut log, b"\x1b[6n").await;
+        // Held for the emulator, which has not answered.
+        stays_absent(&mut log, HELD_FOR, b"replied-").await;
+    }
+    // The emulator was the query's only witness, so its detach answers the query.
+    drop(emulator);
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("after-emulator");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        "replied-42".to_owned()
+    };
+    read_until_seen(&mut log, expected.as_bytes()).await;
 }
 
 #[tokio::test]

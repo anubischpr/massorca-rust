@@ -6,6 +6,7 @@
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::delegation_tree::{DelegationNode, DelegationTree, TreeAction, TreeVariant};
+use crate::components::diff_view::file_icon;
 use crate::components::plan_view::{Plan, PlanAction, PlanVariant, PlanView, StepStatus};
 use crate::components::switch::ease;
 use crate::icon::{Icon, IconName, IconSize};
@@ -27,6 +28,13 @@ use std::rc::Rc;
 
 /// Rows a collapsed card shows at most.
 pub const COLLAPSED_ROWS: usize = 6;
+
+/// The column's line while no card holds information (D-AG-27 States, empty).
+pub const EMPTY_TEXT: &str = "Nothing to summarise yet.";
+
+/// The subtitle of the expanded Results card.
+pub const RESULTS_SUBTITLE: &str =
+    "URLs of the environment, file changes and visuals recorded in this chat.";
 
 /// The cards of the column, in the order it shows them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -226,6 +234,17 @@ impl SessionSummary {
             .into_iter()
             .filter(|kind| self.has(*kind))
             .collect()
+    }
+
+    /// The Environment header's glyph and text: the host with its status, or, while the host
+    /// cannot be reached, the unreachable glyph and "Last known state, 5 min ago".
+    pub fn environment_value(&self) -> Option<(AgentState, String)> {
+        let env = self.environment.as_ref()?;
+        Some(match (self.stale, &env.last_known) {
+            (true, Some(age)) => (AgentState::Unreachable, format!("Last known state, {age}")),
+            (true, None) => (AgentState::Unreachable, env.host.to_string()),
+            (false, _) => (env.host_state, env.host.to_string()),
+        })
     }
 
     /// The value at the right of a header: "VPS", "3 of 7", "35%", "2 reported" and so on.
@@ -492,6 +511,15 @@ fn card_rows(
             }
         }
         CardKind::Results => {
+            if expanded {
+                rows.push(
+                    div()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(p.text.secondary)
+                        .child(RESULTS_SUBTITLE)
+                        .into_any_element(),
+                );
+            }
             for (index, item) in summary.results.iter().enumerate() {
                 let element = match item {
                     ResultItem::Url { url, remote } => {
@@ -499,11 +527,13 @@ fn card_rows(
                             Button::new(("summary-open", index), "Open")
                                 .variant(ButtonVariant::Secondary)
                                 .size(ButtonSize::Compact)
+                                .leading_icon(IconName::ExternalLink)
                                 .disabled(*remote)
                                 .on_click(on(handler, SummaryAction::OpenUrl(url.clone()))),
                             Button::new(("summary-copy", index), "Copy URL")
                                 .variant(ButtonVariant::Secondary)
                                 .size(ButtonSize::Compact)
+                                .leading_icon(IconName::Copy)
                                 .on_click(on(handler, SummaryAction::CopyUrl(url.clone()))),
                         );
                         let mut column = div()
@@ -527,11 +557,21 @@ fn card_rows(
                         let path = path.clone();
                         div()
                             .id(("summary-file", index))
-                            .text_style(TYPE_MONO_SM)
-                            .text_color(p.accent.fg)
-                            .underline()
+                            .flex()
+                            .items_center()
+                            .gap(px(SPACE_2))
+                            .min_w_0()
                             .cursor_pointer()
-                            .child(path.clone())
+                            .child(file_icon(&path, p))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_style(TYPE_MONO_SM)
+                                    .text_color(p.accent.fg)
+                                    .underline()
+                                    .child(path.clone()),
+                            )
                             .on_click(move |_, window, cx| {
                                 emit(&file, SummaryAction::OpenFile(path.clone()), window, cx)
                             })
@@ -729,6 +769,9 @@ impl RenderOnce for SessionSummaryCard {
             .read(cx)
             .clone();
         let value = self.summary.value(kind);
+        let env_value = (kind == CardKind::Environment)
+            .then(|| self.summary.environment_value())
+            .flatten();
         let dim = self.summary.stale && kind.host_fed();
         let title_color = if dim { p.text.tertiary } else { p.text.primary };
         let toggle = self.on_action.clone();
@@ -737,9 +780,12 @@ impl RenderOnce for SessionSummaryCard {
         let header = div()
             .id((id.clone(), "header"))
             .role(Role::Button)
-            .aria_label(match &value {
-                Some(value) => format!("{}, {}", kind.title(), value),
-                None => kind.title().to_owned(),
+            .aria_label(match (&value, &env_value) {
+                (Some(value), Some((_, shown))) if shown != value => {
+                    format!("{}, {}, {}", kind.title(), value, shown)
+                }
+                (Some(value), _) => format!("{}, {}", kind.title(), value),
+                (None, _) => kind.title().to_owned(),
             })
             .aria_expanded(expanded)
             .track_focus(&focus)
@@ -767,21 +813,35 @@ impl RenderOnce for SessionSummaryCard {
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
+                    .flex_none()
                     .text_style(TYPE_BODY_STRONG)
                     .text_color(title_color)
                     .child(kind.title()),
             )
-            .children(value.map(|value| {
+            // The value takes the rest and truncates before the title does.
+            .child(
                 div()
-                    .flex_none()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(SPACE_1))
                     .text_style(TYPE_CAPTION)
                     .tabular_figures()
                     .text_color(p.text.secondary)
-                    .child(value)
-            }))
+                    .children(
+                        env_value.as_ref().map(|(state, _)| {
+                            AgentStatus::new(*state).size(AgentStatusSize::XSmall)
+                        }),
+                    )
+                    .children(
+                        env_value
+                            .map(|(_, text)| text)
+                            .or(value)
+                            .map(|text| div().min_w_0().truncate().child(text)),
+                    ),
+            )
             .child(
                 Icon::new(if expanded {
                     IconName::ChevronDown
@@ -830,6 +890,9 @@ pub fn summary_column(
     fresh: &HashSet<CardKind>,
     on_action: Option<SummaryHandler>,
 ) -> Div {
+    if summary.visible().is_empty() {
+        return div().child(EmptyLine);
+    }
     div()
         .flex()
         .flex_col()
@@ -842,6 +905,20 @@ pub fn summary_column(
             card.on_action = on_action.clone();
             card
         }))
+}
+
+/// The column's text while no card holds information, in `text.tertiary`.
+#[derive(IntoElement)]
+struct EmptyLine;
+
+impl RenderOnce for EmptyLine {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        div()
+            .debug_selector(|| "summary-empty".into())
+            .text_style(TYPE_BODY_SM)
+            .text_color(cx.theme().palette.text.tertiary)
+            .child(EMPTY_TEXT)
+    }
 }
 
 #[cfg(test)]
@@ -977,6 +1054,46 @@ mod tests {
             Some("1 running")
         );
         assert_eq!(s.value(CardKind::QaServers).as_deref(), Some("2 detected"));
+    }
+
+    #[test]
+    fn the_environment_header_shows_the_host_glyph_or_the_last_known_state() {
+        let mut live = summary();
+        assert_eq!(
+            live.environment_value(),
+            Some((AgentState::Running, "VPS".to_owned()))
+        );
+        live.stale = true;
+        if let Some(env) = live.environment.as_mut() {
+            env.last_known = Some("5 min ago".into());
+        }
+        assert_eq!(
+            live.environment_value(),
+            Some((
+                AgentState::Unreachable,
+                "Last known state, 5 min ago".to_owned()
+            ))
+        );
+        assert_eq!(SessionSummary::default().environment_value(), None);
+    }
+
+    #[gpui::test]
+    fn an_empty_column_says_nothing_to_summarise(cx: &mut gpui::TestAppContext) {
+        struct Empty;
+        impl gpui::Render for Empty {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                summary_column(
+                    Rc::new(SessionSummary::default()),
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    None,
+                )
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Empty);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("summary-empty").is_some());
+        assert_eq!(EMPTY_TEXT, "Nothing to summarise yet.");
     }
 
     #[test]

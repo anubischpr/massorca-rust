@@ -19,7 +19,8 @@ pub use profile::{Profile, ensure_dir};
 pub use unix_user::current_uid;
 #[cfg(windows)]
 pub use windows_dir_access::{
-    PinnedDir, create_dir_owner_only, dacl_sddl, has_owner_only_dacl, owner_only_dir_sddl,
+    PinnedDir, Sid, create_dir_owner_only, dacl_grantees, dacl_sddl, dir_owner_is_acceptable,
+    has_owner_only_dacl, owner_is_acceptable, owner_matches, owner_only_dir_sddl,
     restrict_dir_to_owner,
 };
 #[cfg(windows)]

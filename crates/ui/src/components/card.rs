@@ -291,15 +291,25 @@ impl RenderOnce for Card {
                 );
             }
             if let Some(title) = self.title {
-                header = header.child(
+                // A loading card keeps its place with a skeleton line, not the title text (Card.md, States).
+                let title = if self.loading {
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Skeleton::line(LineWidth::Partial))
+                        .into_any_element()
+                } else {
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_style(TYPE_TITLE_SM)
                         .text_color(title_color)
-                        .child(title),
-                );
+                        .debug_selector(|| "card-title".into())
+                        .child(title)
+                        .into_any_element()
+                };
+                header = header.child(title);
             }
             if let Some(value) = self.value {
                 header = header.child(
@@ -464,6 +474,41 @@ mod tests {
         focus_and_draw(cx, &focus);
         press_key(cx, "enter");
         assert_eq!(opens.get(), 0);
+    }
+
+    #[gpui::test]
+    fn a_loading_card_draws_a_skeleton_where_its_title_is(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| TitleHarness { loading: true });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("card-title").is_none(),
+            "the title text is not drawn"
+        );
+    }
+
+    #[gpui::test]
+    fn a_settled_card_draws_its_title(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| TitleHarness { loading: false });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("card-title").is_some(),
+            "the title is drawn"
+        );
+    }
+
+    /// Hosts one card with a title, loading or settled.
+    struct TitleHarness {
+        loading: bool,
+    }
+
+    impl gpui::Render for TitleHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(
+                div()
+                    .w(px(240.))
+                    .child(Card::new("plan").title("Plan").loading(self.loading)),
+            )
+        }
     }
 
     /// Hosts a card with no content, which must draw nothing.

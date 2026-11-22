@@ -38,7 +38,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
-            "config.get",
+            "settings.get",
             "Read a setting",
             "config.get",
             json!({
@@ -48,7 +48,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
-            "config.set",
+            "settings.set",
             "Change a setting",
             "config.set",
             json!({
@@ -57,7 +57,17 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": { "owner": { "type": "string" }, "key": { "type": "string" }, "value": {} }
             }),
         ),
-        command("config.list", "List settings", "config.list", no_args()),
+        command("settings.list", "List settings", "config.list", no_args()),
+        command(
+            "settings.reset",
+            "Restore a setting's default",
+            "config.reset",
+            json!({
+                "type": "object",
+                "required": ["key"],
+                "properties": { "owner": { "type": "string" }, "key": { "type": "string" } }
+            }),
+        ),
         command(
             "project.add",
             "Register a project",
@@ -109,6 +119,42 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "List workspaces",
             "workspace.list",
             json!({ "type": "object", "properties": { "project": { "type": "string" } } }),
+        ),
+        command(
+            "device.list",
+            "List the devices paired with the service",
+            "device.list",
+            no_args(),
+        ),
+        command(
+            "device.revoke",
+            "Revoke a paired device",
+            "device.revoke",
+            selector("device"),
+        ),
+        command(
+            "device.whoami",
+            "Show who this connection acts as",
+            "device.whoami",
+            no_args(),
+        ),
+        command(
+            "pair.offer",
+            "Create a one-time pairing offer for a new device",
+            "pairing.create",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 3600 },
+                    "admin": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "server.status",
+            "Show the service's network listeners and devices",
+            "network.status",
+            no_args(),
         ),
         command(
             "workspace.show",
@@ -355,7 +401,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
     ]
 }
 
-fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDescriptor {
+pub(super) fn command(
+    id: &str,
+    title: &str,
+    method: &str,
+    args_schema: Value,
+) -> CommandDescriptor {
     CommandDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
@@ -364,12 +415,12 @@ fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDe
     }
 }
 
-fn no_args() -> Value {
+pub(super) fn no_args() -> Value {
     json!({ "type": "object", "properties": {} })
 }
 
 /// Arguments that name one project or workspace by selector.
-fn selector(name: &str) -> Value {
+pub(super) fn selector(name: &str) -> Value {
     let mut properties = Map::new();
     properties.insert(name.to_owned(), json!({ "type": "string" }));
     json!({ "type": "object", "required": [name], "properties": properties })

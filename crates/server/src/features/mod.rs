@@ -2,10 +2,13 @@
 
 mod agents;
 mod config;
+mod config_keys;
+mod devices;
 mod events;
 mod git;
 mod projects;
 mod service;
+mod teams;
 mod terminal_attach;
 mod terminals;
 mod workspace_domain;
@@ -32,11 +35,13 @@ pub(crate) fn register_core(
     handles.extend(events::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
+    handles.extend(devices::register(registries)?);
     handles.extend(workspaces::register(registries)?);
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
     handles.extend(git::register(registries)?);
+    handles.extend(teams::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

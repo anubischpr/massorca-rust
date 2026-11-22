@@ -9,19 +9,19 @@ use crate::a11y;
 use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind, NameTooltip};
 use crate::components::agent_status::{AgentState, AgentStatus, AgentStatusSize};
 use crate::components::button::StatePreview;
-use crate::components::skeleton::{Skeleton, SkeletonShape};
+use crate::components::skeleton::{LineWidth, Skeleton, SkeletonShape};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::Surface;
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
     BORDER_WIDTH_THICK, Color, DURATION_TOOLTIP_DELAY, Palette, RADIUS_MD,
-    SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ROW_TWO_LINE,
-    SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
+    SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ICON_SM,
+    SIZE_ROW_TWO_LINE, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
 };
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, ElementId, FocusHandle, InteractiveElement,
     IntoElement, KeyDownEvent, MouseButton, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Visibility, Window, div, px,
+    StatefulInteractiveElement, StyleRefinement, Styled, Visibility, Window, div, px, relative,
 };
 use std::fmt;
 use std::rc::Rc;
@@ -207,6 +207,40 @@ impl fmt::Debug for RowLeading {
     }
 }
 
+/// The leading item an error row gives its alert glyph: the status glyph, else the first item.
+fn error_slot(leading: &[RowLeading]) -> Option<usize> {
+    leading
+        .iter()
+        .position(|item| matches!(item, RowLeading::Status(..)))
+        .or_else(|| (!leading.is_empty()).then_some(0))
+}
+
+/// The leading elements of an error row: the alert glyph takes its slot and every other item stays (A84).
+fn error_leading(leading: Vec<RowLeading>, ink: Ink, palette: &Palette) -> Vec<AnyElement> {
+    let slot = error_slot(&leading);
+    let alert = || {
+        Icon::new(IconName::OctagonAlert)
+            .size(IconSize::Small)
+            .color(palette.status.danger_fg)
+            .into_any_element()
+    };
+    let mut elements: Vec<AnyElement> = leading
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            if Some(index) == slot {
+                alert()
+            } else {
+                item.element(ink)
+            }
+        })
+        .collect();
+    if slot.is_none() {
+        elements.push(alert());
+    }
+    elements
+}
+
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 type MenuHandler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -231,6 +265,7 @@ pub struct ListRow {
     disabled: bool,
     dimmed: bool,
     loading: bool,
+    label_placeholder: bool,
     error: Option<SharedString>,
     title_strong: bool,
     title_colour: Option<Color>,
@@ -274,6 +309,7 @@ impl ListRow {
             disabled: false,
             dimmed: false,
             loading: false,
+            label_placeholder: false,
             error: None,
             title_strong: false,
             title_colour: None,
@@ -364,6 +400,12 @@ impl ListRow {
     /// Shows a skeleton in place of the content while the row's data loads.
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    /// A loading row draws one bar where its label goes, not a circle and two lines (sidebar rows).
+    pub fn label_placeholder(mut self, label_only: bool) -> Self {
+        self.label_placeholder = label_only;
         self
     }
 
@@ -464,14 +506,33 @@ impl RenderOnce for ListRow {
         let height = row_height(self.lines, self.density);
         if self.loading {
             // A placeholder: it has an id, so it can take the row's type, but no role.
+            let shape = if self.label_placeholder {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().w(px(SIZE_ICON_SM)).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Skeleton::line(LineWidth::Partial)),
+                    )
+                    .into_any_element()
+            } else {
+                Skeleton::new(SkeletonShape::Row).into_any_element()
+            };
             return a11y::disabled(
                 div()
                     .id(self.id.clone())
+                    .debug_selector(|| "row-placeholder".into())
                     .flex()
                     .items_center()
                     .h(px(height))
                     .px(px(SPACE_2))
-                    .child(Skeleton::new(SkeletonShape::Row)),
+                    .child(shape),
                 self.disabled,
             );
         }
@@ -568,15 +629,7 @@ impl RenderOnce for ListRow {
         }
 
         let (leading, secondary) = match self.error {
-            Some(reason) => (
-                vec![
-                    Icon::new(IconName::OctagonAlert)
-                        .size(IconSize::Small)
-                        .color(p.status.danger_fg)
-                        .into_any_element(),
-                ],
-                Some(reason),
-            ),
+            Some(reason) => (error_leading(self.leading, ink, &p), Some(reason)),
             None => (
                 self.leading
                     .into_iter()
@@ -598,12 +651,18 @@ impl RenderOnce for ListRow {
         } else {
             TYPE_BODY
         };
-        let title = div()
+        // A name keeps its width up to 60 percent of a one-line row, so its secondary line truncates first.
+        let keeps_title = secondary.is_some() && self.lines == RowLines::One;
+        let mut title = div()
             .min_w_0()
             .truncate()
             .text_style(title_style)
             .text_color(ink.title)
+            .debug_selector(|| "row-title".into())
             .child(self.title);
+        if keeps_title {
+            title = title.flex_shrink_0().max_w(relative(0.6));
+        }
         let body = match self.lines {
             RowLines::One => div()
                 .flex()
@@ -748,6 +807,62 @@ mod tests {
         let disabled = row_ink(&p, true, true, Some(usage));
         assert_eq!(disabled.title, p.text.disabled);
         assert_eq!(disabled.icon, p.text.disabled);
+    }
+
+    #[test]
+    fn an_error_row_replaces_its_status_glyph_and_keeps_the_agent_mark() {
+        let session = [
+            RowLeading::Status(AgentState::Error, AgentStatusSize::XSmall),
+            RowLeading::Agent(AgentKind::Gemini, AgentIconSize::Small),
+        ];
+        assert_eq!(error_slot(&session), Some(0));
+        assert_eq!(error_slot(&[RowLeading::Icon(IconName::Folder)]), Some(0));
+        assert_eq!(error_slot(&[]), None);
+    }
+
+    /// Hosts one host row in a column of `width`, to measure the width of its name.
+    struct WidthHarness {
+        width: f32,
+    }
+
+    impl Render for WidthHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(self.width)).child(
+                ListRow::new("host", "oppm-api")
+                    .surface(Surface::Frame)
+                    .leading(RowLeading::Icon(IconName::Server))
+                    .secondary("Last known state, 5 min ago"),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_name_keeps_its_width_when_its_secondary_line_squeezes_the_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, _| WidthHarness { width: 400. });
+        cx.run_until_parked();
+        let wide = f32::from(
+            cx.debug_bounds("row-title")
+                .expect("title is drawn")
+                .size
+                .width,
+        );
+        view.update(cx, |harness, cx| {
+            harness.width = 200.;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let narrow = f32::from(
+            cx.debug_bounds("row-title")
+                .expect("title is drawn")
+                .size
+                .width,
+        );
+        assert!(
+            (wide - narrow).abs() < 0.5,
+            "the name shrank from {wide} to {narrow} px"
+        );
     }
 
     /// Hosts one row that logs what it is asked to do.

@@ -95,10 +95,30 @@ pub const GIT_NO_OPERATION: &str = "git.no_operation";
 pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
 /// The repository's git directory cannot be watched; the stream ends with this code.
 pub const GIT_WATCH_UNAVAILABLE: &str = "git.watch_unavailable";
+/// CLI only: a fast-forward-only pull found local and remote commits on both sides; nothing changed.
+pub const GIT_DIVERGED: &str = "git.diverged";
+/// CLI only: a pull's merge or rebase stopped on conflicts.
+pub const GIT_CONFLICTS: &str = "git.conflicts";
+/// CLI only: the remote refused the push.
+pub const GIT_PUSH_REJECTED: &str = "git.push_rejected";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
 pub const STORE_NEWER_SCHEMA: &str = "store.newer_schema";
+/// A network connection without a client certificate or `hello.auth` (decision 0041).
+pub const AUTH_REQUIRED: &str = "auth.required";
+/// The client certificate belongs to no paired device.
+pub const AUTH_UNKNOWN_DEVICE: &str = "auth.unknown_device";
+pub const AUTH_DEVICE_REVOKED: &str = "auth.device_revoked";
+/// A wrong, unknown or already used pairing secret.
+pub const PAIRING_INVALID: &str = "pairing.invalid";
+pub const PAIRING_EXPIRED: &str = "pairing.expired";
+/// Too many failed pairing attempts from this address, or overall; retry after the window.
+pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
+/// The service has no network listener, so an offer would name no address.
+pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
+pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
+pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";
@@ -129,6 +149,23 @@ pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
 pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
+
+/// A team, bot or team project is named by a selector that matches none, or none of its own team.
+pub const TEAM_NOT_FOUND: &str = "team.not_found";
+/// Another team has this name.
+pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
+pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
+pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+pub const BOT_NOT_FOUND: &str = "bot.not_found";
+/// Another bot of the team has this name.
+pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
+/// The team already has a lead bot; clear its lead first.
+pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
+/// The bot owns open tasks; it can be removed only with `unassign`.
+pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
+pub const TASK_NOT_FOUND: &str = "task.not_found";
+/// The task's agent session still runs; stop it first.
+pub const TASK_RUNNING: &str = "task.running";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
