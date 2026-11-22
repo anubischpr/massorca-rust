@@ -1,6 +1,5 @@
 //! The `massorca` command line: global options and the command tree.
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::builder::FalseyValueParser;
@@ -47,10 +46,9 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Whether this run prints JSON. `ext` takes its arguments verbatim, so a `--json` among them counts too.
+    /// Whether this run prints JSON.
     pub fn wants_json(&self) -> bool {
         self.json
-            || matches!(&self.command, Commands::Ext { args } if args.iter().any(|arg| arg == "--json"))
     }
 }
 
@@ -127,12 +125,6 @@ pub enum Commands {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
-    },
-    /// Extensions. Not available yet: every form exits 1.
-    Ext {
-        /// Anything after `ext`; not interpreted yet.
-        #[arg(allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
-        args: Vec<OsString>,
     },
 }
 

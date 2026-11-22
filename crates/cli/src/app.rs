@@ -15,7 +15,6 @@ use crate::args::{Cli, Commands, PairCommand, ServerCommand, ServiceCommand};
 use crate::config;
 use crate::device;
 use crate::error::CliError;
-use crate::ext;
 use crate::host;
 use crate::output::{self, Output};
 use crate::pair;
@@ -157,7 +156,6 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(crate::task::execute(&target, autostart, command, output))
         }
-        Commands::Ext { .. } => Err(ext::unavailable()),
     }
 }
 
