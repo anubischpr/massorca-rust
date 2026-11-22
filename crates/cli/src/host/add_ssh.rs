@@ -2,11 +2,8 @@
 
 use std::path::PathBuf;
 
-use massorca_client::{Client, HostRecord, Hosts, validate_host_name};
-use massorca_core_remote::bootstrap::{
-    self, BootstrapPlan, BootstrapReport, DEFAULT_OFFER_TTL_SECS, DEFAULT_REMOTE_DIR,
-};
-use massorca_core_remote::ssh::SystemSsh;
+use massorca_client::{Client, HostRecord, Hosts, default_device_name, validate_host_name};
+use massorca_core_remote::bootstrap::{BootstrapPlan, BootstrapReport, install_over_ssh};
 use massorca_profile::Profile;
 use massorca_protocol::pairing::Offer;
 use serde::Serialize;
@@ -18,7 +15,6 @@ use crate::error::CliError;
 use crate::host::records::record_lines;
 use crate::host::status::{self, HostStatus};
 use crate::output::Output;
-use crate::pair::default_device_name;
 use crate::service::unit::listen_addresses;
 
 /// What `host add-ssh` did: the installed binary and unit, and the host it paired or upgraded.
@@ -50,15 +46,12 @@ pub async fn execute(
     }
     let listen = listen_addresses(&args.listen)?;
     let device_name = args.device_name.clone().unwrap_or_else(default_device_name);
-    let plan = BootstrapPlan {
-        binary: PathBuf::from(cwd_path::absolute(&args.binary)?),
+    let plan = BootstrapPlan::for_ssh_host(
+        PathBuf::from(cwd_path::absolute(&args.binary)?),
         listen,
-        remote_dir: DEFAULT_REMOTE_DIR.to_owned(),
-        device_name: device_name.clone(),
-        offer_ttl_secs: DEFAULT_OFFER_TTL_SECS,
-    };
-    let shell = SystemSsh::new(&args.target, args.ssh_arg.clone())?;
-    let installed = run_bootstrap(shell, plan, output).await?;
+        device_name.clone(),
+    );
+    let installed = run_bootstrap(args.target.clone(), args.ssh_arg.clone(), plan, output).await?;
     let offer = Offer::decode(installed.offer.expose())?;
     let name = args.name.clone().unwrap_or_else(|| offer.server.clone());
     let hosts = Hosts::of(profile);
@@ -115,13 +108,14 @@ async fn upgrade(
 
 /// Installs or upgrades the service on the host, on a blocking thread. Progress goes to stderr in text mode.
 async fn run_bootstrap(
-    shell: SystemSsh,
+    target: String,
+    ssh_args: Vec<String>,
     plan: BootstrapPlan,
     output: Output,
 ) -> Result<BootstrapReport, CliError> {
     tokio::task::spawn_blocking(move || {
         let mut progress = |line: &str| output.progress(line);
-        bootstrap::bootstrap(&shell, &plan, &mut progress)
+        install_over_ssh(&target, ssh_args, &plan, &mut progress)
     })
     .await?
     .map_err(CliError::from)
