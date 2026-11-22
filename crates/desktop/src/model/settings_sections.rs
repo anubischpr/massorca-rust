@@ -2,11 +2,13 @@
 //! sections in nav order, the rows each one lists and what backs them, and search over them.
 //! Free of GPUI, so the rules test without a window.
 
+use massorca_ui::assets::{FONT_MONO, FONT_SANS};
+
 /// The service setting behind the workspace folder row.
 pub const WORKSPACE_FOLDER_KEY: &str = "workspaces.default_root";
 /// Where conversations without a project are kept (A95). The service has no setting for it yet.
 pub const CONVERSATIONS_FOLDER: &str = "~/MassOrca/Conversations";
-/// The control of a row that has no backing yet.
+/// The status of a row whose layer is not built yet.
 pub const NOT_AVAILABLE: &str = "Not available yet";
 
 /// The twelve sections of the Settings navigation, in the order of the spec (section 6.1).
@@ -65,19 +67,51 @@ impl SettingsSection {
     pub fn opens_elsewhere(self) -> bool {
         self == Self::Extensions
     }
+
+    /// The line under the section's title, where the section's rows depend on a grant.
+    pub fn note(self) -> Option<&'static str> {
+        match self {
+            Self::Sources => {
+                Some("Connecting a provider needs your grant on the provider's own page.")
+            }
+            _ => None,
+        }
+    }
 }
 
-/// What a planned control does once it has a backing. It is drawn disabled until then.
+/// What a planned control does once it has a backing. It is drawn disabled until then, and holds
+/// or sends nothing. A value is shown only where the design documents it as the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Planned {
+    /// An on-off switch.
     Switch,
-    /// A text value, shown as it is.
-    Text(&'static str),
-    /// A short list of options; the value shown is the first one.
+    /// Short segmented options; the first one is shown as the choice.
     Choice(&'static [&'static str]),
+    /// A dropdown, with the default shown when there is one.
+    Select(Option<&'static str>),
+    /// A dropdown and a ghost action beside it.
+    SelectAction(Option<&'static str>, &'static str),
+    /// Segmented options and a button beside them.
+    ChoiceAction(&'static [&'static str], &'static str),
+    /// A text field, with the default shown when there is one.
+    Text(Option<&'static str>),
+    /// A number field with its stepper and unit, with the default shown when there is one.
+    Number {
+        value: Option<&'static str>,
+        unit: &'static str,
+    },
+    /// A slider that shows `value`, with its knob at `percent` of the way along.
+    Slider { value: &'static str, percent: u8 },
+    /// The six accent presets and a custom colour.
+    Swatches,
+    /// One checkbox per option, each shown.
+    Checkboxes(&'static [&'static str]),
+    /// A button.
     Action(&'static str),
+    /// A link row that opens a sub-page.
     Link,
-    ReadOnly(&'static str),
+    /// A row with no control; its status says what is missing.
+    Status,
 }
 
 /// What a row is: backed by the service or the bridge, or planned for a later layer.
@@ -104,7 +138,7 @@ pub struct RowSpec {
 
 const GENERAL: &[RowSpec] = &[
     RowSpec {
-        label: "Conversations folder",
+        label: "Conversations without a project",
         helper: "Where conversations without a project are saved.",
         body: RowBody::ConversationsFolder,
     },
@@ -114,6 +148,11 @@ const GENERAL: &[RowSpec] = &[
         body: RowBody::WorkspaceFolder,
     },
     RowSpec {
+        label: "Editor defaults",
+        helper: "The editor that opens a workspace, and its defaults.",
+        body: RowBody::Planned(Planned::Action("Choose")),
+    },
+    RowSpec {
         label: "MassOrca account",
         helper: "Sign in to use your account on this PC.",
         body: RowBody::Planned(Planned::Action("Sign in")),
@@ -121,7 +160,10 @@ const GENERAL: &[RowSpec] = &[
     RowSpec {
         label: "Updates",
         helper: "Release channel for MassOrca.",
-        body: RowBody::Planned(Planned::Choice(&["Stable", "Preview"])),
+        body: RowBody::Planned(Planned::ChoiceAction(
+            &["Stable", "Preview"],
+            "Check for updates",
+        )),
     },
     RowSpec {
         label: "Setup checklist",
@@ -139,7 +181,37 @@ const AGENTS: &[RowSpec] = &[
     RowSpec {
         label: "Default agent",
         helper: "The agent that starts a new session.",
-        body: RowBody::Planned(Planned::Choice(&["Claude", "Codex", "OpenCode"])),
+        body: RowBody::Planned(Planned::Select(None)),
+    },
+    RowSpec {
+        label: "Claude",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "Codex",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "Antigravity",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "Gemini",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "OpenCode",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "Cursor",
+        helper: "Detected, missing or signed out on this PC.",
+        body: RowBody::Planned(Planned::Status),
     },
     RowSpec {
         label: "Agent accounts and usage",
@@ -147,14 +219,32 @@ const AGENTS: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Link),
     },
     RowSpec {
-        label: "Delegation depth limit",
-        helper: "How many levels of child sessions an agent may start, from 1 to 5.",
-        body: RowBody::Planned(Planned::Text("3")),
+        label: "Computer use",
+        helper: "Lets an agent use the screen, mouse and keyboard.",
+        body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "Browser access",
+        helper: "Lets an agent drive the browser.",
+        body: RowBody::Planned(Planned::Switch),
     },
     RowSpec {
         label: "Keep the computer awake",
         helper: "Stops the PC from sleeping while an agent runs.",
         body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "Session search",
+        helper: "Searches inside past agent sessions.",
+        body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "Delegation depth limit",
+        helper: "How many levels of child sessions an agent may start, from 1 to 5.",
+        body: RowBody::Planned(Planned::Number {
+            value: Some("3"),
+            unit: "levels",
+        }),
     },
 ];
 
@@ -165,9 +255,19 @@ const APPEARANCE: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Choice(&["System", "Dark", "Light"])),
     },
     RowSpec {
+        label: "Import theme",
+        helper: "Warp and Ghostty themes. A theme below the contrast minimum is rejected.",
+        body: RowBody::Planned(Planned::Action("Import")),
+    },
+    RowSpec {
+        label: "Layout preset",
+        helper: "Switch between saved layouts, or save this one.",
+        body: RowBody::Planned(Planned::SelectAction(None, "Save as preset")),
+    },
+    RowSpec {
         label: "Accent colour",
         helper: "Lavender is the default accent.",
-        body: RowBody::Planned(Planned::Action("Choose")),
+        body: RowBody::Planned(Planned::Swatches),
     },
     RowSpec {
         label: "Density",
@@ -177,12 +277,36 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Text size",
         helper: "Scales the interface text from 90% to 130%.",
-        body: RowBody::Planned(Planned::Text("100%")),
+        body: RowBody::Planned(Planned::Slider {
+            value: "100%",
+            percent: 25,
+        }),
+    },
+    RowSpec {
+        label: "Interface font",
+        helper: "Font for the interface.",
+        body: RowBody::Planned(Planned::Select(Some(FONT_SANS))),
+    },
+    RowSpec {
+        label: "Monospace font",
+        helper: "Font for code, terminals and paths.",
+        body: RowBody::Planned(Planned::Select(Some(FONT_MONO))),
     },
     RowSpec {
         label: "Session summary",
         helper: "Shows only the cards that have information.",
         body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "Status bar items",
+        helper: "What the status bar shows.",
+        body: RowBody::Planned(Planned::Checkboxes(&[
+            "Agent status",
+            "Memory",
+            "Terminals",
+            "Ports",
+            "Hosts",
+        ])),
     },
 ];
 
@@ -190,7 +314,7 @@ const INPUT: &[RowSpec] = &[
     RowSpec {
         label: "Tab width",
         helper: "Spaces inserted for a tab in the code editor.",
-        body: RowBody::Planned(Planned::Text("4")),
+        body: RowBody::Planned(Planned::Text(Some("4"))),
     },
     RowSpec {
         label: "Keyboard shortcuts",
@@ -203,22 +327,22 @@ const TERMINAL: &[RowSpec] = &[
     RowSpec {
         label: "Terminal font",
         helper: "Font used in terminal panes.",
-        body: RowBody::Planned(Planned::Text("Cascadia Mono")),
+        body: RowBody::Planned(Planned::Text(Some("Cascadia Mono"))),
     },
     RowSpec {
         label: "Scrollback lines",
         helper: "How many lines a terminal keeps.",
-        body: RowBody::Planned(Planned::Text("10000")),
+        body: RowBody::Planned(Planned::Text(Some("10000"))),
     },
     RowSpec {
         label: "Shell",
         helper: "The shell a new terminal starts.",
-        body: RowBody::Planned(Planned::Text("PowerShell")),
+        body: RowBody::Planned(Planned::Text(Some("PowerShell"))),
     },
     RowSpec {
         label: "Browser home page",
         helper: "The page a new browser tab opens.",
-        body: RowBody::Planned(Planned::Text("about:blank")),
+        body: RowBody::Planned(Planned::Text(Some("about:blank"))),
     },
 ];
 
@@ -302,14 +426,14 @@ const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Network proxy",
         helper: "Address of a proxy server, if this network needs one.",
-        body: RowBody::Planned(Planned::Text("None")),
+        body: RowBody::Planned(Planned::Text(Some("None"))),
     },
 ];
 
 const ROUTING: &[RowSpec] = &[RowSpec {
     label: "Routing decisions",
     helper: "Why each Bot Teams request went to the bot it did.",
-    body: RowBody::Planned(Planned::ReadOnly("None yet")),
+    body: RowBody::Planned(Planned::Status),
 }];
 
 /// The rows a section lists, in order.
@@ -392,6 +516,10 @@ pub fn hit_line(hits: &[Hit], selected: SettingsSection) -> String {
 mod tests {
     use super::*;
 
+    fn bodies(section: SettingsSection) -> Vec<RowBody> {
+        rows(section).iter().map(|row| row.body).collect()
+    }
+
     #[test]
     fn the_twelve_sections_keep_the_spec_order_and_names() {
         assert_eq!(SettingsSection::ALL.len(), 12);
@@ -421,7 +549,8 @@ mod tests {
     #[test]
     fn search_ignores_case_and_looks_at_names_helpers_and_section_names() {
         let theme: Vec<&str> = search("THEME").iter().map(|hit| hit.row().label).collect();
-        assert_eq!(theme, vec!["Theme"]);
+        assert!(theme.contains(&"Theme"));
+        assert!(theme.contains(&"Import theme"));
         let shortcut: Vec<&str> = search("shortcut")
             .iter()
             .map(|hit| hit.row().label)
@@ -440,16 +569,74 @@ mod tests {
 
     #[test]
     fn the_hit_line_counts_in_this_section_or_in_sections() {
-        let theme = search("theme");
+        let density = search("density");
         assert_eq!(
-            hit_line(&theme, SettingsSection::Appearance),
+            hit_line(&density, SettingsSection::Appearance),
             "1 match in this section"
         );
         assert_eq!(
-            hit_line(&theme, SettingsSection::General),
+            hit_line(&density, SettingsSection::General),
             "1 match in 1 section"
         );
         let spread = search("on");
         assert!(hit_line(&spread, SettingsSection::General).ends_with("sections"));
+    }
+
+    #[test]
+    fn the_conversations_row_is_named_as_the_spec_names_it() {
+        assert_eq!(
+            rows(SettingsSection::General)[0].label,
+            "Conversations without a project"
+        );
+    }
+
+    #[test]
+    fn the_hosts_list_has_this_pc_only_until_a_remote_host_layer_exists() {
+        assert_eq!(rows(SettingsSection::Hosts)[0].body, RowBody::ThisPc);
+        assert!(
+            rows(SettingsSection::Hosts)
+                .iter()
+                .all(|row| !row.label.contains("VPS"))
+        );
+    }
+
+    #[test]
+    fn the_appearance_section_lists_the_spec_control_types() {
+        let appearance = bodies(SettingsSection::Appearance);
+        assert!(appearance.contains(&RowBody::Planned(Planned::Swatches)));
+        assert!(appearance.contains(&RowBody::Planned(Planned::Slider {
+            value: "100%",
+            percent: 25,
+        })));
+        assert!(appearance.contains(&RowBody::Planned(Planned::SelectAction(
+            None,
+            "Save as preset"
+        ))));
+        assert!(appearance.contains(&RowBody::Planned(Planned::Checkboxes(&[
+            "Agent status",
+            "Memory",
+            "Terminals",
+            "Ports",
+            "Hosts",
+        ]))));
+    }
+
+    #[test]
+    fn the_agents_section_lists_one_availability_row_per_agent() {
+        let statuses = rows(SettingsSection::Agents)
+            .iter()
+            .filter(|row| row.body == RowBody::Planned(Planned::Status))
+            .count();
+        assert_eq!(statuses, 6);
+    }
+
+    #[test]
+    fn the_sources_section_says_that_connecting_needs_the_providers_grant() {
+        assert!(
+            SettingsSection::Sources
+                .note()
+                .is_some_and(|note| note.contains("grant"))
+        );
+        assert_eq!(SettingsSection::General.note(), None);
     }
 }
