@@ -271,6 +271,46 @@ impl fmt::Debug for Sid {
     }
 }
 
+/// This process's token user (TokenUser).
+fn token_user() -> io::Result<Sid> {
+    let token = current_process_token()?;
+    let user = token_information(&token, TokenUser)?;
+    // SAFETY: the buffer starts with a TOKEN_USER whose SID points into the same buffer, alive here.
+    unsafe { Sid::from_psid((*user.as_ptr().cast::<TOKEN_USER>()).User.Sid) }
+}
+
+/// The SIDs a path's DACL grants, one per entry, in order. An entry that is not an allow is listed as the null SID
+/// (`S-1-0-0`), which no owner check accepts.
+pub fn dacl_grantees(path: &Path) -> io::Result<Vec<Sid>> {
+    Ok(dacl_entries(path)?
+        .1
+        .into_iter()
+        .map(|entry| entry.sid)
+        .collect())
+}
+
+/// The error for a directory whose owner is not acceptable. One owned by Administrators was left by an elevated run;
+/// the message says how to fix it.
+fn owner_refusal(dir: &Path, owner: &Sid) -> io::Error {
+    let administrators = Sid::parse(ADMINISTRATORS).ok();
+    let message = if administrators.is_some_and(|administrators| *owner == administrators) {
+        format!(
+            "{}: owned by Administrators ({ADMINISTRATORS}) from an elevated run; run MassOrca elevated once, which \
+             makes it yours, or take ownership of it",
+            dir.display()
+        )
+    } else {
+        format!(
+            "{}: owned by {owner}, not by this user, its token's default owner or SYSTEM",
+            dir.display()
+        )
+    };
+    io::Error::new(io::ErrorKind::PermissionDenied, message)
+}
+
+/// BUILTIN\Administrators, the default owner of an elevated administrator's new objects.
+const ADMINISTRATORS: &str = "S-1-5-32-544";
+
 /// The owners this process accepts: its token's user (TokenUser), its token's default owner (TokenOwner) and SYSTEM.
 fn accepted_owners() -> io::Result<Vec<Sid>> {
     let token = current_process_token()?;
@@ -338,9 +378,12 @@ pub fn dir_owner_is_acceptable(handle: &File) -> io::Result<bool> {
     Ok(owner_matches(&handle_owner(handle)?, &accepted_owners()?))
 }
 
-/// Replaces `dir`'s DACL with [`owner_only_dir_sddl`] and cuts inheritance from its parent; children that inherit
-/// get the owner-only entries. A directory made with [`create_dir_owner_only`] needs no call to this.
+/// Replaces `dir`'s DACL with [`owner_only_dir_sddl`], cuts inheritance from its parent, and makes the token user its
+/// owner (a process may always assign its own user SID): children that inherit get the owner-only entries, and a
+/// directory an elevated run left owned by Administrators becomes the user's, so a non-elevated run accepts it too. A
+/// directory made with [`create_dir_owner_only`] needs no call to this.
 pub fn restrict_dir_to_owner(dir: &Path) -> io::Result<()> {
+    let user = token_user()?;
     let descriptor = owner_only_dir_descriptor()?;
     let mut present = 0;
     let mut acl: *mut ACL = ptr::null_mut();
@@ -361,14 +404,16 @@ pub fn restrict_dir_to_owner(dir: &Path) -> io::Result<()> {
         return Err(io::Error::other("the owner-only descriptor has no DACL"));
     }
     let name = wide_path(dir)?;
-    // SAFETY: `name` is a NUL-terminated path that lives through the call, and `acl` points into `descriptor`, which
-    // also outlives it; owner, group and SACL are not set, so their null pointers are not read.
+    // SAFETY: `name` is a NUL-terminated path, `user` a valid SID and `acl` points into `descriptor`; all outlive the
+    // call, which only reads them. Group and SACL are not set, so their null pointers are not read.
     let status = unsafe {
         SetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.as_psid(),
             ptr::null_mut(),
             acl,
             ptr::null(),
@@ -461,17 +506,21 @@ impl PinnedDir {
             ));
         }
         let pinned = Self { file };
-        if !dir_owner_is_acceptable(&pinned.file)? {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "{}: owned by {}, not by this user, its token's default owner or SYSTEM",
-                    dir.display(),
-                    pinned.owner()?
-                ),
-            ));
+        let owner = pinned.owner_sid()?;
+        if !owner_matches(&owner, &accepted_owners()?) {
+            return Err(owner_refusal(dir, &owner));
         }
         Ok(pinned)
+    }
+
+    /// The pinned directory's owner, read through the handle.
+    pub fn owner_sid(&self) -> io::Result<Sid> {
+        handle_owner(&self.file)
+    }
+
+    /// Whether the token user itself owns the pinned directory (not only an acceptable owner).
+    pub fn owned_by_token_user(&self) -> io::Result<bool> {
+        Ok(owner_matches(&self.owner_sid()?, &[token_user()?]))
     }
 
     /// The SID of the pinned directory's owner, read through the handle.
@@ -525,8 +574,8 @@ fn wide_path(path: &Path) -> io::Result<U16CString> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DaclEntry, PinnedDir, Sid, create_dir_owner_only, dacl_is_owner_only, dacl_sddl,
-        dir_owner_is_acceptable, has_owner_only_dacl, owner_matches, owner_only_dir_sddl,
+        DaclEntry, PinnedDir, Sid, create_dir_owner_only, dacl_entries, dacl_is_owner_only,
+        dir_owner_is_acceptable, has_owner_only_dacl, owner_matches, owner_refusal,
         restrict_dir_to_owner,
     };
 
@@ -620,19 +669,63 @@ mod tests {
         ));
     }
 
+    /// A directory made owner-only names the token user as owner, elevated or not; a plain one is owned by the
+    /// token's default owner (Administrators when elevated), which this process accepts.
     #[test]
     fn a_directory_this_user_creates_is_owned_by_it_and_pinned() {
+        let user = sid(&current_user_sid().unwrap());
         let parent = tempfile::tempdir().unwrap();
         let dir = parent.path().join("owned");
         create_dir_owner_only(&dir).unwrap();
         let pin = PinnedDir::open(&dir).unwrap();
-        assert_eq!(pin.owner().unwrap(), current_user_sid().unwrap());
+        assert!(owner_matches(
+            &pin.owner_sid().unwrap(),
+            std::slice::from_ref(&user)
+        ));
         let plain = parent.path().join("plain");
         std::fs::create_dir(&plain).unwrap();
-        assert_eq!(
-            PinnedDir::open(&plain).unwrap().owner().unwrap(),
-            current_user_sid().unwrap()
-        );
+        let pinned = PinnedDir::open(&plain).unwrap();
+        assert!(dir_owner_is_acceptable(&pinned.file).unwrap());
+    }
+
+    /// A non-elevated token's accepted owners: its user twice (TokenUser and TokenOwner) and SYSTEM.
+    fn not_elevated(user: &str) -> Vec<Sid> {
+        vec![sid(user), sid(user), sid("S-1-5-18")]
+    }
+
+    #[test]
+    fn an_elevated_token_accepts_a_user_owned_and_an_administrators_owned_directory() {
+        let user = "S-1-5-21-1-2-3-1001";
+        assert!(owner_matches(&sid(user), &elevated(user)));
+        assert!(owner_matches(&sid("S-1-5-32-544"), &elevated(user)));
+    }
+
+    #[test]
+    fn a_non_elevated_token_refuses_an_administrators_owned_directory() {
+        let user = "S-1-5-21-1-2-3-1001";
+        assert!(owner_matches(&sid(user), &not_elevated(user)));
+        assert!(!owner_matches(&sid("S-1-5-32-544"), &not_elevated(user)));
+    }
+
+    #[test]
+    fn a_refused_administrators_owner_says_how_to_fix_it() {
+        let dir = std::path::Path::new("C:/profiles/default/agents");
+        let error = owner_refusal(dir, &sid("S-1-5-32-544"));
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let text = error.to_string();
+        assert!(text.contains("Administrators"), "{text}");
+        assert!(text.contains("elevated"), "{text}");
+        assert!(text.contains("take ownership"), "{text}");
+        let other = owner_refusal(dir, &sid("S-1-5-21-9-9-9-1005")).to_string();
+        assert!(!other.contains("elevated"), "{other}");
+    }
+
+    #[test]
+    fn a_user_and_system_dacl_is_accepted_by_both_kinds_of_token() {
+        let user = "S-1-5-21-1-2-3-1001";
+        let entries = [allow(user), allow("SY")];
+        assert!(dacl_is_owner_only(true, &entries, &elevated(user)));
+        assert!(dacl_is_owner_only(true, &entries, &not_elevated(user)));
     }
 
     #[test]
@@ -661,15 +754,17 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let dir = parent.path().join("secret");
         create_dir_owner_only(&dir).unwrap();
-        assert!(
-            has_owner_only_dacl(&dir).unwrap(),
-            "{}",
-            dacl_sddl(&dir).unwrap()
-        );
+        assert!(has_owner_only_dacl(&dir).unwrap());
         std::fs::write(dir.join("file"), b"fake").unwrap();
-        let file = dacl_sddl(&dir.join("file")).unwrap();
-        for other in [";AU)", ";BU)", ";WD)", ";BA)"] {
-            assert!(!file.contains(other), "{file}");
+        let user_and_system = [sid(&current_user_sid().unwrap()), sid("SY")];
+        let (_, file) = dacl_entries(&dir.join("file")).unwrap();
+        assert!(!file.is_empty());
+        for entry in &file {
+            assert!(
+                entry.allowed && owner_matches(&entry.sid, &user_and_system),
+                "{:?}",
+                entry.sid
+            );
         }
         let again = create_dir_owner_only(&dir).unwrap_err();
         assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
@@ -725,29 +820,45 @@ mod tests {
         assert!(!dacl_is_owner_only(true, &[denied], &accepted));
     }
 
+    /// After `restrict_dir_to_owner` a directory is owned by the token user (whatever the token's default owner) and
+    /// allows only accepted owners; its new files inherit entries for the user and SYSTEM only. All compared as SIDs.
     #[test]
     fn a_restricted_directory_has_a_protected_dacl_for_the_owner_and_system_only() {
+        let user = sid(&current_user_sid().unwrap());
         let parent = tempfile::tempdir().unwrap();
         let dir = parent.path().join("secret");
         std::fs::create_dir(&dir).unwrap();
         restrict_dir_to_owner(&dir).unwrap();
         std::fs::write(dir.join("file"), b"fake").unwrap();
 
-        let sid = current_user_sid().unwrap();
-        let sddl = dacl_sddl(&dir).unwrap();
-        assert!(sddl.starts_with("D:P"), "{sddl}");
-        assert!(sddl.contains(&sid), "{sddl}");
-        assert!(sddl.contains(";;;SY)"), "{sddl}");
-        let file = dacl_sddl(&dir.join("file")).unwrap();
-        for granted in [&sddl, &file] {
-            for other in [";AU)", ";BU)", ";WD)", ";BA)"] {
-                assert!(!granted.contains(other), "{granted}");
-            }
+        let owner = PinnedDir::open(&dir).unwrap().owner_sid().unwrap();
+        assert!(
+            owner_matches(&owner, std::slice::from_ref(&user)),
+            "owner {owner}"
+        );
+        assert!(has_owner_only_dacl(&dir).unwrap());
+        let user_and_system = [user.clone(), sid("SY")];
+        let (protected, entries) = dacl_entries(&dir).unwrap();
+        assert!(protected);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| owner_matches(&entry.sid, std::slice::from_ref(&user)))
+        );
+        let (_, file) = dacl_entries(&dir.join("file")).unwrap();
+        assert!(!file.is_empty());
+        for entry in entries.iter().chain(&file) {
+            assert!(entry.allowed, "{:?}", entry.sid);
+            assert!(
+                owner_matches(&entry.sid, &user_and_system),
+                "{:?}",
+                entry.sid
+            );
         }
         assert!(
-            file.contains(&sid),
-            "the file inherits the owner entry: {file}"
+            file.iter()
+                .any(|entry| owner_matches(&entry.sid, std::slice::from_ref(&user))),
+            "the file inherits the user's entry"
         );
-        assert!(owner_only_dir_sddl().unwrap().starts_with("D:P("));
     }
 }
