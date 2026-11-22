@@ -62,6 +62,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
   - `ws-session`, `ws-start`, `sh-empty-app`: Sidebar toggle, Back and Forward icons, then the session title.
 - No artboard exists for Pairing, Memory, Files or the team project page. Pairing draws the icon Back. Memory, Files and the project page take the team pattern, `{team} · {page}`.
 - No keyboard shortcut for Back exists in `shell/actions.rs`, so none was added.
+- Owner decision: a page whose artboard draws Back keeps it. Full pages keep the Back that their artboards show, labelled or icon.
 
 **Superseded by owner ruling (branch `desktop/status-bar-memory`)**
 - A7 is superseded. The Memory label is restored: "Memory 1.22 GB" (`sh-empty-app`). The copy follows the artboards: "Agents: idle" with no agent running, "2 hosts", "1 of 2 hosts unreachable" (`sh-host-unreachable`), and in Bot Teams "Terminals 0", "Ports 0", "1 host unreachable" (`bt-board`).

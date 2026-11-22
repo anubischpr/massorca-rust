@@ -5,6 +5,8 @@ mod config;
 mod config_keys;
 mod devices;
 mod events;
+pub(crate) mod extension_process;
+mod extensions;
 mod git;
 mod projects;
 mod secret_params;
@@ -43,6 +45,7 @@ pub(crate) fn register_core(
     handles.extend(terminals::register(registries)?);
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
+    handles.extend(extensions::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);

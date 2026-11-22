@@ -38,6 +38,13 @@ impl Git {
         discover_with(std::env::var_os(BINARY_ENV))
     }
 
+    /// The git `discover` would use (`MASSORCA_GIT`, else `git` on the path), without running it. A binary that is
+    /// missing or broken is reported by each call that needs it, so a start does not wait for a `git --version`.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::with_binary(resolve_binary(std::env::var_os(BINARY_ENV)))
+    }
+
     /// Replaces the timeout of read-only queries.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {

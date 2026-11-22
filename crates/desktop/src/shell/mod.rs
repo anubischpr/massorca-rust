@@ -5,6 +5,7 @@ mod add_host;
 mod bring_back;
 mod canvas;
 mod debug_focus;
+mod debug_page;
 mod diff_page;
 mod marketplace;
 mod pairing;
@@ -32,7 +33,7 @@ mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
-use crate::launch_options::DebugFocus;
+use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
 use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
@@ -73,6 +74,8 @@ mod add_host_tests;
 mod bring_back_tests;
 #[cfg(test)]
 mod debug_focus_tests;
+#[cfg(test)]
+mod debug_page_tests;
 #[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
@@ -145,6 +148,8 @@ pub struct Shell {
     _debug_input: Option<Subscription>,
     /// The debug focus the launch asked for, if any; the start page composer logs for it.
     debug_focus: Option<DebugFocus>,
+    /// The page or dialog `--page` asks for, until it opens or falls back.
+    debug_page: Option<DebugPage>,
     /// Each workspace's start page composer, kept so its draft survives redraws.
     start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
@@ -368,6 +373,7 @@ impl Shell {
             _store_changes: store_changes,
             _debug_input: None,
             debug_focus: None,
+            debug_page: None,
             start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
@@ -517,6 +523,7 @@ impl Render for Shell {
         let theme = *cx.theme();
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
+        self.drive_debug_page(window, cx);
         let shell = cx.entity().downgrade();
         let show_controls = title_bar::draws_window_controls(
             window.window_decorations(),
