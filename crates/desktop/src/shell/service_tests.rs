@@ -115,7 +115,7 @@ fn next_remove(
 }
 
 #[gpui::test]
-fn the_service_fills_the_sidebar_and_shows_its_status_item(cx: &mut TestAppContext) {
+fn the_service_fills_the_sidebar_and_the_hosts_item_counts_its_hosts(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[("p1", "alpha")]);
     rig.shell.read_with(cx, |shell, _| {
         let projects = &shell.model().snapshot().projects;
@@ -123,7 +123,8 @@ fn the_service_fills_the_sidebar_and_shows_its_status_item(cx: &mut TestAppConte
         assert_eq!(projects[0].hosts[0].workspaces[0].name, "fix-login");
         assert_eq!(shell.model().snapshot().service_notice, None);
     });
-    assert!(cx.debug_bounds("status-service").is_some());
+    assert!(cx.debug_bounds("status-hosts").is_some());
+    assert!(cx.debug_bounds("status-service").is_none());
     assert!(
         cx.debug_bounds("service-banner").is_none(),
         "connected shows no banner"

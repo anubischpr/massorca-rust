@@ -8,19 +8,16 @@ pub enum StatusItem {
     Memory,
     Terminals,
     Ports,
-    /// The link to the service (decision 0028). The bar shows it only for service data.
-    Service,
     Hosts,
 }
 
 impl StatusItem {
     /// Every item, in bar order.
-    pub const ALL: [StatusItem; 6] = [
+    pub const ALL: [StatusItem; 5] = [
         StatusItem::Agents,
         StatusItem::Memory,
         StatusItem::Terminals,
         StatusItem::Ports,
-        StatusItem::Service,
         StatusItem::Hosts,
     ];
 
@@ -31,7 +28,6 @@ impl StatusItem {
             StatusItem::Memory => "Memory",
             StatusItem::Terminals => "Terminals",
             StatusItem::Ports => "Ports",
-            StatusItem::Service => "Service",
             StatusItem::Hosts => "Hosts",
         }
     }
@@ -60,13 +56,11 @@ impl StatusItemVisibility {
     }
 }
 
-/// The items the visibility menu lists: every item, except the service's when the data does not
-/// come from a service.
-pub fn visibility_menu_items(service_linked: bool) -> Vec<StatusItem> {
-    StatusItem::ALL
-        .into_iter()
-        .filter(|item| service_linked || *item != StatusItem::Service)
-        .collect()
+/// The items the visibility menu lists: the bar's five items for every data source. The argument
+/// says whether the data comes from a service; the service link is no bar item of its own now
+/// (it shows in the hosts item), so the list does not depend on it.
+pub fn visibility_menu_items(_service_linked: bool) -> Vec<StatusItem> {
+    StatusItem::ALL.to_vec()
 }
 
 #[cfg(test)]
@@ -95,8 +89,8 @@ mod tests {
     }
 
     #[test]
-    fn the_service_item_is_listed_only_for_service_data() {
-        assert!(!visibility_menu_items(false).contains(&StatusItem::Service));
+    fn the_menu_lists_the_bar_items_for_every_data_source() {
+        assert_eq!(visibility_menu_items(false), StatusItem::ALL.to_vec());
         assert_eq!(visibility_menu_items(true), StatusItem::ALL.to_vec());
     }
 
@@ -105,14 +99,7 @@ mod tests {
         let labels: Vec<&str> = StatusItem::ALL.into_iter().map(StatusItem::label).collect();
         assert_eq!(
             labels,
-            [
-                "Agent status",
-                "Memory",
-                "Terminals",
-                "Ports",
-                "Service",
-                "Hosts"
-            ]
+            ["Agent status", "Memory", "Terminals", "Ports", "Hosts"]
         );
     }
 }

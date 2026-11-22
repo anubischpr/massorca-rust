@@ -100,7 +100,7 @@ pub fn service_status(connection: &ConnectionState, now: Instant) -> ServiceStat
         },
         ConnectionState::Unreachable { reason } => ServiceStatus {
             tone: ServiceTone::Unreachable,
-            text: "Service unreachable".to_owned(),
+            text: "Service not running".to_owned(),
             tooltip: reason.clone(),
         },
     }
@@ -321,7 +321,7 @@ mod tests {
         assert!(notice.retry);
         assert_eq!(
             service_status(&state.connection, now).text,
-            "Service unreachable"
+            "Service not running"
         );
         let snapshot = service_snapshot(&state, now);
         assert_eq!(snapshot.status.hosts_text(), "1 of 1 hosts unreachable");

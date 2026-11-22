@@ -19,7 +19,8 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
-/// The Status bar: 24 px on the Canvas surface with caption text. Items share one hover and
+/// The Status bar: 24 px on the Canvas surface with caption text. Agent status sits at the left;
+/// memory, terminals, ports and hosts at the right (StatusBar spec). Items share one hover and
 /// press treatment and show their full value in a tooltip (StatusItem spec). Right click, or the
 /// menu key, opens the visibility menu; the items it hides are left out (StatusBar spec).
 pub(super) fn status_bar(
@@ -78,11 +79,12 @@ pub(super) fn status_bar(
             theme,
         ));
     }
+    bar = bar.child(div().flex_1());
     if visible.is_shown(StatusItem::Memory) {
         bar = bar.child(item(
             "status-memory",
             None,
-            format!("Memory {}", status.memory),
+            status.memory.clone(),
             format!("Memory {}", status.memory),
             secondary,
             theme,
@@ -108,38 +110,10 @@ pub(super) fn status_bar(
             theme,
         ));
     }
-    bar = bar.child(div().flex_1());
-    if let Some(service) = service.filter(|_| visible.is_shown(StatusItem::Service)) {
-        bar = bar.child(service_item(service, theme));
-    }
     if visible.is_shown(StatusItem::Hosts) {
-        bar = bar.child(hosts_item(status, theme));
+        bar = bar.child(hosts_item(status, service, theme));
     }
     bar
-}
-
-/// The service item: a dot in the colour of the link's state and a short word. The tooltip gives
-/// the server, the retry time or the reason.
-fn service_item(service: &ServiceStatus, theme: &Theme) -> impl IntoElement {
-    let dot = div()
-        .flex_none()
-        .size(px(SIZE_INDICATOR_DOT))
-        .rounded(px(RADIUS_FULL));
-    let status = &theme.palette.status;
-    let dot = match service.tone {
-        ServiceTone::Ok => dot.bg(status.success_solid),
-        ServiceTone::Busy => dot.border_1().border_color(theme.palette.border.strong),
-        ServiceTone::Warning => dot.bg(status.warning_solid),
-        ServiceTone::Unreachable => dot.bg(status.danger_solid),
-    };
-    item(
-        "status-service",
-        Some(dot.into_any_element()),
-        service.text.clone(),
-        service.tooltip.clone(),
-        theme.palette.text.secondary,
-        theme,
-    )
 }
 
 /// One status item: an optional glyph and a caption. Its hover fill sits on the Canvas.
@@ -176,10 +150,16 @@ fn item(
     row.child(div().min_w_0().truncate().child(text))
 }
 
-/// The hosts item: a dot that is solid when every host is reached and a ring when one is not,
-/// and the count dimmed when a host is unreachable (D-SH-05).
-fn hosts_item(status: &StatusBarModel, theme: &Theme) -> impl IntoElement {
-    let unreachable = status.hosts_unreachable > 0;
+/// The hosts item. While the service link is not up it names that state instead of a host count
+/// (D-SH-05, "Service not running"). Its dot is solid when every host is reached and a ring when
+/// one is not.
+fn hosts_item(
+    status: &StatusBarModel,
+    service: Option<&ServiceStatus>,
+    theme: &Theme,
+) -> AnyElement {
+    let link = service.filter(|link| link.tone != ServiceTone::Ok);
+    let unreachable = link.is_some() || status.hosts_unreachable > 0;
     let dot = div()
         .flex_none()
         .size(px(SIZE_INDICATOR_DOT))
@@ -194,14 +174,19 @@ fn hosts_item(status: &StatusBarModel, theme: &Theme) -> impl IntoElement {
     } else {
         theme.palette.text.secondary
     };
+    let (text, tip) = match link {
+        Some(link) => (link.text.clone(), link.tooltip.clone()),
+        None => (status.hosts_text(), status.hosts_tooltip()),
+    };
     item(
         "status-hosts",
         Some(dot.into_any_element()),
-        status.hosts_text(),
-        status.hosts_tooltip(),
+        text,
+        tip,
         color,
         theme,
     )
+    .into_any_element()
 }
 
 fn glyph(name: IconName, theme: &Theme) -> AnyElement {
