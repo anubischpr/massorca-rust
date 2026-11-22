@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -120,6 +121,8 @@ impl CommandRunner for HostPrograms {
 }
 
 impl HostPrograms {
+    /// One run. The log gets the argv line and the exit status (or the timeout) whatever happens, and up to
+    /// `max_log_bytes` of output of this run; an earlier run's bytes never count against it.
     fn run_capped(
         &self,
         argv: &[String],
@@ -130,32 +133,43 @@ impl HostPrograms {
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the command is empty"))?;
-        let resolved = resolve(program, &self.search_env()).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("`{program}` was not found on PATH"),
-            )
-        })?;
+        if program.contains(['/', '\\']) || Path::new(program).is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("`{program}` names a path; a vendor command names a program only"),
+            ));
+        }
         let file = OpenOptions::new().create(true).append(true).open(log)?;
-        let used = file.metadata()?.len();
-        let sink = Arc::new(Mutex::new(Sink::new(
-            file,
-            max_log_bytes.saturating_sub(used),
-        )));
+        let sink = Arc::new(Mutex::new(Sink::new(file, max_log_bytes)));
         sink.lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .write(format!("$ {}\n", argv.join(" ")).as_bytes());
+            .line(&format!("$ {}", argv.join(" ")));
+        let fail = |error: io::Error| {
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .line(&format!("could not start: {error}"));
+            error
+        };
+        let resolved = resolve(program, &self.search_env()).ok_or_else(|| {
+            fail(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("`{program}` was not found on PATH"),
+            ))
+        })?;
+        // A fresh folder per run, so a command never starts in the service's own working folder.
+        let work = WorkDir::create().map_err(&fail)?;
 
         let mut command = Command::new(&resolved);
         command
             .args(args)
+            .current_dir(work.path())
             .env_clear()
             .envs(self.passed_env())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_window(&mut command);
-        let (mut child, tree) = ProcessTree::spawn(&mut command)?;
+        let (mut child, tree) = ProcessTree::spawn(&mut command).map_err(&fail)?;
         let readers: Vec<Receiver<()>> = [
             child
                 .stdout
@@ -170,13 +184,74 @@ impl HostPrograms {
         .flatten()
         .collect();
 
-        let exit = wait_until(&mut child, tree, Instant::now() + timeout)?;
+        let waited = wait_until(&mut child, tree, Instant::now() + timeout);
         let grace = Instant::now() + OUTPUT_GRACE;
         for reader in readers {
             let _ = reader.recv_timeout(grace.saturating_duration_since(Instant::now()));
         }
-        sink.lock().unwrap_or_else(PoisonError::into_inner).finish();
-        Ok(exit)
+        let mut sink = sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let status = match &waited {
+            Ok(exit) if exit.timed_out => "timed out and was stopped".to_owned(),
+            Ok(exit) => format!(
+                "exit {}",
+                exit.code
+                    .map_or_else(|| "none".to_owned(), |code| code.to_string())
+            ),
+            Err(error) => format!("could not be waited on: {error}"),
+        };
+        sink.line(&status);
+        sink.finish();
+        waited
+    }
+}
+
+/// A fresh folder a vendor command starts in, named for this run and removed when the run ends. It is private to the
+/// service's user where the platform allows it (0062, second review).
+struct WorkDir(PathBuf);
+
+static WORK_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl WorkDir {
+    fn create() -> io::Result<Self> {
+        for _ in 0..16 {
+            let path = std::env::temp_dir().join(format!(
+                "massorca-vendor-{}-{}",
+                std::process::id(),
+                WORK_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            match create_private_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "no free folder name for a vendor command",
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for WorkDir {
+    fn drop(&mut self) {
+        // A process that outlived its command may still hold files open; the folder is then left for the OS.
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
     }
 }
 
@@ -223,17 +298,14 @@ impl ProcessTree {
         Ok((command.spawn()?, Self {}))
     }
 
-    /// The child is assigned to the job as soon as it starts, before a vendor installer gets far enough to start
-    /// anything of its own.
+    /// The child starts suspended inside a kill-on-close job and runs only once it is in the job, so nothing a vendor
+    /// installer starts can escape the job (decision 0062, second review).
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        use std::os::windows::io::AsRawHandle;
-        let child = command.spawn()?;
-        let job = win32job::Job::create_with_limit_info(
-            win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
-        )
-        .ok()
-        .filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
+        // CREATE_NO_WINDOW, which `hide_window` set: the suspended spawn replaces the creation flags.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let (child, job) =
+            massorca_core_remote::windows_job::spawn_in_job(command, CREATE_NO_WINDOW)?;
         if job.is_none() {
             tracing::warn!(
                 "no job object for a vendor command: a timeout ends only the command itself"
@@ -337,6 +409,13 @@ impl Sink {
         }
     }
 
+    /// Writes a line the budget never drops: the argv and the exit status of every run are always logged.
+    fn line(&mut self, text: &str) {
+        if let Some(file) = self.file.as_mut() {
+            let _ = writeln!(file, "{text}");
+        }
+    }
+
     fn finish(&mut self) {
         if let Some(mut file) = self.file.take()
             && self.truncated
@@ -419,7 +498,7 @@ mod tests {
             .run(&strings(&["./planted"]), &log, LONG)
             .expect_err("a relative program is refused");
 
-        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -436,21 +515,71 @@ mod tests {
 
         assert!(exit.success());
         let text = fs::read(&log).expect("the log");
-        assert!(text.len() <= 100, "the log has {} bytes", text.len());
-        assert!(text.ends_with(TRUNCATED_NOTE));
+        // The first line is the argv, always logged; the budget applies to the output after it.
+        let output = text
+            .split(|byte| *byte == b'\n')
+            .skip(1)
+            .collect::<Vec<_>>()
+            .concat();
+        let kept = output.iter().filter(|byte| **byte == b'x').count();
+        assert!(kept <= 100, "{kept} output bytes kept of a budget of 100");
+        assert!(
+            text.windows(TRUNCATED_NOTE.len())
+                .any(|window| window == TRUNCATED_NOTE)
+        );
     }
 
     #[test]
-    fn a_log_already_at_its_cap_gets_nothing_more() {
+    fn each_run_gets_its_own_budget_of_output() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let log = dir.path().join("log");
-        fs::write(&log, [b'a'; 64]).expect("a full log");
+        fs::write(&log, [b'a'; 64]).expect("an earlier run's log");
 
         host()
             .run_capped(&say("late", 0), &log, LONG, 64)
             .expect("it runs");
 
-        assert_eq!(fs::read(&log).expect("the log").len(), 64);
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(text.contains("late"), "{text:?}");
+    }
+
+    #[test]
+    fn the_argv_and_exit_status_are_logged_even_when_the_output_budget_is_spent() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+
+        host()
+            .run_capped(&say(&"y".repeat(300), 3), &log, LONG, 0)
+            .expect("it runs");
+
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(text.starts_with("$ "), "{text:?}");
+        assert!(text.contains("exit 3"), "{text:?}");
+    }
+
+    #[test]
+    fn a_vendor_command_starts_in_a_fresh_folder_removed_after_the_run() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        let pwd = if cfg!(windows) {
+            strings(&["cmd", "/D", "/C", "cd"])
+        } else {
+            strings(&["sh", "-c", "pwd"])
+        };
+
+        host().run(&pwd, &log, LONG).expect("it runs");
+
+        let text = fs::read_to_string(&log).expect("the log");
+        let started_in = text
+            .lines()
+            .map(str::trim)
+            .find(|line| line.contains("massorca-vendor-"))
+            .expect("the folder the command printed");
+        assert_ne!(
+            Path::new(started_in),
+            std::env::current_dir().expect("the service folder")
+        );
+        assert!(!Path::new(started_in).exists(), "the folder is removed");
     }
 
     #[test]
@@ -499,9 +628,19 @@ mod tests {
         let log = dir.path().join("log");
         let script = dir.path().join("vendor.cmd");
         fs::write(&script, "@echo off\r\necho got [%1]\r\n").expect("a batch file");
-        let argv = vec![script.to_string_lossy().into_owned(), "a&b".to_owned()];
+        let argv = vec!["vendor.cmd".to_owned(), "a&b".to_owned()];
+        let found = HostPrograms {
+            env: Some(SearchEnv {
+                path: dir
+                    .path()
+                    .parent()
+                    .map(|_| dir.path().as_os_str().to_owned()),
+                pathext: None,
+            }),
+            service_env: None,
+        };
 
-        let exit = host().run(&argv, &log, LONG).expect("it runs");
+        let exit = found.run(&argv, &log, LONG).expect("it runs");
 
         assert!(exit.success());
         let text = fs::read_to_string(&log).expect("the log");
@@ -573,6 +712,7 @@ mod tests {
         dir.join(TREE_MARK).exists().then_some(dir)
     }
 
+    /// The test binary, run as `name`. Its path is absolute; a test that runs it through the host names it bare instead.
     fn this_test(name: &str) -> Vec<String> {
         let exe = std::env::current_exe().expect("the test binary");
         vec![
@@ -618,18 +758,27 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         fs::write(dir.path().join(TREE_MARK), "").expect("the mark");
         let temp = dir.path().as_os_str();
-        let host = HostPrograms::with_service_env(service_env(&[
-            ("TEMP", temp),
-            ("TMP", temp),
-            ("TMPDIR", temp),
-        ]));
-
+        let exe = std::env::current_exe().expect("the test binary");
+        let mut argv = this_test("tree_installer");
+        argv[0] = exe
+            .file_name()
+            .expect("a file name")
+            .to_string_lossy()
+            .into_owned();
+        // The test binary is named bare and found on the search path of its own folder.
+        let host = HostPrograms {
+            env: Some(SearchEnv {
+                path: exe.parent().map(|folder| folder.as_os_str().to_owned()),
+                pathext: None,
+            }),
+            service_env: Some(service_env(&[
+                ("TEMP", temp),
+                ("TMP", temp),
+                ("TMPDIR", temp),
+            ])),
+        };
         let exit = host
-            .run(
-                &this_test("tree_installer"),
-                &dir.path().join("log"),
-                Duration::from_secs(3),
-            )
+            .run(&argv, &dir.path().join("log"), Duration::from_secs(3))
             .expect("it runs");
 
         assert!(exit.timed_out);
