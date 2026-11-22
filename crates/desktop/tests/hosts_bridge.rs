@@ -2,7 +2,7 @@
 //! Each computer is a temporary profile; nothing reaches a real service or a real host.
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::default_device_name;
@@ -13,8 +13,28 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::methods::devices::{DeviceRevokeParams, PairingCreateParams};
 use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig};
+use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{sleep, timeout};
+
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -112,7 +132,7 @@ fn is_connected(state: &StoreState, name: &str) -> bool {
 
 #[tokio::test]
 async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
-    let server_home = tempfile::tempdir().expect("a temporary home");
+    let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
     let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
     let mut server_state = StoreState::default();
@@ -126,7 +146,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
         .expect("an offer is made");
 
     // This computer has no service of its own: accepting an offer needs only the network.
-    let client_home = tempfile::tempdir().expect("a temporary home");
+    let client_home = temp_home();
     let (client_bridge, client_handle, mut client_updates) = bridge_for(client_home.path());
     let record = client_handle
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
@@ -154,7 +174,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
 
 #[tokio::test]
 async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
-    let server_home = tempfile::tempdir().expect("a temporary home");
+    let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
     let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
     let mut server_state = StoreState::default();
@@ -167,7 +187,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
         .await
         .expect("an offer is made");
 
-    let client_home = tempfile::tempdir().expect("a temporary home");
+    let client_home = temp_home();
     let (client_bridge, client_handle, mut client_updates) = bridge_for(client_home.path());
     client_handle
         .accept_offer(offer.offer.expose().to_owned(), Some("vps".to_owned()))
@@ -211,7 +231,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
 
 #[tokio::test]
 async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
-    let server_home = tempfile::tempdir().expect("a temporary home");
+    let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
     let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
     let mut state = StoreState::default();
@@ -224,7 +244,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
         .await
         .expect("an offer is made");
 
-    let client_home = tempfile::tempdir().expect("a temporary home");
+    let client_home = temp_home();
     let (client_bridge, client_handle, _client_updates) = bridge_for(client_home.path());
     client_handle
         .accept_offer(offer.offer.expose().to_owned(), None)
@@ -280,7 +300,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
 
 #[tokio::test]
 async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
-    let server_home = tempfile::tempdir().expect("a temporary home");
+    let server_home = temp_home();
     let server = start_listening(server_home.path()).await;
     let (server_bridge, server_handle, mut server_updates) = bridge_for(server_home.path());
     let mut state = StoreState::default();
@@ -294,7 +314,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
         .expect("an offer is made");
     let text = offer.offer.expose().to_owned();
 
-    let client_home = tempfile::tempdir().expect("a temporary home");
+    let client_home = temp_home();
     let (client_bridge, client_handle, _client_updates) = bridge_for(client_home.path());
     client_handle
         .accept_offer(text.clone(), Some("vps".to_owned()))
@@ -302,7 +322,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
         .expect("the first redeem pairs");
 
     // The offer works once: a second redeem is refused by the server, with its own sentence.
-    let second_home = tempfile::tempdir().expect("a temporary home");
+    let second_home = temp_home();
     let (second_bridge, second_handle, _second_updates) = bridge_for(second_home.path());
     let refused = second_handle
         .accept_offer(text, Some("again".to_owned()))
@@ -335,7 +355,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
 
 #[tokio::test]
 async fn an_ssh_add_that_is_refused_before_it_starts_keeps_an_empty_log() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let (bridge, handle, _updates) = bridge_for(home.path());
     let binary = home.path().join("massorca");
     std::fs::write(&binary, b"not a program").expect("a stand-in binary");
