@@ -6,9 +6,9 @@ use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
+use crate::extension::ExtensionCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
-use crate::extension::ExtensionCommand;
 use crate::terminal::TerminalCommand;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
