@@ -2,7 +2,7 @@
 //! profile. The attached feed answers the program's queries, as an attached client must (0034).
 //! No window opens: the feed is the emulator the desktop surface uses, without GPUI.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -20,8 +20,28 @@ use massorca_protocol::methods::terminals::{
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 use massorca_server::{RunningService, Service, ServiceConfig};
 use massorca_ui::components::terminal_surface::feed::{FeedEvent, TerminalFeed};
+use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
+
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
+}
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -267,7 +287,7 @@ fn has_row(feed: &TerminalFeed, text: &str) -> bool {
 
 #[tokio::test]
 async fn a_terminal_is_created_attached_typed_into_resized_detached_and_killed() {
-    let home = tempfile::tempdir().expect("a temporary home");
+    let home = temp_home();
     let repo_dir = home.path().join("demo");
     repo(&repo_dir);
     let service = start_service(home.path()).await;
