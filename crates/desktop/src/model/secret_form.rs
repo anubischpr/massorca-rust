@@ -107,8 +107,8 @@ impl SecretForm {
         connected && name_problem(name).is_none() && has_value && self.status != FormStatus::Saving
     }
 
-    /// The request that stores `value` under `name`. The caller clears the field as it sends, so the form keeps no
-    /// copy. A second request while a save is in flight is refused, so the value is sent once.
+    /// The request that stores `value` under `name`. The form keeps no copy: the field holds the value until the
+    /// service stores it or the dialog closes. A second request while a save is in flight is refused, so it is sent once.
     pub fn request(&mut self, name: &str, value: &str) -> Result<SecretSet, &'static str> {
         if self.status == FormStatus::Saving {
             return Err("A save is already on its way.");
@@ -128,7 +128,7 @@ impl SecretForm {
         })
     }
 
-    /// The service refused the save: the form stays open and says why. The value was already sent.
+    /// The service refused the save: the form stays open, says why, and the field keeps the value for a retry.
     pub fn refused(&mut self, sentence: String) {
         self.status = FormStatus::Refused(sentence);
     }
