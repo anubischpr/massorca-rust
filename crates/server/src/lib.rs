@@ -39,6 +39,6 @@ pub use method::{
 pub use owner::Owner;
 pub use permission::{Permission, Principal, authorize};
 pub use registry::{Entry, RegistrationError, RegistrationHandle, Registry};
-pub use service::{RunningService, Service, ServiceConfig};
+pub use service::{RunningService, Service, ServiceConfig, VAULT_PROTECTION_ENV, VaultOptions};
 pub use settings::{SettingDecl, SettingKind, SettingsRegistry};
 pub use shutdown::ShutdownHandle;

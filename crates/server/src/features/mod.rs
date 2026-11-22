@@ -5,6 +5,8 @@ mod config;
 mod events;
 mod git;
 mod projects;
+mod secret_refusals;
+mod secrets;
 mod service;
 mod terminal_attach;
 mod terminals;
@@ -37,6 +39,7 @@ pub(crate) fn register_core(
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
     handles.extend(git::register(registries)?);
+    handles.extend(secrets::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

@@ -11,6 +11,7 @@ use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
 use massorca_core_terminal::{ManagerConfig, TerminalManager};
+use massorca_core_vault::Vault;
 use massorca_core_workspace::Workspaces;
 #[cfg(windows)]
 use massorca_profile::owner_only_security_descriptor;
@@ -40,6 +41,26 @@ pub struct ServiceConfig {
     pub server_version: String,
 }
 
+/// Where the vault keeps a new key (decision 0071).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VaultOptions {
+    /// Keeps a new key in an owner-only file instead of the OS store.
+    pub force_file: bool,
+}
+
+/// Selects the file protection; tests set it so no profile writes into a real keyring.
+pub const VAULT_PROTECTION_ENV: &str = "MASSORCA_VAULT_PROTECTION";
+
+impl VaultOptions {
+    /// `force_file` when `MASSORCA_VAULT_PROTECTION=file`.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            force_file: std::env::var_os(VAULT_PROTECTION_ENV).is_some_and(|value| value == "file"),
+        }
+    }
+}
+
 /// Starts services.
 #[derive(Debug)]
 pub struct Service;
@@ -47,6 +68,14 @@ pub struct Service;
 impl Service {
     /// Takes the profile lock, opens the store, binds the endpoint and starts serving. Fails with `AlreadyRunning` while another service holds the lock.
     pub async fn start(config: ServiceConfig) -> Result<RunningService, ServiceError> {
+        Self::start_with(config, VaultOptions::from_env()).await
+    }
+
+    /// [`Service::start`] with explicit vault options instead of the environment's.
+    pub async fn start_with(
+        config: ServiceConfig,
+        vault_options: VaultOptions,
+    ) -> Result<RunningService, ServiceError> {
         let ServiceConfig {
             profile,
             server_name,
@@ -85,6 +114,11 @@ impl Service {
             .await
             .map_err(io::Error::other)?
             .map_err(|error| io::Error::other(error.to_string()))?;
+        let vault = Arc::new(Vault::new(
+            store.clone(),
+            profile.dir().join("vault"),
+            vault_options.force_file,
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -92,6 +126,7 @@ impl Service {
             shutdown: shutdown.clone(),
             registries,
             workspaces,
+            vault,
             terminals: terminals.clone(),
             agents,
             server: PeerInfo {

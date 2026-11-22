@@ -2,6 +2,7 @@
 
 mod core_table;
 mod git_table;
+mod secret_table;
 
 use serde_json::Value;
 
@@ -17,10 +18,11 @@ pub struct CommandDescriptor {
     pub args_schema: Value,
 }
 
-/// Every core command: the Phase 1 table, then the git commands.
+/// Every core command: the Phase 1 table, the git commands, then the secret commands.
 pub fn core_commands() -> Vec<CommandDescriptor> {
     let mut commands = core_table::core_commands();
     commands.extend(git_table::git_commands());
+    commands.extend(secret_table::secret_commands());
     commands
 }
 

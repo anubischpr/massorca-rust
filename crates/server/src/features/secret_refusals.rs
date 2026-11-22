@@ -1,0 +1,83 @@
+//! Vault refusals as protocol errors. Messages and data carry scopes, names and request ids, never a value.
+
+use massorca_core_vault::{Scope, ScopeError, VaultError};
+use massorca_protocol::{ErrorBody, codes};
+use serde_json::{Value, json};
+
+/// Parses untrusted scope text; the refusal never repeats it.
+pub(crate) fn parse_scope(text: &str) -> Result<Scope, ErrorBody> {
+    text.parse()
+        .map_err(|error: ScopeError| ErrorBody::new(codes::SECRET_INVALID_SCOPE, error.to_string()))
+}
+
+/// The protocol error for a vault refusal.
+pub(crate) fn refusal(error: VaultError) -> ErrorBody {
+    let message = error.to_string();
+    let (code, data) = match error {
+        VaultError::Locked(_) => (codes::SECRET_VAULT_LOCKED, None),
+        VaultError::NotFound { scope, name } => (codes::SECRET_NOT_FOUND, Some(named(scope, name))),
+        VaultError::NameInUse { scope, name } => {
+            (codes::SECRET_NAME_IN_USE, Some(named(scope, name)))
+        }
+        VaultError::Linked { scope, name, owner } => (
+            codes::SECRET_LINKED,
+            Some(json!({ "scope": scope, "name": name, "owner": owner })),
+        ),
+        VaultError::HasLinks {
+            scope,
+            name,
+            linked,
+        } => (
+            codes::SECRET_HAS_LINKS,
+            Some(json!({ "scope": scope, "name": name, "linked": linked })),
+        ),
+        VaultError::InvalidName => (codes::SECRET_INVALID_NAME, None),
+        VaultError::InvalidScope => (codes::SECRET_INVALID_SCOPE, None),
+        VaultError::TooLarge => (codes::SECRET_TOO_LARGE, None),
+        VaultError::InvalidReason => (codes::SECRET_INVALID_REASON, None),
+        VaultError::RequestNotFound(id) => (
+            codes::SECRET_REQUEST_NOT_FOUND,
+            Some(json!({ "request": id })),
+        ),
+        VaultError::RequestResolved { id, state } => (
+            codes::SECRET_REQUEST_RESOLVED,
+            Some(json!({ "request": id, "state": state })),
+        ),
+        VaultError::Key(_) | VaultError::Cipher | VaultError::Store(_) => (codes::INTERNAL, None),
+    };
+    ErrorBody {
+        code: code.to_owned(),
+        message,
+        data,
+    }
+}
+
+fn named(scope: String, name: String) -> Value {
+    json!({ "scope": scope, "name": name })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_scope, refusal};
+    use massorca_core_vault::VaultError;
+    use massorca_protocol::codes;
+
+    #[test]
+    fn has_links_lists_the_linked_scopes_in_data() {
+        let body = refusal(VaultError::HasLinks {
+            scope: "global".to_owned(),
+            name: "TOKEN".to_owned(),
+            linked: vec!["project:a".to_owned(), "team:b".to_owned()],
+        });
+        assert_eq!(body.code, codes::SECRET_HAS_LINKS);
+        let data = body.data.expect("data");
+        assert_eq!(data["linked"], serde_json::json!(["project:a", "team:b"]));
+    }
+
+    #[test]
+    fn a_bad_scope_is_invalid_scope_without_echoing_the_text() {
+        let body = parse_scope("nowhere-secret-text").expect_err("refused");
+        assert_eq!(body.code, codes::SECRET_INVALID_SCOPE);
+        assert!(!body.message.contains("nowhere-secret-text"));
+    }
+}
