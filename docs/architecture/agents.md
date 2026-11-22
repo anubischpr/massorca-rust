@@ -28,7 +28,8 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 ```
 <profile>/agents/
   kinds/*.json            declared kinds (owner `user`)
-  homes/<kind>/           credential home per kind (0056)
+  homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
+  accounts/<kind>/<id>/   credential home per account (0059)
   runs/<session>/         generated hook settings for a run (0053)
 ```
 
@@ -105,6 +106,12 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
 | `agent.credentials.show` | read | `kind` | `{ kind, home, exists, files: [{ name, present, bytes?, modified_at_ms? }] }` |
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
+| `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects }] }` |
+| `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
+| `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
+| `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
+| `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
+| `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
 Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
@@ -112,7 +119,7 @@ Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
-`agent.credentials_invalid`.
+`agent.credentials_invalid`, `agent.account_not_found`.
 
 Event bus topic: `agent.changed` (id = session id).
 
@@ -245,6 +252,12 @@ massorca agent bring-back <child> [--no-merge] [--no-prompt]
 massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
+massorca agent accounts list <kind>
+massorca agent accounts add <kind> [--label <l>] [--no-attach]
+massorca agent accounts import <kind> --from <dir> [--label <l>]
+massorca agent accounts activate <kind> <account> [--project <p>]
+massorca agent accounts remove <kind> <account>
+massorca agent accounts check <kind> [<account>]
 ```
 
 ## Credential import
@@ -276,6 +289,48 @@ service refuses `import --replace` and `remove` with `agent.busy` while any sess
 kind has a run that has not exited. Declared file names must also not be Windows device
 names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
 in a dot or a space.
+
+## Accounts (decision 0059)
+
+A kind can have several accounts on one host, and one of them is active. An account is a
+credential home at `<profile>/agents/accounts/<kind>/<id>/`, built with the 0056 rules
+(`credentials.rs`: owner-only directories, pinning, link refusal, the homes gate). Its row in
+the store (`agent_accounts`, with `agent_account_active` and `agent_account_choices`) holds the
+label, the identity the check captured, and the state. Ids are canonical lower-case UUIDs.
+
+- **Run resolution** (`accounts::resolve_home`, under `lock_homes`, for start and resume alike):
+  the project's choice, else the active account, else no home variable. The home is taken only
+  as a plain directory; a link is refused with `agent.credentials_invalid`. A run records its
+  account in memory, and `agent.accounts.remove` is refused with `agent.busy` while a live run
+  uses it.
+- **Sign-in** (`sign_in.rs`): the empty home is created, and a service-owned terminal runs the
+  kind's `accounts.login` arguments against the kind's program, with the home variable set and
+  `strip_env` applied (set to empty, as in 0056). The terminal is listed under the scope
+  `agent-accounts`, which is no workspace. When it ends, the account is kept as `signed_in` if
+  its declared files exist or its check reports signed in, and deleted otherwise.
+- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s, and keeps
+  at most 64 KiB of output, which is matched and never logged or returned. An expired pattern
+  match means `expired`; the signed-in exit means `signed_in`, with the identity pattern's first
+  group as the identity; another exit means `needs_sign_in`; a check that does not finish means
+  `unknown`. A different identity than the recorded one is `conflict`, and the recorded identity
+  stays.
+- **Import** copies the declared files into a new account and checks it. A check that reports
+  the login is not signed in deletes the new account, and the result is `failed`. `not_found`
+  means none of the declared files is in the source.
+- **Migration**: the first access to a kind moves `homes/<kind>/` into `accounts/<kind>/<new id>/`
+  by one same-volume rename, records it as `default` with state `migrated`, and makes it active when
+  the kind has none. The deprecated `agent.credentials.*` calls act on the active account.
+- **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
+  bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
+  publishes nothing.
+- **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
+  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
+  go to the resolved program and are never run at declaration time. Patterns are compiled with
+  the `regex` crate when the kind loads. The four built-in kinds declare no accounts, because
+  their real login commands are not verified in this phase.
+
+Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,
+`agent.usage`, `agent.models`, and the vault environment provider.
 
 ## Security
 
