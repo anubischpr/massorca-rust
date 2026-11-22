@@ -35,6 +35,10 @@ pub(super) struct PageFrames<'a> {
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
     /// The Work panel, while its region is on screen.
     pub work_panel: Option<WorkFrame>,
+    /// The body of the Project sidebar, when it is on screen.
+    pub project: Option<AnyElement>,
+    /// The diff of the file open from Source control, which takes the Canvas over the start page.
+    pub diff: Option<AnyElement>,
 }
 
 pub(super) fn canvas(
@@ -48,6 +52,7 @@ pub(super) fn canvas(
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let shell = cx.entity().downgrade();
     let mut work = pages.work_panel.take();
+    let mut project = pages.project.take();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
@@ -63,7 +68,7 @@ pub(super) fn canvas(
         .overflow_hidden()
         .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
-            let body = work_body(region, &mut work, cx);
+            let body = region_body(region, &mut work, &mut project, cx);
             region_column(
                 region,
                 zones.get(Zone::of_region(region)).clone(),
@@ -72,7 +77,7 @@ pub(super) fn canvas(
             )
         }));
     surface.children(overlay.map(|region| {
-        let body = work_body(region, &mut work, cx);
+        let body = region_body(region, &mut work, &mut project, cx);
         overlay_panel(
             region,
             zones.get(Zone::of_region(region)).clone(),
@@ -82,10 +87,17 @@ pub(super) fn canvas(
     }))
 }
 
-/// The body of a region, taken once: the Work panel's pane, and nothing for the other regions.
-fn work_body(region: Region, work: &mut Option<WorkFrame>, cx: &mut App) -> Option<AnyElement> {
+/// The body of a region, taken once: the Work panel's pane or the Project sidebar's body, and
+/// nothing for the other regions.
+fn region_body(
+    region: Region,
+    work: &mut Option<WorkFrame>,
+    project: &mut Option<AnyElement>,
+    cx: &mut App,
+) -> Option<AnyElement> {
     match region {
         Region::WorkPanel => work.take().map(|frame| work_panel::work_panel(frame, cx)),
+        Region::ProjectSidebar => project.take(),
         _ => None,
     }
 }
@@ -116,6 +128,9 @@ fn conversation(
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
+        if let Some(diff) = pages.diff {
+            return diff;
+        }
         return match pages.start {
             Some(frame) => start_page::start_page(frame, cx),
             None => placeholder(
@@ -257,7 +272,7 @@ fn region_column(
         .border_l_1()
         .border_color(theme.palette.border.subtle)
         .child(region_header(region, theme))
-        .when_some(body, |column, body| column.child(body))
+        .children(body)
 }
 
 /// A region open over the Canvas when the window is too narrow to fit it inline (X1).
@@ -286,7 +301,7 @@ fn overlay_panel(
         .shadow(box_shadows(theme.shadows.e2))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(region_header(region, theme))
-        .when_some(body, |panel, body| panel.child(body))
+        .children(body)
 }
 
 fn region_header(region: Region, theme: &Theme) -> impl IntoElement {

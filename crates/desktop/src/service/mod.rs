@@ -4,10 +4,14 @@
 
 mod bridge;
 mod connection;
+mod git;
 mod launch;
 mod refusal;
 mod terminals;
 mod update;
+
+#[cfg(test)]
+mod git_tests;
 
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
@@ -22,7 +26,7 @@ pub use refusal::Refusal;
 pub use terminals::{StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]
 pub(crate) use terminals::{TerminalCommand, TerminalWrite};
-pub use update::{StoreState, StoreUpdate};
+pub use update::{GitUpdate, StoreState, StoreUpdate, WorkspaceGit};
 
 #[cfg(test)]
 pub(crate) use update::fixtures;
