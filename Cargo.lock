@@ -3581,12 +3581,14 @@ dependencies = [
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "win32job",
 ]
 
 [[package]]
@@ -3690,6 +3692,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "massorca-client",
+ "massorca-core-remote",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",

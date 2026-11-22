@@ -13,6 +13,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 massorca-client.workspace = true
+massorca-core-remote.workspace = true
 massorca-profile.workspace = true
 massorca-protocol.workspace = true
 massorca-ui.workspace = true
