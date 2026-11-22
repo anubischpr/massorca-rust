@@ -145,6 +145,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(crate::git::execute(&target, autostart, command, output))
         }
+        Commands::Secret { command } => {
+            let target = globals.target()?;
+            block_on(crate::secret::execute(&target, autostart, command, output))
+        }
         Commands::Team { command } => {
             let target = globals.target()?;
             block_on(crate::team::execute(&target, autostart, command, output))

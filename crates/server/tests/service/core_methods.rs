@@ -92,7 +92,7 @@ const TEAM_METHODS: [&str; 19] = [
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 16] = [
+const CLI_COMMAND_IDS: [&str; 26] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -109,6 +109,16 @@ const CLI_COMMAND_IDS: [&str; 16] = [
     "workspace.list",
     "workspace.show",
     "workspace.rm",
+    "secret.status",
+    "secret.list",
+    "secret.set",
+    "secret.link",
+    "secret.unlink",
+    "secret.remove",
+    "secret.request",
+    "secret.requests",
+    "secret.decline",
+    "secret.reset-key",
 ];
 
 #[tokio::test]

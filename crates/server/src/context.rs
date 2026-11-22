@@ -6,6 +6,7 @@ use std::sync::Arc;
 use massorca_core_agents::{Agents, Change};
 use massorca_core_store::Store;
 use massorca_core_terminal::TerminalManager;
+use massorca_core_vault::Vault;
 use massorca_core_workspace::Workspaces;
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
@@ -40,6 +41,8 @@ pub struct AppState {
     pub registries: Registries,
     /// The projects and workspaces domain. Calls take a handle with the current default root.
     pub workspaces: Arc<Workspaces>,
+    /// The profile's secret vault (decision 0071); calls run on the blocking pool.
+    pub vault: Arc<Vault>,
     /// The service's terminals (decision 0033); they end with the service.
     pub terminals: TerminalManager,
     /// Agent sessions and their runs (decision 0051).
