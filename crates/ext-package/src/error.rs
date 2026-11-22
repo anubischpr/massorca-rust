@@ -78,6 +78,28 @@ fn join(problems: &[Problem]) -> String {
         .join("; ")
 }
 
+/// Collects problems while a validator walks a document, so every rule is reported in one pass.
+#[derive(Debug, Default)]
+pub(crate) struct Problems(Vec<Problem>);
+
+impl Problems {
+    pub(crate) fn add(&mut self, path: impl Into<String>, message: impl Into<String>) {
+        self.0.push(Problem {
+            path: path.into(),
+            message: message.into(),
+        });
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<Problem> {
+        self.0
+    }
+}
+
+/// Appends one segment to a JSON-pointer-like path.
+pub(crate) fn at(base: &str, segment: impl std::fmt::Display) -> String {
+    format!("{base}/{segment}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,5 +5,6 @@
 mod error;
 pub mod ids;
 pub mod package_path;
+pub mod permission;
 
 pub use error::{Error, Problem, codes};
