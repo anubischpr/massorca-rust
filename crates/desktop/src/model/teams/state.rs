@@ -1,6 +1,7 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
+use super::live::agent_of_kind;
 use super::page::TeamPage;
 use super::types::{
     AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
@@ -49,12 +50,12 @@ pub struct NewTeam {
     pub workspaces: bool,
 }
 
-/// What the Add bot dialog sends.
+/// What the Add bot dialog sends. `kind` is the service's id of the agent kind the bot runs on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewBot {
     pub name: String,
     pub role: String,
-    pub agent: Agent,
+    pub kind: String,
 }
 
 /// All Bot Teams data the shell shows. `connected` is false when no service backs it.
@@ -197,7 +198,7 @@ impl TeamsState {
             id,
             name,
             role: new.role.trim().to_owned(),
-            agent: Some(new.agent),
+            agent: agent_of_kind(&new.kind),
         });
         if team.lead.is_none() {
             team.lead = Some(id);
@@ -483,13 +484,40 @@ mod tests {
                 NewBot {
                     name: "Nora".into(),
                     role: String::new(),
-                    agent: Agent::Codex,
+                    kind: "codex".into(),
                 },
             )
             .unwrap();
         let team = state.team(id).unwrap();
         assert_eq!(team.lead, Some(bot));
         assert_eq!(team.lead_name(), Some("Nora"));
+        let nora = team.bots.iter().find(|b| b.id == bot).unwrap();
+        assert_eq!(nora.agent, Some(Agent::Codex));
+    }
+
+    #[test]
+    fn a_bot_of_a_kind_this_build_has_no_mark_for_gets_the_generic_mark() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state.create_team(new_team("Ops", 0)).unwrap();
+        let bot = state
+            .add_bot(
+                id,
+                NewBot {
+                    name: "Ada".into(),
+                    role: String::new(),
+                    kind: "my-own-kind".into(),
+                },
+            )
+            .unwrap();
+        let ada = state
+            .team(id)
+            .unwrap()
+            .bots
+            .iter()
+            .find(|b| b.id == bot)
+            .unwrap()
+            .clone();
+        assert_eq!(ada.agent, None);
     }
 
     #[test]

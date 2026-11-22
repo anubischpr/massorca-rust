@@ -109,21 +109,6 @@ pub fn agent_of_kind(kind: &str) -> Option<Agent> {
     }
 }
 
-/// The kind a bot run by this agent is created with.
-pub fn kind_of_agent(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Antigravity => "antigravity",
-        Agent::GentleShell => "gentle-shell",
-        Agent::Gemini => "gemini",
-        Agent::OpenCode => "opencode",
-        Agent::Cursor => "cursor",
-        // No mark, so no kind to create a bot with; the Add bot form never offers it.
-        Agent::Unknown => "unknown",
-    }
-}
-
 /// The page's column for a protocol column.
 fn column_of(column: WireColumn) -> Option<Column> {
     match column {

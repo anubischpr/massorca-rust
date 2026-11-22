@@ -1,5 +1,6 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
+pub mod agent_kinds;
 pub mod agent_sessions;
 pub mod canvas;
 pub mod marketplace;
