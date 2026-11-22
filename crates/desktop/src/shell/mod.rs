@@ -55,6 +55,8 @@ mod service_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
+mod source_control_tests;
+#[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
 mod tests;
