@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Android: Tasks</title>
+  <script src="./support.js"></script>
+  <link rel="stylesheet" href="massorca.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+button{background:transparent;border:0;padding:0;margin:0;font:inherit;color:inherit}
+
+    html, body { margin: 0; padding: 0; background: var(--surface-sunken); }
+    .an-root { position: relative; box-sizing: border-box; overflow: hidden; background: var(--surface-sunken); color: var(--text-primary); font-family: var(--font-sans); font-size: 14px; line-height: 20px; --sh-e1: 0 1px 2px 0 rgba(0,0,0,0.40); --sh-e3: 0 16px 40px -4px rgba(0,0,0,0.65); }
+    .an-root[data-theme="light"] { --sh-e1: 0 1px 2px 0 rgba(20,20,40,0.08); --sh-e3: 0 16px 40px -4px rgba(20,20,40,0.22); }
+    .an-root *, .an-root *::before, .an-root *::after { box-sizing: border-box; }
+    :where(.an-root button) { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: default; }
+    .an-head { padding: 32px 40px 0; display: flex; flex-direction: column; gap: 4px; }
+    .an-head h1 { margin: 0; font: 600 22px/28px var(--font-sans); letter-spacing: 0; }
+    .an-head p { margin: 0; max-width: 1100px; font: 400 13px/18px var(--font-sans); color: var(--text-secondary); }
+    .an-grid { display: flex; flex-wrap: wrap; gap: 40px; padding: 24px 40px 40px; align-items: flex-start; }
+    .pw { width: 390px; display: flex; flex-direction: column; gap: 12px; flex: none; }
+    .plabel { font: 400 12px/16px var(--font-mono); color: var(--text-secondary); height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .plabel b { font-weight: 500; color: var(--text-primary); }
+    .ph { position: relative; width: 390px; height: 844px; border-radius: 28px; border: 1px solid var(--border-default); background: var(--surface-canvas); overflow: hidden; display: flex; flex-direction: column; }
+    .ptop { flex: none; background: var(--surface-frame); }
+    .inset { height: 24px; flex: none; }
+    .bar { display: flex; align-items: center; height: 56px; padding: 0 4px; gap: 0; }
+    .bar .ttl { flex: 1; min-width: 0; padding: 0 8px; }
+    .bar.home .ttl { padding-left: 0; }
+    .pbody { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--surface-canvas); overflow: hidden; }
+    .pbot { height: 24px; flex: none; background: var(--surface-canvas); }
+    .scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .scroll > *, .sh-body > * { flex: none; }
+    .pbody > :not(.scroll) { flex: none; }
+    .ib { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); flex: none; position: relative; }
+    .ib.on { color: var(--text-primary); }
+    .ib .dot { position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-waiting); border: 2px solid var(--surface-frame); }
+    .ic { flex: none; display: block; }
+    .t-cap { font: 400 12px/16px var(--font-sans); }
+    .t-ov { font: 600 12px/16px var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; }
+    .t-label { font: 500 14px/20px var(--font-sans); }
+    .t-bsm { font: 400 13px/18px var(--font-sans); }
+    .t-body { font: 400 14px/20px var(--font-sans); }
+    .t-bst { font: 600 14px/20px var(--font-sans); }
+    .t-tsm { font: 600 16px/22px var(--font-sans); }
+    .t-title { font: 600 18px/24px var(--font-sans); }
+    .t-head { font: 600 22px/28px var(--font-sans); }
+    .t-disp { font: 600 28px/36px var(--font-sans); letter-spacing: -0.01em; }
+    .t-chat { font: 400 16px/24px var(--font-sans); }
+    .t-mono { font: 400 13px/18px var(--font-mono); }
+    .t-monosm { font: 400 12px/16px var(--font-mono); }
+    .c-p { color: var(--text-primary); } .c-s { color: var(--text-secondary); } .c-t { color: var(--text-tertiary); }
+    .c-acc { color: var(--accent-fg); } .c-ok { color: var(--status-success-fg); } .c-warn { color: var(--status-warning-fg); } .c-err { color: var(--status-danger-fg); }
+    .c-wait { color: var(--agent-waiting); } .c-unr { color: var(--agent-unreachable); } .c-run { color: var(--agent-running); }
+    .tn { font-variant-numeric: tabular-nums; }
+    .tr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .fx { display: flex; } .col { display: flex; flex-direction: column; } .ac { align-items: center; } .jb { justify-content: space-between; } .f1 { flex: 1; min-width: 0; } .nf { flex: none; }
+    .g4 { gap: 4px; } .g8 { gap: 8px; } .g12 { gap: 12px; } .g16 { gap: 16px; }
+    .px { padding-left: 16px; padding-right: 16px; }
+    .list > .row + .row { border-top: 1px solid var(--border-subtle); }
+    .row { display: flex; align-items: center; gap: 12px; padding: 0 16px; min-height: 48px; position: relative; }
+    .row.two { min-height: 56px; }
+    .row.tint-wait { background: var(--agent-waiting-bg); }
+    .row.tint-err { background: var(--agent-error-bg); }
+    .row.dim { color: var(--text-tertiary); }
+    .row.sel { background: var(--fill-selected-canvas); }
+    .row.sel::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent-fg); }
+    .sech { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 4px; min-height: 40px; color: var(--text-secondary); }
+    .plate { width: 40px; height: 40px; border-radius: 8px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); flex: none; }
+    .mk { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid; font-family: var(--font-sans); font-weight: 600; color: var(--text-primary); flex: none; background: var(--surface-sunken); }
+    .ur { position: relative; width: 32px; height: 32px; display: inline-block; flex: none; }
+    .ur svg { position: absolute; inset: 0; }
+    .urm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 600 11px/1 var(--font-sans); }
+    .card { background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--sh-e1); }
+    .card.pad { padding: 12px; }
+    .card.wait { background: var(--agent-waiting-bg); }
+    .card.errc { background: var(--agent-error-bg); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: var(--radius-md); font: 500 14px/20px var(--font-sans); border: 1px solid transparent; white-space: nowrap; flex: none; }
+    .btn.lg { min-height: 48px; }
+    .btn.blk { width: 100%; }
+    .btn.p { background: var(--accent-default); color: var(--text-on-accent); }
+    .btn.s { border-color: var(--border-strong); color: var(--text-primary); }
+    .btn.g { color: var(--accent-fg); padding: 0 12px; }
+    .btn.d { background: var(--status-danger-solid); color: var(--status-danger-on); }
+    .btn.x { background: var(--fill-disabled); color: var(--text-disabled); border-color: var(--border-subtle); }
+    .btn.sm { min-height: 44px; padding: 0 12px; }
+    .badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); font: 500 12px/16px var(--font-sans); white-space: nowrap; flex: none; color: var(--text-secondary); }
+    .badge.ok { background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-fg); }
+    .badge.wn { background: var(--status-warning-bg); border-color: var(--status-warning-border); color: var(--status-warning-fg); }
+    .badge.er { background: var(--status-danger-bg); border-color: var(--status-danger-border); color: var(--status-danger-fg); }
+    .badge.in { background: var(--status-info-bg); border-color: var(--status-info-border); color: var(--status-info-fg); }
+    .badge.un { background: var(--surface-raised); border-color: var(--border-default); color: var(--agent-unreachable); }
+    .badge.ac { background: var(--accent-subtle-raised); border-color: transparent; color: var(--accent-fg); }
+    .chip { display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px; border-radius: var(--radius-full); background: var(--surface-sunken); border: 1px solid transparent; font: 500 14px/20px var(--font-sans); color: var(--text-primary); white-space: nowrap; flex: none; }
+    .chip.on { background: var(--accent-subtle-canvas); border-color: var(--accent-fg); color: var(--accent-fg); }
+    .chip.sm { height: 28px; padding: 0 8px; font: 500 12px/16px var(--font-sans); border-radius: var(--radius-sm); }
+    .chip.mono { font: 400 12px/16px var(--font-mono); height: 28px; padding: 0 8px; border-radius: var(--radius-sm); }
+    .chips { display: flex; gap: 8px; padding: 0 16px; overflow: hidden; }
+    .tf { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--surface-sunken); font: 400 16px/22px var(--font-sans); color: var(--text-primary); }
+    .tf.ta { align-items: flex-start; padding-top: 12px; padding-bottom: 12px; }
+    .tf.err { border-color: var(--status-danger-fg); }
+    .tf.foc { border: 2px solid var(--border-focus); padding-left: 11px; }
+    .tf .ph-t { color: var(--text-tertiary); }
+    .lbl { font: 500 14px/20px var(--font-sans); margin-bottom: 8px; display: block; }
+    .help { font: 400 13px/18px var(--font-sans); color: var(--text-secondary); margin-top: 8px; }
+    .errm { font: 400 13px/18px var(--font-sans); color: var(--status-danger-fg); margin-top: 8px; display: flex; gap: 8px; align-items: flex-start; }
+    .seg { display: flex; height: 44px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 2px; gap: 2px; background: var(--surface-sunken); }
+    .seg > div { flex: 1; min-width: 48px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 4px; font: 500 14px/20px var(--font-sans); color: var(--text-secondary); }
+    .seg > .on { background: var(--fill-selected-canvas); color: var(--text-primary); font-weight: 600; }
+    .sw { width: 36px; height: 20px; border-radius: 10px; background: var(--border-strong); position: relative; flex: none; }
+    .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface-canvas); }
+    .sw.on { background: var(--accent-default); }
+    .sw.on::after { left: 18px; background: #fff; }
+    .rad { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border-strong); flex: none; position: relative; }
+    .rad.on { border-color: var(--accent-default); }
+    .rad.on::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--accent-default); }
+    .cbx { width: 20px; height: 20px; border-radius: var(--radius-sm); border: 2px solid var(--border-strong); flex: none; display: flex; align-items: center; justify-content: center; color: #fff; }
+    .cbx.on { background: var(--accent-default); border-color: var(--accent-default); }
+    .bn { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid; align-items: flex-start; flex: none; }
+    .bn .bt { flex: 1; min-width: 0; }
+    .bn.info { background: var(--status-info-bg); border-color: var(--status-info-border); }
+    .bn.info .gl { color: var(--status-info-fg); }
+    .bn.ok { background: var(--status-success-bg); border-color: var(--status-success-border); }
+    .bn.ok .gl { color: var(--status-success-fg); }
+    .bn.wn { background: var(--status-warning-bg); border-color: var(--status-warning-border); }
+    .bn.wn .gl { color: var(--status-warning-fg); }
+    .bn.er { background: var(--status-danger-bg); border-color: var(--status-danger-border); }
+    .bn.er .gl { color: var(--status-danger-fg); }
+    .bn.un { background: var(--surface-raised); border-color: var(--border-default); }
+    .bn .acts { display: flex; gap: 4px; margin: 4px -12px -4px; }
+    .scrim { position: absolute; inset: 0; background: var(--scrim); z-index: 20; }
+    .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; background: var(--surface-overlay); border: 1px solid var(--border-default); border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: var(--sh-e3); display: flex; flex-direction: column; max-height: 760px; overflow: hidden; }
+    .grab { width: 32px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 8px auto 0; flex: none; }
+    .sh-head { display: flex; align-items: center; min-height: 56px; padding: 0 4px 0 16px; flex: none; }
+    .sh-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .sh-foot { flex: none; padding: 12px 16px; border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 8px; background: var(--surface-overlay); }
+    .sh-inset { height: 24px; flex: none; }
+    .sheet .row { min-height: 48px; }
+    .sk { background: var(--fill-skeleton); border-radius: 4px; }
+    .fab { position: absolute; right: 16px; bottom: 16px; height: 56px; padding: 0 20px 0 16px; border-radius: 28px; background: var(--accent-default); color: var(--text-on-accent); display: flex; align-items: center; gap: 8px; font: 600 14px/20px var(--font-sans); box-shadow: 0 6px 16px -2px rgba(0,0,0,0.45); z-index: 5; }
+    .ub { align-self: flex-end; max-width: 85%; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 12px; font: 400 16px/24px var(--font-sans); }
+    .tool { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 4px; font: 400 12px/16px var(--font-mono); }
+    .code { background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; font: 400 13px/18px var(--font-mono); color: var(--text-primary); overflow: hidden; }
+    .ic-code { font: 400 12px/16px var(--font-mono); background: var(--surface-sunken); border-radius: var(--radius-sm); padding: 1px 4px; }
+    .pill { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px; border-radius: 22px; background: var(--surface-overlay); border: 1px solid var(--border-default); box-shadow: 0 6px 16px -2px rgba(0,0,0,0.35); font: 500 14px/20px var(--font-sans); }
+    .cmpwrap { flex: none; padding: 8px 12px 8px; background: var(--surface-canvas); display: flex; flex-direction: column; gap: 8px; }
+    .cmp { background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--sh-e1); padding: 12px 12px 8px; }
+    .cmp.dis { background: var(--fill-disabled); }
+    .cmpt { font: 400 16px/24px var(--font-sans); min-height: 48px; }
+    .cmpb { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .cmpb .ib { width: 44px; height: 44px; }
+    .mchip { height: 44px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-radius: var(--radius-full); background: var(--surface-sunken); border: 1px solid transparent; font: 500 14px/20px var(--font-sans); white-space: nowrap; }
+    .send { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
+    .send.rdy { background: var(--accent-default); color: var(--text-on-accent); }
+    .send.off { background: var(--fill-disabled); color: var(--text-disabled); }
+    .send.stp { background: var(--fill-selected-raised); border: 0; color: var(--text-primary); }
+    .qdock { margin: 0 12px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--sh-e1); }
+    .term { background: var(--terminal-bg); color: var(--terminal-fg); font: 400 12px/16px var(--font-mono); padding: 12px 12px; flex: 1; min-height: 0; overflow: hidden; white-space: pre; }
+    .keyrow { display: flex; gap: 4px; padding: 6px 8px; background: var(--surface-frame); border-top: 1px solid var(--border-subtle); flex: none; }
+    .key { min-width: 44px; height: 44px; padding: 0 8px; border-radius: var(--radius-md); background: var(--surface-raised); border: 1px solid var(--border-default); display: flex; align-items: center; justify-content: center; font: 500 13px/16px var(--font-mono); color: var(--text-primary); flex: 1; }
+    .key.on { background: var(--accent-subtle-raised); color: var(--accent-fg); border-color: var(--accent-fg); }
+    .dl { font: 400 13px/18px var(--font-mono); display: flex; white-space: pre; }
+    .dl .ln { width: 44px; flex: none; text-align: right; padding-right: 8px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; user-select: none; }
+    .dl .sg { width: 18px; flex: none; text-align: center; }
+    .dl.add { background: var(--diff-add-bg); } .dl.add .ln { background: var(--diff-add-gutter); } .dl.add .sg { color: var(--diff-add-fg); }
+    .dl.rem { background: var(--diff-remove-bg); } .dl.rem .ln { background: var(--diff-remove-gutter); } .dl.rem .sg { color: var(--diff-remove-fg); }
+    .dl.hunk { background: var(--surface-raised); color: var(--text-secondary); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+    .dl .cd { padding: 2px 8px 2px 0; }
+    .sk-tx { color: var(--syntax-keyword); } .sk-st { color: var(--syntax-string); } .sk-fn { color: var(--syntax-function); } .sk-cm { color: var(--syntax-comment); } .sk-ty { color: var(--syntax-type); } .sk-nu { color: var(--syntax-number); } .sk-va { color: var(--syntax-variable); }
+    .prog { height: 4px; border-radius: 2px; background: var(--usage-ring-track); overflow: hidden; }
+    .prog > i { display: block; height: 100%; background: var(--accent-default); }
+    .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 32px 24px; }
+    .stepn { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-subtle-canvas); color: var(--accent-fg); display: flex; align-items: center; justify-content: center; font: 600 14px/20px var(--font-sans); flex: none; }
+    .hair { height: 1px; background: var(--border-subtle); flex: none; }
+    .mono { font-family: var(--font-mono); }
+    .tab-row { display: flex; padding: 8px 16px; background: var(--surface-canvas); flex: none; }
+    .tab-row .seg { flex: 1; }
+    .thumb { border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--surface-sunken); overflow: hidden; position: relative; }
+    .kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
+  
+/* floating mobile layout (owner 2026-11-13) */
+.ptop { background: transparent !important; }
+.bar.fl { height: 64px; padding: 0 12px; gap: 8px; justify-content: space-between; }
+.fb { width: 48px; height: 48px; border-radius: 50%; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--sh-e1); display: flex; align-items: center; justify-content: center; color: var(--text-primary); flex: none; position: relative; }
+.fb .dot { top: 8px; right: 8px; border-color: var(--surface-raised); }
+.fsp { width: 48px; height: 48px; flex: none; }
+.fgrp { display: flex; align-items: center; gap: 2px; height: 48px; padding: 0 4px; border-radius: 24px; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--sh-e1); flex: none; }
+.fgrp > button, .fgrp > .ib { width: 44px; height: 40px; border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); position: relative; }
+.fgrp > .on { background: var(--fill-selected-raised); color: var(--text-primary); }
+.fgrp .dot { top: 6px; right: 8px; border-color: var(--surface-raised); }
+.fttl { flex: 0 1 auto; min-width: 0; max-width: 232px; height: 48px; padding: 0 18px; border-radius: 24px; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--sh-e1); display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+.fttl > * { max-width: 100%; }
+.fttl .t-title { font: 600 15px/20px var(--font-sans); }
+.fttl .t-head { font: 600 16px/22px var(--font-sans); }
+.fttl .t-cap { font-size: 11px; line-height: 14px; }
+.fttl.sel { flex-direction: row; gap: 8px; padding: 0 12px 0 14px; }
+.spill-row { display: flex; justify-content: center; padding: 2px 16px 8px; flex: none; background: transparent; }
+.spill { display: inline-flex; align-items: center; gap: 8px; height: 40px; max-width: 330px; padding: 0 6px 0 14px; border-radius: 20px; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--sh-e1); font: 500 14px/20px var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+.spill .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.spill .sct { min-width: 28px; height: 28px; padding: 0 8px; border-radius: 14px; background: var(--surface-sunken); color: var(--text-secondary); font: 500 12px/28px var(--font-sans); text-align: center; flex: none; }
+.cmpwrap { background: transparent !important; padding: 4px 12px 8px !important; }
+.cmp { border-radius: 24px !important; padding: 8px !important; box-shadow: var(--sh-e3) !important; }
+.cmpt { background: var(--surface-sunken); border-radius: 16px; padding: 12px 14px; min-height: 52px !important; }
+.cmp.dis .cmpt { background: transparent; }
+.cmpb { gap: 2px !important; margin-top: 6px !important; }
+.cmpb .ib { width: 40px !important; height: 40px !important; border-radius: 20px; }
+.cmpb .mchip { height: 36px; max-width: 128px; padding: 0 8px 0 6px; border-radius: 18px; gap: 6px; }
+.cmpb .mchip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cmpb .acc.full { background: var(--status-danger-bg); color: var(--status-danger-fg); }
+.cmp.one { display: flex; align-items: center; gap: 4px; padding: 6px !important; }
+.cmp.one .cmpt { flex: 1; min-height: 44px !important; padding: 10px 14px; border-radius: 22px; }
+.cmp.one .ib { width: 44px; height: 44px; border-radius: 22px; }
+.fdown { position: absolute; right: 16px; bottom: 8px; width: 48px; height: 48px; border-radius: 50%; background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--sh-e3); display: flex; align-items: center; justify-content: center; color: var(--text-primary); z-index: 5; }
+</style>
+</helmet>
+<div class="an-root" data-theme="{{theme}}" style="width:1760px;height:1042px">
+<div class="an-head"><h1>Android: Tasks</h1><p>M-TK-01 one list for Workspaces and Bot Teams: approvals first, then issues, pull requests and Board tasks, with the create sheet and its per-provider states.</p></div>
+<div class="an-grid" style="width:1760px"><div class="pw"><div class="plabel" title="Tasks: approvals first, then open items from every provider"><b>M-TK-01</b> · Tasks: approvals first, then open items from every provider</div><div class="ph"><div class="ptop"><div class="inset"></div><div class="bar fl"><button type="button" class="fb" aria-label="Back"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><div class="fttl"><div class="t-title tr">Tasks</div></div><button type="button" class="fb" aria-label="Filter"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button></div></div><div class="pbody"><div class="scroll"><div class="chips" style="padding:8px 16px"><span class="chip on ">All</span><span class="chip ">Needs approval</span><span class="chip ">GitHub</span><span class="chip ">Bot Teams</span></div><div class="sech"><span class="t-ov">Needs your approval</span><span class="t-cap c-wait tn">2</span></div><div class="list"><div class="row two tint-wait"><span class="nf"><svg class="ic" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--agent-waiting)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Waiting for you"><circle cx="12" cy="12" r="10" fill="var(--agent-waiting)" stroke="none"/><path d="M9.3 9.4a2.9 2.9 0 0 1 5.4 1.1c0 1.9-2.7 2.3-2.7 4" stroke="var(--status-warning-on)" stroke-width="2.2"/><path d="M12 17.6h.01" stroke="var(--status-warning-on)" stroke-width="2.6"/></svg></span><div class="f1 col" style="min-width:0"><div class="t-body tr">Run pnpm db:seed</div><div class="t-bsm c-s tr">feat/billing-export · oppm</div></div><span class="badge">Workspaces</span><button type="button" class="btn s sm">Review</button></div><div class="row two tint-wait"><span class="nf"><svg class="ic" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--agent-waiting)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Waiting for you"><circle cx="12" cy="12" r="10" fill="var(--agent-waiting)" stroke="none"/><path d="M9.3 9.4a2.9 2.9 0 0 1 5.4 1.1c0 1.9-2.7 2.3-2.7 4" stroke="var(--status-warning-on)" stroke-width="2.2"/><path d="M12 17.6h.01" stroke="var(--status-warning-on)" stroke-width="2.6"/></svg></span><div class="f1 col" style="min-width:0"><div class="t-body tr">Confirm the release date</div><div class="t-bsm c-s tr">Desarrollo · Ada</div></div><span class="badge">Bot Team</span><button type="button" class="btn s sm">Review</button></div></div><div class="sech"><span class="t-ov">Open</span><span class="t-cap c-s tn">4</span></div><div class="list"><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">#214 Invoice rounding is off by one cent</div><div class="t-bsm c-s tr">NexusCare · issue</div></div><span class="t-cap c-t">GitHub</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">#128 Add CSV export to the billing report</div><div class="t-bsm c-s tr">oppm · pull request</div></div><span class="t-cap c-t">GitHub</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">NEX-88 Login times out on slow networks</div><div class="t-bsm c-s tr">NexusCare · issue</div></div><span class="t-cap c-t">Linear</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">Release notes 2.4</div><div class="t-bsm c-s tr">Desarrollo · Bruno</div></div><span class="t-cap c-t">Board</span></div></div></div><span class="fab"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> New task</span></div><div class="pbot"></div></div></div><div class="pw"><div class="plabel" title="Create task sheet: Workspaces or Bot Team"><b>M-TK-01</b> · Create task sheet: Workspaces or Bot Team</div><div class="ph"><div class="ptop"><div class="inset"></div><div class="bar fl"><button type="button" class="fb" aria-label="Back"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><div class="fttl"><div class="t-title tr">Tasks</div></div><button type="button" class="fb" aria-label="Filter"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button></div></div><div class="pbody"><div class="scroll"><div class="chips" style="padding:8px 16px"><span class="chip on ">All</span><span class="chip ">Needs approval</span><span class="chip ">GitHub</span><span class="chip ">Bot Teams</span></div><div class="sech"><span class="t-ov">Needs your approval</span><span class="t-cap c-wait tn">2</span></div><div class="list"><div class="row two tint-wait"><span class="nf"><svg class="ic" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--agent-waiting)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Waiting for you"><circle cx="12" cy="12" r="10" fill="var(--agent-waiting)" stroke="none"/><path d="M9.3 9.4a2.9 2.9 0 0 1 5.4 1.1c0 1.9-2.7 2.3-2.7 4" stroke="var(--status-warning-on)" stroke-width="2.2"/><path d="M12 17.6h.01" stroke="var(--status-warning-on)" stroke-width="2.6"/></svg></span><div class="f1 col" style="min-width:0"><div class="t-body tr">Run pnpm db:seed</div><div class="t-bsm c-s tr">feat/billing-export · oppm</div></div><span class="badge">Workspaces</span><button type="button" class="btn s sm">Review</button></div><div class="row two tint-wait"><span class="nf"><svg class="ic" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--agent-waiting)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Waiting for you"><circle cx="12" cy="12" r="10" fill="var(--agent-waiting)" stroke="none"/><path d="M9.3 9.4a2.9 2.9 0 0 1 5.4 1.1c0 1.9-2.7 2.3-2.7 4" stroke="var(--status-warning-on)" stroke-width="2.2"/><path d="M12 17.6h.01" stroke="var(--status-warning-on)" stroke-width="2.6"/></svg></span><div class="f1 col" style="min-width:0"><div class="t-body tr">Confirm the release date</div><div class="t-bsm c-s tr">Desarrollo · Ada</div></div><span class="badge">Bot Team</span><button type="button" class="btn s sm">Review</button></div></div><div class="sech"><span class="t-ov">Open</span><span class="t-cap c-s tn">4</span></div><div class="list"><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">#214 Invoice rounding is off by one cent</div><div class="t-bsm c-s tr">NexusCare · issue</div></div><span class="t-cap c-t">GitHub</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">#128 Add CSV export to the billing report</div><div class="t-bsm c-s tr">oppm · pull request</div></div><span class="t-cap c-t">GitHub</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">NEX-88 Login times out on slow networks</div><div class="t-bsm c-s tr">NexusCare · issue</div></div><span class="t-cap c-t">Linear</span></div><div class="row two "><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-secondary);"><path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/></svg><div class="f1 col" style="min-width:0"><div class="t-body tr">Release notes 2.4</div><div class="t-bsm c-s tr">Desarrollo · Bruno</div></div><span class="t-cap c-t">Board</span></div></div></div><span class="fab"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg> New task</span></div><div class="pbot"></div><div class="scrim"></div><div class="sheet"><div class="grab"></div><div class="sh-head"><div class="f1 col"><div class="t-title tr">New task</div></div><button type="button" class="ib" aria-label="Close"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div><div class="sh-body"><div class="px col g16" style="padding:0 16px 8px"><div><div class="seg" role="tablist"><div><svg class="ic " viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>Workspaces</div><div class="on"><svg class="ic " viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>Bot Team</div></div></div><div><span class="lbl">Team</span><div class="tf" style="justify-content:space-between"><span class="fx ac g8"><span class="nf" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;color:var(--usage-ring-6)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><polygon points="12,4 21,20 3,20" fill="currentColor"/></svg></span> Desarrollo</span><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--text-tertiary);"><path d="m6 9 6 6 6-6"/></svg></div></div><div><span class="lbl">What needs doing</span><div class="tf ta foc" style="min-height:88px"><span>Update the README screenshots for 2.4</span></div></div><div><span class="lbl">When it starts</span><div class="seg" role="tablist"><div class="on">Start now</div><div>Later</div></div></div></div></div><div class="sh-foot"><button type="button" class="btn p lg blk">Create task</button></div><div class="sh-inset"></div></div></div></div><div class="pw"><div class="plabel" title="Per provider: error, connect, loading"><b>M-TK-01</b> · Per provider: error, connect, loading</div><div class="ph"><div class="ptop"><div class="inset"></div><div class="bar fl"><button type="button" class="fb" aria-label="Back"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><div class="fttl"><div class="t-title tr">Tasks</div></div><button type="button" class="fb" aria-label="Filter"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button></div></div><div class="pbody"><div class="scroll"><div class="chips" style="padding:8px 16px"><span class="chip on ">All</span><span class="chip ">GitHub</span><span class="chip ">Linear</span></div><div class="sech"><span class="t-ov">GitHub</span></div><div class="card pad col g8" style="margin:4px 16px"><div class="fx ac g8"><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--status-danger-fg);"><path d="M12 16h.01"/><path d="M12 8v4"/><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"/></svg><span class="t-bst">Could not load GitHub tasks</span></div><div class="t-bsm c-s">The request timed out. Tasks from other providers are not affected.</div><div><button type="button" class="btn s sm"><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>Retry</button></div></div><div class="sech"><span class="t-ov">Linear</span></div><div class="card pad col g8" style="margin:4px 16px"><div class="t-bst">Connect Linear</div><div class="t-bsm c-s">Sign in on This PC to see Linear issues here.</div></div><div class="sech"><span class="t-ov">Board</span></div><div class="list"><div class="row two"><div class="sk" style="width:20px;height:20px;border-radius:10px;"></div><div class="col g8 f1"><div class="sk" style="width:230px;height:14px;border-radius:4px;"></div><div class="sk" style="width:115px;height:10px;border-radius:4px;"></div></div></div><div class="row two"><div class="sk" style="width:20px;height:20px;border-radius:10px;"></div><div class="col g8 f1"><div class="sk" style="width:180px;height:14px;border-radius:4px;"></div><div class="sk" style="width:90px;height:10px;border-radius:4px;"></div></div></div></div></div></div><div class="pbot"></div></div></div><div class="pw"><div class="plabel" title="Empty"><b>M-TK-01</b> · Empty</div><div class="ph"><div class="ptop"><div class="inset"></div><div class="bar fl"><button type="button" class="fb" aria-label="Back"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button><div class="fttl"><div class="t-title tr">Tasks</div></div><button type="button" class="fb" aria-label="Filter"><svg class="ic " viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg></button></div></div><div class="pbody"><div class="empty" style="padding-top:112px"><span class="plate" style="width:56px;height:56px;border-radius:12px"><svg class="ic " viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></span><div class="t-head" style="margin-top:8px">No tasks</div><div class="t-body c-s">Connect GitHub or Linear on This PC to see issues here, or create a task.</div><div style="margin-top:12px"><button type="button" class="btn p lg"><svg class="ic " viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New task</button></div></div></div><div class="pbot"></div></div></div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":1042},"theme":{"editor":"enum","options":["dark","light"],"default":"dark"}}'>
+class Component extends DCLogic { renderVals(){ return { theme: this.props.theme ?? 'dark' }; } }
+</script>
+</body>
+</html>
