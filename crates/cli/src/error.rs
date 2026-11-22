@@ -1,19 +1,15 @@
 //! The failure a command reports: a stable code, a message, optional data and the exit code.
 
 use std::io;
-use std::path::PathBuf;
 
-use massorca_client::ClientError;
+use massorca_client::{ClientError, profile_refusal};
 use massorca_core_remote::bootstrap::BootstrapError;
 use massorca_core_remote::ssh::SshError;
 use massorca_profile::{ProfileError, RootAccessError};
 use massorca_protocol::codes;
-use massorca_protocol::codes::{
-    PROFILE_FOREIGN_ENTRIES, PROFILE_UNSAFE_LOCATION, PROFILE_WRITABLE_BY_OTHERS,
-};
 use massorca_protocol::pairing::OfferError;
 use massorca_server::{ListenSpecError, ServiceError};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// Exit codes of `massorca` (docs/architecture/core.md).
 pub mod exit {
@@ -70,7 +66,9 @@ impl From<ClientError> for CliError {
         let message = error.to_string();
         let code = match error {
             ClientError::Remote(body) => return Self::from_body(body, exit_code),
-            ClientError::StartRefused(body) => return Self::from_body(*body, exit_code),
+            ClientError::StartRefused(body) | ClientError::ProfileRefused(body) => {
+                return Self::from_body(*body, exit_code);
+            }
             ClientError::Handshake { error: body, .. } => {
                 return Self::from_body(*body, exit_code);
             }
@@ -117,31 +115,9 @@ impl From<ServiceError> for CliError {
 
 impl From<RootAccessError> for CliError {
     fn from(error: RootAccessError) -> Self {
-        let message = error.to_string();
-        let shown = |paths: &[PathBuf]| -> Vec<String> {
-            paths
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect()
-        };
-        let (code, data) = match &error {
-            RootAccessError::ForeignEntries { paths } => {
-                (PROFILE_FOREIGN_ENTRIES, json!({ "paths": shown(paths) }))
-            }
-            RootAccessError::WritableByOthers { paths } => {
-                (PROFILE_WRITABLE_BY_OTHERS, json!({ "paths": shown(paths) }))
-            }
-            RootAccessError::UnsafeLocation { path } => (
-                PROFILE_UNSAFE_LOCATION,
-                json!({ "path": path.display().to_string() }),
-            ),
-            RootAccessError::Io(error) => {
-                return Self::new("io.failed", error.to_string(), exit::ERROR);
-            }
-        };
-        Self {
-            data: Some(Box::new(data)),
-            ..Self::new(code, message, exit::ERROR)
+        match profile_refusal(&error) {
+            Some(body) => Self::from_body(body, exit::ERROR),
+            None => Self::new("io.failed", error.to_string(), exit::ERROR),
         }
     }
 }

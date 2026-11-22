@@ -23,7 +23,8 @@ pub(crate) struct Starting {
 }
 
 impl Starting {
-    /// The refusal, once the service has exited before accepting connections; `None` while it still runs.
+    /// The refusal, once the service has exited before accepting connections; `None` while it still runs. The status
+    /// file is read only after the exit status says the start failed.
     pub(crate) fn refusal(&mut self) -> Option<ClientError> {
         let status = self.child.try_wait().ok().flatten()?;
         Some(read_refusal(&self.status_dir.join(STATUS_FILE), status))
@@ -37,6 +38,22 @@ impl Starting {
 }
 
 const STATUS_FILE: &str = "status.json";
+
+/// The `ErrorBody` in a status file, if it is no larger than `MAX_STATUS_BYTES`.
+fn read_status(path: &Path) -> Option<ErrorBody> {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_STATUS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_STATUS_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
 
 pub(crate) fn service_run(
     profile: &Profile,
@@ -76,12 +93,18 @@ fn status_dir() -> std::io::Result<PathBuf> {
     }
 }
 
-/// The error a service left in its status file, or a plain start failure when it left none.
+/// A status file larger than this is ignored.
+const MAX_STATUS_BYTES: u64 = 64 * 1024;
+
+/// The error a service that exited with a failure left in its status file, or a plain start failure when it exited
+/// otherwise or left none. Read with a size bound.
 fn read_refusal(path: &Path, status: ExitStatus) -> ClientError {
-    match fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<ErrorBody>(&bytes).ok())
-    {
+    let body = if status.success() {
+        None
+    } else {
+        read_status(path)
+    };
+    match body {
         Some(body) => ClientError::StartRefused(Box::new(body)),
         None => ClientError::StartFailed(format!(
             "the service exited ({status}) before accepting connections"
@@ -199,5 +222,52 @@ mod tests {
             massorca_profile::secure_root(&profile).expect("checked"),
             massorca_profile::RootAccess::Private
         );
+    }
+
+    fn exit_status(code: u32) -> std::process::ExitStatus {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code)
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw((code as i32) << 8)
+        }
+    }
+
+    #[test]
+    fn a_status_file_is_trusted_only_after_a_failed_exit_and_only_when_small() {
+        use super::{MAX_STATUS_BYTES, read_refusal};
+        use crate::ClientError;
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let status = temp.path().join("status.json");
+        std::fs::write(
+            &status,
+            r#"{"code":"profile.unsafe_location","message":"unsafe"}"#,
+        )
+        .expect("a status");
+
+        assert!(matches!(
+            read_refusal(&status, exit_status(1)),
+            ClientError::StartRefused(body) if body.code == "profile.unsafe_location"
+        ));
+        assert!(
+            matches!(
+                read_refusal(&status, exit_status(0)),
+                ClientError::StartFailed(_)
+            ),
+            "a service that exited cleanly left no refusal"
+        );
+
+        let padding = " ".repeat(MAX_STATUS_BYTES as usize);
+        std::fs::write(&status, format!(r#"{{"code":"x","message":"y"}}{padding}"#))
+            .expect("an oversized status");
+        assert!(matches!(
+            read_refusal(&status, exit_status(1)),
+            ClientError::StartFailed(_)
+        ));
     }
 }

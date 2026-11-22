@@ -103,7 +103,7 @@ impl From<&ClientError> for Refusal {
                 },
             },
             // The service the app started refused to (ADR 0073): its own code and message, as the CLI shows them.
-            ClientError::StartRefused(body) => Self::Failed {
+            ClientError::StartRefused(body) | ClientError::ProfileRefused(body) => Self::Failed {
                 code: body.code.clone(),
                 message: body.message.clone(),
             },
