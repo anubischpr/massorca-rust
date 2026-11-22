@@ -375,7 +375,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
     ]
 }
 
-fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDescriptor {
+pub(super) fn command(
+    id: &str,
+    title: &str,
+    method: &str,
+    args_schema: Value,
+) -> CommandDescriptor {
     CommandDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
@@ -384,12 +389,12 @@ fn command(id: &str, title: &str, method: &str, args_schema: Value) -> CommandDe
     }
 }
 
-fn no_args() -> Value {
+pub(super) fn no_args() -> Value {
     json!({ "type": "object", "properties": {} })
 }
 
 /// Arguments that name one project or workspace by selector.
-fn selector(name: &str) -> Value {
+pub(super) fn selector(name: &str) -> Value {
     let mut properties = Map::new();
     properties.insert(name.to_owned(), json!({ "type": "string" }));
     json!({ "type": "object", "required": [name], "properties": properties })

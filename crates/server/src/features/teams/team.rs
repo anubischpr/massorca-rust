@@ -1,0 +1,200 @@
+//! `team.create`, `team.list`, `team.show`, `team.update` and `team.rm` (capability `teams/1`, decision 0072).
+
+use massorca_core_store::{Store, TeamRow, new_id, now_ms};
+use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
+use massorca_protocol::methods::teams::{
+    self, Team, TeamAccess, TeamCharacter, TeamCreateParams, TeamList, TeamRef, TeamRemoveParams,
+    TeamUpdateParams,
+};
+use massorca_protocol::{ErrorBody, capabilities, codes};
+
+use crate::context::{Registries, RequestCtx};
+use crate::error::ServiceError;
+use crate::features::NoParams;
+use crate::features::workspace_domain::publish;
+use crate::owner::Owner;
+use crate::permission::Permission;
+use crate::registry::RegistrationHandle;
+
+use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
+
+/// The six shapes a team can take, with the name each one has in the store.
+const CHARACTERS: [(TeamCharacter, &str); 6] = [
+    (TeamCharacter::Triangle, "triangle"),
+    (TeamCharacter::Square, "square"),
+    (TeamCharacter::Circle, "circle"),
+    (TeamCharacter::Diamond, "diamond"),
+    (TeamCharacter::Hexagon, "hexagon"),
+    (TeamCharacter::Star, "star"),
+];
+
+pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
+    let methods = &registries.methods;
+    Ok(vec![
+        methods.register(
+            Owner::Core,
+            teams::CREATE,
+            capabilities::TEAMS,
+            Permission::Workspace,
+            create,
+        )?,
+        methods.register(
+            Owner::Core,
+            teams::LIST,
+            capabilities::TEAMS,
+            Permission::Read,
+            list,
+        )?,
+        methods.register(
+            Owner::Core,
+            teams::SHOW,
+            capabilities::TEAMS,
+            Permission::Read,
+            show,
+        )?,
+        methods.register(
+            Owner::Core,
+            teams::UPDATE,
+            capabilities::TEAMS,
+            Permission::Workspace,
+            update,
+        )?,
+        methods.register(
+            Owner::Core,
+            teams::REMOVE,
+            capabilities::TEAMS,
+            Permission::Workspace,
+            remove,
+        )?,
+    ])
+}
+
+async fn create(ctx: RequestCtx, params: TeamCreateParams) -> Result<Team, ErrorBody> {
+    let team = blocking(&ctx, move |store, _agents| create_team(store, params)).await?;
+    publish(&ctx, TOPIC_TEAM_CHANGED, &team.id);
+    Ok(team)
+}
+
+async fn list(ctx: RequestCtx, _params: NoParams) -> Result<TeamList, ErrorBody> {
+    let teams = blocking(&ctx, |store, _agents| {
+        let rows = store.list_teams().map_err(store_error)?;
+        Ok(rows.iter().map(team_view).collect())
+    })
+    .await?;
+    Ok(TeamList { teams })
+}
+
+async fn show(ctx: RequestCtx, params: TeamRef) -> Result<Team, ErrorBody> {
+    blocking(&ctx, move |store, _agents| {
+        Ok(team_view(&selectors::team(store, &params.team)?))
+    })
+    .await
+}
+
+async fn update(ctx: RequestCtx, params: TeamUpdateParams) -> Result<Team, ErrorBody> {
+    let team = blocking(&ctx, move |store, _agents| update_team(store, params)).await?;
+    publish(&ctx, TOPIC_TEAM_CHANGED, &team.id);
+    Ok(team)
+}
+
+async fn remove(ctx: RequestCtx, params: TeamRemoveParams) -> Result<Team, ErrorBody> {
+    let team = blocking(&ctx, move |store, _agents| remove_team(store, params)).await?;
+    publish(&ctx, TOPIC_TEAM_CHANGED, &team.id);
+    Ok(team)
+}
+
+fn create_team(store: &Store, params: TeamCreateParams) -> Result<Team, ErrorBody> {
+    let row = TeamRow {
+        id: new_id(),
+        name: non_blank(&params.name, "the team name")?,
+        purpose: optional_text(params.purpose).unwrap_or_default(),
+        character: character_name(params.character.unwrap_or_default())?.to_owned(),
+        access: access_name(params.access.unwrap_or_default())?.to_owned(),
+        workspaces: params.workspaces.unwrap_or(false),
+        created_at: now_ms(),
+    };
+    store.insert_team(&row).map_err(store_error)?;
+    Ok(team_view(&row))
+}
+
+fn update_team(store: &Store, params: TeamUpdateParams) -> Result<Team, ErrorBody> {
+    let mut row = selectors::team(store, &params.team)?;
+    if let Some(name) = params.name {
+        row.name = non_blank(&name, "the team name")?;
+    }
+    if let Some(purpose) = params.purpose {
+        row.purpose = purpose.trim().to_owned();
+    }
+    if let Some(character) = params.character {
+        row.character = character_name(character)?.to_owned();
+    }
+    if let Some(access) = params.access {
+        row.access = access_name(access)?.to_owned();
+    }
+    if let Some(workspaces) = params.workspaces {
+        row.workspaces = workspaces;
+    }
+    if !store.update_team(&row).map_err(store_error)? {
+        return Err(removed_meanwhile("team"));
+    }
+    Ok(team_view(&row))
+}
+
+fn remove_team(store: &Store, params: TeamRemoveParams) -> Result<Team, ErrorBody> {
+    let row = selectors::team(store, &params.team)?;
+    if !store.delete_team(&row.id).map_err(store_error)? {
+        return Err(removed_meanwhile("team"));
+    }
+    Ok(team_view(&row))
+}
+
+fn removed_meanwhile(what: &str) -> ErrorBody {
+    ErrorBody::new(
+        codes::INTERNAL,
+        format!("the {what} was removed by another call"),
+    )
+}
+
+/// The store name of a shape. A shape from a newer peer is refused.
+fn character_name(character: TeamCharacter) -> Result<&'static str, ErrorBody> {
+    CHARACTERS
+        .iter()
+        .find(|(known, _)| *known == character)
+        .map(|(_, name)| *name)
+        .ok_or_else(|| invalid("the team character is not one of the six shapes"))
+}
+
+fn character_of(name: &str) -> TeamCharacter {
+    CHARACTERS
+        .iter()
+        .find(|(_, known)| *known == name)
+        .map_or(TeamCharacter::Unknown, |(character, _)| *character)
+}
+
+/// The store name of an access mode. Only `full` exists so far.
+fn access_name(access: TeamAccess) -> Result<&'static str, ErrorBody> {
+    match access {
+        TeamAccess::Full => Ok("full"),
+        TeamAccess::Unknown => Err(invalid("the team access is not a known mode")),
+    }
+}
+
+fn access_of(name: &str) -> TeamAccess {
+    if name == "full" {
+        TeamAccess::Full
+    } else {
+        TeamAccess::Unknown
+    }
+}
+
+fn team_view(row: &TeamRow) -> Team {
+    Team {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        purpose: row.purpose.clone(),
+        character: character_of(&row.character),
+        access: access_of(&row.access),
+        workspaces: row.workspaces,
+        created_at_ms: row.created_at,
+    }
+}
