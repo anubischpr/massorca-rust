@@ -5,6 +5,7 @@
 
 pub mod contributes;
 pub mod data;
+pub mod logic;
 mod references;
 pub mod settings;
 pub mod views;

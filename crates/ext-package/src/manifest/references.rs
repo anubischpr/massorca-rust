@@ -41,6 +41,10 @@ pub(crate) fn referenced(manifest: &Manifest) -> Vec<(String, String)> {
         let here = format!("/contributes/views/{index}");
         out.push((at(&here, "document"), view.document.clone()));
     }
+    for (index, tool) in contributes.tools.iter().enumerate() {
+        let here = format!("/contributes/tools/{index}");
+        out.push((at(&here, "input"), tool.input.clone()));
+    }
     out
 }
 
