@@ -13,6 +13,7 @@ use massorca_protocol::methods::git::status::{BranchState, GitStatus, StatusEntr
 use super::service_tests::{Rig, draw, rig};
 use crate::model::regions::Region;
 use crate::model::source_control_flow::{DiscardStage, DiscardTarget};
+use crate::service::fixtures::{project, workspace};
 use crate::service::{Command, GitUpdate, Refusal, StoreUpdate};
 
 /// Selects workspace `w1` and opens the Source control tab for it, then draws the window.
@@ -335,5 +336,53 @@ fn every_state_of_the_panel_draws(cx: &mut TestAppContext) {
 
     rig.shell.read_with(cx, |shell, _| {
         assert_eq!(shell.source_control.watching.as_deref(), Some("w1"));
+    });
+}
+
+#[gpui::test]
+fn the_commit_draft_does_not_follow_the_selection_to_another_workspace(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha")],
+            workspaces: vec![
+                workspace("w1", "p1", "fix-login", 1),
+                workspace("w2", "p1", "other", 2),
+            ],
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    open_panel(&rig, cx);
+
+    // A message typed for w1 is in the box.
+    rig.shell.update_in(cx, |shell, window, cx| {
+        let field = shell.source_control.commit_field.clone();
+        field.update(cx, |field, cx| field.set_text("half-written", window, cx));
+    });
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, cx| {
+        assert_eq!(
+            shell.source_control.commit_field.read(cx).text(),
+            "half-written"
+        );
+    });
+
+    // Selecting w2 empties the box and the commit form; coming back to w1 does not restore the draft.
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w2"));
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.source_control.commit_field.read(cx).text(), "");
+        assert_eq!(shell.source_control.commit.message, "");
+    });
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    cx.run_until_parked();
+    draw(cx);
+    rig.shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.source_control.commit_field.read(cx).text(), "");
+        assert_eq!(shell.source_control.commit.message, "");
     });
 }

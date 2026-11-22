@@ -147,6 +147,9 @@ impl Shell {
         if self.source_control.workspace != selected {
             self.source_control.workspace = selected.clone();
             self.source_control.error = None;
+            // A message typed for one workspace is not carried to another; the spec keeps no draft.
+            self.source_control.commit = CommitForm::default();
+            self.source_control.clear_field = true;
             self.source_control.open = None;
             self.source_control.diff = None;
             self.source_control.discard = None;
@@ -202,6 +205,7 @@ impl Shell {
             Some(path) => (vec![path], false),
             None => (Vec::new(), true),
         };
+        let answer_for = workspace.clone();
         let params = GitPathsParams {
             workspace,
             paths,
@@ -216,15 +220,23 @@ impl Shell {
             } else {
                 handle.git_stage(params).await
             };
-            this.update(cx, |shell, cx| shell.finish_index(result, cx))
+            this.update(cx, |shell, cx| shell.finish_index(&answer_for, result, cx))
                 .ok();
         })
         .detach();
     }
 
-    fn finish_index(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+    /// The stage call's answer. A refusal is shown only while the panel still shows that workspace.
+    fn finish_index(
+        &mut self,
+        workspace: &str,
+        result: Result<(), Refusal>,
+        cx: &mut Context<Self>,
+    ) {
         self.source_control.busy = false;
-        self.source_control.error = result.err().map(|refusal| refusal.message());
+        if self.source_control.workspace.as_deref() == Some(workspace) {
+            self.source_control.error = result.err().map(|refusal| refusal.message());
+        }
         cx.notify();
     }
 
@@ -235,19 +247,30 @@ impl Shell {
         else {
             return;
         };
+        let answer_for = workspace.clone();
         let Some(params) = self.source_control.commit.submit(&workspace) else {
             return;
         };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = handle.git_commit(params).await.map(|_| ());
-            this.update(cx, |shell, cx| shell.finish_commit(result, cx))
+            this.update(cx, |shell, cx| shell.finish_commit(&answer_for, result, cx))
                 .ok();
         })
         .detach();
     }
 
-    fn finish_commit(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+    /// The commit call's answer. An answer for a workspace the panel no longer shows changes nothing it shows.
+    fn finish_commit(
+        &mut self,
+        workspace: &str,
+        result: Result<(), Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_control.workspace.as_deref() != Some(workspace) {
+            cx.notify();
+            return;
+        }
         match result {
             Ok(()) => {
                 self.source_control.commit.committed();
