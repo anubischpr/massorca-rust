@@ -6,6 +6,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use massorca_ext_package::ids::is_extension_id;
+use massorca_ext_package::package_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -113,6 +115,9 @@ impl Lockfile {
                 lockfile.version
             )));
         }
+        for entry in &lockfile.packages {
+            entry.check()?;
+        }
         Ok(lockfile)
     }
 
@@ -134,7 +139,8 @@ impl Lockfile {
             file.flush()?;
             file.sync_all()?;
             drop(file);
-            fs::rename(&temp, path)
+            fs::rename(&temp, path)?;
+            sync_dir(dir)
         })();
         written.map_err(|error| {
             let _ = fs::remove_file(&temp);
@@ -149,6 +155,41 @@ impl Lockfile {
     pub fn get_mut(&mut self, id: &str) -> Option<&mut LockEntry> {
         self.packages.iter_mut().find(|entry| entry.id == id)
     }
+}
+
+impl LockEntry {
+    /// The id and path are used to build paths that removal deletes, so an entry that names anything outside its own
+    /// `pkgs/<id>/` folder is refused.
+    fn check(&self) -> Result<(), Error> {
+        if !is_extension_id(&self.id) {
+            return Err(Error::InvalidLockfile(format!(
+                "{:?} is not an extension id",
+                self.id
+            )));
+        }
+        let inside = self
+            .path
+            .strip_prefix("pkgs/")
+            .and_then(|rest| rest.strip_prefix(self.id.as_str()))
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|version| !version.is_empty() && !version.contains('/'));
+        if !inside || package_path::check(&self.path, false).is_err() {
+            return Err(Error::InvalidLockfile(format!(
+                "the path of {} is not under pkgs/{}/",
+                self.id, self.id
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Makes the rename durable: on Unix the folder entry is synced too. Windows has no folder handle to sync.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -191,6 +232,41 @@ mod tests {
         assert_eq!(written, expected);
         let leftovers: Vec<_> = fs::read_dir(dir.path()).expect("list").collect();
         assert_eq!(leftovers.len(), 1, "no temporary file is left behind");
+    }
+
+    #[test]
+    fn an_entry_naming_a_path_outside_its_package_folder_is_refused() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("lock.json");
+        let entry = |id: &str, rel: &str| {
+            serde_json::json!({ "version": 1, "packages": [{
+                "id": id, "version": "1.0.0", "source": { "kind": "dir", "ref": "x" },
+                "sha256": "ab", "path": rel, "enabled": true, "consent": "c", "installed_at_ms": 0
+            }] })
+        };
+        for (id, rel) in [
+            ("..", "pkgs/../1.0.0-ab"),
+            ("acme.kit", "pkgs/acme.kit/../../outside"),
+            ("acme.kit", "pkgs/other.kit/1.0.0-ab"),
+            ("acme.kit", "data/acme.kit"),
+            ("acme.kit", "pkgs/acme.kit"),
+            ("acme.kit", "pkgs/acme.kit/1.0.0-ab/deeper"),
+            ("acme.kit", "pkgs/acme.kit/C:"),
+        ] {
+            fs::write(&path, entry(id, rel).to_string()).expect("seed");
+            let error = Lockfile::read(&path).expect_err(rel);
+            assert_eq!(
+                error.code(),
+                crate::error::codes::INVALID_LOCKFILE,
+                "{id} {rel}"
+            );
+        }
+        fs::write(
+            &path,
+            entry("acme.kit", "pkgs/acme.kit/1.0.0-ab").to_string(),
+        )
+        .expect("seed");
+        Lockfile::read(&path).expect("a valid entry reads");
     }
 
     #[test]
