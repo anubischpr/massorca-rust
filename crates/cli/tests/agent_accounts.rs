@@ -18,27 +18,33 @@ const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
 /// A token the fake agent's check reports as expired.
 const EXPIRED_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 
-/// Declares kind `fake` with its sign-in and check, the way the test profile does.
-fn declare_fake(sandbox: &Sandbox) {
+/// Declares kind `fake` with its sign-in, its sign-out, and the check `check` runs (`None` declares no check).
+fn declare_kind(sandbox: &Sandbox, check: Option<&[&str]>) {
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
     fs::create_dir_all(&dir).expect("create the kinds directory");
+    let mut accounts = json!({ "login": ["login"], "logout": ["logout"] });
+    if let Some(args) = check {
+        accounts["check"] = json!({
+            "args": args,
+            "signed_in_exit": 0,
+            "expired_pattern": "expired",
+            "identity_pattern": "signed in as (\\S+)"
+        });
+    }
     let fake = json!({
         "id": "fake",
         "name": "Fake agent",
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
         "prompt": { "mode": "argv" },
         "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] },
-        "accounts": {
-            "login": ["login"],
-            "check": {
-                "args": ["whoami"],
-                "signed_in_exit": 0,
-                "expired_pattern": "expired",
-                "identity_pattern": "signed in as (\\S+)"
-            }
-        }
+        "accounts": accounts
     });
     fs::write(dir.join("fake.json"), fake.to_string()).expect("write the fake kind");
+}
+
+/// Declares kind `fake` with the check the fake agent's `whoami` runs.
+fn declare_fake(sandbox: &Sandbox) {
+    declare_kind(sandbox, Some(&["whoami"]));
 }
 
 /// Starts the service with `env` set on it, and waits until it runs.
@@ -390,7 +396,6 @@ fn check_reports_expired_and_a_different_identity_as_conflict() {
 fn migration_turns_the_old_home_into_an_active_default_account() {
     let sandbox = Sandbox::new();
     declare_fake(&sandbox);
-    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_PRINT_HOME", "1")]);
     let legacy = sandbox
         .profile_dir("default")
         .join("agents")
@@ -398,6 +403,8 @@ fn migration_turns_the_old_home_into_an_active_default_account() {
         .join("fake");
     fs::create_dir_all(&legacy).expect("create the 0056 home");
     fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
+    // The move happens at a service start (decision 0059), so the home is in place before the service starts.
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_PRINT_HOME", "1")]);
 
     let listed = accounts(&sandbox);
     assert_eq!(listed.len(), 1, "{listed:?}");
@@ -480,4 +487,278 @@ fn the_accounts_output_names_no_secret() {
     );
     let text = stdout_text(&outcome.success());
     assert!(!text.contains("fake-secret-value"), "{text}");
+}
+
+/// Waits until the kind lists at least one account and returns the first one.
+fn first_account(sandbox: &Sandbox) -> Value {
+    eventually("an account to be listed", || {
+        accounts(sandbox).into_iter().next()
+    })
+}
+
+/// Waits until no account is listed.
+fn no_accounts(sandbox: &Sandbox) {
+    eventually("no account to be listed", || {
+        accounts(sandbox).is_empty().then_some(())
+    });
+}
+
+#[test]
+fn a_hung_check_is_stopped_with_its_child_and_reports_unknown() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, Some(&["hang"]));
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+
+    let started = std::time::Instant::now();
+    let imported = import(&sandbox, &source, "work");
+    assert_eq!(imported["result"], "imported", "{imported}");
+    let id = imported["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "unknown", "{checked}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(40),
+        "two checks of 10 seconds each must not hang: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn removing_an_imported_account_does_not_run_the_sign_out() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let imported = import(&sandbox, &source, "imported");
+    let id = imported["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    sandbox.json_ok("default", &["agent", "accounts", "remove", "fake", &id]);
+    assert!(!marker.exists(), "an imported login is not signed out");
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "signed",
+            "--no-attach",
+        ],
+    );
+    eventually("the signed-in account", || {
+        (account_labelled_or_none(&sandbox, "signed")?["state"] == "signed_in").then_some(())
+    });
+    let signed = account_labelled(&sandbox, "signed");
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "remove",
+            "fake",
+            signed["id"].as_str().unwrap(),
+        ],
+    );
+    assert!(
+        marker.exists(),
+        "a sign-in account is signed out when removed"
+    );
+}
+
+#[test]
+fn a_sign_in_whose_check_says_expired_is_discarded() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_EXPIRED", "1")]);
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "expired",
+            "--no-attach",
+        ],
+    );
+    no_accounts(&sandbox);
+}
+
+#[test]
+fn a_sign_in_without_a_check_is_kept_as_unknown_not_signed_in() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, None);
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "plain",
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to finish", || {
+        (account_labelled_or_none(&sandbox, "plain")?["state"] != "needs_sign_in").then_some(())
+    });
+    assert_eq!(account_labelled(&sandbox, "plain")["state"], "unknown");
+}
+
+#[test]
+fn a_sign_in_whose_check_hangs_is_kept_as_unknown_when_its_files_exist() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, Some(&["hang"]));
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "slow",
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to finish after its check times out", || {
+        (account_labelled_or_none(&sandbox, "slow")?["state"] == "unknown").then_some(())
+    });
+}
+
+#[test]
+fn a_pending_sign_in_refuses_removal_and_activation() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_HANG", "1")]);
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "pending",
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    let removal = error_of(&sandbox, &["agent", "accounts", "remove", "fake", &id]);
+    assert_eq!(removal["code"], "agent.busy", "{removal}");
+    let activation = error_of(&sandbox, &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activation["code"], "agent.busy", "{activation}");
+    assert_eq!(accounts(&sandbox).len(), 1, "the pending account is kept");
+}
+
+#[test]
+fn a_sign_in_left_unfinished_by_a_restart_is_decided_at_startup() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let first = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_HANG", "1")]);
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "orphan",
+            "--no-attach",
+        ],
+    );
+    assert_eq!(accounts(&sandbox).len(), 1);
+    drop(first);
+    sandbox.wait_for_running("default", false);
+
+    let _service = spawn_service_with(&sandbox, &[]);
+    no_accounts(&sandbox);
+}
+
+#[test]
+fn an_orphan_account_home_is_adopted_as_migrated_at_startup() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let orphan = "0195c0de-0000-7000-8000-0000000000aa";
+    let home = account_home(&sandbox, orphan);
+    fs::create_dir_all(&home).expect("create the orphan home");
+    fs::write(home.join("token.json"), FAKE_TOKEN).expect("write the orphan token");
+
+    let _service = spawn_service_with(&sandbox, &[]);
+    let adopted = first_account(&sandbox);
+    assert_eq!(adopted["id"], orphan);
+    assert_eq!(adopted["state"], "migrated");
+    assert_eq!(adopted["active"], true, "no other account is active");
+}
+
+#[test]
+fn listing_accounts_and_kinds_does_not_migrate_the_legacy_home() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[]);
+    let legacy = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("homes")
+        .join("fake");
+    fs::create_dir_all(&legacy).expect("create the 0056 home");
+    fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
+
+    sandbox.json_ok("default", &["agent", "kinds"]);
+    assert!(
+        accounts(&sandbox).is_empty(),
+        "a read does not move the home"
+    );
+    assert!(
+        legacy.exists(),
+        "the 0056 home stays until a start or the next service"
+    );
+}
+
+#[test]
+fn a_label_with_control_characters_or_too_long_is_refused_as_invalid_params() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let long = "a".repeat(257);
+    let control = "bad\u{7}label";
+    for label in [long.as_str(), control] {
+        let error = error_of(
+            &sandbox,
+            &[
+                "agent",
+                "accounts",
+                "add",
+                "fake",
+                "--label",
+                label,
+                "--no-attach",
+            ],
+        );
+        assert_eq!(error["code"], "request.invalid_params", "{error}");
+    }
+    assert!(
+        accounts(&sandbox).is_empty(),
+        "nothing is created for a refused label"
+    );
 }

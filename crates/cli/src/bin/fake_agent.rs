@@ -11,6 +11,8 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
@@ -32,6 +34,14 @@ const CRASH_EXIT_CODE: u8 = 3;
 const PRINT_HOME_ENV: &str = "FAKE_AGENT_PRINT_HOME";
 /// Set to `1`, `login` exits 1 without writing the token (decision 0059).
 const LOGIN_FAIL_ENV: &str = "FAKE_AGENT_LOGIN_FAIL";
+/// Set to `1`, `login` never finishes (decision 0059): the sign-in terminal stays open.
+const LOGIN_HANG_ENV: &str = "FAKE_AGENT_LOGIN_HANG";
+/// Set to `1`, `login` writes an expired token, so the check that follows reports expired.
+const LOGIN_EXPIRED_ENV: &str = "FAKE_AGENT_LOGIN_EXPIRED";
+/// Names a file that `logout` writes outside the home, so a test can see that the sign-out ran.
+const LOGOUT_MARKER_ENV: &str = "FAKE_AGENT_LOGOUT_MARKER";
+/// The token `login` writes when it is told to expire it.
+const EXPIRED_LOGIN_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 /// What `login` writes into the token file.
 const FAKE_LOGIN_TOKEN: &str = r#"{"fake":true}"#;
 /// A token containing this is expired: `whoami` then reports `expired`.
@@ -47,6 +57,9 @@ fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         Some("login") => return login(),
         Some("whoami") => return whoami(),
+        Some("logout") => return logout(),
+        Some("hang") => return hang(),
+        Some("hang-child") => return hang_child(),
         _ => {}
     }
     let arguments = Arguments::parse(env::args().skip(1));
@@ -282,11 +295,21 @@ fn login() -> ExitCode {
         say("login failed");
         return ExitCode::from(1);
     }
+    if env::var_os(LOGIN_HANG_ENV).is_some_and(|value| value == "1") {
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
     let Some(home) = credential_home() else {
         say("no credential home");
         return ExitCode::from(1);
     };
-    match fs::write(home.join(CREDENTIAL_FILE), FAKE_LOGIN_TOKEN) {
+    let token = if env::var_os(LOGIN_EXPIRED_ENV).is_some_and(|value| value == "1") {
+        EXPIRED_LOGIN_TOKEN
+    } else {
+        FAKE_LOGIN_TOKEN
+    };
+    match fs::write(home.join(CREDENTIAL_FILE), token) {
         Ok(()) => {
             say("signed in");
             ExitCode::SUCCESS
@@ -383,4 +406,34 @@ fn clean(line: &str) -> String {
         .replace("\x1b[201~", "")
         .trim()
         .to_owned()
+}
+
+/// The sign-out (decision 0059): writes the marker `FAKE_AGENT_LOGOUT_MARKER` names, outside the home, and leaves the
+/// token alone. Without a marker it does nothing.
+fn logout() -> ExitCode {
+    if let Some(marker) = env::var_os(LOGOUT_MARKER_ENV).filter(|path| !path.is_empty()) {
+        if fs::write(&marker, "logged out\n").is_err() {
+            return ExitCode::from(1);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// A check that never finishes: it starts a child that inherits the same output pipes, and both sleep. A stopped check
+/// must take its child with it, or the pipes stay open and its output is never read to the end.
+fn hang() -> ExitCode {
+    if let Ok(me) = env::current_exe() {
+        let _ = Command::new(me)
+            .arg("hang-child")
+            .stdin(Stdio::null())
+            .spawn();
+    }
+    hang_child()
+}
+
+/// The sleeping half of [`hang`].
+fn hang_child() -> ExitCode {
+    loop {
+        thread::sleep(Duration::from_secs(3600));
+    }
 }

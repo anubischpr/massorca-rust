@@ -173,9 +173,9 @@ fn list_lines(listed: &AccountsList) -> Vec<String> {
         .map(|account| {
             vec![
                 account.id.clone(),
-                account.label.clone(),
+                printable(&account.label),
                 state_word(account.state).to_owned(),
-                account.identity.clone().unwrap_or_default(),
+                printable(&account.identity.clone().unwrap_or_default()),
                 if account.active { "yes" } else { "no" }.to_owned(),
                 account.projects.join(", "),
             ]
@@ -199,11 +199,11 @@ fn summary_lines(summary: &AccountSummary) -> Vec<String> {
     let identity = summary
         .identity
         .as_deref()
-        .map(|identity| format!(", {identity}"))
+        .map(|identity| format!(", {}", printable(identity)))
         .unwrap_or_default();
     vec![format!(
         "account {} ({}): {}{identity}{}",
-        summary.label,
+        printable(&summary.label),
         summary.id,
         state_word(summary.state),
         if summary.active { ", active" } else { "" }
@@ -235,4 +235,12 @@ fn removed_line(removed: &AccountsRemoved) -> String {
             removed.account, removed.kind
         )
     }
+}
+
+/// Text as the terminal shows it: control characters removed, so a label or identity cannot move the cursor or clear the
+/// screen. Labels are at most 256 characters, and identities are checked by the service the same way.
+fn printable(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control())
+        .collect()
 }
