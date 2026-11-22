@@ -193,7 +193,9 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   reaches `STATE` (`exited` means its run has ended), then prints the session and exits 0.
   With `--timeout SECS` it gives up after that long and fails with `agent.status_timeout`.
   `agent status [SESSION] --watch` prints the sessions, then one line per change, until it
-  is interrupted; with `--json` each item is its own `{"ok":true,"result":...}` line.
+  is interrupted; with `--json` each item is its own `{"ok":true,"result":...}` line. Like
+  `git watch`, it exits non-zero with the reason when the stream is cut off: the device was
+  revoked (`auth.device_revoked`), the service is stopping, or the connection was lost.
 - `agent hook EVENT [PAYLOAD]` reads the session and token from `MASSORCA_AGENT_SESSION` and
   `MASSORCA_AGENT_TOKEN`, which the service sets in every run, and the payload from the
   argument or else from stdin when stdin is not a terminal (at most 64 KiB). It never starts
