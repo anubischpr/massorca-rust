@@ -18,6 +18,8 @@ mod windows_dir_access;
 #[cfg(windows)]
 mod windows_endpoint_access;
 #[cfg(windows)]
+mod windows_handle_walk;
+#[cfg(windows)]
 mod windows_profile_root;
 #[cfg(windows)]
 mod windows_profile_secure;

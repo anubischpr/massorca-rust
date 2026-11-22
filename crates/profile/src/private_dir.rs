@@ -51,7 +51,7 @@ pub fn open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
 #[cfg(windows)]
 fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
     use crate::windows_profile_root::{
-        FolderAccess, entries_others_can_reach, folder_access, make_owner_only_below,
+        FolderAccess, check_below, folder_access, make_owner_only_below,
     };
 
     let paths = || vec![dir.to_path_buf()];
@@ -68,11 +68,9 @@ fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
             return Err(RootAccessError::ReadableByOthers { paths: paths() });
         }
     }
-    // The folder holds secrets, so anything below it that others can reach is refused on every open.
-    let exposed = entries_others_can_reach(dir)?;
-    if !exposed.is_empty() {
-        return Err(RootAccessError::ReadableByOthers { paths: exposed });
-    }
+    // The folder holds secrets, so on every open anything below it that is a link or that others can reach is
+    // refused.
+    check_below(dir)?;
     Ok(PrivateDir {
         path: dir.to_path_buf(),
         pin: held,
@@ -279,7 +277,8 @@ impl PrivateDir {
             if crate::unix_dir_fd::entry_present(&folder, marker)? {
                 return Ok(false);
             }
-            crate::unix_dir_fd::rename(&self.dir, name, &tombstone)?;
+            crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
+                .map_err(|error| refused_open(&path, error))?;
         }
         self.delete_entry(&tombstone)?;
         Ok(true)
@@ -300,11 +299,10 @@ impl PrivateDir {
         }
         #[cfg(unix)]
         {
-            drop(
-                crate::unix_dir_fd::open_dir(Some(&self.dir), Path::new(name))
-                    .map_err(|error| refused_open(&path, error))?,
-            );
-            crate::unix_dir_fd::rename(&self.dir, name, &tombstone)?;
+            let folder = crate::unix_dir_fd::open_dir(Some(&self.dir), Path::new(name))
+                .map_err(|error| refused_open(&path, error))?;
+            crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
+                .map_err(|error| refused_open(&path, error))?;
         }
         self.delete_entry(&tombstone)?;
         Ok(())
@@ -797,5 +795,39 @@ mod tests {
 
         assert!(names(parent.path()).is_empty());
         assert_eq!(fs::read(outside.join("secret")).expect("still there"), b"x");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_below_an_owner_only_folder_is_refused_on_every_open() {
+        use crate::windows_profile_root::{Links, read_sddl};
+
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("an outside folder");
+        let before = read_sddl(&outside, Links::Open).expect("its DACL");
+        let hosts = temp.path().join("hosts");
+        let parent = open_private_dir(&hosts).expect("an owner-only folder");
+        let office = parent.child("office").expect("a host folder");
+        drop(office);
+        drop(parent);
+        let link = hosts.join("office").join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .expect("mklink runs");
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+
+        assert!(matches!(
+            open_private_dir(&hosts),
+            Err(RootAccessError::UnsafeLocation { path }) if path == link
+        ));
+        assert_eq!(read_sddl(&outside, Links::Open).expect("its DACL"), before);
     }
 }

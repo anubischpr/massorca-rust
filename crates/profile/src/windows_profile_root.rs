@@ -236,36 +236,22 @@ pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError
 }
 
 /// Gives the folder `path` the protected owner-only DACL, inherited by what is created in it later.
-/// Makes the folder `dir` and everything below it owner-only, through handles that never follow a link, while the
-/// caller keeps `dir` pinned. It first opens every entry below with `FILE_FLAG_OPEN_REPARSE_POINT` and checks it: a
-/// reparse point (a junction or a link) is refused with `UnsafeLocation`, and an explicit grant to anyone outside the
-/// accepted owners and Administrators with `ReadableByOthers`, before anything changes. Then each entry gets the
-/// protected owner-only DACL through its own handle, and `dir` last. Nothing outside `dir` is opened or changed.
+/// Makes the folder `dir` and everything below it owner-only, while the caller keeps `dir` pinned. The walk lists each
+/// folder through its handle and opens each entry relative to it, never following a link (`windows_handle_walk`): a
+/// reparse point below is refused with `UnsafeLocation`, and an explicit grant to anyone outside the accepted owners
+/// and Administrators with `ReadableByOthers`, before anything changes. Then each entry gets the protected owner-only
+/// DACL through its own handle, and `dir` last. Nothing outside `dir` is opened or changed.
 pub(crate) fn make_owner_only_below(dir: &Path) -> Result<(), RootAccessError> {
-    use std::os::windows::fs::MetadataExt;
     use std::os::windows::io::AsRawHandle;
 
     let trusted = Trusted::current()?;
-    let mut opened = Vec::new();
+    let folder = crate::windows_handle_walk::open_folder(dir)?;
+    let entries = crate::windows_handle_walk::walk_below(&folder, dir)?;
     let mut exposed = Vec::new();
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(folder) = pending.pop() {
-        for entry in fs::read_dir(&folder)? {
-            let path = entry?.path();
-            let file = open_for_access_change(&path)?;
-            let attributes = file.metadata()?.file_attributes();
-            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return Err(RootAccessError::UnsafeLocation { path });
-            }
-            let descriptor = Descriptor::parse(&sddl_of_handle(file.as_raw_handle())?);
-            if descriptor.grants_explicitly_to_others(&trusted) {
-                exposed.push(path.clone());
-            }
-            let is_dir = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
-            if is_dir {
-                pending.push(path);
-            }
-            opened.push((file, is_dir));
+    for entry in &entries {
+        let descriptor = Descriptor::parse(&sddl_of_handle(entry.file.as_raw_handle())?);
+        if descriptor.grants_explicitly_to_others(&trusted) {
+            exposed.push(entry.path.clone());
         }
     }
     if !exposed.is_empty() {
@@ -275,46 +261,43 @@ pub(crate) fn make_owner_only_below(dir: &Path) -> Result<(), RootAccessError> {
     let user = trusted.user();
     let folder_dacl = owner_only_dir_dacl_sddl(user)?;
     let file_dacl = format!("D:P(A;;FA;;;{user})");
-    for (file, is_dir) in &opened {
-        set_dacl_through(file, if *is_dir { &folder_dacl } else { &file_dacl })?;
+    for entry in &entries {
+        set_dacl_through(
+            &entry.file,
+            if entry.is_dir {
+                &folder_dacl
+            } else {
+                &file_dacl
+            },
+        )?;
     }
-    set_dacl_through(&open_for_access_change(dir)?, &folder_dacl)?;
+    set_dacl_through(&folder, &folder_dacl)?;
     Ok(())
 }
 
-/// Opens `path` itself, never a link's target, to read and change its DACL. It shares everything, so a pinned folder
-/// can be opened this way while its pin is held.
-fn open_for_access_change(path: &Path) -> io::Result<fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
+/// Checks everything below `dir` the same way, through handles that never follow a link: a reparse point is refused
+/// with `UnsafeLocation`, and up to `MAX_LISTED_ENTRIES` entries whose DACL gives anyone outside the accepted owners
+/// and Administrators any access are refused with `ReadableByOthers`.
+pub(crate) fn check_below(dir: &Path) -> Result<(), RootAccessError> {
+    use std::os::windows::io::AsRawHandle;
 
-    fs::OpenOptions::new()
-        .access_mode(READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-}
-
-/// Up to `MAX_LISTED_ENTRIES` entries below `dir`, links read themselves and never followed, whose DACL gives anyone
-/// outside the accepted owners and Administrators any access.
-pub(crate) fn entries_others_can_reach(dir: &Path) -> io::Result<Vec<std::path::PathBuf>> {
     let trusted = Trusted::current()?;
-    let mut found = Vec::new();
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(folder) = pending.pop() {
-        for entry in fs::read_dir(&folder)? {
-            let entry = entry?;
-            let path = entry.path();
-            if Descriptor::parse(&read_sddl(&path, Links::Open)?).grants_any_to_others(&trusted) {
-                found.push(path);
-                if found.len() >= crate::root_access::MAX_LISTED_ENTRIES {
-                    return Ok(found);
-                }
-            } else if entry.file_type()?.is_dir() {
-                pending.push(path);
+    let folder = crate::windows_handle_walk::open_folder(dir)?;
+    let mut exposed = Vec::new();
+    for entry in crate::windows_handle_walk::walk_below(&folder, dir)? {
+        let descriptor = Descriptor::parse(&sddl_of_handle(entry.file.as_raw_handle())?);
+        if descriptor.grants_any_to_others(&trusted) {
+            exposed.push(entry.path);
+            if exposed.len() >= crate::root_access::MAX_LISTED_ENTRIES {
+                break;
             }
         }
     }
-    Ok(found)
+    if exposed.is_empty() {
+        Ok(())
+    } else {
+        Err(RootAccessError::ReadableByOthers { paths: exposed })
+    }
 }
 
 /// Creates a new file at `path` whose descriptor allows only the current user, in the same call that creates it, so it

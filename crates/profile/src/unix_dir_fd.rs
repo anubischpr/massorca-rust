@@ -126,6 +126,46 @@ pub(crate) fn open_or_create(parent: &File, name: &str) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+/// The device and inode of the entry `name` of `parent`, not following a link.
+pub(crate) fn entry_identity(parent: &File, name: &str) -> io::Result<(u64, u64)> {
+    let c_name = c_name(Path::new(name))?;
+    // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `parent` is an open folder, `c_name` is NUL-terminated, and `stat` is a valid out-pointer.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((stat.st_dev as u64, stat.st_ino as u64))
+}
+
+/// Renames the entry `from` of `parent` to `to` and checks that what moved is `expected`, the folder held open as
+/// `expected`; anything else is renamed back and refused.
+pub(crate) fn rename_checked(
+    parent: &File,
+    from: &str,
+    to: &str,
+    expected: &File,
+) -> io::Result<()> {
+    let wanted = expected.metadata()?;
+    rename(parent, from, to)?;
+    if entry_identity(parent, to)? == (wanted.dev(), wanted.ino()) {
+        return Ok(());
+    }
+    let _ = rename(parent, to, from);
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{from} changed while it was being removed"),
+    ))
+}
+
 /// Whether `parent` holds an entry `name`, a link included; only `ENOENT` means absent, and any other error is
 /// returned.
 pub(crate) fn entry_present(parent: &File, name: &str) -> io::Result<bool> {
@@ -232,23 +272,62 @@ pub(crate) fn list_names(dir: &File) -> io::Result<Vec<std::ffi::OsString>> {
     }
 }
 
-/// How deep `remove_entry` goes below the entry it is given before it refuses.
-const MAX_REMOVE_DEPTH: usize = 64;
+/// How many levels below the entry it is given `remove_entry` goes: an entry 64 levels down is removed, one 65 levels
+/// down makes it refuse.
+pub(crate) const MAX_REMOVE_DEPTH: usize = 64;
 
 /// Removes the entry `name` of `parent` and, for a folder, everything in it, never following a link: a link is
-/// removed itself, and each folder is opened with `O_NOFOLLOW | O_DIRECTORY` relative to its parent. A tree nested
-/// deeper than `MAX_REMOVE_DEPTH` is refused.
+/// removed itself, and each folder is opened with `O_NOFOLLOW | O_DIRECTORY` relative to its parent. The depth is
+/// measured first, so a tree nested deeper than `MAX_REMOVE_DEPTH` is refused before anything is deleted.
 pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<()> {
-    remove_entry_at(parent, name, 0)
+    check_depth(parent, name, 0)?;
+    remove_entry_at(parent, name)
 }
 
-fn remove_entry_at(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::Result<()> {
+/// Fails when the entry `name` of `parent` holds anything more than `MAX_REMOVE_DEPTH` levels below it; deletes nothing.
+fn check_depth(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::Result<()> {
     if depth > MAX_REMOVE_DEPTH {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("a folder is nested deeper than {MAX_REMOVE_DEPTH} levels"),
+            format!(
+                "a folder is nested deeper than {MAX_REMOVE_DEPTH} levels, so nothing was removed"
+            ),
         ));
     }
+    let Some(folder) = open_child_folder(parent, name)? else {
+        return Ok(());
+    };
+    for child in list_names(&folder)? {
+        check_depth(&folder, &child, depth + 1)?;
+    }
+    Ok(())
+}
+
+/// The entry `name` of `parent` opened as a folder, never following a link; `None` when it is anything else.
+fn open_child_folder(parent: &File, name: &std::ffi::OsStr) -> io::Result<Option<File>> {
+    let c_name = CString::new(name.as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `parent` is an open folder, `c_name` is NUL-terminated, and `stat` is a valid out-pointer.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Ok(None);
+    }
+    open_dir(Some(parent), Path::new(name)).map(Some)
+}
+
+fn remove_entry_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<()> {
     let c_name = CString::new(name.as_bytes())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
@@ -281,7 +360,7 @@ fn remove_entry_at(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::R
         // SAFETY: `fd` was just opened and nothing else owns it.
         let folder = unsafe { File::from_raw_fd(fd) };
         for child in list_names(&folder)? {
-            remove_entry_at(&folder, &child, depth + 1)?;
+            remove_entry_at(&folder, &child)?;
         }
     }
     let flags = if is_dir { libc::AT_REMOVEDIR } else { 0 };
@@ -378,16 +457,41 @@ mod tests {
         assert_eq!(fs::read(outside.join("secret")).expect("still there"), b"x");
     }
 
-    #[test]
-    fn a_tree_nested_deeper_than_the_limit_is_refused() {
-        let temp = tempfile::tempdir().expect("a temporary folder");
-        let mut deep = temp.path().join("deep");
-        for _ in 0..70 {
-            deep.push("d");
+    /// A folder `deep` with `levels` nested folders below it and a file in the last one.
+    fn nested(root: &std::path::Path, levels: usize) -> std::path::PathBuf {
+        let mut deepest = root.join("deep");
+        for _ in 0..levels {
+            deepest.push("d");
         }
-        fs::create_dir_all(&deep).expect("a deep tree");
+        fs::create_dir_all(&deepest).expect("a deep tree");
+        fs::write(deepest.join("file"), b"x").expect("a file at the bottom");
+        deepest
+    }
+
+    #[test]
+    fn a_tree_64_levels_deep_is_removed() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        nested(temp.path(), 63);
+        let parent = File::open(temp.path()).expect("opened");
+
+        remove_entry(&parent, OsStr::new("deep")).expect("removed");
+
+        assert!(!temp.path().join("deep").exists());
+    }
+
+    #[test]
+    fn a_tree_deeper_than_64_levels_is_refused_and_nothing_is_deleted() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let deepest = nested(temp.path(), 64);
+        fs::write(temp.path().join("deep").join("near"), b"x").expect("a file near the top");
         let parent = File::open(temp.path()).expect("opened");
 
         assert!(remove_entry(&parent, OsStr::new("deep")).is_err());
+
+        assert!(deepest.join("file").is_file(), "the deepest file stays");
+        assert!(
+            temp.path().join("deep").join("near").is_file(),
+            "nothing was deleted"
+        );
     }
 }
