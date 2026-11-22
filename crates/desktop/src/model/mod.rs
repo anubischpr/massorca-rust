@@ -17,6 +17,7 @@ pub mod setup;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
+pub mod source_control;
 pub mod start_page;
 pub mod status_items;
 pub mod teams;
