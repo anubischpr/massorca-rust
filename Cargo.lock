@@ -3340,6 +3340,7 @@ dependencies = [
 name = "massorca-core-terminal"
 version = "0.1.0"
 dependencies = [
+ "alacritty_terminal",
  "portable-pty",
  "rustix",
  "tempfile",
