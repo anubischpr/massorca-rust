@@ -386,3 +386,74 @@ fn the_commit_draft_does_not_follow_the_selection_to_another_workspace(cx: &mut 
         assert_eq!(shell.source_control.commit.message, "");
     });
 }
+
+#[gpui::test]
+fn a_late_discard_answer_does_not_reshape_the_dialog_of_another_workspace(cx: &mut TestAppContext) {
+    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha")],
+            workspaces: vec![
+                workspace("w1", "p1", "fix-login", 1),
+                workspace("w2", "p1", "other", 2),
+            ],
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    open_panel(&rig, cx);
+    next(&mut rig);
+
+    // A discard of a.txt in w1 is confirmed, and its call is out.
+    let a = DiscardTarget {
+        path: "a.txt".into(),
+        untracked: false,
+    };
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![a], cx));
+    draw(cx);
+    rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
+    cx.run_until_parked();
+    let Command::GitDiscard { reply: a_reply, .. } = next(&mut rig) else {
+        panic!("a discard call for a.txt was expected");
+    };
+
+    // The selection moves to w2 while that call is pending, and b.txt is opened for discard there.
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w2"));
+    draw(cx);
+    while rig.script.next().is_some() {}
+    let b = DiscardTarget {
+        path: "b.txt".into(),
+        untracked: false,
+    };
+    rig.shell
+        .update(cx, |shell, cx| shell.open_discard(vec![b], cx));
+    draw(cx);
+
+    // a.txt's answer arrives late: the service refused it because of its staged changes.
+    let _ = a_reply.send(Err(Refusal::GitRefused {
+        code: codes::GIT_DISCARD_STAGED.into(),
+        message: "a.txt has staged changes.".into(),
+        paths: vec!["a.txt".into()],
+    }));
+    cx.run_until_parked();
+    draw(cx);
+
+    // b.txt's dialog is still its first dialog, and confirming it sends b.txt alone.
+    rig.shell.read_with(cx, |shell, _| {
+        let flow = shell
+            .source_control
+            .discard
+            .as_ref()
+            .expect("b.txt's dialog is open");
+        assert_eq!(flow.stage(), &DiscardStage::Confirm);
+        assert_eq!(flow.copy().title, "Discard changes in b.txt?");
+    });
+    rig.shell.update(cx, |shell, cx| shell.confirm_discard(cx));
+    cx.run_until_parked();
+    let Command::GitDiscard { params, .. } = next(&mut rig) else {
+        panic!("a discard call for b.txt was expected");
+    };
+    assert_eq!(params.paths, ["b.txt"]);
+    assert!(!params.include_staged, "b.txt's staged changes stay");
+}
