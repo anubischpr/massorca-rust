@@ -1,10 +1,9 @@
 //! Command descriptors: what each CLI command or palette entry runs (extensions.md section 9, item 5).
 
 mod core_table;
+mod git_table;
 
 use serde_json::Value;
-
-pub use core_table::core_commands;
 
 use crate::owner::Owner;
 use crate::registry::{RegistrationError, RegistrationHandle, Registry};
@@ -16,6 +15,13 @@ pub struct CommandDescriptor {
     pub title: String,
     pub method: String,
     pub args_schema: Value,
+}
+
+/// Every core command: the Phase 1 table, then the git commands.
+pub fn core_commands() -> Vec<CommandDescriptor> {
+    let mut commands = core_table::core_commands();
+    commands.extend(git_table::git_commands());
+    commands
 }
 
 /// Command descriptors keyed by id.

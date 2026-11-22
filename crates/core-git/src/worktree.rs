@@ -1,7 +1,11 @@
 //! Linked worktrees: listing, adding and removing them.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, LazyLock, Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::error::GitError;
 use crate::git::Git;
@@ -57,10 +61,19 @@ pub enum WorktreeAdd<'a> {
 #[derive(Debug)]
 struct AddSnapshot {
     registered: Vec<PathBuf>,
+    /// Something was already at the target path, so an undo must not delete it.
+    target_existed: bool,
     /// The commit a branch this add creates will start at; `None` when the add
     /// creates no branch or the branch already exists.
     new_branch_base: Option<String>,
 }
+
+/// How long an undo keeps retrying. On Windows a killed add's processes exit asynchronously, and until they
+/// do, a hook whose working directory is the new worktree keeps git from removing it.
+const UNDO_BUDGET: Duration = Duration::from_secs(30);
+const UNDO_RETRY: Duration = Duration::from_millis(250);
+/// Each git command of an undo; long enough for a loaded machine, short enough to stay within the budget.
+const UNDO_STEP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `path` in a form two spellings of one directory share; unchanged when it does not exist.
 fn comparable(path: &Path) -> PathBuf {
@@ -112,18 +125,27 @@ impl Git {
                 args.push(OsString::from(branch));
             }
         }
-        let before = self.add_snapshot(repo, add)?;
+        let target = repo.join(path);
+        // Held across the snapshot, the add and its undo: a second add to the same target that took its snapshot
+        // while the first was running would otherwise see an empty path, fail, and undo the first one's worktree.
+        let _claim = TargetClaim::acquire(&target);
+        let before = self.add_snapshot(repo, &target, add)?;
         let result = self
             .run_mutation(Some(repo), args)
             .and_then(|captured| captured.require_success());
         if result.is_err() {
-            self.undo_add(repo, &repo.join(path), add, &before);
+            self.undo_add(repo, &target, add, &before);
         }
         result
     }
 
     /// What exists before `worktree add` runs, so a failure undoes only what it created.
-    fn add_snapshot(&self, repo: &Path, add: WorktreeAdd<'_>) -> Result<AddSnapshot, GitError> {
+    fn add_snapshot(
+        &self,
+        repo: &Path,
+        target: &Path,
+        add: WorktreeAdd<'_>,
+    ) -> Result<AddSnapshot, GitError> {
         let registered = self.registered_paths(repo)?;
         let new_branch_base = match add {
             WorktreeAdd::NewBranch { branch, base } => {
@@ -140,42 +162,92 @@ impl Git {
         };
         Ok(AddSnapshot {
             registered,
+            target_existed: std::fs::symlink_metadata(target).is_ok(),
             new_branch_base,
         })
     }
 
-    /// Best effort: removes a worktree at `target` that was not registered before, then
-    /// deletes a new branch that still points at its base. The add's own error is what
-    /// the caller sees, so failures here are ignored.
+    /// Best effort: removes a worktree at `target` that was not registered before, and the directory if this
+    /// add created it, retrying for up to [`UNDO_BUDGET`] while dying processes still hold it; then deletes a
+    /// new branch that still points at its base. The add's own error is what the caller sees.
     fn undo_add(&self, repo: &Path, target: &Path, add: WorktreeAdd<'_>, before: &AddSnapshot) {
+        // The add's own mutation timeout may be what cut it short; on a loaded machine every cleanup command would
+        // hit it too, so the undo bounds each command on its own.
+        let undo = self.clone().with_mutation_timeout(Some(UNDO_STEP_TIMEOUT));
         let target = comparable(target);
-        if let Ok(after) = self.registered_paths(repo) {
-            for path in after
-                .iter()
-                .filter(|path| **path == target && !before.registered.contains(path))
-            {
-                // Twice `--force`: git locks a worktree while it is being added.
-                let _ = self.run_mutation(
-                    Some(repo),
-                    [
-                        OsString::from("worktree"),
-                        OsString::from("remove"),
-                        OsString::from("--force"),
-                        OsString::from("--force"),
-                        OsString::from("--"),
-                        path.into(),
-                    ],
+        let deadline = Instant::now() + UNDO_BUDGET;
+        loop {
+            // Every step on every pass: a step that keeps failing must not keep the others from running.
+            // The branch delete fails while the worktree is still registered, and succeeds on a later pass.
+            let registration = undo.undo_registration(repo, &target, before);
+            let directory = undo_directory(&target, before);
+            let branch = undo.undo_branch(repo, add, before);
+            if registration && directory && branch {
+                return;
+            }
+            if Instant::now() >= deadline {
+                let left: Vec<&str> = [
+                    (!registration).then_some("worktree registration"),
+                    (!directory).then_some("directory"),
+                    (!branch).then_some("branch"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                tracing::warn!(
+                    target = %target.display(),
+                    ?left,
+                    "a failed worktree add could not be fully undone"
                 );
+                return;
             }
-            let _ = self.run_mutation(Some(repo), ["worktree", "prune"]);
+            thread::sleep(UNDO_RETRY);
         }
-        if let (WorktreeAdd::NewBranch { branch, .. }, Some(base)) = (add, &before.new_branch_base)
-        {
-            let reference = format!("refs/heads/{branch}");
-            if self.resolve(repo, &reference).ok().flatten().as_ref() == Some(base) {
+    }
+
+    /// Deletes the branch this add created while it still points at its base; true once nothing of it is left
+    /// to delete. A branch that moved since is someone's work and is kept.
+    fn undo_branch(&self, repo: &Path, add: WorktreeAdd<'_>, before: &AddSnapshot) -> bool {
+        let (WorktreeAdd::NewBranch { branch, .. }, Some(base)) = (add, &before.new_branch_base)
+        else {
+            return true;
+        };
+        let reference = format!("refs/heads/{branch}");
+        match self.resolve(repo, &reference) {
+            Ok(Some(commit)) if commit == *base => {
                 let _ = self.run_mutation(Some(repo), ["branch", "-D", "--", branch]);
+                matches!(self.resolve(repo, &reference), Ok(None))
             }
+            Ok(_) => true,
+            Err(_) => false,
         }
+    }
+
+    /// Unregisters `target` when this add registered it; true once git no longer lists it.
+    fn undo_registration(&self, repo: &Path, target: &Path, before: &AddSnapshot) -> bool {
+        let Ok(after) = self.registered_paths(repo) else {
+            return false;
+        };
+        if !after.iter().any(|path| path == target)
+            || before.registered.iter().any(|path| path == target)
+        {
+            return true;
+        }
+        // Twice `--force`: git locks a worktree while it is being added.
+        let _ = self.run_mutation(
+            Some(repo),
+            [
+                OsString::from("worktree"),
+                OsString::from("remove"),
+                OsString::from("--force"),
+                OsString::from("--force"),
+                OsString::from("--"),
+                target.into(),
+            ],
+        );
+        let _ = self.run_mutation(Some(repo), ["worktree", "prune"]);
+        self.registered_paths(repo)
+            .is_ok_and(|after| !after.iter().any(|path| path == target))
     }
 
     /// Canonical paths of every registered worktree, under the mutation timeout
@@ -217,5 +289,65 @@ impl Git {
         args.push(OsString::from("--"));
         args.push(path.into());
         self.run_mutation(Some(repo), args)?.require_success()
+    }
+}
+
+/// Deletes the directory a failed add created, once git has let go of it; true when none of it is left.
+/// A directory that was there before the add is never touched.
+fn undo_directory(target: &Path, before: &AddSnapshot) -> bool {
+    if before.target_existed {
+        return true;
+    }
+    match std::fs::symlink_metadata(target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+        Ok(_) => std::fs::remove_dir_all(target).is_ok(),
+    }
+}
+
+/// Targets of the adds running in this process.
+static CLAIMED_TARGETS: LazyLock<(Mutex<HashSet<PathBuf>>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HashSet::new()), Condvar::new()));
+
+/// One add's exclusive claim on its target path within this process; released on drop. Another process (a user's
+/// terminal) can still race an add, and the snapshot check is what limits the damage then.
+#[derive(Debug)]
+struct TargetClaim {
+    key: PathBuf,
+}
+
+impl TargetClaim {
+    fn acquire(target: &Path) -> Self {
+        let key = claim_key(target);
+        let (claimed, released) = &*CLAIMED_TARGETS;
+        let mut claimed = claimed.lock().unwrap_or_else(PoisonError::into_inner);
+        while claimed.contains(&key) {
+            claimed = released
+                .wait(claimed)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        claimed.insert(key.clone());
+        Self { key }
+    }
+}
+
+impl Drop for TargetClaim {
+    fn drop(&mut self) {
+        let (claimed, released) = &*CLAIMED_TARGETS;
+        claimed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+        released.notify_all();
+    }
+}
+
+/// One key for every spelling of a target that may not exist yet: absolute, and case-folded on Windows.
+fn claim_key(target: &Path) -> PathBuf {
+    let absolute = std::path::absolute(target).unwrap_or_else(|_| target.to_path_buf());
+    if cfg!(windows) {
+        PathBuf::from(absolute.to_string_lossy().to_lowercase())
+    } else {
+        absolute
     }
 }

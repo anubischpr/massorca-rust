@@ -3,6 +3,7 @@
 //! Enter and Space activate a focused button through GPUI's keyboard click, so
 //! one `on_click` serves the pointer and the keyboard (handoff 2.3).
 
+use crate::a11y;
 use crate::icon::{IconName, IconSize};
 use crate::style::{FocusRing, Surface};
 use crate::theme::{ActiveTheme, TextStyled, Theme, box_shadows};
@@ -14,7 +15,7 @@ use crate::tokens::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt, App, ElementId, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Svg,
+    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Svg,
     Transformation, Window, div, px, radians, svg,
 };
 use std::rc::Rc;
@@ -388,8 +389,12 @@ impl RenderOnce for Button {
             window.request_animation_frame();
         }
 
+        let (name, tooltip) = (self.label.clone(), self.tooltip.clone());
+        let (disabled, loading) = (self.disabled, self.loading);
         let mut root = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_label(name)
             .track_focus(&focus)
             .focus_ring(&theme)
             .group(HOVER_GROUP)
@@ -429,7 +434,10 @@ impl RenderOnce for Button {
         if let Some(icon) = self.trailing {
             root = root.child(glyph(icon, icon_size, rest.label, hover_label));
         }
-        root
+        if let Some(text) = tooltip {
+            root = root.aria_description(text);
+        }
+        a11y::disabled(a11y::busy(root, loading), disabled)
     }
 }
 
@@ -663,5 +671,42 @@ pub(crate) mod test_support {
             prefer_character_input: false,
         });
         cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_button_is_named_by_its_label(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Button::new("save", "Save").render(window, cx))
+        })
+        .expect("a button is reported");
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.label(), Some("Save"));
+    }
+
+    #[gpui::test]
+    fn a_disabled_button_is_disabled_and_a_loading_button_is_busy(cx: &mut TestAppContext) {
+        let disabled = root(cx, |window, cx| {
+            reported(
+                Button::new("save", "Save")
+                    .disabled(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(disabled.is_disabled());
+
+        let loading = root(cx, |window, cx| {
+            reported(Button::new("save", "Save").loading(true).render(window, cx))
+        })
+        .expect("reported");
+        assert!(loading.is_busy());
+        assert!(!loading.is_disabled());
     }
 }
