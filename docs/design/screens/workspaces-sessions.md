@@ -570,7 +570,7 @@ The owner did not make these. Each follows the owner's notes as closely as possi
 
 | # | Decision | Alternative | What changes |
 |---|---|---|---|
-| 1 | `ws-session` is 1600 by 900, not 1440. All six regions open with a minimap need 48 + 200 + 480 + 240 + 320 + 240 = 1528 px, because the minimap needs a 480 px Conversation. | Keep 1440 and lower the minimap threshold to 360 px. | One number in the MessageMinimap spec; at 1440 the six-region view would show a minimap on a 392 px Conversation. |
+| 1 | `ws-session` is 1600 by 900, not 1440. (Derived reasoning; the measured ladder in `ws-narrow` is 1408, 1168, 928 and 728 px.) All six regions open with a minimap need 48 + 200 + 480 + 240 + 320 + 240 = 1528 px, because the minimap needs a 480 px Conversation. | Keep 1440 and lower the minimap threshold to 360 px. | One number in the MessageMinimap spec; at 1440 the six-region view would show a minimap on a 392 px Conversation. |
 | 2 | The Model picker opens above the Composer in a session (owner reference) and flips below it on the start page (ModelPicker spec). | Always above. | On the start page the picker would cover the heading and the placement row. |
 | 3 | The agents overview (D-AG-22) has no page: the Sessions tab and a Status bar popover do the job. Kanban view and terminal popout are not carried over. | A full-canvas overview page. | One more Sidebar or rail entry and a page. |
 | 4 | A workspace's label colour comes from the six usage slot colours, not from status colours (D-WS-04, D-WS-06). | Free colour choice. | A user tag could look like an error or a waiting state. |
