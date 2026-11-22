@@ -6,6 +6,7 @@ mod agent_links;
 mod catalogue;
 mod item_page;
 mod sample;
+mod service_source;
 mod source;
 mod types;
 
@@ -16,6 +17,7 @@ pub use item_page::{
     Part, advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
 };
 pub use sample::SampleMarketplaceSource;
+pub use service_source::{ServiceMarketplace, agent_snapshot};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
     AccountId, AccountState, AgentAccount, DEFAULT_AGENT_KEY, Host, HostId, HostState, ItemKind,

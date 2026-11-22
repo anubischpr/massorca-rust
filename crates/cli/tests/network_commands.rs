@@ -8,7 +8,8 @@ use std::process::Stdio;
 
 use assert_cmd::assert::Assert;
 use harness::{
-    ChildGuard, Sandbox, eventually, execute_with_stdin, single_document, stdout_text, with_json,
+    ChildGuard, Sandbox, eventually, execute_with_stdin, git_repo, single_document, stdout_text,
+    with_json,
 };
 use serde_json::{Value, json};
 
@@ -139,6 +140,67 @@ fn an_admin_device_revokes_another_device_which_is_then_refused() {
     assert_eq!(
         single_document(&refused)["error"]["code"],
         "auth.device_revoked"
+    );
+}
+
+/// A watch whose device is revoked ends at once, non-zero, with a sentence naming the revocation.
+#[test]
+fn a_watch_of_a_revoked_device_exits_non_zero_and_says_why() {
+    use std::io::{BufRead, BufReader, Read};
+
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let _service = start_server(&server);
+    let repo = server.home().join("repo");
+    git_repo(&repo);
+    let repo_text = repo.to_string_lossy().into_owned();
+    let root_text = server.home().join("ws").to_string_lossy().into_owned();
+    server.json_ok(
+        "server",
+        &[
+            "--no-autostart",
+            "project",
+            "add",
+            &repo_text,
+            "--workspaces-root",
+            &root_text,
+        ],
+    );
+    server.json_ok(
+        "server",
+        &["--no-autostart", "workspace", "create", "repo", "feature"],
+    );
+    accept_ok(&client, &pair_offer(&server, &[]), "srv", "laptop");
+
+    let mut child = client
+        .command("client")
+        .args(["--host", "srv", "git", "watch", "-w", "feature"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    assert_eq!(
+        lines.next().expect("a ready line").expect("read"),
+        "watching"
+    );
+
+    server.json_ok("server", &["--no-autostart", "device", "revoke", "laptop"]);
+    let status = child.wait().expect("the watch ends");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    assert!(
+        !status.success(),
+        "a revoked watch exits non-zero: {status:?}"
+    );
+    assert!(
+        stderr.contains("this device's access was revoked"),
+        "{stderr}"
     );
 }
 

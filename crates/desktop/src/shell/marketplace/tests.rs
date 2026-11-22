@@ -274,7 +274,7 @@ fn settings_lists_the_installed_agents_and_each_opens_its_page(cx: &mut TestAppC
     click(cx, "settings-nav-Agents");
     assert!(
         shown(cx, "button:settings-agent-open-2"),
-        "Gemini CLI is installed"
+        "Codex is installed"
     );
     assert!(
         !shown(cx, "button:settings-agent-open-3"),

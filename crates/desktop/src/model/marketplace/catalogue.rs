@@ -95,7 +95,7 @@ mod tests {
             names(&listed(&sample(), MarketplacePage::Installed, "")),
             [
                 "Claude",
-                "Gemini CLI",
+                "Codex",
                 "Model usage panel",
                 "Quick notes",
                 "Workspace board"
@@ -120,7 +120,7 @@ mod tests {
                 MarketplacePage::Category(ItemKind::Agent),
                 ""
             )),
-            ["Claude", "Gemini CLI"]
+            ["Claude", "Codex"]
         );
         assert_eq!(
             names(&listed(

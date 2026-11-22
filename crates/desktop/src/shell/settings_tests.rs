@@ -4,6 +4,7 @@
 
 use super::settings::host_word;
 use super::*;
+use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_form::FormStatus;
 use crate::model::settings::FolderStatus;

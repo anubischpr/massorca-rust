@@ -10,7 +10,7 @@ use crate::abort_guard::AbortOnDrop;
 use crate::context::AppState;
 use crate::dispatch;
 use crate::handshake;
-use crate::network::{LiveGuard, Pending};
+use crate::network::{LiveGuard, Pending, revoked_error};
 use crate::session::Session;
 use crate::shutdown::ShutdownSignal;
 use crate::streams::StreamTable;
@@ -86,7 +86,16 @@ pub(crate) async fn serve(
     drop(pre_auth);
 }
 
-/// Routes requests until the peer leaves or shutdown is requested, then lets in-flight requests finish and ends open streams.
+/// Why a session stopped reading requests.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Closing {
+    PeerLeft,
+    ShuttingDown,
+    Revoked,
+}
+
+/// Routes requests until the peer leaves, shutdown is requested or the device is revoked, then ends open streams.
+/// A shutdown lets in-flight requests finish; the other two cancel them.
 async fn run_session(
     session: &Arc<Session>,
     inbound: &mut mpsc::Receiver<Frame>,
@@ -94,37 +103,44 @@ async fn run_session(
     mut live: Option<&mut LiveGuard>,
 ) {
     let mut requests = JoinSet::new();
-    let shutting_down = loop {
+    let closing = loop {
         tokio::select! {
             biased;
-            () = signal.wait() => break true,
+            () = signal.wait() => break Closing::ShuttingDown,
             () = revoked(live.as_deref_mut()) => {
                 tracing::info!(connection = %session.connection_id, "closing the connection of a revoked device");
-                break false;
+                break Closing::Revoked;
             }
             Some(_) = requests.join_next(), if !requests.is_empty() => {}
             frame = inbound.recv(), if requests.len() < MAX_REQUESTS_IN_FLIGHT => match frame {
                 Some(frame) => route(frame, session, &mut requests),
-                None => break false,
+                None => break Closing::PeerLeft,
             },
         }
     };
 
-    if !shutting_down {
-        // Nobody is left to read the replies, so the requests are cancelled rather than run to completion.
+    if closing != Closing::ShuttingDown {
+        // Nobody is left to read the replies, or the device may no longer have them, so the requests are cancelled.
         requests.abort_all();
     }
     // The accept loop bounds this wait when the service is stopping.
     while requests.join_next().await.is_some() {}
+    // Each open stream is told why it ends, so a client does not mistake it for a finished stream.
+    let reason = match closing {
+        Closing::PeerLeft => None,
+        Closing::ShuttingDown => Some(ErrorBody::new(
+            codes::SERVICE_SHUTTING_DOWN,
+            "the service is shutting down",
+        )),
+        Closing::Revoked => Some(revoked_error()),
+    };
     for stream in session.streams.close_all() {
-        if shutting_down {
-            let error =
-                ErrorBody::new(codes::SERVICE_SHUTTING_DOWN, "the service is shutting down");
+        if let Some(error) = &reason {
             let _ = session
                 .outbound
                 .send(Frame::Message(Message::End {
                     stream,
-                    error: Some(error),
+                    error: Some(error.clone()),
                 }))
                 .await;
         }

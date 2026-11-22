@@ -10,7 +10,7 @@ mod state;
 mod types;
 
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
-pub use live::{agent_of_kind, kind_of_agent, live_teams};
+pub use live::{agent_of_kind, live_teams};
 pub use page::TeamPage;
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{
