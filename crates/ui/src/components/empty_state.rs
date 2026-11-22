@@ -343,9 +343,11 @@ mod tests {
         cx.run_until_parked();
         let panel = cx.debug_bounds("empty-panel").expect("panel is drawn");
         let action = cx.debug_bounds("empty-action").expect("action is drawn");
+        // The content box: the section padding and the 1 px border on each side.
+        let content = f32::from(panel.size.width) - 2.0 * (SPACE_4 + 1.0);
         assert!(
-            action.size.width < panel.size.width,
-            "the action stretches across the panel"
+            f32::from(action.size.width) < content,
+            "the action is as wide as the panel's content box"
         );
     }
 
