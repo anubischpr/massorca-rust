@@ -215,6 +215,21 @@ listing names.
   Each command has text and `--json` output. Every flow is tested end to end
   through the CLI.
 
+### As built
+
+- The wire types in `protocol::methods::extensions` are built from the service's own views. A result carries every
+  field of the view that the protocol type names; unknown fields are ignored by decoders.
+- `extensions.get` and `extensions.list` carry `installed.cli`: the lockfile's record of each CLI, with the vendor
+  command that ran. The desktop and `extension show` read what ran from there.
+- `--yes-run-installer` needs `--yes`. A script that wants the vendor command to run passes both.
+- Without `--yes` the CLI prints the review on stderr and fails with `extension.consent_required`. In `--json` mode
+  the review is the error's `data`. A relative `dir:` or `file:` path is made absolute by the CLI for the local
+  service; for a paired host the path is read on that host as typed.
+- The host runner kills only the child process at the timeout. A grandchild the installer started can outlive it, and
+  the runner stops waiting for its output two seconds after the child ends.
+- `extensions.inspect` needs only `Read` and reads `dir:` and `file:` paths on the host, so a read-only device can
+  learn whether a path holds a package. Install, enable, disable and remove need `HostAdmin`.
+
 ## Alternatives
 
 - **Prompt in the CLI.** An interactive yes/no reads well, but it hangs on a
