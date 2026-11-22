@@ -1,21 +1,76 @@
 //! `massorca service run`: the service in this process, until it is stopped.
 
-use massorca_profile::{Profile, ensure_dir};
-use massorca_server::{ListenSpec, NetworkConfig, Service, ServiceConfig, ShutdownHandle};
-use tokio::runtime::Builder;
+use std::path::Path;
+
+use massorca_profile::{Profile, RootAccess, ensure_dir, secure_root};
+use massorca_protocol::ErrorBody;
+use massorca_server::{
+    ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig, ServiceError, ShutdownHandle,
+};
+use tokio::runtime::{Builder, Runtime};
+use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::args::RunArgs;
 use crate::error::CliError;
 use crate::logging::init_service_logging;
 use crate::output::Output;
 
-/// Runs the service of `profile` until a stop request or a stop signal arrives.
+/// Runs the service of `profile` until a stop request or a stop signal arrives. A failure before the service accepts
+/// connections is also written to `--start-status`, where the client that started it reads it (ADR 0073).
 pub fn run(profile: &Profile, args: &RunArgs, output: Output) -> Result<(), CliError> {
+    let started = start(profile, args).inspect_err(|error| {
+        if let Some(path) = &args.start_status {
+            write_start_status(path, error);
+        }
+    })?;
+    let Started {
+        runtime,
+        running,
+        _logging,
+    } = started;
+    runtime.block_on(serve(running, output))
+}
+
+/// A service that accepts connections, and what must live as long as it.
+struct Started {
+    runtime: Runtime,
+    running: RunningService,
+    _logging: WorkerGuard,
+}
+
+fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
+    // Checked before anything is written into the profile, logs included (decision 0073).
+    let access = secure_root(profile).map_err(ServiceError::from)?;
     let network = network_config(args)?;
     ensure_dir(profile)?;
-    let _logging = init_service_logging(profile, args.log_stderr)?;
+    let logging = init_service_logging(profile, args.log_stderr)?;
+    if access == RootAccess::Repaired {
+        tracing::warn!(path = %profile.dir().display(), "profile directory access was repaired: it is now private to its owner");
+    }
     let runtime = Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(serve(profile, network, output))
+    let config = ServiceConfig {
+        profile: profile.clone(),
+        server_name: "massorca".to_owned(),
+        server_version: env!("CARGO_PKG_VERSION").to_owned(),
+    };
+    let running = runtime.block_on(Service::start_with_network(config, network))?;
+    Ok(Started {
+        runtime,
+        running,
+        _logging: logging,
+    })
+}
+
+/// The error as the client shows it: one `ErrorBody`. A start fails either way, so a write error is ignored.
+fn write_start_status(path: &Path, error: &CliError) {
+    let body = ErrorBody {
+        code: error.code.clone(),
+        message: error.message.clone(),
+        data: error.data.as_deref().cloned(),
+    };
+    if let Ok(json) = serde_json::to_vec(&body) {
+        let _ = std::fs::write(path, json);
+    }
 }
 
 /// The `--listen` addresses, checked as decision 0045 says. None means the local socket only.
@@ -28,13 +83,7 @@ fn network_config(args: &RunArgs) -> Result<NetworkConfig, CliError> {
     Ok(NetworkConfig { listen })
 }
 
-async fn serve(profile: &Profile, network: NetworkConfig, output: Output) -> Result<(), CliError> {
-    let config = ServiceConfig {
-        profile: profile.clone(),
-        server_name: "massorca".to_owned(),
-        server_version: env!("CARGO_PKG_VERSION").to_owned(),
-    };
-    let running = Service::start_with_network(config, network).await?;
+async fn serve(running: RunningService, output: Output) -> Result<(), CliError> {
     let info = running.info();
     tracing::info!(profile = %info.profile, pid = info.pid, "service started");
     output.success(

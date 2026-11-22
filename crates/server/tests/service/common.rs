@@ -1,6 +1,6 @@
 //! Helpers shared by the service tests: profiles on temporary homes, in-process services and raw frames.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -26,8 +26,23 @@ pub const SERVER_NAME: &str = "massorca-test";
 pub const SERVER_VERSION: &str = "0.0.0-test";
 
 /// A temporary home, removed when the value drops.
-pub fn temp_home() -> TempDir {
-    tempfile::tempdir().expect("a temporary home")
+/// A private home below a temporary folder; the temporary folder itself may be shared with other users (ADR 0073).
+pub struct TempHome {
+    _temp: TempDir,
+    path: PathBuf,
+}
+
+impl TempHome {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+pub fn temp_home() -> TempHome {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let path = temp.path().join("home");
+    massorca_profile::create_home(&path).expect("a private home");
+    TempHome { _temp: temp, path }
 }
 
 /// The profile `name` under `home`, resolved without reading the process environment.
