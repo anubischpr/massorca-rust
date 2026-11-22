@@ -4,7 +4,8 @@ use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
-use crate::windows_sid::{Sid, Trusted};
+use crate::windows_dir_access::Sid;
+use crate::windows_trust::Trusted;
 
 /// Rights that let a holder change an object or what it contains: add a file or folder, delete a child, delete the
 /// object itself, change its DACL or owner, and the generic write and all rights.
@@ -217,7 +218,8 @@ mod tests {
     use std::path::Path;
 
     use super::{Descriptor, parse_rights, verbatim};
-    use crate::windows_sid::{Sid, Trusted};
+    use crate::windows_dir_access::Sid;
+    use crate::windows_trust::Trusted;
 
     /// The built-in Administrator, which SDDL writes as `LA`.
     fn administrator() -> Sid {
@@ -229,7 +231,7 @@ mod tests {
     }
 
     fn sid_string() -> String {
-        administrator().to_sid_string().expect("its SID string")
+        administrator().to_string()
     }
 
     #[test]

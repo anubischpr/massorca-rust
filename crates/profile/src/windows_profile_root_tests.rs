@@ -7,8 +7,9 @@ use tempfile::TempDir;
 
 use super::{Disk, Links, RealDisk, read_sddl, secure_root, secure_root_with, set_dacl};
 use crate::root_access::{MAX_LISTED_ENTRIES, RootAccess, RootAccessError};
+use crate::windows_dir_access::Sid;
 use crate::windows_sddl::Descriptor;
-use crate::windows_sid::{Sid, Trusted};
+use crate::windows_trust::{Trusted, current_user};
 
 /// A user SID no account on the test machine has.
 const STRANGER: &str = "S-1-5-21-1-2-3-4242";
@@ -71,11 +72,11 @@ impl Layout {
 }
 
 fn user() -> Sid {
-    Sid::current_user().expect("the current user")
+    current_user().expect("the current user")
 }
 
 fn user_string() -> String {
-    user().to_sid_string().expect("the user's SID string")
+    user().to_string()
 }
 
 fn descriptor_of(path: &Path) -> Descriptor {

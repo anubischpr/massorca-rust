@@ -17,7 +17,7 @@ mod windows_profile_root;
 #[cfg(windows)]
 mod windows_sddl;
 #[cfg(windows)]
-mod windows_sid;
+mod windows_trust;
 
 pub use endpoint::local_socket_name;
 #[cfg(unix)]
@@ -30,10 +30,11 @@ pub use root_access::{
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
-pub use windows_dir_access::{dir_owner_is_acceptable, owner_is_acceptable, owner_matches};
+pub use windows_dir_access::{
+    PinnedDir, Sid, create_dir_owner_only, dacl_sddl, dir_owner_is_acceptable, has_owner_only_dacl,
+    owner_is_acceptable, owner_matches, owner_only_dir_sddl, restrict_dir_to_owner,
+};
 #[cfg(windows)]
 pub use windows_endpoint_access::{
     owner_only_sddl, owner_only_security_descriptor, process_belongs_to_current_user,
 };
-#[cfg(windows)]
-pub use windows_sid::Sid;

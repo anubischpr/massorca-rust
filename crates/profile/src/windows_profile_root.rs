@@ -30,8 +30,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
+use crate::windows_dir_access::Sid;
 use crate::windows_sddl::{Descriptor, verbatim};
-use crate::windows_sid::{Sid, Trusted};
+use crate::windows_trust::{Trusted, current_user};
 
 /// Whether a descriptor read opens a link itself or what it points to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +66,7 @@ impl Disk for RealDisk {
 /// The DACL of a private folder: full access for `user`, inherited by every file and folder below, nothing from above.
 /// The user is written as an `S-1-…` string, never an alias.
 fn owner_only_dir_dacl_sddl(user: &Sid) -> io::Result<String> {
-    Ok(format!("D:P(A;OICI;FA;;;{})", user.to_sid_string()?))
+    Ok(format!("D:P(A;OICI;FA;;;{user})"))
 }
 
 pub(crate) fn secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAccessError> {
@@ -196,12 +197,8 @@ fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<F
 
 /// Creates `dir` with the owner-only descriptor in one call, so it is never reachable by others; false when it existed.
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<bool> {
-    let user = Sid::current_user()?;
-    let descriptor = descriptor(&format!(
-        "O:{}{}",
-        user.to_sid_string()?,
-        owner_only_dir_dacl_sddl(&user)?
-    ))?;
+    let user = current_user()?;
+    let descriptor = descriptor(&format!("O:{}{}", user, owner_only_dir_dacl_sddl(&user)?))?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: descriptor.as_sd().cast_mut(),

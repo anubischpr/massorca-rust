@@ -70,10 +70,11 @@ refuse such a place rather than try to make it safe.
   ordinary token creates nothing owned by it, so on that token such an entry
   was made by someone else. Administrators stays acceptable as a holder of
   write access in a DACL, since Windows grants it full access on the user's
-  own folders. Every crate checks owners with the same functions:
-  `owner_matches(&Sid, &[Sid])`, `owner_is_acceptable(PSID)` and
-  `dir_owner_is_acceptable(HANDLE)` in `massorca_profile`; the last two take
-  raw pointers and are `unsafe fn`.
+  own folders. Every crate checks owners with the same functions in
+  `massorca_profile` (module `windows_dir_access`, shared with agent
+  credential homes): `Sid` (`parse` for `S-1-` text or an alias,
+  `unsafe from_psid`), `owner_matches(&Sid, &[Sid])`,
+  `owner_is_acceptable(PSID)` and `dir_owner_is_acceptable(&File)`.
 - SIDs are compared as SIDs (`EqualSid`), never as text: SDDL writes some
   accounts as aliases, such as `SY`, `BA` and `LA` for the built-in
   Administrator. Every SID read from a descriptor is parsed back into its
