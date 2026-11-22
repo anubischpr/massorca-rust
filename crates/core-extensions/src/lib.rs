@@ -8,6 +8,7 @@ mod error;
 pub mod host;
 pub mod layout;
 pub mod lockfile;
+pub mod review;
 pub mod source;
 pub mod views;
 
