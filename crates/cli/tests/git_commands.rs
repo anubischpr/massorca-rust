@@ -424,3 +424,32 @@ fn watch_prints_ready_then_the_change_and_stops_after_max_events() {
     );
     assert!(child.wait().expect("wait").success());
 }
+
+/// An edit made the moment the ready line arrives is reported: the service watches before it says ready.
+#[test]
+fn watch_reports_an_edit_made_right_after_the_ready_line() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let mut child = sandbox
+        .command("default")
+        .args(["git", "watch", "-w", "feature", "--max-events", "1"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let ready = lines.next().expect("a ready line").expect("read");
+    assert_eq!(ready, "watching");
+    std::fs::write(
+        dir.join("README.md"),
+        "edited at once
+",
+    )
+    .expect("write");
+    let changed = lines.next().expect("a change line").expect("read");
+    assert!(changed.starts_with("changed: "), "{changed}");
+    assert!(changed.contains("worktree"), "{changed}");
+    assert!(child.wait().expect("wait").success());
+}
