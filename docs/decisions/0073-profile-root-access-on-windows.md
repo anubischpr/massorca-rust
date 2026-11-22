@@ -141,10 +141,14 @@ owner then makes the home private once with `massorca profile secure`.
   Windows read access for others is refused as well
   (`profile.readable_by_others`), because the folder holds a device key,
   and a folder only the accepted owners and Administrators can reach is
-  given the owner-only DACL. That also resets the inherited entries of
-  everything below it, so a grant it used to pass on through an
-  inherit-only entry is taken away; an explicit grant below that still
-  lets others in is refused with `profile.readable_by_others`. On Unix a folder others can only read (such as
+  given the owner-only DACL. Everything below it is made owner-only too,
+  so a grant it used to pass on through an inherit-only entry is taken
+  away. That is done while the folder stays pinned, through a handle to
+  each entry opened with `FILE_FLAG_OPEN_REPARSE_POINT`; a reparse point
+  below is refused with `profile.unsafe_location` and an explicit grant to
+  others with `profile.readable_by_others`, both before anything changes,
+  so nothing outside the folder is ever touched. Every open also refuses
+  anything below the folder that others can reach. On Unix a folder others can only read (such as
   `0755` or `0750`) is set to `0700`. Files are written through a temporary
   file with a random name, created new and the owner's alone from the start
   (an owner-only descriptor passed to `CreateFileW` on Windows, `openat`
@@ -158,8 +162,12 @@ owner then makes the home private once with `massorca profile secure`.
   folder with `fs::remove_dir_all`, which never follows links. `add`
   writes all of a host's files into a staged `.writing-` folder and
   renames it to the host's name only at the end, so a crash leaves no
-  half host; a host folder without its host file, from an older build, is
-  removed before the new one is published. `list` skips tombstones
+  half host. A host folder without its host file, from an older build, is
+  moved aside only when the host file is certainly absent, checked again
+  while that folder is held open; when that cannot be read, the add is
+  refused with `host.unreadable` and nothing is deleted. Publishing never
+  replaces a folder, so of two adds of one name, one wins and the other
+  gets `host.exists`. `list` skips tombstones
   and temporary files, and `add` and `remove` delete those a crash left,
   retrying each a few times. `Client::pair` checks before it uses
   the offer, which works only once. Autostart first checks the location

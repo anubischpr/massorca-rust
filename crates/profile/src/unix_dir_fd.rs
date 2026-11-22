@@ -105,6 +105,32 @@ pub(crate) fn write_new(parent: &File, name: &str, contents: &[u8]) -> io::Resul
     file.sync_all()
 }
 
+/// Whether `parent` holds an entry `name`, a link included; only `ENOENT` means absent, and any other error is
+/// returned.
+pub(crate) fn entry_present(parent: &File, name: &str) -> io::Result<bool> {
+    let c_name = c_name(Path::new(name))?;
+    // SAFETY: an all-zero `stat` is a valid value to be overwritten by fstatat.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `parent` is an open folder, `c_name` is NUL-terminated, and `stat` is a valid out-pointer.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
 /// Removes the file `name` from `parent`; a link is removed itself, never its target.
 pub(crate) fn unlink(parent: &File, name: &str) -> io::Result<()> {
     let name = c_name(Path::new(name))?;

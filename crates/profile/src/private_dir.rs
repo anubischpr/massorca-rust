@@ -51,11 +51,8 @@ fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
         FolderAccess, entries_others_can_reach, folder_access, make_owner_only_below,
     };
 
-    let pin = |dir: &Path| {
-        crate::windows_dir_access::PinnedDir::open(dir).map_err(|error| refused_open(dir, error))
-    };
     let paths = || vec![dir.to_path_buf()];
-    let held = pin(dir)?;
+    let held = pin_waiting(dir)?;
     match folder_access(dir)? {
         FolderAccess::Private => {}
         // Entries below may have inherited a grant the folder only passed on (inherit-only), so everything below is
@@ -77,6 +74,27 @@ fn open_existing(dir: &Path) -> Result<PrivateDir, RootAccessError> {
         path: dir.to_path_buf(),
         pin: held,
     })
+}
+
+/// `ERROR_SHARING_VIOLATION`: another handle holds the folder without sharing delete, such as another add's pin.
+#[cfg(windows)]
+const SHARING_VIOLATION: i32 = 32;
+
+/// Pins `dir`, waiting up to about two seconds while another pin of it is held, so two writers take turns instead of
+/// one failing.
+#[cfg(windows)]
+fn pin_waiting(dir: &Path) -> Result<crate::windows_dir_access::PinnedDir, RootAccessError> {
+    let mut attempts = 0;
+    loop {
+        match crate::windows_dir_access::PinnedDir::open(dir) {
+            Ok(pin) => return Ok(pin),
+            Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) && attempts < 100 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(refused_open(dir, error)),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -198,6 +216,41 @@ impl PrivateDir {
         }
     }
 
+    /// Removes the folder `name` like `remove_child_dir`, unless it holds an entry `marker`: that is checked while the
+    /// folder itself is held open, right before it is moved aside, so a folder that gains the marker in the meantime is
+    /// never removed. Returns whether it was removed. Only a definite "not found" counts as absent; any other error
+    /// when reading the marker removes nothing and is returned.
+    pub fn remove_child_dir_unless(
+        &self,
+        name: &str,
+        marker: &str,
+    ) -> Result<bool, RootAccessError> {
+        check_entry_name(name)?;
+        check_entry_name(marker)?;
+        let tombstone = format!("{TOMBSTONE_PREFIX}{name}-{}", random_hex()?);
+        let path = self.path.join(name);
+        #[cfg(windows)]
+        {
+            let pin = crate::windows_dir_access::PinnedDir::open(&path)
+                .map_err(|error| refused_open(&path, error))?;
+            if entry_present(&path.join(marker))? {
+                return Ok(false);
+            }
+            pin.rename_to(&self.path.join(&tombstone))?;
+        }
+        #[cfg(unix)]
+        {
+            let folder = crate::unix_dir_fd::open_dir(Some(&self.dir), Path::new(name))
+                .map_err(|error| refused_open(&path, error))?;
+            if crate::unix_dir_fd::entry_present(&folder, marker)? {
+                return Ok(false);
+            }
+            crate::unix_dir_fd::rename(&self.dir, name, &tombstone)?;
+        }
+        self.delete_entry(&tombstone)?;
+        Ok(true)
+    }
+
     /// Removes the folder `name` and what it holds. It is opened without following links, so a link there is refused,
     /// then renamed through that open handle to a unique tombstone in this folder, and only the tombstone is deleted.
     /// A tombstone a crash left behind is deleted by the next `sweep_leftovers`.
@@ -256,6 +309,16 @@ impl PrivateDir {
             }
         }
         Ok(())
+    }
+}
+
+/// Whether `path` exists; only "not found" means absent, and any other error is returned.
+#[cfg(windows)]
+fn entry_present(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
 

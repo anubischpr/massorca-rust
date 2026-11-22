@@ -120,6 +120,7 @@ impl From<&ClientError> for Refusal {
             | ClientError::ServerIdentityMismatch
             | ClientError::HostNotFound(_)
             | ClientError::HostExists(_)
+            | ClientError::HostUnreadable { .. }
             | ClientError::InvalidHostName(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
