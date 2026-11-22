@@ -37,3 +37,5 @@ pub struct ChangeEvent {
     pub topic: String,
     pub id: String,
 }
+/// Topic of `agent.accounts_changed`, the account change of decision 0059; its id is the kind.
+pub const TOPIC_ACCOUNTS_CHANGED: &str = "agent.accounts_changed";
