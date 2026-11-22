@@ -277,6 +277,30 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("session"),
         ),
         command(
+            "agent.hook",
+            "Report an agent run's status from its hook",
+            "agent.hook",
+            json!({
+                "type": "object",
+                "required": ["session", "token", "event"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "token": { "type": "string" },
+                    "event": { "type": "string" },
+                    "payload": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.watch",
+            "Stream agent sessions' execution and activity",
+            "agent.watch",
+            json!({
+                "type": "object",
+                "properties": { "workspace": { "type": "string" }, "session": { "type": "string" } }
+            }),
+        ),
+        command(
             "agent.attach",
             "Attach to an agent session's terminal",
             "agent.show",
