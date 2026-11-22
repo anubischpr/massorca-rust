@@ -157,6 +157,11 @@ impl ShellModel {
             .filter(|region| self.region_visible(*region))
     }
 
+    /// Whether a region is recorded as the open overlay, on screen or not.
+    pub fn has_overlay(&self) -> bool {
+        self.regions.overlay().is_some()
+    }
+
     pub fn close_overlay(&mut self) {
         self.regions.close_overlay();
     }
@@ -215,6 +220,12 @@ impl ShellModel {
             self.snapshot.session_title = Some(title);
             self.snapshot.active_session = Some(id);
         }
+    }
+
+    /// Closes the open session, so a selected workspace shows its start page again.
+    pub fn close_session(&mut self) {
+        self.snapshot.session_title = None;
+        self.snapshot.active_session = None;
     }
 
     /// The Canvas content for the current page, mode and open session. A selected workspace shows
