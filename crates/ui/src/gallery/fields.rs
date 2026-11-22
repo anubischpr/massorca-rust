@@ -115,6 +115,13 @@ fn text_field_story(window: &mut Window, cx: &mut App) -> AnyElement {
             .clearable()
             .with_text("oppm")
     });
+    let masked = window.use_keyed_state("text-field/masked", cx, |_, cx| {
+        TextField::new(cx)
+            .label("Value")
+            .masked()
+            .mono()
+            .with_text("placeholder-value")
+    });
 
     div()
         .flex()
@@ -131,5 +138,6 @@ fn text_field_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Mono", mono, cx))
         .child(variant("Comfortable", comfortable, cx))
         .child(variant("Clearable", clearable, cx))
+        .child(variant("Masked", masked, cx))
         .into_any_element()
 }
