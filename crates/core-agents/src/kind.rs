@@ -244,8 +244,11 @@ impl KindDecl {
         {
             problems.push("status.events and status.result_field need a mechanism".to_owned());
         }
-        if self.status.events.keys().any(String::is_empty) {
-            problems.push("status.events names must not be empty".to_owned());
+        if !self.status.events.keys().all(|name| valid_event_name(name)) {
+            problems.push(
+                "status.events names must be 1 to 64 characters of letters, digits, _, ., : and -"
+                    .to_owned(),
+            );
         }
         if self
             .status
@@ -292,6 +295,14 @@ pub fn valid_id(id: &str) -> bool {
 fn valid_program(program: &str) -> bool {
     !program.trim().is_empty()
         && (Path::new(program).is_absolute() || !program.contains(['/', '\\']))
+}
+
+/// Event names go into hook commands, so they are limited to characters no shell treats specially.
+fn valid_event_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
 }
 
 /// `[A-Za-z_][A-Za-z0-9_]*`.
@@ -452,6 +463,25 @@ mod tests {
             value["status"] = serde_json::json!({ "events": { "stop": "done" } });
         });
         assert!(problems.iter().any(|problem| problem.contains("mechanism")));
+    }
+
+    #[test]
+    fn event_names_are_safe_in_a_hook_command() {
+        let problems = problems_of(|value| {
+            value["status"] =
+                serde_json::json!({ "mechanism": "env-command", "events": { "a b;rm": "done" } });
+        });
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("status.events"))
+        );
+        let fine = problems_of(|value| {
+            value["status"] = serde_json::json!({
+                "mechanism": "env-command", "events": { "turn-complete": "done", "Stop": "done" }
+            });
+        });
+        assert!(fine.is_empty(), "{fine:?}");
     }
 
     #[test]

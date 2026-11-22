@@ -3302,11 +3302,15 @@ dependencies = [
 name = "massorca-core-agents"
 version = "0.1.0"
 dependencies = [
+ "massorca-core-store",
+ "massorca-core-terminal",
+ "massorca-core-workspace",
  "massorca-protocol",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
