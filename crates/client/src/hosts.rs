@@ -621,7 +621,7 @@ mod tests {
             (office.to_path_buf(), "(RD)"),
             (office.join("host.json"), "(RA)"),
         ] {
-            let denied = std::process::Command::new("icacls")
+            let denied = massorca_process::command("icacls")
                 .arg(&path)
                 .args(["/deny", &format!("*S-1-1-0:{right}")])
                 .output()
@@ -643,7 +643,7 @@ mod tests {
     fn unblock_host_file(office: &std::path::Path) {
         #[cfg(windows)]
         for path in [office.join("host.json"), office.to_path_buf()] {
-            let _ = std::process::Command::new("icacls")
+            let _ = massorca_process::command("icacls")
                 .arg(&path)
                 .args(["/remove:d", "*S-1-1-0"])
                 .output();

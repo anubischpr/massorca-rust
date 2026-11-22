@@ -734,7 +734,7 @@ mod tests {
         );
         let hosts = hosts_passing_on_a_read_grant(temp.path());
         let link = hosts.join("office");
-        let made = std::process::Command::new("cmd")
+        let made = massorca_process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(&link)
             .arg(&outside)
