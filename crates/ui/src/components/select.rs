@@ -27,31 +27,44 @@ pub enum SelectEvent {
     Changed(usize),
 }
 
-/// Menu rows for `options`, with the selected option checked.
-pub(crate) fn option_entries(options: &[SharedString], selected: Option<usize>) -> Vec<MenuEntry> {
+/// Menu rows for `options`, with the selected option checked. An option with a reason is listed disabled under it.
+pub(crate) fn option_entries(
+    options: &[SharedString],
+    reasons: &[Option<SharedString>],
+    selected: Option<usize>,
+) -> Vec<MenuEntry> {
     options
         .iter()
         .enumerate()
         .map(|(index, label)| {
-            MenuItem::new(label.clone())
-                .checked(selected == Some(index))
-                .into()
+            let item = MenuItem::new(label.clone()).checked(selected == Some(index));
+            match reasons.get(index).cloned().flatten() {
+                Some(reason) => item.disabled(reason).into(),
+                None => item.into(),
+            }
         })
         .collect()
 }
 
-/// The option a letter selects while the select is closed: the next one that starts with it.
+/// The option a letter selects while the select is closed: the next enabled one that starts with it.
 pub(crate) fn letter_choice(
     options: &[SharedString],
+    reasons: &[Option<SharedString>],
     selected: Option<usize>,
     letter: char,
 ) -> Option<usize> {
-    type_ahead(&option_entries(options, selected), selected, letter)
+    type_ahead(
+        &option_entries(options, reasons, selected),
+        selected,
+        letter,
+    )
 }
 
 /// A single-choice field. The owner subscribes to [`SelectEvent`] for changes.
 pub struct SelectView {
     options: Vec<SharedString>,
+    /// The reason each option is unavailable, by index; an option with one is listed disabled.
+    option_reasons: Vec<Option<SharedString>>,
     selected: Option<usize>,
     placeholder: SharedString,
     label: Option<SharedString>,
@@ -83,8 +96,10 @@ impl SelectView {
         options: impl IntoIterator<Item = impl Into<SharedString>>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let options: Vec<SharedString> = options.into_iter().map(Into::into).collect();
         Self {
-            options: options.into_iter().map(Into::into).collect(),
+            option_reasons: vec![None; options.len()],
+            options,
             selected: None,
             placeholder: "Choose".into(),
             label: None,
@@ -97,6 +112,19 @@ impl SelectView {
             bounds: TriggerBounds::default(),
             layer: OverlayLayer::default(),
         }
+    }
+
+    /// Lists option `index` as unavailable: it shows `reason` under its label and cannot be chosen.
+    pub fn option_unavailable(mut self, index: usize, reason: impl Into<SharedString>) -> Self {
+        if let Some(slot) = self.option_reasons.get_mut(index) {
+            *slot = Some(reason.into());
+        }
+        self
+    }
+
+    /// Why option `index` cannot be chosen, when it cannot be.
+    pub fn option_reason(&self, index: usize) -> Option<&SharedString> {
+        self.option_reasons.get(index).and_then(Option::as_ref)
     }
 
     /// The option chosen at the start; an index past the end is ignored.
@@ -189,7 +217,7 @@ impl SelectView {
             return;
         }
         window.focus(&self.focus, cx);
-        let entries = option_entries(&self.options, self.selected);
+        let entries = option_entries(&self.options, &self.option_reasons, self.selected);
         let selected = self.selected;
         let empty = self.empty_text.clone();
         let layer = self.layer;
@@ -233,7 +261,10 @@ impl SelectView {
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         self.close(cx);
-        if index < self.options.len() && self.selected != Some(index) {
+        if index < self.options.len()
+            && self.option_reason(index).is_none()
+            && self.selected != Some(index)
+        {
             self.selected = Some(index);
             cx.emit(SelectEvent::Changed(index));
         }
@@ -261,7 +292,8 @@ impl SelectView {
             && !modifiers.control
             && !modifiers.alt
             && !modifiers.platform
-            && let Some(index) = letter_choice(&self.options, self.selected, letter)
+            && let Some(index) =
+                letter_choice(&self.options, &self.option_reasons, self.selected, letter)
         {
             self.choose(index, cx);
             cx.stop_propagation();
@@ -376,9 +408,14 @@ mod tests {
             .collect()
     }
 
+    fn no_reasons(count: usize) -> Vec<Option<SharedString>> {
+        vec![None; count]
+    }
+
     #[test]
     fn only_the_selected_option_is_checked() {
-        let entries = option_entries(&branches(), Some(1));
+        let options = branches();
+        let entries = option_entries(&options, &no_reasons(3), Some(1));
         let checked: Vec<Option<bool>> = entries
             .iter()
             .map(|entry| match entry {
@@ -390,22 +427,44 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_option_is_listed_disabled_and_letters_skip_it() {
+        let options = branches();
+        let reasons = [
+            None,
+            Some(SharedString::from("Not available on this host")),
+            None,
+        ];
+        let entries = option_entries(&options, &reasons, None);
+        let disabled: Vec<bool> = entries
+            .iter()
+            .map(|entry| match entry {
+                MenuEntry::Item(item) => item.is_disabled(),
+                _ => false,
+            })
+            .collect();
+        assert_eq!(disabled, vec![false, true, false]);
+        assert_eq!(letter_choice(&options, &reasons, None, 'f'), None);
+        assert_eq!(letter_choice(&options, &reasons, None, 'r'), Some(2));
+    }
+
+    #[test]
     fn a_letter_selects_the_next_option_that_starts_with_it() {
         let options = branches();
-        assert_eq!(letter_choice(&options, None, 'f'), Some(1));
-        assert_eq!(letter_choice(&options, Some(1), 'r'), Some(2));
+        let none = no_reasons(3);
+        assert_eq!(letter_choice(&options, &none, None, 'f'), Some(1));
+        assert_eq!(letter_choice(&options, &none, Some(1), 'r'), Some(2));
         assert_eq!(
-            letter_choice(&options, Some(2), 'm'),
+            letter_choice(&options, &none, Some(2), 'm'),
             Some(0),
             "wraps to the start"
         );
-        assert_eq!(letter_choice(&options, None, 'z'), None);
+        assert_eq!(letter_choice(&options, &none, None, 'z'), None);
     }
 
     #[test]
     fn an_empty_option_list_has_nothing_to_choose() {
-        assert_eq!(letter_choice(&[], None, 'a'), None);
-        assert!(option_entries(&[], None).is_empty());
+        assert_eq!(letter_choice(&[], &[], None, 'a'), None);
+        assert!(option_entries(&[], &[], None).is_empty());
     }
 }
 

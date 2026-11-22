@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -113,7 +112,7 @@ const STANDARD_LOCATIONS: &[&str] = &[];
 /// Reads `tailscale status --json`. A missing CLI or a stopped daemon is an answer, not an error.
 pub fn status() -> Result<TailscaleStatus, TailscaleUnavailable> {
     let cli = find_cli().ok_or(TailscaleUnavailable::NotInstalled)?;
-    let mut command = Command::new(&cli);
+    let mut command = massorca_process::command(&cli);
     command.args(["status", "--json"]);
     let captured = process::run_captured(command, None, STATUS_TIMEOUT).map_err(|err| {
         TailscaleUnavailable::Failed(match err {
