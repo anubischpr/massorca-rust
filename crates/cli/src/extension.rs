@@ -1,0 +1,253 @@
+//! `massorca extension ...` (alias `ext`): install, list, enable, disable and remove packages (decision 0062).
+//!
+//! The CLI never prompts. `install` without `--yes` prints the review and fails with `extension.consent_required`;
+//! `--yes` accepts the review it just printed, and `--yes-run-installer` also accepts running the vendor command.
+
+use std::path::Path;
+
+use clap::{Args, Subcommand};
+use massorca_client::Client;
+use massorca_protocol::codes;
+use massorca_protocol::methods::extensions::{
+    CliPlanState, ExtensionInstallParams, ExtensionRemoveParams, ExtensionReview,
+    ExtensionSetEnabledParams, ExtensionState,
+};
+
+use crate::connect::connect;
+use crate::error::{CliError, exit};
+use crate::extension_text::{
+    command_text, installed_lines, item_lines, item_rows, removed_lines, review_lines, state_text,
+};
+use crate::output::Output;
+use crate::target::Target;
+
+#[derive(Debug, Subcommand)]
+pub enum ExtensionCommand {
+    /// Lists the installed extensions.
+    List,
+    /// Shows one extension, installed or from the catalogue.
+    Show {
+        /// Package id, such as massorca.claude.
+        id: String,
+    },
+    /// Lists the built-in catalogue and which entries are installed.
+    Catalogue,
+    /// Reviews a package: its risk, permissions and what installing would run. Changes nothing.
+    Inspect {
+        /// catalogue:<id>, dir:<path> or file:<path>, read on the service host.
+        source: String,
+    },
+    /// Installs a package. Without --yes it prints the review and fails with extension.consent_required.
+    Install(InstallArgs),
+    /// Enables an installed extension.
+    Enable {
+        /// Package id.
+        id: String,
+    },
+    /// Disables an installed extension. Its files and data stay.
+    Disable {
+        /// Package id.
+        id: String,
+    },
+    /// Removes an installed extension, its files and its data.
+    Remove(RemoveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InstallArgs {
+    /// catalogue:<id>, dir:<path> or file:<path>, read on the service host.
+    pub source: String,
+    /// Required for file:<path>: the archive's SHA-256, as published.
+    #[arg(long, value_name = "HEX")]
+    pub sha256: Option<String>,
+    /// Accepts the review this command prints: the risk and the permissions.
+    #[arg(long)]
+    pub yes: bool,
+    /// Also accepts running the vendor installer the review lists. Needs --yes.
+    #[arg(long, requires = "yes")]
+    pub yes_run_installer: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoveArgs {
+    /// Package id.
+    pub id: String,
+    /// Also deletes the credential homes of the package's agents.
+    #[arg(long)]
+    pub delete_agent_homes: bool,
+    /// Also runs the uninstall command of each agent CLI the package installed.
+    #[arg(long)]
+    pub uninstall_cli: bool,
+}
+
+/// Runs one `extension` subcommand against the service `target` names.
+pub async fn execute(
+    target: &Target,
+    autostart: bool,
+    command: ExtensionCommand,
+    output: Output,
+) -> Result<(), CliError> {
+    let client = connect(target, autostart).await?;
+    match command {
+        ExtensionCommand::List => {
+            let list = client.extension_list().await?;
+            output.success(
+                &list,
+                &item_rows(&list.extensions, "no extensions installed"),
+            );
+        }
+        ExtensionCommand::Show { id } => {
+            let item = client.extension_get(&id).await?;
+            output.success(&item, &item_lines(&item));
+        }
+        ExtensionCommand::Catalogue => {
+            let list = client.extension_catalogue().await?;
+            output.success(
+                &list,
+                &item_rows(&list.extensions, "the catalogue is empty"),
+            );
+        }
+        ExtensionCommand::Inspect { source } => {
+            let review = client
+                .extension_inspect(&source_for(&source, target))
+                .await?;
+            output.success(&review, &review_lines(&review));
+        }
+        ExtensionCommand::Install(args) => install(&client, target, args, output).await?,
+        ExtensionCommand::Enable { id } => set_enabled(&client, id, true, output).await?,
+        ExtensionCommand::Disable { id } => set_enabled(&client, id, false, output).await?,
+        ExtensionCommand::Remove(args) => {
+            let removed = client
+                .extension_remove(&ExtensionRemoveParams {
+                    id: args.id,
+                    delete_agent_homes: args.delete_agent_homes,
+                    uninstall_cli: args.uninstall_cli,
+                })
+                .await?;
+            output.success(&removed, &removed_lines(&removed));
+        }
+    }
+    Ok(())
+}
+
+async fn install(
+    client: &Client,
+    target: &Target,
+    args: InstallArgs,
+    output: Output,
+) -> Result<(), CliError> {
+    let source = source_for(&args.source, target);
+    let review = client.extension_inspect(&source).await?;
+    if let Some(pinned) = &args.sha256
+        && !pinned.eq_ignore_ascii_case(&review.sha256)
+    {
+        return Err(CliError::new(
+            codes::EXTENSION_HASH_MISMATCH,
+            format!("the package hashes to {}, not {pinned}", review.sha256),
+            exit::ERROR,
+        ));
+    }
+    if !args.yes {
+        let hint = if review.runs_installer {
+            "review it above, then re-run with --yes --yes-run-installer to accept it and run the vendor installer"
+        } else {
+            "review it above, then re-run with --yes to accept it"
+        };
+        return Err(refusal(
+            codes::EXTENSION_CONSENT_REQUIRED,
+            format!("the install review was not accepted; {hint}"),
+            &review,
+            output,
+        ));
+    }
+    if review.runs_installer && !args.yes_run_installer {
+        let commands: Vec<String> = review
+            .cli
+            .iter()
+            .filter_map(|plan| match &plan.state {
+                CliPlanState::WillRun { command } => Some(command_text(command)),
+                _ => None,
+            })
+            .collect();
+        return Err(refusal(
+            codes::EXTENSION_INSTALLER_CONSENT_REQUIRED,
+            format!(
+                "installing runs a vendor installer ({}); re-run with --yes --yes-run-installer to allow it",
+                commands.join("; ")
+            ),
+            &review,
+            output,
+        ));
+    }
+    for line in review_lines(&review) {
+        output.progress(&line);
+    }
+    let installed = client
+        .extension_install(&ExtensionInstallParams {
+            source,
+            consent: Some(review.consent),
+            run_installer: args.yes_run_installer,
+            sha256: args.sha256,
+        })
+        .await?;
+    output.success(&installed, &installed_lines(&installed));
+    Ok(())
+}
+
+async fn set_enabled(
+    client: &Client,
+    id: String,
+    enabled: bool,
+    output: Output,
+) -> Result<(), CliError> {
+    let outcome = client
+        .extension_set_enabled(&ExtensionSetEnabledParams { id, enabled })
+        .await?;
+    let line = if outcome.changed {
+        format!("{} is now {}", outcome.id, state_text(state_of(enabled)))
+    } else {
+        format!(
+            "{} was already {}",
+            outcome.id,
+            state_text(state_of(enabled))
+        )
+    };
+    output.success(&outcome, &[line]);
+    Ok(())
+}
+
+fn state_of(enabled: bool) -> ExtensionState {
+    if enabled {
+        ExtensionState::Enabled
+    } else {
+        ExtensionState::Disabled
+    }
+}
+
+/// A refusal that carries the review: in text mode the review is printed first, in JSON mode it is the error's data.
+fn refusal(code: &str, message: String, review: &ExtensionReview, output: Output) -> CliError {
+    for line in review_lines(review) {
+        output.progress(&line);
+    }
+    let mut error = CliError::new(code, message, exit::ERROR);
+    error.data = serde_json::to_value(review).ok().map(Box::new);
+    error
+}
+
+/// The source as the service should read it. A relative `dir:` or `file:` path is made absolute here, because the
+/// service runs in another folder; for a paired host the path means a path on that host and is left as typed.
+fn source_for(source: &str, target: &Target) -> String {
+    if !target.is_local() {
+        return source.to_owned();
+    }
+    let Some((kind, path)) = source.split_once(':') else {
+        return source.to_owned();
+    };
+    if !matches!(kind, "dir" | "file") || path.is_empty() || Path::new(path).is_absolute() {
+        return source.to_owned();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => format!("{kind}:{}", cwd.join(path).display()),
+        Err(_) => source.to_owned(),
+    }
+}

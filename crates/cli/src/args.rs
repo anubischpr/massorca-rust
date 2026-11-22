@@ -8,6 +8,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 use crate::agent::AgentCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
+use crate::extension::ExtensionCommand;
 use crate::terminal::TerminalCommand;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
@@ -125,6 +126,12 @@ pub enum Commands {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    /// Installs, lists, enables, disables and removes extensions, such as the agent packages.
+    #[command(visible_alias = "ext")]
+    Extension {
+        #[command(subcommand)]
+        command: ExtensionCommand,
     },
 }
 

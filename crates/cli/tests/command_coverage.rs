@@ -1,4 +1,4 @@
-//! Every CLI command except `service run` and `ext` has a command descriptor in the server's core table,
+//! Every CLI command except `service run` has a command descriptor in the server's core table,
 //! except the commands that run on this computer alone.
 
 use std::collections::BTreeSet;
@@ -72,7 +72,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
     let checked: BTreeSet<&str> = paths
         .iter()
         .map(String::as_str)
-        .filter(|path| *path != "service.run" && path.split('.').next() != Some("ext"))
+        .filter(|path| *path != "service.run")
         .filter(|path| !CLIENT_ONLY.contains(path))
         .collect();
 
@@ -99,6 +99,14 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "device.list",
             "device.revoke",
             "device.whoami",
+            "extension.catalogue",
+            "extension.disable",
+            "extension.enable",
+            "extension.inspect",
+            "extension.install",
+            "extension.list",
+            "extension.remove",
+            "extension.show",
             "git.abort",
             "git.commit",
             "git.branch-create",

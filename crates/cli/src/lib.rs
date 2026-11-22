@@ -13,6 +13,8 @@ pub mod connect;
 pub mod cwd_path;
 pub mod device;
 pub mod error;
+pub mod extension;
+pub mod extension_text;
 pub mod git;
 pub mod host;
 pub mod logging;
