@@ -24,7 +24,7 @@ pub use connection::{
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
-pub use teams::{TeamRecord, TeamsRead};
+pub use teams::{TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]
 pub(crate) use terminals::{TerminalCommand, TerminalWrite};

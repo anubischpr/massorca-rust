@@ -194,6 +194,9 @@ impl Shell {
             }
             shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
+            if let Some(teams) = store.read(cx).teams() {
+                shell.model.refresh_teams(teams);
+            }
             cx.notify();
         });
         let rail = RailState::new(snapshot.usage.len(), cx);

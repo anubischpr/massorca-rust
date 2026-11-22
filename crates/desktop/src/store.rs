@@ -10,8 +10,9 @@ use massorca_profile::Profile;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::data::DataSource;
-use crate::model::service_view::{NOTICE_TICK, service_snapshot};
+use crate::model::service_view::{NOTICE_TICK, service_snapshot, teams_view};
 use crate::model::shell::ShellSnapshot;
+use crate::model::teams::TeamsState;
 use crate::service::{ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options};
 
 /// Where the store's data comes from.
@@ -104,6 +105,11 @@ impl ServiceStore {
 
     pub fn is_sample(&self) -> bool {
         matches!(self.source, Source::Sample(_))
+    }
+
+    /// The Bot Teams the service reported; `None` for sample data, whose Teams the shell keeps itself.
+    pub fn teams(&self) -> Option<TeamsState> {
+        (!self.is_sample()).then(|| teams_view(&self.state))
     }
 
     pub fn state(&self) -> &StoreState {

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
+use massorca_desktop::model::service_view::teams_view;
+use massorca_desktop::model::teams::Column as PageColumn;
 use massorca_desktop::service::{ServiceBridge, StoreState, StoreUpdate, connect_options};
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
@@ -149,6 +151,13 @@ async fn the_bridge_reads_every_team_with_its_board() {
     assert_eq!(open.column, Column::Open);
     let titles: Vec<&str> = open.cards.iter().map(|card| card.title.as_str()).collect();
     assert_eq!(titles, ["Write the spec"]);
+    let view = teams_view(&state);
+    assert!(view.is_connected());
+    assert_eq!(view.hosts()[0].name, "This PC");
+    let team_view = &view.teams()[0];
+    assert_eq!(team_view.name, "Desarrollo");
+    assert_eq!(team_view.tasks[0].title, "Write the spec");
+    assert_eq!(team_view.tasks[0].column, PageColumn::Open);
     stop_service(service).await;
 }
 
@@ -193,4 +202,24 @@ async fn a_team_created_through_another_client_reaches_the_store_without_a_reque
     )
     .await;
     stop_service(service).await;
+}
+
+#[tokio::test]
+async fn the_teams_are_not_claimed_once_the_service_is_gone() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    assert!(teams_view(&state).is_connected());
+
+    stop_service(service).await;
+    until(&mut updates, &mut state, "the link to stop", |state| {
+        !state.connection.is_connected()
+    })
+    .await;
+    assert!(!teams_view(&state).is_connected());
 }

@@ -2,6 +2,7 @@
 //! No GPUI types here, so the rules test as Rust.
 
 mod board;
+mod live;
 mod page;
 mod sample;
 mod sidebar;
@@ -9,6 +10,7 @@ mod state;
 mod types;
 
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
+pub use live::live_teams;
 pub use page::TeamPage;
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{

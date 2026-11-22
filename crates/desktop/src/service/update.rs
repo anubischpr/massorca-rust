@@ -12,7 +12,7 @@ use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
 use super::refusal::Refusal;
-use super::teams::{TeamRecord, TeamsRead};
+use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +96,8 @@ pub struct StoreState {
     pub teams: Option<Vec<TeamRecord>>,
     /// The number of the newest Bot Teams read applied.
     pub team_read: u64,
+    /// The numbers the pages give the ids of the teams, their cards and their bots.
+    pub team_ids: TeamIds,
 }
 
 impl Default for StoreState {
@@ -110,6 +112,7 @@ impl Default for StoreState {
             git: BTreeMap::new(),
             teams: None,
             team_read: 0,
+            team_ids: TeamIds::default(),
         }
     }
 }
@@ -123,6 +126,9 @@ impl StoreState {
                     self.down_since = None;
                 } else if self.connection.is_connected() || self.down_since.is_none() {
                     self.down_since = Some(now);
+                }
+                if !state.is_connected() {
+                    self.teams = None;
                 }
                 self.connection = state;
             }
@@ -172,6 +178,9 @@ impl StoreState {
         }
         self.team_read = read.number;
         self.teams = read.teams.ok();
+        for record in self.teams.iter().flatten() {
+            self.team_ids.register(record);
+        }
     }
 
     /// An update for a workspace the store does not hold (removed, or not listed yet) changes nothing.

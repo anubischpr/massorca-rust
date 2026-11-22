@@ -2,6 +2,7 @@
 //! Board. A read takes a number when it starts, and the store applies only the newest answer, so a slow read
 //! never replaces a newer one.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use massorca_client::{Client, ClientError};
@@ -70,4 +71,56 @@ async fn fetch(client: &Client) -> Result<Vec<TeamRecord>, ClientError> {
         }
     }
     Ok(records)
+}
+
+/// Numbers the protocol's ids for the pages, which key on numbers. An id keeps the number the first read that
+/// names it gave it, for the life of the store, so a page keeps pointing at the same team, card or bot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TeamIds {
+    numbers: BTreeMap<String, u32>,
+}
+
+impl TeamIds {
+    /// Numbers every id a team names: the team, its cards and the bots on them.
+    pub fn register(&mut self, record: &TeamRecord) {
+        self.number(&record.team.id);
+        for column in &record.board.columns {
+            for card in &column.cards {
+                self.number(&card.id);
+                if let Some(bot) = &card.bot_id {
+                    self.number(bot);
+                }
+            }
+        }
+    }
+
+    /// The number of `id`, if a read has named it.
+    pub fn get(&self, id: &str) -> Option<u32> {
+        self.numbers.get(id).copied()
+    }
+
+    fn number(&mut self, id: &str) {
+        if !self.numbers.contains_key(id) {
+            let next = u32::try_from(self.numbers.len() + 1).unwrap_or(u32::MAX);
+            self.numbers.insert(id.to_owned(), next);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::update::fixtures::team;
+
+    #[test]
+    fn a_later_read_keeps_the_numbers_of_the_ids_it_does_not_change() {
+        let mut ids = TeamIds::default();
+        ids.register(&team("t1", "Desarrollo"));
+        let first = ids.get("t1");
+        ids.register(&team("t2", "Ops"));
+        assert!(first.is_some());
+        assert_eq!(ids.get("t1"), first);
+        assert_ne!(ids.get("t2"), first);
+        assert_eq!(ids.get("unknown"), None);
+    }
 }

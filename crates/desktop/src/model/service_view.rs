@@ -8,6 +8,7 @@ use super::shell::{
     HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone, ShellSnapshot,
     StatusBarModel, WorkspaceRow,
 };
+use super::teams::{TeamsState, live_teams};
 use crate::service::{ConnectionState, StoreState};
 
 /// The one host a local service stands for in the tree (A10).
@@ -146,6 +147,17 @@ fn retry_in(retry_at: Instant, now: Instant) -> String {
 /// How long to wait before the notice's text is stale: one second while a timer shows.
 pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 
+/// The Bot Teams of the connected service, as the Teams pages draw them. Without a connection, or before a
+/// read has answered on it, there are no teams and nothing can change.
+pub fn teams_view(state: &StoreState) -> TeamsState {
+    match &state.teams {
+        Some(records) if state.connection.is_connected() => {
+            live_teams(&state.team_ids, LOCAL_HOST, records)
+        }
+        _ => TeamsState::unavailable(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +190,37 @@ mod tests {
             now,
         );
         state
+    }
+
+    #[test]
+    fn the_teams_stay_unavailable_until_a_read_answers_on_a_connected_service() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        assert!(!teams_view(&state).is_connected());
+        let connected = ConnectionState::Connected {
+            server: "vps".into(),
+            version: "1".into(),
+        };
+        state.apply(crate::service::StoreUpdate::Connection(connected), now);
+        assert!(
+            !teams_view(&state).is_connected(),
+            "no read has answered yet"
+        );
+        let read = crate::service::TeamsRead {
+            number: 1,
+            teams: Ok(vec![crate::service::fixtures::team("t1", "Desarrollo")]),
+        };
+        state.apply(crate::service::StoreUpdate::Teams(read), now);
+        let view = teams_view(&state);
+        assert!(view.is_connected());
+        assert_eq!(view.hosts()[0].name, LOCAL_HOST);
+        assert_eq!(view.teams()[0].name, "Desarrollo");
+        let lost = ConnectionState::Reconnecting {
+            attempt: 1,
+            retry_at: now,
+        };
+        state.apply(crate::service::StoreUpdate::Connection(lost), now);
+        assert!(!teams_view(&state).is_connected());
     }
 
     #[test]

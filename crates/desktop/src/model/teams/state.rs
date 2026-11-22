@@ -119,6 +119,21 @@ impl TeamsState {
         }
     }
 
+    /// The state after a service read: `fresh`'s teams, with the team, the memory tab and the picked card
+    /// kept where they still exist.
+    pub fn refreshed(&self, mut fresh: TeamsState) -> TeamsState {
+        let selected = self.selected.filter(|team| fresh.team(*team).is_some());
+        let pick = self.pick.clone().filter(|pick| {
+            fresh
+                .tasks(pick.board)
+                .is_some_and(|tasks| tasks.iter().any(|task| task.id == pick.task))
+        });
+        fresh.selected = selected;
+        fresh.pick = pick;
+        fresh.memory_tab = self.memory_tab;
+        fresh
+    }
+
     pub fn pick(&self) -> Option<&Pick> {
         self.pick.as_ref()
     }
@@ -178,7 +193,7 @@ impl TeamsState {
             id,
             name,
             role: new.role.trim().to_owned(),
-            agent: new.agent,
+            agent: Some(new.agent),
         });
         if team.lead.is_none() {
             team.lead = Some(id);
@@ -489,6 +504,20 @@ mod tests {
             state.team(team).unwrap().project(project).unwrap().link,
             None
         );
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_selected_team_and_the_picked_card_while_they_exist() {
+        let mut state = SampleTeamsSource.teams();
+        let task = state.team(TeamId(1)).unwrap().tasks[0].id;
+        state.select(TeamId(1));
+        state.pick_task(BoardOwner::Team(TeamId(1)), task).unwrap();
+        let kept = state.refreshed(SampleTeamsSource.teams());
+        assert_eq!(kept.selected(), Some(TeamId(1)));
+        assert_eq!(kept.pick().map(|pick| pick.task), Some(task));
+        let gone = state.refreshed(TeamsState::unavailable());
+        assert_eq!(gone.selected(), None);
+        assert!(gone.pick().is_none());
     }
 
     #[test]
