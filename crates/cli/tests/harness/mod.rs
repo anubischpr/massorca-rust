@@ -19,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use assert_cmd::assert::Assert;
+use massorca_cli::service::parent_watch::PARENT_PID_ENV;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -48,6 +49,8 @@ pub fn massorca_in(home: &Path) -> Command {
     for name in CLEARED_ENV {
         command.env_remove(name);
     }
+    // Services this command starts stop once this test process is gone, even when its sandbox never drops.
+    command.env(PARENT_PID_ENV, std::process::id().to_string());
     command
 }
 
@@ -351,7 +354,7 @@ fn processes_in_home(home: &Path) -> Vec<u32> {
 }
 
 #[cfg(unix)]
-fn kill(pid: u32) {
+pub fn kill(pid: u32) {
     let _ = Command::new("kill")
         .args(["-KILL", &pid.to_string()])
         .stdin(Stdio::null())
@@ -361,7 +364,7 @@ fn kill(pid: u32) {
 }
 
 #[cfg(windows)]
-fn kill(pid: u32) {
+pub fn kill(pid: u32) {
     let _ = Command::new("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
@@ -392,6 +395,12 @@ impl ChildGuard {
     /// Guards a child the test spawned itself.
     pub fn new(child: Child) -> Self {
         Self(child)
+    }
+
+    /// Kills the child now, the way a killed test process dies: no destructor of its own runs.
+    pub fn kill_now(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 
     /// `true` while the child has not exited.

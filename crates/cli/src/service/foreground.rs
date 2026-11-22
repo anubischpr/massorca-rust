@@ -14,6 +14,7 @@ use crate::args::RunArgs;
 use crate::error::CliError;
 use crate::logging::init_service_logging;
 use crate::output::Output;
+use crate::service::parent_watch;
 
 /// Runs the service of `profile` until a stop request or a stop signal arrives. A failure before the service accepts
 /// connections is also written to `--start-status`, where the client that started it reads it (ADR 0073).
@@ -95,6 +96,9 @@ async fn serve(running: RunningService, output: Output) -> Result<(), CliError> 
     );
 
     stop_on_signal(running.shutdown_handle());
+    if let Some(pid) = parent_watch::parent_pid() {
+        parent_watch::stop_with_parent(pid, running.shutdown_handle());
+    }
     running.wait().await?;
     tracing::info!("service stopped");
     Ok(())
