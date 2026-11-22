@@ -87,16 +87,17 @@ store follows a service through the bridge (0028).
   terminal. The service sends no terminal events, so the store takes terminals
   from each resync and from the answers to create, kill and close. A lost
   connection ends each attach with `Lost`; the UI waits for the link to come
-  back and attaches again without an offset, which gives a snapshot.
-  The Work panel's strip lists the selected workspace's terminals from the
-  store, and the window keeps only which one is selected. Each shown terminal
-  is a `TerminalSurface` fed by `feed_events`. Its replies go back as input
-  through one function (cursor reports, 0034); an attach that sends them
-  declares `answers_queries` (0036), as the integration test does. Closing the
-  tab of a running terminal asks in X-DLG-01: "Keep running" drops the view
-  and the tab stays in the strip, and "Stop process" calls `terminal.close`.
-  An unverifiable terminal shows a banner that says it may still run. The
-  status bar counts the terminals that may still run.
+  back and attaches again without an offset, which gives a snapshot. The Work
+  panel's strip lists the selected workspace's terminals from the store, and the
+  window keeps only which one is selected. Each shown terminal is a
+  `TerminalSurface` fed by `feed_events`. Its replies go back as input through
+  one function (cursor reports, 0034); an attach that sends them declares
+  `answers_queries` (0036). The pane and the integration test both declare it
+  through `AttachRole::AnswersQueries`. Closing the tab of a running terminal
+  asks in X-DLG-01: "Keep running" drops the view and the tab stays in the
+  strip, and "Stop process" calls `terminal.close`. An unverifiable terminal
+  shows a banner that says it may still run. The status bar counts the
+  terminals that may still run.
 - **Launch.** `massorca-desktop [--sample] [--profile <name>] [--home <dir>]
   [--no-autostart]`. Profile and `MASSORCA_*` variables follow the CLI. The
   service is started from the `massorca` executable next to the desktop.
