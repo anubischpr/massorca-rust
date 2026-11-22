@@ -359,7 +359,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Pending and removing accounts**: a pending sign-in refuses removal and activation with
   `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
   removing under the gate, so no run starts on it while the sign-out runs.
-- **Check** (`account_check.rs`): it runs with the home variable set, for at most 10 s. Its whole
+- **Check** (`account_check.rs`): it runs with the home variable set and the account commands' stripped
+  names removed (`credentials.strip_env` and `accounts.strip_env`, decision 0059 amendment 2026-11-22), for at most 10 s. Its whole
   process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
   output is read for at most one second after that, so a child that keeps the pipes open cannot
   hold the gate. At most 64 KiB of output is kept, which is matched and never logged or returned.
@@ -404,14 +405,89 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
   publishes nothing.
 - **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
-  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`) and `logout` (arguments). They
+  (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`), `logout` (arguments) and `strip_env`
+  (variable names removed from the check, sign-in and sign-out, in addition to `credentials.strip_env`;
+  agent runs keep their environment). They
   go to the resolved program and are never run at declaration time. Patterns are compiled with
   the `regex` crate when the kind loads. The regexes are written by the owner of the profile and run
-  on the service, as its programs do; they are not a trust boundary for other users. The four built-in kinds declare no accounts, because
-  their real login commands are not verified in this phase.
+  on the service, as its programs do; they are not a trust boundary for other users. Only `claude`
+  declares accounts among the built-ins; see "Built-in sign-in commands" below.
 
 Not in this part: `agent.accounts.progress` (URL and code patterns), `agent.options`,
 `agent.usage`, `agent.models`, and the vault environment provider.
+
+## Built-in sign-in commands
+
+A built-in kind gets an `accounts` block only when every command in it is confirmed from a primary
+source (the vendor's documentation, the CLI's own `--help`, or, for Gentle Shell, the owner's
+product source). Confirmed on 2026-11-22; the programs were run only with `--help` and `--version`
+under an empty temporary home.
+
+| Kind | Program | Home variable | Login | Check | Logout |
+| :- | :- | :- | :- | :- | :- |
+| `claude` | `claude` | `CLAUDE_CONFIG_DIR` | `claude auth login` (confirmed) | `claude auth status`, exit 0 signed in, 1 not (confirmed) | `claude auth logout` (confirmed) |
+| `codex` | `codex` | `CODEX_HOME` (documented for file storage only) | `codex login` exists; not confirmed to honour `CODEX_HOME` | `codex login status` exists; exit code and output not documented | `codex logout` exists; not confirmed to honour `CODEX_HOME` |
+| `antigravity` | `agy` | none; credentials are in the OS keyring | no `login` subcommand; sign-in runs when `agy` is first launched | none; no non-interactive status | `/logout` inside the prompt only |
+| `gentle-shell` | `gentle-shell` | `PI_CODING_AGENT_DIR` (as declared today) | `/login` slash command inside its terminal UI; no command-line form | none | none |
+
+Sources:
+
+- Claude: `code.claude.com/docs/en/authentication` (read 2026-11-22). Browser sign-in, with a code
+  pasted into the terminal when the browser shows one; with `CLAUDE_CONFIG_DIR` set, credentials
+  are kept under that directory on Linux and Windows. `code.claude.com/docs/en/cli-reference` (read
+  2026-11-22): `claude auth status` exits 0 when logged in and 1 when not; its JSON carries
+  `configDirectory` (Claude Code 2.1.268 or later). Local `claude --help` and
+  `claude auth {login,status,logout} --help` on 2.1.268.
+- Codex: `developers.openai.com/codex/auth`, which redirects to `learn.chatgpt.com/docs/auth` (read
+  2026-11-22). Lists `codex login`, `codex login --device-auth`, `codex login status` and
+  `codex logout`; `CODEX_HOME` holds `auth.json` in file storage mode; storage modes are file,
+  keyring, auto and ephemeral. The docs state no exit code or identity for `login status`, and do
+  not say whether the commands honour `CODEX_HOME`. Local `codex --help` and the `login`,
+  `login status` and `logout` helps on 0.159.2.
+- Antigravity: `antigravity.google/docs/install?tab=cli` (read 2026-11-22). Sign-in starts on first
+  launch of `agy`; credentials live in the OS keyring; `/logout` signs out; no status command or
+  credential-home variable is documented. Local `agy --help` on 1.5.11 lists no login or logout
+  subcommand.
+- Gentle Shell: the owner's product source, read in the previous app's repository (read-only). Its
+  sign-in table lists a `/login` slash command for the Gentle Shell runtime (internal id `pi`) with
+  no command-line form, and the credential variable in the launch specs. The binary is not
+  installed on this machine, so it was not run.
+
+Declared accounts for `claude` are `login: ["auth", "login"]`, `check: { args: ["auth", "status"],
+signed_in_exit: 0 }` and `logout: ["auth", "logout"]`. No `expired_pattern` or `identity_pattern` is
+declared, because neither is documented. Without an `expired_pattern`, an expired login probably
+reads as `needs_sign_in`, not `expired`; this is not verified.
+
+`claude` also declares `accounts.strip_env` (decision 0059, amendment 2026-11-22). The check, the
+sign-out and the sign-in terminal judge the account's home only, so these variables are removed from
+their environment in addition to `credentials.strip_env`. The sign-in terminal can only add variables,
+so it sets them to empty. The list is the authentication inputs in Claude's documentation, read
+2026-11-22:
+
+- `code.claude.com/docs/en/authentication`, "Authentication precedence" and "Anthropic profiles and
+  federation credentials": `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, the provider
+  selectors `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`, and
+  `ANTHROPIC_IDENTITY_TOKEN_FILE`, which the page names as a Workload Identity Federation variable.
+  The page sends the WIF variables to the WIF reference, which was not read.
+- `code.claude.com/docs/en/env-vars`, rows whose description says they supply or select an
+  authentication credential: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, `ANTHROPIC_WORKSPACE_ID`,
+  `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `ANTHROPIC_AWS_API_KEY`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY` and
+  `CLAUDE_CODE_CLIENT_KEY_PASSPHRASE`.
+
+Excluded: `CLAUDE_CODE_OAUTH_SCOPES` (a scope list, not a credential), `ANTHROPIC_BASE_URL` and the
+endpoint variables (they route requests, they do not authenticate), and the `CLAUDE_CODE_SKIP_*_AUTH`
+switches. The environment-variable reference page was longer than one fetch: the first fetch covered its
+first 100000 characters, and the rest was searched for the variables above, not read in full.
+
+Limits, not verified: an empty value may not count as unset for every variable, so the sign-in terminal
+may still see a set but empty variable; and the list covers the variables named in the documents read,
+not every variable a future Claude release may read.
+
+## Follow-ups
+
+- Agent sessions (runs) keep the vendor credential variables; whether they strip `accounts.strip_env` is open (decision 0059, amendment 2026-11-22).
 
 ## Security
 

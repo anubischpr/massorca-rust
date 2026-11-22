@@ -170,6 +170,10 @@ pub struct AccountsDecl {
     /// The sign-out arguments, run before an account's home is deleted. Absent means none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logout: Option<Vec<String>>,
+    /// Variables removed from the environment of the check, the sign-in and the sign-out, in addition to the
+    /// credentials' `strip_env`. Only those commands are affected; agent runs keep their environment (decision 0059).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strip_env: Vec<String>,
 }
 
 /// The check of an account: its arguments and how its exit code and output decide the state.
@@ -331,6 +335,13 @@ fn accounts_problems(
     no_placeholder("accounts.login", &accounts.login, problems);
     if let Some(logout) = &accounts.logout {
         no_placeholder("accounts.logout", logout, problems);
+    }
+    for name in &accounts.strip_env {
+        if !valid_env_name(name) {
+            problems.push(format!(
+                "accounts.strip_env entry {name:?} is not a variable name"
+            ));
+        }
     }
     if let Some(check) = &accounts.check {
         no_placeholder("accounts.check.args", &check.args, problems);
@@ -713,6 +724,25 @@ mod tests {
                 .any(|problem| problem.contains("accounts.check.expired_pattern")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn an_accounts_strip_entry_that_is_not_a_variable_name_is_refused() {
+        let problems = with_accounts(serde_json::json!({
+            "login": ["login"],
+            "strip_env": ["ANTHROPIC_PROFILE", "BAD-NAME"]
+        }));
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("accounts.strip_env entry \"BAD-NAME\"")),
+            "{problems:?}"
+        );
+        let fine = with_accounts(serde_json::json!({
+            "login": ["login"],
+            "strip_env": ["ANTHROPIC_PROFILE"]
+        }));
+        assert!(fine.is_empty(), "{fine:?}");
     }
 
     #[test]
