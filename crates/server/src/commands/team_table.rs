@@ -104,5 +104,49 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        command(
+            "team.project.add",
+            "Add a project to a team",
+            "team.project_add",
+            json!({
+                "type": "object",
+                "required": ["team", "name"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "name": { "type": "string" },
+                    "goal": { "type": "string" },
+                    "brief": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.project.update",
+            "Change a team's project",
+            "team.project_update",
+            json!({
+                "type": "object",
+                "required": ["team", "project"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "project": { "type": "string" },
+                    "name": { "type": "string" },
+                    "goal": { "type": "string" },
+                    "brief": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.project.rm",
+            "Remove a team's project",
+            "team.project_rm",
+            json!({
+                "type": "object",
+                "required": ["team", "project"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "project": { "type": "string" }
+                }
+            }),
+        ),
     ]
 }

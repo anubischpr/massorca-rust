@@ -4,6 +4,7 @@
 mod bot;
 mod selectors;
 mod team;
+mod team_project;
 
 use massorca_core_agents::Agents;
 use massorca_core_store::{Store, StoreError};
@@ -23,6 +24,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     ];
     handles.extend(team::register(registries)?);
     handles.extend(bot::register(registries)?);
+    handles.extend(team_project::register(registries)?);
     Ok(handles)
 }
 
