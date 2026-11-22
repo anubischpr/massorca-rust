@@ -103,6 +103,9 @@ pub struct Shell {
     /// The Settings search field; the text it settles on becomes `settings.query`.
     settings_search: Entity<SearchField>,
     _settings_search_changes: Subscription,
+    /// The vault page's search over names; the text it settles on becomes `settings.vault_query`.
+    vault_search: Entity<SearchField>,
+    _vault_search_changes: Subscription,
     /// The workspace folder's text field, shown on the Settings page.
     settings_folder: Entity<TextField>,
     /// The disabled state the field was last set to, so a frame does not notify it again.
@@ -292,6 +295,13 @@ impl Shell {
                 .placeholder("Code from the sign-in page")
         });
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let vault_search = cx.new(|cx| SearchField::new("Search names", cx));
+        let vault_search_changes =
+            cx.subscribe(&vault_search, |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.set_vault_query(query.as_ref(), cx);
+                }
+            });
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
@@ -342,6 +352,8 @@ impl Shell {
             settings: SettingsModel::default(),
             settings_search,
             _settings_search_changes: settings_search_changes,
+            vault_search,
+            _vault_search_changes: vault_search_changes,
             settings_folder,
             settings_folder_disabled: false,
             settings_hosts_asked: false,
@@ -565,6 +577,7 @@ impl Render for Shell {
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
+            vault_search: &self.vault_search,
             connection,
             hosts,
             shell: shell.clone(),

@@ -7,6 +7,7 @@ use super::*;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_form::FormStatus;
+use crate::model::secret_vault::VaultScopeFilter;
 use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
@@ -422,8 +423,99 @@ fn the_vault_dialogs_are_centred_in_the_window_whichever_row_opened_them(cx: &mu
         shell.close_secret_dialog(window, cx)
     });
 
-    click(cx, "button:settings-vault-delete-project:p1-DATABASE_URL");
+    click(cx, "settings-vault-delete-project:p1-DATABASE_URL");
     assert_centred_in_the_window(cx, "Delete secret");
+}
+
+/// Seeds four owned names in a project, a team and Global, and opens the vault page.
+fn open_vault_with_three_scopes(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
+            SecretStatus {
+                protection: "file".into(),
+                state: "ready".into(),
+                count: 4,
+                name_clashes: Vec::new(),
+            },
+        ))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("global", "GITHUB_TOKEN"),
+            owned_secret("project:p1", "OPENAI_API_KEY"),
+            owned_secret("project:p1", "DATABASE_URL"),
+            owned_secret("team:t1", "SLACK_TOKEN"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+}
+
+#[gpui::test]
+fn add_secret_is_a_header_button_and_no_longer_a_row(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    open_vault_with_three_scopes(&rig, cx);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-add-row").is_none(),
+        "Add secret is not a row of the page any more"
+    );
+    let add = cx
+        .debug_bounds("button:settings-vault-add")
+        .expect("Add secret is drawn");
+    let first_name = cx
+        .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+        .expect("the Global name is drawn");
+    assert!(
+        add.origin.y < first_name.origin.y && add.origin.x > px(720.),
+        "Add secret sits top right, above every scope"
+    );
+}
+
+#[gpui::test]
+fn the_vault_search_draws_only_the_names_that_match(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    rig.shell
+        .update(cx, |shell, cx| shell.set_vault_query("openai", cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-OPENAI_API_KEY")
+            .is_some(),
+        "a matching name is drawn"
+    );
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-DATABASE_URL")
+            .is_none()
+            && cx
+                .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+                .is_none(),
+        "names that do not match are not drawn"
+    );
+}
+
+#[gpui::test]
+fn the_vault_scope_filter_keeps_one_kind_of_scope_on_the_page(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_vault_scope(VaultScopeFilter::Team, cx)
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-team:t1-SLACK_TOKEN")
+            .is_some(),
+        "the team's name is drawn"
+    );
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-DATABASE_URL")
+            .is_none()
+            && cx
+                .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+                .is_none(),
+        "projects and Global are left out under the Team filter"
+    );
 }
 
 /// Opens Add and types `name` into the name field.
