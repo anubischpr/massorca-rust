@@ -27,6 +27,41 @@ pub fn check(path: &str, allow_glob: bool) -> Result<(), &'static str> {
             ".." => return Err("parent-directory segment"),
             _ => {}
         }
+        check_windows_alias(segment)?;
+    }
+    Ok(())
+}
+
+/// Refuses, on every OS, a name Windows would resolve to another file or a device: a trailing dot or space (dropped),
+/// an 8.3 short name (`EXTENS~1.JSO`), or a reserved device name with any extension.
+fn check_windows_alias(segment: &str) -> Result<(), &'static str> {
+    if segment.ends_with(['.', ' ']) {
+        return Err("trailing dot or space");
+    }
+    let bytes = segment.as_bytes();
+    if bytes
+        .windows(2)
+        .any(|pair| pair[0] == b'~' && pair[1].is_ascii_digit())
+    {
+        return Err("short-name alias");
+    }
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or(segment)
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+    };
+    if matches!(
+        stem.as_str(),
+        "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
+    ) || numbered("com")
+        || numbered("lpt")
+    {
+        return Err("reserved device name");
     }
     Ok(())
 }
@@ -58,6 +93,36 @@ mod tests {
         assert_eq!(check("./a", false), Err("current-directory segment"));
         assert_eq!(check("a\u{0}b", false), Err("control character"));
         assert_eq!(check("a*.json", false), Err("glob character"));
+    }
+
+    #[test]
+    fn refuses_names_windows_would_alias_on_every_os() {
+        assert_eq!(
+            check("extension.json.", false),
+            Err("trailing dot or space")
+        );
+        assert_eq!(
+            check("extension.json ", false),
+            Err("trailing dot or space")
+        );
+        assert_eq!(
+            check("agents./kit.json", false),
+            Err("trailing dot or space")
+        );
+        assert_eq!(check("EXTENS~1.JSO", false), Err("short-name alias"));
+        assert_eq!(check("a/b~9/c", true), Err("short-name alias"));
+        for reserved in [
+            "con", "CON.json", "nul.txt", "Aux", "prn.a.b", "com1", "LPT9.log", "conin$",
+        ] {
+            assert_eq!(
+                check(&format!("media/{reserved}"), false),
+                Err("reserved device name"),
+                "{reserved}"
+            );
+        }
+        assert_eq!(check("console.json", false), Ok(()));
+        assert_eq!(check("com10.json", false), Ok(()));
+        assert_eq!(check("a~b.json", false), Ok(()));
     }
 
     #[test]
