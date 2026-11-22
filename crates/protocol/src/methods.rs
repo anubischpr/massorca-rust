@@ -10,6 +10,8 @@ pub mod events;
 pub mod git;
 pub mod projects;
 pub mod service;
+pub mod tasks;
+pub mod teams;
 pub mod terminals;
 pub mod workspaces;
 

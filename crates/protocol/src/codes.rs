@@ -150,5 +150,22 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 
+/// A team, bot or team project is named by a selector that matches none, or none of its own team.
+pub const TEAM_NOT_FOUND: &str = "team.not_found";
+/// Another team has this name.
+pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
+pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
+pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+pub const BOT_NOT_FOUND: &str = "bot.not_found";
+/// Another bot of the team has this name.
+pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
+/// The team already has a lead bot; clear its lead first.
+pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
+/// The bot owns open tasks; it can be removed only with `unassign`.
+pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
+pub const TASK_NOT_FOUND: &str = "task.not_found";
+/// The task's agent session still runs; stop it first.
+pub const TASK_RUNNING: &str = "task.running";
+
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

@@ -16,3 +16,5 @@ pub const BINARY_FRAMES: &str = "binary-frames/1";
 /// Agent methods (`agent.*`) and the agent watch stream (decision 0057).
 pub const AGENTS: &str = "agents/1";
 pub const GIT: &str = "git/1";
+/// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
+pub const TEAMS: &str = "teams/1";

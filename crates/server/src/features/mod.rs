@@ -8,6 +8,7 @@ mod events;
 mod git;
 mod projects;
 mod service;
+mod teams;
 mod terminal_attach;
 mod terminals;
 mod workspace_domain;
@@ -40,6 +41,7 @@ pub(crate) fn register_core(
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
     handles.extend(git::register(registries)?);
+    handles.extend(teams::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

@@ -65,6 +65,29 @@ const AGENT_METHODS: [&str; 8] = [
     "agent.watch",
 ];
 
+/// The Bot Teams methods this build registers (capability `teams/1`).
+const TEAM_METHODS: [&str; 19] = [
+    "team.create",
+    "team.list",
+    "team.show",
+    "team.update",
+    "team.rm",
+    "team.bot_add",
+    "team.bot_update",
+    "team.bot_rm",
+    "team.project_add",
+    "team.project_update",
+    "team.project_rm",
+    "team.board",
+    "task.create",
+    "task.list",
+    "task.show",
+    "task.update",
+    "task.done",
+    "task.reopen",
+    "task.rm",
+];
+
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: [&str; 16] = [
     "service.info",
@@ -232,6 +255,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(&TERMINAL_METHODS)
         .chain(&DEVICE_METHODS)
         .chain(&AGENT_METHODS)
+        .chain(&TEAM_METHODS)
     {
         assert!(
             commands.iter().any(|command| command.method == *method),
