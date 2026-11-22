@@ -1,6 +1,7 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
 pub mod canvas;
+pub mod marketplace;
 pub mod morph;
 pub mod navigation;
 pub mod palette;
@@ -17,9 +18,13 @@ pub mod setup;
 pub mod shell;
 pub mod shell_state;
 pub mod sidebar;
+pub mod source_control;
+pub mod source_control_diff;
+pub mod source_control_flow;
 pub mod start_page;
 pub mod status_items;
 pub mod teams;
 pub mod terminals;
 pub mod title_bar;
+pub mod work_panel;
 pub mod workspace_flow;

@@ -190,41 +190,6 @@ const AGENTS: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Select(None)),
     },
     RowSpec {
-        label: "Claude",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "Codex",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "Antigravity",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "Gemini",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "OpenCode",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "Cursor",
-        helper: "Detected, missing or signed out on this PC.",
-        body: RowBody::Planned(Planned::Status),
-    },
-    RowSpec {
-        label: "Agent accounts and usage",
-        helper: "Sign-in state and remaining usage for each agent.",
-        body: RowBody::Planned(Planned::Link),
-    },
-    RowSpec {
         label: "Computer use",
         helper: "Lets an agent use the screen, mouse and keyboard.",
         body: RowBody::Planned(Planned::Switch),
@@ -512,9 +477,7 @@ const NOTIFICATIONS: &[RowSpec] = &[
 const EXTENSIONS: &[RowSpec] = &[RowSpec {
     label: "Extensions",
     helper: "Managed in Marketplace, under Installed.",
-    body: RowBody::Planned(Planned::Elsewhere(
-        "Marketplace > Installed is not built yet.",
-    )),
+    body: RowBody::Planned(Planned::Link),
 }];
 
 const VAULT: &[RowSpec] = &[RowSpec {
@@ -754,12 +717,10 @@ mod tests {
     }
 
     #[test]
-    fn the_extensions_row_says_that_marketplace_is_not_built_yet() {
+    fn the_extensions_row_links_to_marketplace_installed() {
         assert_eq!(
             bodies(SettingsSection::Extensions),
-            vec![RowBody::Planned(Planned::Elsewhere(
-                "Marketplace > Installed is not built yet."
-            ))]
+            vec![RowBody::Planned(Planned::Link)]
         );
     }
 
@@ -785,12 +746,15 @@ mod tests {
     }
 
     #[test]
-    fn the_agents_section_lists_one_availability_row_per_agent() {
+    fn the_agents_section_has_no_fixed_list_of_agents() {
         let statuses = rows(SettingsSection::Agents)
             .iter()
             .filter(|row| row.body == RowBody::Planned(Planned::Status))
             .count();
-        assert_eq!(statuses, 6);
+        assert_eq!(
+            statuses, 0,
+            "installed agents come from the Marketplace, one row each"
+        );
     }
 
     #[test]

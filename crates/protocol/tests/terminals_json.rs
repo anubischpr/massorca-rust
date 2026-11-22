@@ -197,6 +197,7 @@ fn attach_params_omit_unset_options() {
             since: None,
             cols: None,
             rows: None,
+            answers_queries: None,
         },
         &json!({ "terminal": "t-1" }),
     );
@@ -210,8 +211,39 @@ fn attach_params_carry_resume_offset_and_size() {
             since: Some(1024),
             cols: Some(80),
             rows: Some(24),
+            answers_queries: None,
         },
         &json!({ "terminal": "t-1", "since": 1024, "cols": 80, "rows": 24 }),
+    );
+}
+
+#[test]
+fn attach_params_declare_that_the_client_answers_queries() {
+    assert_wire(
+        &terminals::TerminalAttachParams {
+            terminal: "t-1".to_owned(),
+            since: None,
+            cols: None,
+            rows: None,
+            answers_queries: Some(true),
+        },
+        &json!({ "terminal": "t-1", "answers_queries": true }),
+    );
+}
+
+#[test]
+fn attach_params_from_older_clients_decode_without_the_declaration() {
+    let params: terminals::TerminalAttachParams = serde_json::from_value(json!({
+        "terminal": "t-1",
+        "since": 1024,
+        "cols": 80,
+        "rows": 24,
+    }))
+    .expect("an attach without answers_queries decodes");
+    assert_eq!(params.answers_queries, None);
+    assert_eq!(
+        (params.since, params.cols, params.rows),
+        (Some(1024), Some(80), Some(24))
     );
 }
 

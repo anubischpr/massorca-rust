@@ -558,6 +558,9 @@ impl Agents {
         title: String,
         size: PtySize,
     ) -> Result<String, AgentError> {
+        if !plan.files.is_empty() {
+            crate::credentials::create_agents_dir(self.profile_dir())?;
+        }
         write_files(&plan.files)?;
         let mut env = plan.env;
         // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).

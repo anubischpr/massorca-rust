@@ -12,6 +12,7 @@ These apply to every command and may come before or after the command name.
 |---|---|---|
 | `--profile <NAME>` | `MASSORCA_PROFILE` | Profile to use. Default `default`. Each profile has its own service and data. |
 | `--home <DIR>` | `MASSORCA_HOME` | Directory that holds the profiles. Default: the platform data directory. |
+| `--host <NAME>` | `MASSORCA_HOST` | Paired host to address instead of the local service (decision 0046). `local`, or no flag, is the local service. A host is never started. |
 | `--json` | | Print one JSON document on stdout instead of text. |
 | `--no-autostart` | `MASSORCA_NO_AUTOSTART` | Never start the service on its own. |
 
@@ -20,11 +21,17 @@ letters, digits, `-` or `_`.
 
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
 
+`--host` applies to every command that talks to a service. `service run`, `service status`,
+`service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands work on
+this computer only: with `--host` they exit 2 with `cli.host_not_supported`. `service unit` reads
+the `--home` flag but never `MASSORCA_HOME`, because its unit is for another machine.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `service run [--log-stderr]` | Runs the service of the profile in this process until it is stopped. `--log-stderr` also writes log lines to stderr. |
+| `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
+| `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
 | `service status` | Shows whether the service runs. Never starts it. |
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities). Starts the service when it is not running. |
 | `service stop` | Stops the service. Succeeds when it is not running. |
@@ -49,6 +56,18 @@ letters, digits, `-` or `_`.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `pair offer [--admin] [--ttl <SECS>]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. `--admin` adds `host-admin` and `device-admin`. |
+| `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
+| `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
+| `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
+| `device whoami` | Shows the principal this command runs as, its scopes and its device. |
+| `server status` | Shows the listeners, the server pin, the active devices and the pending offers. Without `--host`, also this computer's Tailscale state. |
+| `host list` | Lists the hosts this client paired with. Makes no connection. |
+| `host show <NAME>` | Shows one host: addresses, pin, device, scopes and pairing time. |
+| `host remove <NAME> [--keep-device] [--uninstall --ssh <TARGET>]` | Forgets a host. Unless `--keep-device`, revokes this device on the server when the host answers. `--uninstall` also stops and removes the service over SSH; if that fails the host is kept, so the command can be run again. |
+| `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
+| `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
+| `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
@@ -210,6 +229,25 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 With `--json` it prints the start document on stdout, and the service log goes to the
 profile's log files only unless `--log-stderr` is given.
 
+### Hosts and pairing
+
+A server is `massorca service run --listen <ADDR>` on another machine. `--listen` takes
+`tailscale[:PORT]` (this node's Tailscale address, the default port 7347), `localhost:PORT` or
+`IP:PORT`. An address on every interface (`0.0.0.0`, `::`) needs `--allow-all-interfaces`.
+
+The server's owner makes an offer, and the other computer accepts it:
+
+```sh
+# on the server
+massorca pair offer --admin
+# on the other computer, reading the offer from stdin
+massorca pair accept - --name vps
+```
+
+The accepted host is stored in this profile. `--host vps` then addresses it, and `host list`,
+`host status` and `host remove` manage it. A host that does not answer is reported as
+`unreachable`; nothing is inferred about the work on it (decision 0044).
+
 ## Output
 
 Text mode writes results to stdout. Errors go to stderr as one line:
@@ -240,9 +278,9 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 |---|---|
 | 0 | Success. |
 | 1 | The service answered with an error, or local data could not be used. The code is printed. |
-| 2 | The command line is invalid, including an invalid profile name or log filter, or `terminal attach` without a terminal on stdin and stdout. |
+| 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
-| 4 | The service is not running and could not be reached or started. |
+| 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. |
 
 ## Logs and files
 
@@ -252,5 +290,5 @@ Each profile lives in `<home>/profiles/<name>/`. The service writes daily log fi
 ## Not yet available
 
 Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
-generated names, setup scripts, terminal and agent guards on removal, squash-merge detection,
-remote hosts) are not available yet.
+generated names, setup scripts, terminal and agent guards on removal, squash-merge detection) are
+not available yet.

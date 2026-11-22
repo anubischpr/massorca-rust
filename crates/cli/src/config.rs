@@ -1,6 +1,5 @@
-//! `massorca config get|set|list`: reading and changing settings through the service.
+//! `massorca settings get|set|list|reset` (also `massorca config`): reading and changing settings through the service.
 
-use massorca_profile::Profile;
 use massorca_protocol::methods::config::{ConfigKey, ConfigSet, ConfigValue};
 use serde_json::Value;
 
@@ -8,28 +7,54 @@ use crate::args::{ConfigCommand, ConfigGetArgs, ConfigSetArgs};
 use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::target::Target;
 
-/// Runs one `config` subcommand against the service of `profile`.
+/// Runs one `config` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: ConfigCommand,
     output: Output,
 ) -> Result<(), CliError> {
     match command {
-        ConfigCommand::Get(args) => get(profile, autostart, args, output).await,
-        ConfigCommand::Set(args) => set(profile, autostart, args, output).await,
-        ConfigCommand::List => list(profile, autostart, output).await,
+        ConfigCommand::Get(args) => get(target, autostart, args, output).await,
+        ConfigCommand::Set(args) => set(target, autostart, args, output).await,
+        ConfigCommand::List => list(target, autostart, output).await,
+        ConfigCommand::Reset(args) => reset(target, autostart, args, output).await,
     }
 }
 
-async fn get(
-    profile: &Profile,
+async fn reset(
+    target: &Target,
     autostart: bool,
     args: ConfigGetArgs,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
+    let value = client
+        .config_reset(&ConfigKey {
+            owner: args.owner,
+            key: args.key,
+        })
+        .await?;
+    output.success(
+        &value,
+        &[format!(
+            "{} = {} (default)",
+            value.key,
+            render(&value.value)
+        )],
+    );
+    Ok(())
+}
+
+async fn get(
+    target: &Target,
+    autostart: bool,
+    args: ConfigGetArgs,
+    output: Output,
+) -> Result<(), CliError> {
+    let client = connect(target, autostart).await?;
     let value = client
         .config_get(&ConfigKey {
             owner: args.owner,
@@ -41,12 +66,12 @@ async fn get(
 }
 
 async fn set(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     args: ConfigSetArgs,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     let params = ConfigSet {
         owner: args.owner,
         key: args.key,
@@ -60,8 +85,8 @@ async fn set(
     Ok(())
 }
 
-async fn list(profile: &Profile, autostart: bool, output: Output) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+async fn list(target: &Target, autostart: bool, output: Output) -> Result<(), CliError> {
+    let client = connect(target, autostart).await?;
     let list = client.config_list().await?;
     let lines: Vec<String> = list.values.iter().map(list_line).collect();
     output.success(&list, &lines);

@@ -19,6 +19,8 @@ pub enum ServiceError {
     Registration(#[from] RegistrationError),
     #[error(transparent)]
     Method(#[from] MethodError),
+    #[error("cannot set up the network listener: {0}")]
+    Network(String),
     #[error("cannot pick the default workspace root: {0}")]
     DefaultWorkspaceRoot(String),
 }

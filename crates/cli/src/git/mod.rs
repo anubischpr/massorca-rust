@@ -9,8 +9,8 @@ mod remote;
 mod status;
 mod watch;
 
+use crate::target::Target;
 use clap::{Args, Subcommand};
-use massorca_profile::Profile;
 
 use crate::connect::connect;
 use crate::cwd_path;
@@ -72,14 +72,14 @@ impl WorkspaceArg {
     }
 }
 
-/// Runs one `git` subcommand against the service of `profile`.
+/// Runs one `git` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: GitCommand,
     output: Output,
 ) -> Result<(), CliError> {
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         GitCommand::Status(args) => status::run(&client, args, output).await,
         GitCommand::Stage(args) => index::run_stage(&client, args, output).await,

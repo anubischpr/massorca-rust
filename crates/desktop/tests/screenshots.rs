@@ -165,6 +165,12 @@ const SHOTS: &[Shot] = &[
     sample("tasks-page", tasks_page),
     sample("calendar-page", calendar_page),
     sample("marketplace-page", marketplace_page),
+    Shot {
+        name: "marketplace-narrow-880",
+        width: 880.0,
+        data: Data::Sample,
+        reach: marketplace_page,
+    },
     sample("prototypes-page", prototypes_page),
     sample("automations-page", automations_page),
     sample("settings-general", settings_section::<0>),
@@ -208,9 +214,11 @@ const SHOTS: &[Shot] = &[
     sample("bot-teams-board", bot_teams_board),
     sample("bot-teams-new-team", bot_teams_new_team),
     sample("bot-teams-add-bot", bot_teams_add_bot),
-    narrow(1280.0, "narrow-1280"),
-    narrow(1040.0, "narrow-1040"),
-    narrow(840.0, "narrow-840"),
+    // The ws-narrow artboard's own widths for steps 1 to 3, then 720 px for step 4 (below 728).
+    narrow(1300.0, "narrow-1300"),
+    narrow(1100.0, "narrow-1100"),
+    narrow(880.0, "narrow-880"),
+    narrow(720.0, "narrow-720"),
 ];
 
 #[test]

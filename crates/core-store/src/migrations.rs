@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -83,6 +84,88 @@ CREATE INDEX agent_sessions_by_parent ON agent_sessions(parent_id);
 "#,
         foreign_keys_off: false,
     },
+    Migration {
+        // Paired network devices (decision 0041). Only the hash of a device's public key is kept.
+        sql: r#"
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_pin TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER,
+    revoked_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Bot Teams core (decision 0072): teams and their bots. A team's removal removes its bots; at most one bot is the lead.
+    Migration {
+        sql: r#"
+CREATE TABLE teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    character TEXT NOT NULL,
+    access TEXT NOT NULL,
+    workspaces INTEGER NOT NULL CHECK(workspaces IN (0,1)),
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE bots (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    job TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    model TEXT,
+    effort TEXT,
+    lead INTEGER NOT NULL CHECK(lead IN (0,1)),
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+CREATE UNIQUE INDEX bots_one_lead ON bots(team_id) WHERE lead = 1;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team projects (decision 0072): each has its own Board and Brief; a team's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE team_projects (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Tasks (decision 0072). A task keeps its own lifecycle; the agent session it names is read from the agents domain.
+    // A removed bot or project leaves its tasks without that link; a removed team takes its tasks with it.
+    Migration {
+        sql: r#"
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES team_projects(id) ON DELETE SET NULL,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('room','cli')),
+    session_id TEXT,
+    outcome TEXT CHECK(outcome IN ('success','failure','cancelled','interrupted')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX tasks_by_team ON tasks(team_id, created_at);
+CREATE INDEX tasks_by_bot ON tasks(bot_id);
+CREATE INDEX tasks_by_project ON tasks(project_id);
+"#,
+        foreign_keys_off: false,
+    },
     // Agent accounts (decision 0059): several credential homes per kind, one active per kind, and per-project choices.
     // Deleting an account clears its active mark and its choices; deleting a project clears its choices.
     Migration {
@@ -114,13 +197,25 @@ CREATE INDEX agent_account_choices_by_account ON agent_account_choices(account);
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.
-/// Each step runs under the write lock and re-reads `user_version` there, so concurrent openers migrate a file once.
+/// The whole upgrade of a file runs under an OS lock, and each step re-reads `user_version` under the write lock, so
+/// concurrent openers migrate a file once and back it up once.
 pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+    // An up-to-date or newer database is answered without the migration lock, so it is never written to.
+    let found = user_version(connection)?;
+    if found > supported {
+        return Err(StoreError::NewerSchema { found, supported });
+    }
+    if found == supported {
+        return Ok(());
+    }
+    // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
+    // would back up the half-migrated file again.
+    let _upgrade = file.map(upgrade_lock).transpose()?;
     let mut backed_up = false;
     loop {
         // Read without the lock first, so an up-to-date database is never written to.
@@ -191,6 +286,19 @@ fn run_step(
     transaction.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish.
+fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".migrating");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(name))?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 fn user_version(connection: &Connection) -> rusqlite::Result<i64> {

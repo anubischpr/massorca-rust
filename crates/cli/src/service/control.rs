@@ -10,9 +10,10 @@ use massorca_profile::Profile;
 use massorca_protocol::methods::service::ServiceInfo;
 use serde::Serialize;
 
-use crate::connect::{connect, connect_running};
+use crate::connect::{connect, connect_local, connect_running};
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::target::Target;
 
 /// How long a stopping service may take to release its profile.
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -54,8 +55,8 @@ pub async fn status(profile: &Profile, output: Output) -> Result<(), CliError> {
 }
 
 /// Shows the service's identity, starting the service first unless autostart is off.
-pub async fn info(profile: &Profile, autostart: bool, output: Output) -> Result<(), CliError> {
-    let info = connect(profile, autostart).await?.service_info().await?;
+pub async fn info(target: &Target, autostart: bool, output: Output) -> Result<(), CliError> {
+    let info = connect(target, autostart).await?.service_info().await?;
     output.success(&info, &info_lines(&info));
     Ok(())
 }
@@ -75,7 +76,7 @@ pub async fn stop(profile: &Profile, output: Output) -> Result<(), CliError> {
 /// Stops the service if it runs, then starts it again.
 pub async fn restart(profile: &Profile, output: Output) -> Result<(), CliError> {
     stop_service(profile).await?;
-    let info = connect(profile, true).await?.service_info().await?;
+    let info = connect_local(profile, true).await?.service_info().await?;
     output.success(&info, &info_lines(&info));
     Ok(())
 }

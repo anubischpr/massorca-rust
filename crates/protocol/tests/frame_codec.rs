@@ -46,3 +46,22 @@ fn json_and_stream_bytes_are_the_known_frame_kinds() {
 fn local_frame_limit_is_eight_mebibytes() {
     assert_eq!(MAX_FRAME_LEN_LOCAL, 8 * 1024 * 1024);
 }
+
+#[test]
+fn a_frame_body_round_trips_without_its_length_prefix() {
+    use massorca_protocol::{Frame, decode_frame_body, encode_frame_body};
+    let frames = [
+        Frame::Message(massorca_protocol::Message::Cancel { stream: 7 }),
+        Frame::StreamBytes {
+            stream: 3,
+            payload: vec![0, 1, 2, 255],
+        },
+    ];
+    for frame in frames {
+        let body = encode_frame_body(&frame);
+        assert_eq!(decode_frame_body(&body).expect("decodes"), frame);
+    }
+    assert!(decode_frame_body(&[]).is_err());
+    assert!(decode_frame_body(&[0x02, 0, 0]).is_err());
+    assert!(decode_frame_body(&[0x7f]).is_err());
+}

@@ -9,6 +9,7 @@ use crate::service::{ConnectionState, Script, StoreUpdate};
 use gpui::{AppContext, TestAppContext, VisualTestContext};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::Workspace;
+use massorca_ui::components::composer::Composer;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -45,6 +46,7 @@ fn rig(
             Some(handle),
             None,
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )
@@ -85,6 +87,58 @@ fn two_projects() -> (Vec<Project>, Vec<Workspace>) {
 
 fn canvas(rig: &Rig, cx: &mut VisualTestContext) -> Canvas {
     rig.shell.read_with(cx, |shell, _| shell.model().canvas())
+}
+
+/// Opens workspace `w1` on its start page and puts the focus in the page's composer.
+fn focused_start_composer(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+    let composer = rig
+        .shell
+        .update(cx, |shell, cx| shell.start_composer("w1", cx));
+    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    draw(cx);
+    composer
+}
+
+fn draft_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
+    composer.read_with(cx, |composer, cx| composer.draft(cx))
+}
+
+#[gpui::test]
+fn the_start_page_composer_takes_typing_and_keeps_the_draft_across_redraws(
+    cx: &mut TestAppContext,
+) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    let composer = focused_start_composer(&rig, cx);
+    cx.simulate_input("hello");
+    draw(cx);
+    assert_eq!(draft_of(&composer, cx), "hello");
+}
+
+#[gpui::test]
+fn enter_keeps_the_draft_while_agent_sessions_are_not_available(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    let composer = focused_start_composer(&rig, cx);
+    cx.simulate_input("hi");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(draft_of(&composer, cx), "hi");
+}
+
+#[gpui::test]
+fn the_start_page_microphone_is_disabled_and_says_why(cx: &mut TestAppContext) {
+    let (projects, workspaces) = two_projects();
+    let (rig, cx) = rig(cx, projects, workspaces);
+    let composer = focused_start_composer(&rig, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer
+            .voice_unavailable_reason()
+            .cloned()),
+        Some("Voice input comes later.".into())
+    );
 }
 
 #[gpui::test]

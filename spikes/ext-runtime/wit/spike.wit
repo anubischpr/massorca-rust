@@ -1,0 +1,12 @@
+package massorca:spike;
+
+interface host {
+  log: func(message: string);
+  kv-get: func(key: string) -> option<string>;
+}
+
+world js-engine {
+  import host;
+  /// Evaluates JS source and returns the result as a string.
+  export run: func(source: string) -> result<string, string>;
+}

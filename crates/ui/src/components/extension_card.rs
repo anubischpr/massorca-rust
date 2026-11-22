@@ -4,19 +4,20 @@
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::progress::ProgressBar;
-use crate::components::skeleton::{Skeleton, SkeletonShape};
+use crate::components::progress::percent_text;
+use crate::components::skeleton::{LineWidth, Skeleton};
 use crate::components::switch::Switch;
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::{FocusRing, Surface};
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
 use crate::tokens::{
-    Color, Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM, SIZE_AVATAR_LG, SIZE_CONTROL_COMPACT, SPACE_1,
-    SPACE_2, SPACE_3, SPACE_4, TYPE_BODY, TYPE_BODY_SM, TYPE_CAPTION, TYPE_MONO_SM, TYPE_TITLE_SM,
+    Color, Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM, SIZE_AVATAR_LG, SIZE_CONTROL_COMPACT,
+    SIZE_PROGRESS_HEIGHT, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY, TYPE_BODY_SM,
+    TYPE_CAPTION, TYPE_MONO_SM, TYPE_TITLE_SM,
 };
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -302,10 +303,14 @@ impl ExtensionCard {
                         .on_click(route(handler, ExtensionAction::Cancel))
                         .into_any_element(),
                 );
+                below = Some(install_bar((id.clone(), "progress"), *percent, p));
                 div()
-                    .flex_1()
                     .min_w_0()
-                    .child(ProgressBar::new("Installing").determinate(f32::from(*percent) / 100.0))
+                    .truncate()
+                    .text_style(TYPE_BODY_SM)
+                    .tabular_figures()
+                    .text_color(p.text.secondary)
+                    .child(installing_text(*percent))
                     .into_any_element()
             }
             ExtensionState::Failed { reason } => {
@@ -388,6 +393,74 @@ struct Footer {
     below: Option<AnyElement>,
 }
 
+/// The installing status: "Installing, 40%".
+fn installing_text(percent: u8) -> String {
+    format!("Installing, {}", percent_text(f32::from(percent) / 100.0))
+}
+
+/// The 4 px install bar across the card, announced as progress.
+fn install_bar(id: impl Into<ElementId>, percent: u8, p: &Palette) -> AnyElement {
+    let fraction = f32::from(percent.min(100)) / 100.0;
+    div()
+        .id(id)
+        .role(Role::ProgressIndicator)
+        .aria_label("Installing")
+        .aria_numeric_value(f64::from(percent.min(100)))
+        .w_full()
+        .h(px(SIZE_PROGRESS_HEIGHT))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(p.progress.track)
+        .child(
+            div()
+                .h_full()
+                .w(relative(fraction))
+                .rounded_full()
+                .bg(p.accent.default),
+        )
+        .into_any_element()
+}
+
+/// The loading card: a plate and two text bars, then a footer bar (ExtensionCard.md States).
+fn loading_body(p: &Palette) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SPACE_3))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(SIZE_AVATAR_LG))
+                        .rounded(px(RADIUS_MD))
+                        .bg(p.fill.skeleton),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SPACE_2))
+                        .pt(px(SPACE_1))
+                        .child(Skeleton::line(LineWidth::Partial))
+                        .child(Skeleton::line(LineWidth::Most)),
+                ),
+        )
+        .child(
+            div()
+                .h(px(SIZE_CONTROL_COMPACT))
+                .w_full()
+                .rounded(px(RADIUS_SM))
+                .bg(p.fill.skeleton),
+        )
+        .into_any_element()
+}
+
 /// A glyph with a word, the state of a card that needs a decision.
 fn status_word(icon: IconName, ink: Color, word: &str) -> AnyElement {
     div()
@@ -447,9 +520,7 @@ impl RenderOnce for ExtensionCard {
             .shadow(box_shadows(theme.shadows.e1))
             .hover(move |s| s.bg(fills.hover));
         if self.loading {
-            return card
-                .child(Skeleton::new(SkeletonShape::Card))
-                .into_any_element();
+            return card.child(loading_body(&p)).into_any_element();
         }
 
         let handler = self.on_action.clone();
@@ -615,6 +686,12 @@ mod tests {
     fn chips_fold_the_rest_into_a_count() {
         assert_eq!(visible_chips(2), (2, 0));
         assert_eq!(visible_chips(7), (4, 3));
+    }
+
+    #[test]
+    fn installing_reads_one_status_with_its_percent() {
+        assert_eq!(installing_text(40), "Installing, 40%");
+        assert_eq!(installing_text(100), "Installing, 100%");
     }
 
     #[test]
