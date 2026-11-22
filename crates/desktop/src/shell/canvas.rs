@@ -5,7 +5,7 @@ use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
 use super::teams;
-use super::zones::ZoneFocus;
+use super::zones::{ZoneFocus, region_focus_ring};
 use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
@@ -47,6 +47,7 @@ pub(super) fn canvas(
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
+        .focus_visible(|style| style.shadow(region_focus_ring(&theme)))
         .relative()
         .flex()
         .flex_row()
@@ -219,6 +220,7 @@ fn service_down_page(notice: &ServiceNotice, shell: &WeakEntity<Shell>) -> AnyEl
 fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
         .track_focus(&focus)
+        .focus_visible(|style| style.shadow(region_focus_ring(theme)))
         .flex_none()
         .w(px(region.default_width()))
         .min_w(px(region.min_width()))
@@ -234,6 +236,9 @@ fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
 fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
         .track_focus(&focus)
+        .focus_visible(|style| {
+            style.shadow([region_focus_ring(theme), box_shadows(theme.shadows.e2)].concat())
+        })
         .absolute()
         .top_0()
         .bottom_0()

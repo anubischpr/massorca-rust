@@ -3,6 +3,7 @@
 
 use super::Shell;
 use super::tooltip::tooltip;
+use super::zones::region_focus_ring;
 use crate::model::shell::{ServiceStatus, ServiceTone, StatusBarModel};
 use crate::model::status_items::{StatusItem, StatusItemVisibility};
 use gpui::{
@@ -68,6 +69,7 @@ pub(super) fn status_bar(
         .h(px(SIZE_STATUSBAR))
         .px(px(SPACE_3))
         .bg(theme.palette.surface.canvas)
+        .focus_visible(|style| style.shadow(region_focus_ring(theme)))
         .text_style(TYPE_CAPTION);
     if visible.is_shown(StatusItem::Agents) {
         bar = bar.child(item(
