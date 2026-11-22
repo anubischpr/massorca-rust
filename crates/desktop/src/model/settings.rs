@@ -9,6 +9,7 @@ use massorca_protocol::methods::config::ConfigValue;
 
 use crate::service::Refusal;
 
+use super::secret_vault::VaultScopeFilter;
 use super::settings_sections::SettingsSection;
 
 /// The reason the folder row is off while the service is not connected.
@@ -176,6 +177,10 @@ pub struct SettingsModel {
     /// The search field's text; a non-empty query shows the hits across every section.
     pub query: String,
     pub folder: FolderSetting,
+    /// The vault page's search text, matched against every name in any case.
+    pub vault_query: String,
+    /// The scope kinds the vault page shows.
+    pub vault_scope: VaultScopeFilter,
 }
 
 #[cfg(test)]
