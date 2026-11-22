@@ -3,6 +3,8 @@
 //! Kinds are data: JSON declarations, built in or in the profile, naming mechanisms from a closed set. No protocol IO;
 //! the service maps requests onto this crate.
 
+pub mod account_check;
+pub mod accounts;
 pub mod catalog;
 pub mod credentials;
 pub mod event;

@@ -179,8 +179,28 @@ fn import_at(
 pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
     let decl = declared(profile_dir, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
-    check_homes_dir(profile_dir)?;
-    let exists = home_state(&home)? == HomeState::Directory;
+    show_at(profile_dir, &decl, &["homes"], &home)
+}
+
+/// Whether one account's home exists, and each declared file in it (decision 0059); names, sizes and times only.
+pub fn show_account(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<CredentialsShown, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = account_home_of(profile_dir, &decl.id, account)?;
+    show_at(profile_dir, &decl, &["accounts", decl.id.as_str()], &home)
+}
+
+fn show_at(
+    profile_dir: &Path,
+    decl: &KindDecl,
+    chain: &[&str],
+    home: &Path,
+) -> Result<CredentialsShown, AgentError> {
+    check_chain(profile_dir, chain)?;
+    let exists = home_state(home)? == HomeState::Directory;
     let names = decl
         .credentials
         .as_ref()
@@ -262,6 +282,68 @@ pub fn usable_account_home(
     let home = account_home_of(profile_dir, kind, account)?;
     check_chain(profile_dir, &["accounts", kind])?;
     Ok((home_state(&home)? == HomeState::Directory).then_some(home))
+}
+
+/// Creates an empty, owner-only home for a new account, so a sign-in can write into it (decision 0059). The caller holds
+/// [`lock_homes`].
+pub(crate) fn create_account_home(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<PathBuf, AgentError> {
+    let home = account_home_of(profile_dir, kind, account)?;
+    let (_root, _pins) = root_dir(profile_dir, &["accounts", kind])?;
+    if home_state(&home)? == HomeState::Directory {
+        return Err(exists(account));
+    }
+    create_private_dir(&home)
+        .map_err(|error| internal("create the account's credential home", &error))?;
+    Ok(home)
+}
+
+/// Moves 0056's single home of `kind` into the account directory `account`: one same-volume rename, so the files are
+/// never copied (decision 0059). The caller holds [`lock_homes`]; nothing is moved when the legacy home is absent.
+pub(crate) fn adopt_legacy_home(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<(), AgentError> {
+    let legacy = home_of(profile_dir, kind)?;
+    let target = account_home_of(profile_dir, kind, account)?;
+    let (_homes, _homes_pin) = root_dir(profile_dir, &["homes"])?;
+    let (_root, _root_pin) = root_dir(profile_dir, &["accounts", kind])?;
+    if home_state(&legacy)? != HomeState::Directory {
+        return Ok(());
+    }
+    if home_state(&target)? != HomeState::Missing {
+        return Err(exists(account));
+    }
+    fs::rename(&legacy, &target)
+        .map_err(|error| internal("move the credential home into an account", &error))?;
+    tracing::info!(kind, "moved the credential home into an account");
+    Ok(())
+}
+
+/// Whether every file the kind declares is present in the account's home as a regular file, never a link. The caller
+/// holds [`lock_homes`] or accepts that a concurrent change may follow.
+pub(crate) fn account_files_present(
+    profile_dir: &Path,
+    kind: &str,
+    account: &str,
+) -> Result<bool, AgentError> {
+    let decl = declared(profile_dir, kind)?;
+    let home = account_home_of(profile_dir, &decl.id, account)?;
+    let names = decl
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.files.clone())
+        .unwrap_or_default();
+    if names.is_empty() || home_state(&home)? != HomeState::Directory {
+        return Ok(false);
+    }
+    Ok(names.iter().all(|name| {
+        fs::symlink_metadata(home.join(name)).is_ok_and(|meta| meta.is_file() && !is_link(&meta))
+    }))
 }
 
 /// The home of an account of a valid kind and id; anything else is refused before the disk is touched.
