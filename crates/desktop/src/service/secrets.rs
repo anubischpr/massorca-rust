@@ -2,11 +2,14 @@
 //! together: after each connect, on each `secret.changed` event and after each write. A read answers only
 //! with names and times, so the store never holds a value.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use massorca_client::Client;
-use massorca_protocol::methods::secrets::{SecretEntry, SecretListParams, SecretSet};
+use massorca_client::{Client, ClientError};
+use massorca_protocol::methods::secrets::{
+    SecretEntry, SecretListParams, SecretRemove, SecretRemoved, SecretSet,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
@@ -88,6 +91,11 @@ pub(crate) enum SecretCommand {
         params: SecretSet,
         reply: oneshot::Sender<Result<SecretEntry, Refusal>>,
     },
+    /// Removes an owned secret; its links go with it only when `include_links` says so.
+    Remove {
+        params: SecretRemove,
+        reply: oneshot::Sender<Result<SecretRemoved, Refusal>>,
+    },
 }
 
 impl ServiceHandle {
@@ -95,6 +103,12 @@ impl ServiceHandle {
     /// optimistically; the list follows the refetch that the answer triggers.
     pub async fn secret_set(&self, params: SecretSet) -> Result<SecretEntry, Refusal> {
         self.ask(|reply| Command::Secret(SecretCommand::Set { params, reply }))
+            .await
+    }
+
+    /// `secret.remove`: deletes an owned secret. The list follows the refetch that the answer triggers.
+    pub async fn secret_remove(&self, params: SecretRemove) -> Result<SecretRemoved, Refusal> {
+        self.ask(|reply| Command::Secret(SecretCommand::Remove { params, reply }))
             .await
     }
 }
@@ -109,22 +123,45 @@ pub(super) fn spawn_call(
 ) {
     match command {
         SecretCommand::Set { params, reply } => {
-            let client = client.clone();
-            let updates = updates.clone();
-            let order = Arc::clone(order);
-            tokio::spawn(async move {
-                let result = client.secret_set(&params).await;
-                let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
-                refresh_in_background(&client, &updates, &order);
-            });
+            write(client, updates, order, reply, move |client| async move {
+                client.secret_set(&params).await
+            })
+        }
+        SecretCommand::Remove { params, reply } => {
+            write(client, updates, order, reply, move |client| async move {
+                client.secret_remove(&params).await
+            })
         }
     }
+}
+
+fn write<T, Fut>(
+    client: &Client,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    order: &Arc<SecretsFreshness>,
+    reply: oneshot::Sender<Result<T, Refusal>>,
+    call: impl FnOnce(Client) -> Fut + Send + 'static,
+) where
+    T: Send + 'static,
+    Fut: Future<Output = Result<T, ClientError>> + Send + 'static,
+{
+    let client = client.clone();
+    let updates = updates.clone();
+    let order = Arc::clone(order);
+    tokio::spawn(async move {
+        let result = call(client.clone()).await;
+        let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        refresh_in_background(&client, &updates, &order);
+    });
 }
 
 /// Answers a vault write with `refusal`, while there is no connection to ask.
 pub(super) fn refuse_while_down(command: SecretCommand, refusal: Refusal) {
     match command {
         SecretCommand::Set { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        SecretCommand::Remove { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }

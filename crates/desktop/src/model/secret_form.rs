@@ -5,8 +5,9 @@ use std::fmt;
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::secrets::SecretSet;
+use massorca_protocol::methods::secrets::{SecretRemove, SecretSet};
 
+use crate::model::secret_vault::count_of;
 use crate::service::Refusal;
 
 /// The longest variable name a secret can have (A29).
@@ -149,6 +150,81 @@ impl SecretForm {
     pub fn refused(&mut self, sentence: String) {
         self.status = FormStatus::Refused(sentence);
     }
+}
+
+/// The confirm before an owned secret is deleted (D-VT-02, merged into X-DLG-01).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoveForm {
+    pub scope: String,
+    pub name: String,
+    /// The scopes that link to the secret. Their links go too, but only once the confirm has named them.
+    pub linked_scopes: Vec<String>,
+    pub status: FormStatus,
+}
+
+impl RemoveForm {
+    pub fn new(scope: String, name: String, linked_scopes: Vec<String>) -> Self {
+        Self {
+            scope,
+            name,
+            linked_scopes,
+            status: FormStatus::Idle,
+        }
+    }
+
+    /// The request that deletes the secret. The links go with it only when there are some, which the confirm showed.
+    pub fn request(&mut self) -> SecretRemove {
+        self.status = FormStatus::Saving;
+        SecretRemove {
+            scope: self.scope.clone(),
+            name: self.name.clone(),
+            include_links: !self.linked_scopes.is_empty(),
+            force: false,
+        }
+    }
+
+    /// The deletion was refused: the dialog stays and says why.
+    pub fn refused(&mut self, sentence: String) {
+        self.status = FormStatus::Refused(sentence);
+    }
+}
+
+/// The action's words: "Delete secret", or "Delete secret (1 project, 1 team)" when links go with it.
+pub fn delete_label(linked_scopes: &[String]) -> String {
+    let projects = linked_scopes
+        .iter()
+        .filter(|scope| scope.starts_with("project:"))
+        .count();
+    let teams = linked_scopes
+        .iter()
+        .filter(|scope| scope.starts_with("team:"))
+        .count();
+    let mut parts = Vec::new();
+    if projects > 0 {
+        parts.push(count_of(projects as u64, "project", "projects"));
+    }
+    if teams > 0 {
+        parts.push(count_of(teams as u64, "team", "teams"));
+    }
+    if parts.is_empty() {
+        "Delete secret".to_owned()
+    } else {
+        format!("Delete secret ({})", parts.join(", "))
+    }
+}
+
+/// What a refused deletion says: the reason in plain words, and that the secret is still there.
+pub fn removal_refusal_sentence(refusal: &Refusal, name: &str) -> String {
+    let reason = match refusal {
+        Refusal::Failed { code, .. } if code.as_str() == codes::SECRET_NOT_FOUND => {
+            format!("There is no secret {name} in this scope to delete")
+        }
+        other => other.message(),
+    };
+    format!(
+        "Not deleted: {}. The secret is still there.",
+        reason.trim_end_matches('.')
+    )
 }
 
 /// What a refused save says, in plain words, always ending with "Nothing was stored.".
@@ -322,6 +398,44 @@ mod tests {
         assert_eq!(
             refusal_sentence(&remote("secret.something_new"), "A"),
             "Not saved: the service says no. Nothing was stored."
+        );
+    }
+
+    #[test]
+    fn a_delete_takes_the_links_only_when_the_confirm_named_them() {
+        let mut alone = RemoveForm::new("global".into(), "OLD".into(), Vec::new());
+        assert!(!alone.request().include_links);
+        let mut shared =
+            RemoveForm::new("global".into(), "SHARED".into(), vec!["project:a".into()]);
+        assert!(shared.request().include_links);
+        assert_eq!(shared.status, FormStatus::Saving);
+    }
+
+    #[test]
+    fn the_delete_label_counts_the_linked_projects_and_teams() {
+        assert_eq!(delete_label(&[]), "Delete secret");
+        assert_eq!(
+            delete_label(&["project:a".into(), "team:b".into()]),
+            "Delete secret (1 project, 1 team)"
+        );
+        assert_eq!(
+            delete_label(&["project:a".into(), "project:b".into()]),
+            "Delete secret (2 projects)"
+        );
+    }
+
+    #[test]
+    fn a_refused_deletion_says_the_secret_is_still_there() {
+        assert_eq!(
+            removal_refusal_sentence(&remote(codes::SECRET_NOT_FOUND), "OLD"),
+            "Not deleted: There is no secret OLD in this scope to delete. The secret is still there."
+        );
+        assert_eq!(
+            removal_refusal_sentence(
+                &Refusal::unavailable("The service cannot be reached right now."),
+                "OLD"
+            ),
+            "Not deleted: The service cannot be reached right now. The secret is still there."
         );
     }
 

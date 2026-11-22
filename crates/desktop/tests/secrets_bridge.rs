@@ -9,7 +9,7 @@ use massorca_desktop::service::{
     Refusal, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
 };
 use massorca_profile::Profile;
-use massorca_protocol::methods::secrets::SecretSet;
+use massorca_protocol::methods::secrets::{SecretLink, SecretRemove, SecretSet};
 use massorca_protocol::{PeerInfo, codes};
 use massorca_server::{RunningService, Service, ServiceConfig, VaultOptions};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -154,6 +154,84 @@ async fn the_store_follows_the_vault_by_name_and_never_holds_a_value() {
     assert!(!shown.contains(VALUE), "the store holds a value: {shown}");
 
     drop(client);
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_secret_with_links_is_removed_with_them_only_when_asked() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let service = start_service(home.path()).await;
+    let (bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the connection and the list",
+        |s| s.connection.is_connected() && matches!(s.secrets.list, Some(Ok(_))),
+    )
+    .await;
+    handle
+        .secret_set(SecretSet {
+            scope: "global".to_owned(),
+            name: "SHARED_TOKEN".to_owned(),
+            value: VALUE.to_owned(),
+            replace: false,
+        })
+        .await
+        .expect("the secret is added");
+    let client = client_for(home.path()).await;
+    client
+        .secret_link(&SecretLink {
+            scope: "project:demo".to_owned(),
+            name: "SHARED_TOKEN".to_owned(),
+            from_scope: "global".to_owned(),
+        })
+        .await
+        .expect("the project links the secret");
+    until(
+        &mut updates,
+        &mut state,
+        "the owned name and its link",
+        |s| names(s) == ["SHARED_TOKEN", "SHARED_TOKEN"],
+    )
+    .await;
+
+    // The links would be lost, so the removal is refused with its code unless they go too.
+    let remove = SecretRemove {
+        scope: "global".to_owned(),
+        name: "SHARED_TOKEN".to_owned(),
+        include_links: false,
+        force: false,
+    };
+    let refused = handle
+        .secret_remove(remove.clone())
+        .await
+        .expect_err("the links would be lost");
+    assert!(
+        matches!(&refused, Refusal::Failed { code, .. } if code == codes::SECRET_HAS_LINKS),
+        "{refused:?}"
+    );
+    assert_eq!(names(&state).len(), 2, "a refusal changes nothing");
+
+    let removed = handle
+        .secret_remove(SecretRemove {
+            include_links: true,
+            ..remove
+        })
+        .await
+        .expect("the secret and its links are removed");
+    assert_eq!(removed.links_removed, ["project:demo"]);
+    until(
+        &mut updates,
+        &mut state,
+        "the vault without the name",
+        |s| names(s).is_empty(),
+    )
+    .await;
+
+    drop(client);
+    drop(handle);
     drop(bridge);
     stop_service(service).await;
 }

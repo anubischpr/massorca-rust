@@ -44,6 +44,8 @@ pub struct SecretRow {
     pub name: String,
     /// The title of the scope that owns the value, when this name is a link.
     pub linked_from: Option<String>,
+    /// The scopes that link to this owned name; empty for a link.
+    pub linked_scopes: Vec<String>,
     /// The dates in one line: "Rotated 12 Nov 2026 · Last used 14 Nov 2026".
     pub detail: String,
 }
@@ -90,7 +92,7 @@ fn key_line(status: &SecretStatus) -> String {
     .to_owned()
 }
 
-fn count_of(count: u64, one: &str, many: &str) -> String {
+pub fn count_of(count: u64, one: &str, many: &str) -> String {
     if count == 1 {
         format!("1 {one}")
     } else {
@@ -139,6 +141,7 @@ fn row(entry: &SecretEntry, projects: &[Project]) -> SecretRow {
         scope: entry.scope.clone(),
         name: entry.name.clone(),
         linked_from,
+        linked_scopes: entry.linked_scopes.clone(),
         detail,
     }
 }
