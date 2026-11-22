@@ -36,7 +36,8 @@ pub fn process_belongs_to_current_user(pid: u32) -> io::Result<bool> {
     Ok(process_token_user(process.0)? == current_user_sid()?)
 }
 
-fn current_user_sid() -> io::Result<String> {
+/// The SID string of the user this process runs as.
+pub(crate) fn current_user_sid() -> io::Result<String> {
     // SAFETY: GetCurrentProcess returns a pseudo-handle that is valid for this process and needs no closing.
     process_token_user(unsafe { GetCurrentProcess() })
 }
@@ -87,7 +88,7 @@ fn token_user_sid(token: HANDLE) -> io::Result<String> {
 }
 
 /// Reads a NUL-terminated wide string that ConvertSidToStringSidW returned.
-fn wide_to_string(text: *const u16) -> String {
+pub(crate) fn wide_to_string(text: *const u16) -> String {
     let mut len = 0;
     // SAFETY: the string is NUL-terminated, so every index up to the terminator is readable.
     while unsafe { *text.add(len) } != 0 {
