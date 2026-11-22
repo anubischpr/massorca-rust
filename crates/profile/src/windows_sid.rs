@@ -8,22 +8,24 @@ use std::io;
 use std::ptr;
 
 use widestring::{U16CStr, U16CString};
-use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows_sys::Win32::Security::{
-    CreateWellKnownSid, EqualSid, GetLengthSid, PSID, SECURITY_MAX_SID_SIZE,
-    WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    CreateWellKnownSid, EqualSid, GetLengthSid, GetTokenInformation, PSID, SECURITY_MAX_SID_SIZE,
+    TOKEN_OWNER, TOKEN_QUERY, TokenOwner, WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+use crate::windows_dir_access::{accepted_owners_for, owner_matches};
 use crate::windows_endpoint_access::current_user_sid;
 
-/// A SID in its binary form. `u32` words keep it aligned for the SID's sub-authorities.
+/// A security identifier in its binary form, compared with `EqualSid`. `u32` words keep it aligned for the SID's sub-authorities.
 #[derive(Clone)]
-pub(crate) struct Sid(Vec<u32>);
+pub struct Sid(Vec<u32>);
 
 impl Sid {
     /// Parses a SID string or an SDDL alias such as `SY`, `BA` or `LA`.
-    pub(crate) fn parse(text: &str) -> io::Result<Self> {
+    pub fn parse(text: &str) -> io::Result<Self> {
         let wide = U16CString::from_str(text)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         let mut sid: PSID = ptr::null_mut();
@@ -38,15 +40,20 @@ impl Sid {
     }
 
     /// The user this process runs as.
-    pub(crate) fn current_user() -> io::Result<Self> {
+    pub fn current_user() -> io::Result<Self> {
         Self::parse(&current_user_sid()?)
     }
 
-    pub(crate) fn local_system() -> io::Result<Self> {
+    /// The default owner of this process's token: Administrators on an elevated administrator token, else the user.
+    pub fn token_owner() -> io::Result<Self> {
+        token_owner_sid()
+    }
+
+    pub fn local_system() -> io::Result<Self> {
         Self::well_known(WinLocalSystemSid)
     }
 
-    pub(crate) fn administrators() -> io::Result<Self> {
+    pub fn administrators() -> io::Result<Self> {
         Self::well_known(WinBuiltinAdministratorsSid)
     }
 
@@ -65,7 +72,7 @@ impl Sid {
     }
 
     /// Copies a valid SID out of memory the caller frees.
-    fn copy(sid: PSID) -> Self {
+    pub(crate) fn copy(sid: PSID) -> Self {
         // SAFETY: `sid` is a valid SID, so GetLengthSid returns its size in bytes.
         let len = unsafe { GetLengthSid(sid) } as usize;
         let mut words = vec![0_u32; len.div_ceil(4)];
@@ -79,7 +86,7 @@ impl Sid {
     }
 
     /// The `S-1-…` form, never an alias, so a descriptor built from it names exactly this SID.
-    pub(crate) fn to_sid_string(&self) -> io::Result<String> {
+    pub fn to_sid_string(&self) -> io::Result<String> {
         let mut text: *mut u16 = ptr::null_mut();
         // SAFETY: the SID is valid and lives through the call; `text` receives a LocalAlloc'd string freed below.
         if unsafe { ConvertSidToStringSidW(self.as_psid(), &mut text) } == 0 {
@@ -111,26 +118,84 @@ impl fmt::Debug for Sid {
     }
 }
 
-/// The SIDs whose access and ownership a profile may carry: the current user, SYSTEM and Administrators.
+/// Who a profile trusts (ADR 0073): owners that `owner_matches` accepts, and, as holders of write access in a DACL,
+/// those owners plus Administrators, which Windows grants full access on the user's own folders by default.
 #[derive(Debug, Clone)]
 pub(crate) struct Trusted {
-    pub user: Sid,
-    system: Sid,
+    user: Sid,
+    accepted: Vec<Sid>,
     administrators: Sid,
 }
 
 impl Trusted {
-    pub(crate) fn for_user(user: Sid) -> io::Result<Self> {
+    /// For this process's token.
+    pub(crate) fn current() -> io::Result<Self> {
+        Self::for_token(Sid::current_user()?, Sid::token_owner()?)
+    }
+
+    /// For a token with this user and default owner; tests pass an elevated or aliased token here.
+    pub(crate) fn for_token(user: Sid, token_owner: Sid) -> io::Result<Self> {
         Ok(Self {
+            accepted: accepted_owners_for(user.clone(), token_owner)?,
             user,
-            system: Sid::local_system()?,
             administrators: Sid::administrators()?,
         })
     }
 
-    pub(crate) fn contains(&self, sid: &Sid) -> bool {
-        [&self.user, &self.system, &self.administrators].contains(&sid)
+    /// The token's user, whom a private folder grants access to.
+    pub(crate) fn user(&self) -> &Sid {
+        &self.user
     }
+
+    pub(crate) fn owns(&self, owner: &Sid) -> bool {
+        owner_matches(owner, &self.accepted)
+    }
+
+    pub(crate) fn may_write(&self, trustee: &Sid) -> bool {
+        self.owns(trustee) || trustee == &self.administrators
+    }
+}
+
+/// A token handle closed on drop.
+struct Token(HANDLE);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from OpenProcessToken and is closed only here, once.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// The default owner SID of this process's token.
+fn token_owner_sid() -> io::Result<Sid> {
+    let mut handle: HANDLE = ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle valid for this call, and `handle` is a valid out-pointer.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = Token(handle);
+    let mut needed = 0_u32;
+    // SAFETY: a null buffer of length 0 only asks for the size, which the call writes to `needed`.
+    unsafe { GetTokenInformation(token.0, TokenOwner, ptr::null_mut(), 0, &mut needed) };
+    let words = (needed as usize).div_ceil(size_of::<usize>()).max(1);
+    // A usize buffer keeps the TOKEN_OWNER aligned for its pointer field.
+    let mut buffer = vec![0_usize; words];
+    // SAFETY: the buffer holds `needed` bytes and is aligned for TOKEN_OWNER; the call fills it with the default owner.
+    if unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenOwner,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: on success the buffer starts with a TOKEN_OWNER whose SID points into the same buffer, alive here.
+    let owner = unsafe { (*buffer.as_ptr().cast::<TOKEN_OWNER>()).Owner };
+    Ok(Sid::copy(owner))
 }
 
 #[cfg(test)]
@@ -161,14 +226,11 @@ mod tests {
     }
 
     #[test]
-    fn the_user_system_and_administrators_are_trusted_and_nobody_else() {
-        let trusted = Trusted::for_user(Sid::current_user().unwrap()).unwrap();
-        for sid in ["SY", "S-1-5-18", "BA", "S-1-5-32-544"] {
-            assert!(trusted.contains(&Sid::parse(sid).unwrap()), "{sid}");
-        }
-        assert!(trusted.contains(&Sid::current_user().unwrap()));
-        for sid in ["WD", "AU", "BU", "S-1-5-21-1-2-3-4242"] {
-            assert!(!trusted.contains(&Sid::parse(sid).unwrap()), "{sid}");
-        }
+    fn administrators_may_hold_write_access_but_owns_nothing_for_an_ordinary_token() {
+        let user = Sid::current_user().unwrap();
+        let trusted = Trusted::for_token(user.clone(), user).unwrap();
+        assert!(trusted.may_write(&Sid::parse("BA").unwrap()));
+        assert!(!trusted.owns(&Sid::parse("BA").unwrap()));
+        assert!(!trusted.may_write(&Sid::parse("S-1-5-21-1-2-3-4242").unwrap()));
     }
 }

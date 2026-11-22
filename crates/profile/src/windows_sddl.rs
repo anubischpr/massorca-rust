@@ -62,7 +62,7 @@ impl Descriptor {
             || self.aces.iter().any(|ace| {
                 ace.allow
                     && ace.applies_to_object()
-                    && !ace.sid.as_ref().is_some_and(|sid| trusted.contains(sid))
+                    && !ace.sid.as_ref().is_some_and(|sid| trusted.may_write(sid))
                     && ace.mask.is_none_or(|mask| mask & WRITE_RIGHTS != 0)
             })
     }
@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn trusted() -> Trusted {
-        Trusted::for_user(administrator()).expect("trusted SIDs")
+        Trusted::for_token(administrator(), administrator()).expect("trusted SIDs")
     }
 
     fn sid_string() -> String {

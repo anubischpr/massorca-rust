@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use super::{Disk, Links, RealDisk, read_sddl, secure_root, secure_root_with, set_dacl};
 use crate::root_access::{MAX_LISTED_ENTRIES, RootAccess, RootAccessError};
 use crate::windows_sddl::Descriptor;
-use crate::windows_sid::Sid;
+use crate::windows_sid::{Sid, Trusted};
 
 /// A user SID no account on the test machine has.
 const STRANGER: &str = "S-1-5-21-1-2-3-4242";
@@ -45,7 +45,18 @@ impl Layout {
     }
 
     fn secure_as(&self, user: Sid, disk: &dyn Disk) -> Result<RootAccess, RootAccessError> {
-        secure_root_with(&self.home, &self.root, user, disk)
+        self.secure_for_token(user.clone(), user, disk)
+    }
+
+    /// As a token with this user and default owner.
+    fn secure_for_token(
+        &self,
+        user: Sid,
+        token_owner: Sid,
+        disk: &dyn Disk,
+    ) -> Result<RootAccess, RootAccessError> {
+        let trusted = Trusted::for_token(user, token_owner).expect("the trusted SIDs");
+        secure_root_with(&self.home, &self.root, trusted, disk)
     }
 
     /// Private ancestors, and a root made the ordinary way with `dacl` added to what it inherits.
@@ -80,6 +91,8 @@ fn sddl_of(path: &Path) -> String {
 struct TestDisk {
     /// Reported as owned by `STRANGER`.
     foreign: Vec<PathBuf>,
+    /// Reported as owned by Administrators, as an elevated administrator token creates them.
+    administrators_own: Vec<PathBuf>,
     /// The current user's SID string is reported as the alias `LA`, the built-in Administrator.
     as_administrator: bool,
     /// Repairs are recorded here and not applied.
@@ -93,9 +106,11 @@ impl Disk for TestDisk {
         if self.as_administrator {
             sddl = sddl.replace(&user_string(), "LA");
         }
+        let dacl = sddl[sddl.find("D:").unwrap_or(sddl.len())..].to_owned();
         if self.foreign.iter().any(|planted| planted == path) {
-            let dacl = &sddl[sddl.find("D:").unwrap_or(sddl.len())..];
             sddl = format!("O:{STRANGER}{dacl}");
+        } else if self.administrators_own.iter().any(|made| made == path) {
+            sddl = format!("O:BA{dacl}");
         }
         Ok(sddl)
     }
@@ -413,4 +428,40 @@ fn a_profile_past_the_old_path_limit_is_created_and_repaired() {
     set_dacl(&layout.root, &dacl, false).expect("a trusted but unprotected DACL");
     assert_eq!(layout.secure().expect("repaired"), RootAccess::Repaired);
     assert!(descriptor_of(&layout.root).is_owner_only(&user()));
+}
+
+#[test]
+fn entries_an_elevated_token_created_are_owned_by_administrators_and_accepted() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let agents = layout.root.join("agents");
+    fs::create_dir_all(agents.join("kinds")).expect("folders");
+    let disk = TestDisk {
+        administrators_own: vec![agents.clone(), agents.join("kinds")],
+        ..TestDisk::default()
+    };
+    let administrators = Sid::parse("BA").expect("Administrators");
+
+    assert_eq!(
+        layout
+            .secure_for_token(user(), administrators, &disk)
+            .expect("checked"),
+        RootAccess::Private
+    );
+}
+
+#[test]
+fn entries_owned_by_administrators_are_foreign_to_a_token_that_does_not_default_to_them() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let agents = layout.root.join("agents");
+    fs::create_dir_all(&agents).expect("a folder");
+    let disk = TestDisk {
+        administrators_own: vec![agents.clone()],
+        ..TestDisk::default()
+    };
+
+    let refused = layout.secure_for_token(user(), user(), &disk);
+
+    assert_eq!(refused_paths(refused), ("foreign", vec![agents]));
 }

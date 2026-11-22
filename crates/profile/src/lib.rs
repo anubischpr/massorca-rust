@@ -9,6 +9,8 @@ mod unix_profile_root;
 #[cfg(unix)]
 mod unix_user;
 #[cfg(windows)]
+mod windows_dir_access;
+#[cfg(windows)]
 mod windows_endpoint_access;
 #[cfg(windows)]
 mod windows_profile_root;
@@ -28,6 +30,10 @@ pub use root_access::{
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
+pub use windows_dir_access::{dir_owner_is_acceptable, owner_is_acceptable, owner_matches};
+#[cfg(windows)]
 pub use windows_endpoint_access::{
     owner_only_sddl, owner_only_security_descriptor, process_belongs_to_current_user,
 };
+#[cfg(windows)]
+pub use windows_sid::Sid;

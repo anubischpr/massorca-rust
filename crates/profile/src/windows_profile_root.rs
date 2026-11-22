@@ -35,7 +35,7 @@ use crate::windows_sid::{Sid, Trusted};
 
 /// Whether a descriptor read opens a link itself or what it points to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Links {
+pub(crate) enum Links {
     Follow,
     Open,
 }
@@ -69,16 +69,16 @@ fn owner_only_dir_dacl_sddl(user: &Sid) -> io::Result<String> {
 }
 
 pub(crate) fn secure_root(home: &Path, dir: &Path) -> Result<RootAccess, RootAccessError> {
-    secure_root_with(home, dir, Sid::current_user()?, &RealDisk)
+    secure_root_with(home, dir, Trusted::current()?, &RealDisk)
 }
 
 fn secure_root_with(
     home: &Path,
     dir: &Path,
-    user: Sid,
+    trusted: Trusted,
     disk: &dyn Disk,
 ) -> Result<RootAccess, RootAccessError> {
-    let trusted = Trusted::for_user(user)?;
+    let user = trusted.user().clone();
     if let Some(parent) = home.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -100,7 +100,7 @@ fn secure_root_with(
         });
     }
     let root = Descriptor::parse(&disk.read(dir, Links::Open)?);
-    if root.owner.as_ref() != Some(&trusted.user) {
+    if !root.owner.as_ref().is_some_and(|owner| trusted.owns(owner)) {
         return Err(RootAccessError::ForeignEntries {
             paths: vec![dir.to_path_buf()],
         });
@@ -111,9 +111,9 @@ fn secure_root_with(
             paths: vec![dir.to_path_buf()],
         });
     }
-    let repaired = !root.is_owner_only(&trusted.user);
+    let repaired = !root.is_owner_only(&user);
     if repaired {
-        disk.protect(dir, &owner_only_dir_dacl_sddl(&trusted.user)?)?;
+        disk.protect(dir, &owner_only_dir_dacl_sddl(&user)?)?;
     }
     // After the repair, so nothing can be planted between the listing and the new access.
     scan_entries(dir, &trusted, disk)?.into_result()?;
@@ -142,7 +142,7 @@ fn check_ancestor(
     let owned = descriptor
         .owner
         .as_ref()
-        .is_some_and(|owner| trusted.contains(owner));
+        .is_some_and(|owner| trusted.owns(owner));
     if !owned || descriptor.grants_write_to_others(trusted) {
         return Err(unsafe_location());
     }
@@ -175,7 +175,7 @@ fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<F
                     let owned = descriptor
                         .owner
                         .as_ref()
-                        .is_some_and(|owner| trusted.contains(owner));
+                        .is_some_and(|owner| trusted.owns(owner));
                     if !owned {
                         findings.add_foreign(path);
                     } else if descriptor.grants_write_to_others(trusted) {
@@ -258,7 +258,7 @@ fn set_dacl(path: &Path, dacl: &str, protected: bool) -> io::Result<()> {
 }
 
 /// The owner and DACL of `path` as SDDL; with `Links::Open` a link is read itself, never its target.
-fn read_sddl(path: &Path, links: Links) -> io::Result<String> {
+pub(crate) fn read_sddl(path: &Path, links: Links) -> io::Result<String> {
     let wide = wide_path(path)?;
     let flags = match links {
         Links::Follow => FILE_FLAG_BACKUP_SEMANTICS,
