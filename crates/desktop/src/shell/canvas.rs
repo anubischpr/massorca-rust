@@ -1,6 +1,7 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::marketplace::{self, MarketplaceFrame};
 use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
@@ -39,6 +40,8 @@ pub(super) struct PageFrames<'a> {
     pub project: Option<AnyElement>,
     /// The diff of the file open from Source control, which takes the Canvas over the start page.
     pub diff: Option<AnyElement>,
+    /// The Marketplace page's frame, while a Marketplace view or item page is on screen.
+    pub marketplace: Option<MarketplaceFrame>,
 }
 
 pub(super) fn canvas(
@@ -116,6 +119,10 @@ fn conversation(
     }
     if model.canvas() == Canvas::Page(Page::Setup) {
         return setup::setup_page(&pages.setup_rows, cx);
+    }
+    // The Marketplace fills the Canvas too, with its own navigation column (D-EX-01).
+    if let (Canvas::Page(Page::Marketplace(_)), Some(frame)) = (model.canvas(), pages.marketplace) {
+        return marketplace::page(frame, window, cx);
     }
     // A service that cannot be reached takes the Canvas: its page, not a banner over an empty one.
     if let Some(notice) = model

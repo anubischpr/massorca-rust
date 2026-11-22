@@ -43,6 +43,6 @@ fn help_exits_0_and_lists_the_command_groups() {
         .assert()
         .success()
         .stdout(contains("service"))
-        .stdout(contains("config"))
+        .stdout(contains("settings"))
         .stdout(contains("ext"));
 }
