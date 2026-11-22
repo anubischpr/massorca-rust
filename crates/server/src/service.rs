@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_agents::{Agents, AgentsConfig, Change, Listener as ChangeListener};
+use massorca_core_extensions::Extensions;
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -31,6 +32,7 @@ use crate::context::{AppState, Registries};
 use crate::error::ServiceError;
 use crate::event_bus::EventBus;
 use crate::features;
+use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
 use crate::network::{self, NetworkConfig};
 use crate::service_json;
@@ -142,6 +144,12 @@ impl Service {
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
+        let host_programs = Arc::new(HostPrograms::default());
+        let extensions = Arc::new(Extensions::new(
+            &profile,
+            host_programs.clone(),
+            host_programs,
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -153,6 +161,7 @@ impl Service {
             vault,
             terminals: terminals.clone(),
             agents,
+            extensions,
             network: network_state,
             server: PeerInfo {
                 name: server_name,

@@ -164,16 +164,18 @@ fn has_execute_bit(_metadata: &Metadata) -> bool {
     true
 }
 
+/// Stops a console program from opening a window on Windows. Does nothing elsewhere.
 #[cfg(windows)]
-fn hide_window(command: &mut Command) {
+pub fn hide_window(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     // CREATE_NO_WINDOW: a console program runs without opening a window.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
+/// Stops a console program from opening a window on Windows. Does nothing elsewhere.
 #[cfg(not(windows))]
-fn hide_window(_command: &mut Command) {}
+pub fn hide_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

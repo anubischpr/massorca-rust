@@ -5,6 +5,7 @@ mod config;
 mod config_keys;
 mod devices;
 mod events;
+pub(crate) mod extension_process;
 mod git;
 mod projects;
 mod secret_params;

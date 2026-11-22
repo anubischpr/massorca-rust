@@ -7,3 +7,5 @@ pub mod ssh;
 pub mod tailscale;
 
 mod process;
+
+pub use process::hide_window;
