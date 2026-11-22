@@ -18,6 +18,7 @@ pub mod host;
 pub mod logging;
 pub mod output;
 pub mod pair;
+pub mod profile_secure;
 pub mod project;
 pub mod server_status;
 pub mod service;

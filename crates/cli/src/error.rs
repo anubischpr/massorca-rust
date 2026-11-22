@@ -70,6 +70,7 @@ impl From<ClientError> for CliError {
         let message = error.to_string();
         let code = match error {
             ClientError::Remote(body) => return Self::from_body(body, exit_code),
+            ClientError::StartRefused(body) => return Self::from_body(*body, exit_code),
             ClientError::Handshake { error: body, .. } => {
                 return Self::from_body(*body, exit_code);
             }
