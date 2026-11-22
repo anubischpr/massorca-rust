@@ -120,6 +120,12 @@ impl TerminalSurface {
         &self.feed
     }
 
+    /// The bytes the emulator owes the program, taken once: the owner sends them as input
+    /// (decision 0034), since an attached client answers the program's queries.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        self.feed.take_replies()
+    }
+
     /// The focus handle; focusing it sends keys to the terminal.
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus

@@ -14,7 +14,9 @@ use gpui::{
     Stateful, StyledText, WeakEntity, div, prelude::*, px,
 };
 use massorca_ui::components::agent_icon::{AgentIcon, AgentIconSize};
-use massorca_ui::components::agent_status::{AgentStatus, AgentStatusSize};
+use massorca_ui::components::agent_status::{
+    AgentState as GlyphState, AgentStatus, AgentStatusSize,
+};
 use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::style::Surface;
@@ -121,7 +123,7 @@ fn panel(
 }
 
 /// The query field. In "Go to file" mode the mode's label sits on its left and its shortcut on
-/// its right (CommandPalette spec).
+/// its right; the Esc key cap sits at the far right (D-CP-01).
 fn query_row(palette: &PaletteModel, input: &Entity<TextField>, theme: &Theme) -> Div {
     let quick_open = palette.mode() == PaletteMode::GoToFile;
     let mut row = div()
@@ -145,7 +147,7 @@ fn query_row(palette: &PaletteModel, input: &Entity<TextField>, theme: &Theme) -
     if quick_open {
         row = row.child(Kbd::new("Mod+P"));
     }
-    row
+    row.child(Kbd::new("Esc"))
 }
 
 fn group_header(group: PaletteGroup, theme: &Theme) -> impl IntoElement {
@@ -201,7 +203,6 @@ fn row(
     if !item.detail.is_empty() {
         row = row.child(
             div()
-                .flex_none()
                 .min_w_0()
                 .truncate()
                 .text_style(TYPE_CAPTION)
@@ -209,7 +210,7 @@ fn row(
                 .child(item.detail.clone()),
         );
     }
-    if let Some(trailing) = trailing(item) {
+    if let Some(trailing) = trailing(item, theme) {
         row = row.child(div().flex_none().ml_auto().child(trailing));
     }
     row.into_any_element()
@@ -244,18 +245,31 @@ fn title(item: &PaletteItem, found: &PaletteMatch, theme: &Theme) -> impl IntoEl
         .into_iter()
         .map(|range| (range, highlight));
     div()
-        .flex_1()
         .min_w_0()
         .truncate()
         .child(StyledText::new(item.title.clone()).with_highlights(runs))
 }
 
-/// A session's state glyph, or a command's shortcut, at the trailing edge.
-fn trailing(item: &PaletteItem) -> Option<AnyElement> {
+/// A session's state word and glyph at the trailing edge, or a command's shortcut (A13, D-CP-01).
+/// "Waiting for you" is drawn in the waiting colour.
+fn trailing(item: &PaletteItem, theme: &Theme) -> Option<AnyElement> {
     if let Some(state) = item.state {
+        let glyph = glyph_state(state);
+        let word = match glyph {
+            GlyphState::Waiting => theme.palette.agent.waiting,
+            _ => theme.palette.text.secondary,
+        };
         return Some(
-            AgentStatus::new(glyph_state(state))
-                .size(AgentStatusSize::XSmall)
+            div()
+                .flex()
+                .flex_row()
+                .flex_none()
+                .items_center()
+                .gap(px(SPACE_1))
+                .text_style(TYPE_CAPTION)
+                .text_color(word)
+                .child(AgentStatus::new(glyph).size(AgentStatusSize::XSmall))
+                .child(glyph.label())
                 .into_any_element(),
         );
     }
