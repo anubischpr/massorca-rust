@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MassOrca screens: start here</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="massorca.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#b8a8f8}a:hover{color:#d4cbfb}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; padding: 96px 120px; display: flex; flex-direction: column; gap: 40px; background: var(--surface-frame); color: var(--text-primary); font-family: 'Geist', 'Segoe UI', system-ui, sans-serif;">
+<div style="display: flex; flex-direction: column; gap: 12px;">
+<p style="margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary);">Design pass, draft for owner review</p>
+<h1 style="margin: 0; font-size: 56px; font-weight: 600; line-height: 1.05;">MassOrca screens</h1>
+<p style="margin: 0; max-width: 760px; font-size: 18px; line-height: 28px; color: var(--text-secondary);">Key screens of the desktop app (GPUI) and the Android app, drawn with the MassOrca design system tokens. Every screen in the inventory is specified in the screen documents; these artboards show the ones that carry the most decisions, with their main states.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px;">
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 24px; border-radius: 8px; background: var(--surface-canvas); border: 1px solid var(--border-default);">
+<p style="margin: 0; font-size: 13px; color: var(--text-tertiary);">Row 1, 13 artboards</p>
+<h2 style="margin: 0; font-size: 20px; font-weight: 600;">Shell, first run and hosts</h2>
+<p style="margin: 0; font-size: 14px; line-height: 20px; color: var(--text-secondary);">Empty app, setup wizard, account migration, hosts, unreachable host, session import, notifications, confirm.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 24px; border-radius: 8px; background: var(--surface-canvas); border: 1px solid var(--border-default);">
+<p style="margin: 0; font-size: 13px; color: var(--text-tertiary);">Row 2, 14 artboards</p>
+<h2 style="margin: 0; font-size: 20px; font-weight: 600;">Workspaces and sessions</h2>
+<p style="margin: 0; font-size: 14px; line-height: 20px; color: var(--text-secondary);">Start page and model picker, a session with all six regions, diff, summary cards, delegation, browser, palette, Tasks, Automations, Prototypes.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 24px; border-radius: 8px; background: var(--surface-canvas); border: 1px solid var(--border-default);">
+<p style="margin: 0; font-size: 13px; color: var(--text-tertiary);">Row 3, 14 artboards</p>
+<h2 style="margin: 0; font-size: 20px; font-weight: 600;">Bot Teams, extensions, settings</h2>
+<p style="margin: 0; font-size: 14px; line-height: 20px; color: var(--text-secondary);">Conference room, Board, Routines, Calendar, Marketplace, permissions, building an extension, Settings, secrets and Vault.</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 24px; border-radius: 8px; background: var(--surface-canvas); border: 1px solid var(--border-default);">
+<p style="margin: 0; font-size: 13px; color: var(--text-tertiary);">Row 4, 15 artboards</p>
+<h2 style="margin: 0; font-size: 20px; font-weight: 600;">Android</h2>
+<p style="margin: 0; font-size: 14px; line-height: 20px; color: var(--text-secondary);">Pairing, Home and hosts, workspaces, session chat, summary, terminal, source control, Bot Teams, settings, secrets, reconnect, tablet.</p>
+</div>
+</div>
+<p style="margin: 0; font-size: 14px; line-height: 20px; color: var(--text-tertiary);">Specs: docs/design/screens/*.md in the repository. Decisions taken without the owner: docs/design/pending-owner-review.md.</p>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

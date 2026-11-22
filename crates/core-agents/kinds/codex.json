@@ -1,0 +1,19 @@
+{
+  "id": "codex",
+  "name": "Codex",
+  "icon": "codex",
+  "program": ["codex"],
+  "args": [],
+  "prompt": { "mode": "argv", "separator": false, "paste": "plain", "submit": "\r" },
+  "session_ref": { "learn": "thread-id" },
+  "resume": ["resume", "{ref}"],
+  "status": {
+    "mechanism": "codex-notify",
+    "events": { "turn-complete": "done" }
+  },
+  "credentials": {
+    "home_env": "CODEX_HOME",
+    "files": ["auth.json", "config.toml"],
+    "strip_env": ["OPENAI_API_KEY"]
+  }
+}
