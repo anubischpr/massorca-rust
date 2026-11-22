@@ -1,10 +1,14 @@
 //! The Marketplace as plain data: catalogue items, hosts and agent accounts, behind a source trait
 //! that the sample implements. No GPUI types here, so the rules test as Rust.
 
+mod accounts;
+mod catalogue;
 mod sample;
 mod source;
 mod types;
 
+pub use accounts::{AccountView, account_views};
+pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use sample::SampleMarketplaceSource;
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{
