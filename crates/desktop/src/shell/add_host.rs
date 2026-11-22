@@ -75,6 +75,10 @@ fn typed_target(flow: &AddHostFlow, cx: &App) -> Result<SshTarget, String> {
 
 /// The user's `.ssh` folder, where the key menu lists the keys; empty when the system names no home folder.
 pub(super) fn default_ssh_dir() -> PathBuf {
+    // Tests never list the real user's keys; a test that needs keys sets a temporary folder.
+    if cfg!(test) {
+        return PathBuf::new();
+    }
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(|home| PathBuf::from(home).join(".ssh"))

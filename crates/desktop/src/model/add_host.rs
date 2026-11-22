@@ -123,11 +123,28 @@ impl KeyChoice {
     }
 }
 
+/// Names in an SSH folder that are never keys.
+const NOT_KEYS: [&str; 4] = [
+    "config",
+    "known_hosts",
+    "known_hosts.old",
+    "authorized_keys",
+];
+
+/// A name that may become ssh's `-i` argument: a plain file name with no separator and no leading dash or dot.
+fn is_plain_key_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && !name.contains(['/', '\\', ':'])
+        && !NOT_KEYS.contains(&name)
+}
+
 /// The key files among the names of an SSH folder, by name only: an `id_*` name without an extension, or a name
-/// with a `.pub` partner. Public keys, known hosts and config files are not keys.
+/// with a `.pub` partner. Public keys, known hosts, config files and names that are not plain file names are not keys.
 pub fn key_names(entries: &[String]) -> Vec<String> {
     let mut keys: Vec<String> = entries
         .iter()
+        .filter(|name| is_plain_key_name(name))
         .filter(|name| {
             let has_public_half = entries.contains(&format!("{name}.pub"));
             !name.ends_with(".pub")
@@ -428,6 +445,11 @@ mod tests {
             "old_key",
             "work_key",
             "work_key.pub",
+            "-oProxyCommand=run",
+            "-oProxyCommand=run.pub",
+            ".hidden_key",
+            ".hidden_key.pub",
+            "id_a\\b",
         ]
         .into_iter()
         .map(str::to_owned)

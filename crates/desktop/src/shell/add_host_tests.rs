@@ -533,3 +533,8 @@ fn a_check_that_finishes_after_the_address_changed_is_dropped(cx: &mut TestAppCo
         "a result for another address is not shown"
     );
 }
+
+#[test]
+fn tests_never_list_the_real_users_ssh_folder() {
+    assert_eq!(super::add_host::default_ssh_dir(), PathBuf::new());
+}
