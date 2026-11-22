@@ -79,10 +79,17 @@ pub struct AgentKind {
     pub icon: String,
     /// `core` for built-ins, `user` for the profile's own files, `ext:<id>` later.
     pub owner: String,
-    /// One of the program candidates resolves to a file; `agent.start` refuses kinds that are not installed.
+    /// Deprecated: the same value as `detected`, kept so `agents/1` clients keep working. Read `detected`
+    /// and `package.state` instead; `agents/2` drops this field.
     pub installed: bool,
+    /// One of the program candidates resolves to a file (0050). `agent.start` refuses kinds that are not detected.
+    #[serde(default)]
+    pub detected: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_path: Option<String>,
+    /// Whether the kind's package is available, enabled or disabled (0059).
+    #[serde(default)]
+    pub package: KindPackage,
     /// The kind declares a resume form and a way to know the agent's own id.
     pub resumable: bool,
     pub status_mechanism: StatusMechanism,
@@ -90,6 +97,35 @@ pub struct AgentKind {
     /// Why the declaration is invalid. A kind with problems is listed but never started.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+}
+
+/// The package a kind comes from (0059). Built-ins and profile files are `enabled` with no id until packages land.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindPackage {
+    #[serde(default)]
+    pub state: PackageState,
+    /// The catalogue id of the package, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The installed version of the package, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// The state of a kind's package (0059).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageState {
+    /// Listed in the catalogue, not installed.
+    Available,
+    /// Installed and on.
+    Enabled,
+    /// Installed and off.
+    Disabled,
+    /// A value from a newer peer that this build does not know. Also what a kind from an `agents/1` peer decodes to.
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 /// Result of `agent.kinds`: built-ins first, then the profile's files by file name.

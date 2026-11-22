@@ -6,7 +6,8 @@ use std::fmt::Debug;
 use massorca_protocol::methods::agents::{
     self, Activity, ActivitySource, ActivityState, AgentBringBackParams, AgentHookParams,
     AgentKind, AgentKinds, AgentSession, AgentStartParams, AgentWatchEvent, Execution,
-    KindCredentials, Outcome, PromptReceipt, ReceiptKind, StatusMechanism,
+    KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt, ReceiptKind,
+    StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -146,7 +147,13 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
         icon: "rose".to_owned(),
         owner: "core".to_owned(),
         installed: true,
+        detected: true,
         program_path: Some("/usr/local/bin/gentle-shell".to_owned()),
+        package: KindPackage {
+            state: PackageState::Enabled,
+            id: None,
+            version: None,
+        },
         resumable: false,
         status_mechanism: StatusMechanism::ClaudeSettings,
         credentials: KindCredentials {
@@ -163,12 +170,85 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
             "icon": "rose",
             "owner": "core",
             "installed": true,
+            "detected": true,
             "program_path": "/usr/local/bin/gentle-shell",
+            "package": { "state": "enabled" },
             "resumable": false,
             "status_mechanism": "claude-settings",
             "credentials": { "supported": false, "imported": false }
         }]}),
     );
+}
+
+#[test]
+fn a_listed_package_carries_its_id_and_version_and_no_program() {
+    let kind = AgentKind {
+        id: "codex".to_owned(),
+        name: "Codex".to_owned(),
+        icon: "codex".to_owned(),
+        owner: "ext:massorca.codex".to_owned(),
+        installed: false,
+        detected: false,
+        program_path: None,
+        package: KindPackage {
+            state: PackageState::Available,
+            id: Some("massorca.codex".to_owned()),
+            version: Some("1.2.0".to_owned()),
+        },
+        resumable: true,
+        status_mechanism: StatusMechanism::CodexNotify,
+        credentials: KindCredentials {
+            supported: true,
+            imported: false,
+        },
+        problems: Vec::new(),
+    };
+    assert_wire(
+        &AgentKinds { kinds: vec![kind] },
+        &json!({ "kinds": [{
+            "id": "codex",
+            "name": "Codex",
+            "icon": "codex",
+            "owner": "ext:massorca.codex",
+            "installed": false,
+            "detected": false,
+            "package": { "state": "available", "id": "massorca.codex", "version": "1.2.0" },
+            "resumable": true,
+            "status_mechanism": "codex-notify",
+            "credentials": { "supported": true, "imported": false }
+        }]}),
+    );
+}
+
+#[test]
+fn a_kind_from_before_detection_and_packages_still_decodes() {
+    let before = json!({
+        "id": "claude",
+        "name": "Claude",
+        "icon": "claude",
+        "owner": "core",
+        "installed": true,
+        "program_path": "/usr/local/bin/claude",
+        "resumable": true,
+        "status_mechanism": "claude-settings",
+        "credentials": { "supported": true, "imported": false }
+    });
+    let decoded: AgentKind = serde_json::from_value(before).expect("an agents/1 kind decodes");
+    assert!(decoded.installed, "the old installed field still decodes");
+    assert!(
+        !decoded.detected,
+        "detected is absent, so it defaults to false"
+    );
+    assert_eq!(decoded.package, KindPackage::default());
+    assert_eq!(decoded.package.state, PackageState::Unknown);
+}
+
+#[test]
+fn an_unknown_package_state_decodes_as_unknown() {
+    let decoded: KindPackage =
+        serde_json::from_value(json!({ "state": "quarantined" })).expect("decodes");
+    assert_eq!(decoded.state, PackageState::Unknown);
+    assert_eq!(decoded.id, None);
 }
 
 #[test]
