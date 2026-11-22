@@ -2,8 +2,11 @@
 //! (decision 0028). The views draw them; the service answers decide how they move.
 
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::workspaces::{WorkspaceCreateParams, WorkspaceRemoveParams};
+use massorca_protocol::methods::workspaces::{
+    Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceRemoveParams,
+};
 
+use crate::model::start_page::{GIT_LATER, SESSIONS_LATER};
 use crate::service::Refusal;
 
 /// The last row of every project menu (A95).
@@ -14,6 +17,16 @@ pub const DELETE_ACTION: &str = "Delete workspace";
 
 /// Helper under the "Keep the branch" choice, which stays off until the service takes it.
 pub const KEEP_BRANCH_LATER: &str = "Choosing to keep the branch comes later.";
+
+/// Why a row of the workspace menu is off until the layer it needs is built.
+pub const RENAME_LATER: &str = "Renaming comes later.";
+pub const EDIT_LATER: &str = "Editing workspaces comes later.";
+pub const TOOLS_LATER: &str = "Opening in other tools comes later.";
+pub const WORK_PANEL_LATER: &str = "The Work panel comes later.";
+/// Why a Git row is off in a folder that is not a Git repository (D-WS-14).
+pub const NEEDS_GIT: &str = "Needs Git";
+/// Why "Copy branch name" is off for a workspace with no branch.
+pub const NO_BRANCH: &str = "This workspace has no branch.";
 
 /// What a row of the project menu stands for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -352,10 +365,125 @@ impl RemoveFlow {
     }
 }
 
+/// The rows of a workspace's menu (D-WS-02). The view maps each row to its icon and runs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceMenuId {
+    NewSession,
+    OpenIn,
+    OpenFileManager,
+    OpenTerminal,
+    OpenEditor,
+    Rename,
+    EditWorkspace,
+    SourceControl,
+    Developer,
+    CopyPath,
+    CopyBranch,
+    RevealInWorkPanel,
+    Delete,
+}
+
+/// One entry of a workspace's menu. `off` is why an item cannot be chosen yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkspaceMenuEntry {
+    Item {
+        id: WorkspaceMenuId,
+        label: &'static str,
+        off: Option<&'static str>,
+    },
+    /// A row that opens its items as a submenu of one level.
+    Submenu {
+        id: WorkspaceMenuId,
+        label: &'static str,
+        items: Vec<WorkspaceMenuEntry>,
+    },
+    Divider,
+}
+
+fn item(id: WorkspaceMenuId, label: &'static str, off: Option<&'static str>) -> WorkspaceMenuEntry {
+    WorkspaceMenuEntry::Item { id, label, off }
+}
+
+/// The menu of one workspace, top to bottom (D-WS-02). A row whose layer is not built yet is off
+/// with its reason; Git rows say so in a folder that has no Git.
+pub fn workspace_menu(workspace: &Workspace) -> Vec<WorkspaceMenuEntry> {
+    let folder = workspace.kind == WorkspaceKind::Folder;
+    let git_off = if folder { NEEDS_GIT } else { GIT_LATER };
+    let branch_off = if folder {
+        Some(NEEDS_GIT)
+    } else if workspace.branch.is_none() {
+        Some(NO_BRANCH)
+    } else {
+        None
+    };
+    vec![
+        item(
+            WorkspaceMenuId::NewSession,
+            "New session",
+            Some(SESSIONS_LATER),
+        ),
+        WorkspaceMenuEntry::Submenu {
+            id: WorkspaceMenuId::OpenIn,
+            label: "Open in",
+            items: vec![
+                item(
+                    WorkspaceMenuId::OpenFileManager,
+                    "File manager",
+                    Some(TOOLS_LATER),
+                ),
+                item(WorkspaceMenuId::OpenTerminal, "Terminal", Some(TOOLS_LATER)),
+                item(WorkspaceMenuId::OpenEditor, "Editor", Some(TOOLS_LATER)),
+            ],
+        },
+        item(WorkspaceMenuId::Rename, "Rename", Some(RENAME_LATER)),
+        item(
+            WorkspaceMenuId::EditWorkspace,
+            "Edit workspace",
+            Some(EDIT_LATER),
+        ),
+        item(
+            WorkspaceMenuId::SourceControl,
+            "Open in Source control",
+            Some(git_off),
+        ),
+        WorkspaceMenuEntry::Submenu {
+            id: WorkspaceMenuId::Developer,
+            label: "Developer",
+            items: vec![
+                item(WorkspaceMenuId::CopyPath, "Copy path", None),
+                item(WorkspaceMenuId::CopyBranch, "Copy branch name", branch_off),
+                item(
+                    WorkspaceMenuId::RevealInWorkPanel,
+                    "Reveal in Work panel",
+                    Some(WORK_PANEL_LATER),
+                ),
+            ],
+        },
+        WorkspaceMenuEntry::Divider,
+        item(WorkspaceMenuId::Delete, "Delete workspace", None),
+    ]
+}
+
+/// The item the user chose, when it can run: a top-level row, or a row of the submenu it opened.
+pub fn chosen_workspace_item(
+    entries: &[WorkspaceMenuEntry],
+    row: usize,
+    child: Option<usize>,
+) -> Option<WorkspaceMenuId> {
+    match (entries.get(row)?, child) {
+        (WorkspaceMenuEntry::Item { id, off: None, .. }, None) => Some(*id),
+        (WorkspaceMenuEntry::Submenu { items, .. }, Some(child)) => match items.get(child)? {
+            WorkspaceMenuEntry::Item { id, off: None, .. } => Some(*id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::fixtures::project;
+    use crate::service::fixtures::{project, workspace};
 
     fn two_projects() -> Vec<Project> {
         vec![project("p1", "alpha"), project("p2", "beta")]
@@ -576,5 +704,136 @@ mod tests {
         flow.confirm();
         flow.answered(Err(Refusal::IgnoredFiles));
         assert_eq!(flow.copy().action, "Delete workspace");
+    }
+
+    fn menu_workspace(kind: WorkspaceKind, branch: Option<&str>) -> Workspace {
+        let mut record = workspace("w1", "p1", "fix-login", 1);
+        record.kind = kind;
+        record.branch = branch.map(str::to_owned);
+        record
+    }
+
+    fn find_item(
+        entries: &[WorkspaceMenuEntry],
+        wanted: WorkspaceMenuId,
+    ) -> Option<&WorkspaceMenuEntry> {
+        entries.iter().find_map(|entry| match entry {
+            WorkspaceMenuEntry::Item { id, .. } if *id == wanted => Some(entry),
+            WorkspaceMenuEntry::Submenu { items, .. } => find_item(items, wanted),
+            _ => None,
+        })
+    }
+
+    fn off_reason(entries: &[WorkspaceMenuEntry], wanted: WorkspaceMenuId) -> Option<&'static str> {
+        match find_item(entries, wanted) {
+            Some(WorkspaceMenuEntry::Item { off, .. }) => *off,
+            _ => panic!("the menu has no item {wanted:?}"),
+        }
+    }
+
+    #[test]
+    fn the_workspace_menu_lists_the_spec_rows_in_order() {
+        let menu = workspace_menu(&menu_workspace(WorkspaceKind::Worktree, Some("feat/x")));
+        let labels: Vec<Option<&str>> = menu
+            .iter()
+            .map(|entry| match entry {
+                WorkspaceMenuEntry::Item { label, .. }
+                | WorkspaceMenuEntry::Submenu { label, .. } => Some(*label),
+                WorkspaceMenuEntry::Divider => None,
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                Some("New session"),
+                Some("Open in"),
+                Some("Rename"),
+                Some("Edit workspace"),
+                Some("Open in Source control"),
+                Some("Developer"),
+                None,
+                Some("Delete workspace"),
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_whose_layer_is_not_built_yet_are_off_with_their_reason() {
+        let menu = workspace_menu(&menu_workspace(WorkspaceKind::Worktree, Some("feat/x")));
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::NewSession),
+            Some(SESSIONS_LATER)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::Rename),
+            Some(RENAME_LATER)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::EditWorkspace),
+            Some(EDIT_LATER)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::OpenEditor),
+            Some(TOOLS_LATER)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::SourceControl),
+            Some(GIT_LATER)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::RevealInWorkPanel),
+            Some(WORK_PANEL_LATER)
+        );
+        assert_eq!(off_reason(&menu, WorkspaceMenuId::CopyPath), None);
+        assert_eq!(off_reason(&menu, WorkspaceMenuId::CopyBranch), None);
+        assert_eq!(off_reason(&menu, WorkspaceMenuId::Delete), None);
+    }
+
+    #[test]
+    fn git_rows_say_a_folder_has_no_git() {
+        let menu = workspace_menu(&menu_workspace(WorkspaceKind::Folder, None));
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::SourceControl),
+            Some(NEEDS_GIT)
+        );
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::CopyBranch),
+            Some(NEEDS_GIT)
+        );
+        assert_eq!(off_reason(&menu, WorkspaceMenuId::CopyPath), None);
+    }
+
+    #[test]
+    fn copy_branch_is_off_for_a_worktree_without_a_branch() {
+        let menu = workspace_menu(&menu_workspace(WorkspaceKind::Worktree, None));
+        assert_eq!(
+            off_reason(&menu, WorkspaceMenuId::CopyBranch),
+            Some(NO_BRANCH)
+        );
+    }
+
+    #[test]
+    fn a_chosen_row_maps_to_its_action_and_off_rows_choose_nothing() {
+        let menu = workspace_menu(&menu_workspace(WorkspaceKind::Worktree, Some("feat/x")));
+        assert_eq!(
+            chosen_workspace_item(&menu, 7, None),
+            Some(WorkspaceMenuId::Delete)
+        );
+        assert_eq!(
+            chosen_workspace_item(&menu, 5, Some(0)),
+            Some(WorkspaceMenuId::CopyPath)
+        );
+        assert_eq!(
+            chosen_workspace_item(&menu, 5, Some(1)),
+            Some(WorkspaceMenuId::CopyBranch)
+        );
+        // A submenu only opens, the divider is not a row, an off row cannot run, and a row past
+        // the end, or a submenu child on a plain row, chooses nothing.
+        assert_eq!(chosen_workspace_item(&menu, 0, None), None);
+        assert_eq!(chosen_workspace_item(&menu, 1, None), None);
+        assert_eq!(chosen_workspace_item(&menu, 5, Some(2)), None);
+        assert_eq!(chosen_workspace_item(&menu, 6, None), None);
+        assert_eq!(chosen_workspace_item(&menu, 9, None), None);
+        assert_eq!(chosen_workspace_item(&menu, 7, Some(0)), None);
     }
 }
