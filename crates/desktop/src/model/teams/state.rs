@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(
             state.create_team(new_team("desarrollo", 1)),
             Err(TeamError::NameTaken),
-            "the name is taken on vps, case aside"
+            "the name is taken on VPS, case aside"
         );
         let id = state.create_team(new_team("  Ops  ", 0)).unwrap();
         let created = state.team(id).unwrap();

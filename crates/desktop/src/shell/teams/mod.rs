@@ -9,11 +9,13 @@ mod project;
 mod routines;
 mod sidebar;
 
+use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::teams::TeamId;
-use gpui::{IntoElement, ParentElement, Styled, div, px};
+use gpui::{ElementId, IntoElement, ParentElement, SharedString, Styled, div, px};
 use massorca_ui::components::avatar::{Avatar, AvatarSize};
+use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::tokens::{SPACE_1, TYPE_BODY_STRONG};
-use massorca_ui::{TextStyled, Theme};
+use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
 pub(super) use board::{board_columns, board_page};
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
@@ -39,6 +41,23 @@ fn team_pill(name: &str, team: TeamId, theme: &Theme) -> impl IntoElement {
                 .text_color(theme.palette.text.primary)
                 .child(name.to_owned()),
         )
+        .child(
+            Icon::new(IconName::ChevronDown)
+                .size(IconSize::XSmall)
+                .color(theme.palette.text.secondary),
+        )
+}
+
+/// A control whose action waits for a layer that does not exist yet: drawn disabled, and its
+/// tooltip says so.
+fn waiting_icon(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    name: impl Into<SharedString>,
+) -> IconButton {
+    IconButton::new(id, icon, name)
+        .disabled(true)
+        .disabled_reason(NOT_AVAILABLE)
 }
 
 #[cfg(test)]

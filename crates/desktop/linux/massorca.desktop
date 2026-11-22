@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MassOrca
+Comment=MassOrca desktop app
+Exec=massorca-desktop
+Icon=massorca
+Terminal=false
+Categories=Development;
+StartupWMClass=massorca

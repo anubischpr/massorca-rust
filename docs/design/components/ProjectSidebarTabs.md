@@ -10,8 +10,8 @@ Inventory IDs: D-SH-04 (Desktop); extension tabs are slots D-SL-01. Android: non
 
 | Part | Tokens | Size |
 |---|---|---|
-| Strip | `surface.canvas`, bottom rule `border.subtle` | Height `size.control.default` (28) |
-| Tab | Icon in `text.secondary`; active `text.primary` on `fill.selected.canvas` | 28 by 28 px; icon `size.icon.sm` (16) |
+| Strip | `surface.canvas`, bottom rule `border.subtle` | Height `size.toolbar` (36): padding `space.1` above and below, `space.2` at the sides, `space.half` between tabs, so its rule lines up with the Work panel tab strip |
+| Tab | Icon in `text.secondary`; active `text.primary` on `fill.selected.canvas`, `radius.md` | 28 by 28 px; icon `size.icon.sm` (16) |
 | Active underline | `accent.default`, `border.width.thick` | 2 px at the bottom edge |
 | Count badge (optional) | Badge spec; `status.danger.solid` with `status.danger.on` for failing runs | Top right of the icon |
 | Tooltip | Tooltip spec | Label text |
