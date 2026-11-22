@@ -60,14 +60,11 @@ pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
     let base = directories::BaseDirs::new().ok_or_else(|| {
         ServiceError::DefaultWorkspaceRoot("there is no user home directory".to_owned())
     })?;
-    base.home_dir()
-        .join("massorca")
-        .join("workspaces")
-        .into_os_string()
-        .into_string()
-        .map_err(|_| {
-            ServiceError::DefaultWorkspaceRoot("the user home directory is not UTF-8".to_owned())
-        })
+    let mut path = base.home_dir().to_path_buf();
+    path.extend(["massorca", "workspaces"]);
+    path.into_os_string().into_string().map_err(|_| {
+        ServiceError::DefaultWorkspaceRoot("the user home directory is not UTF-8".to_owned())
+    })
 }
 
 async fn get(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorBody> {
@@ -161,5 +158,12 @@ fn view(decl: &SettingDecl, stored: Option<Value>) -> ConfigValue {
         value,
         default: decl.default.clone(),
         is_default,
+        kind: Some(decl.kind.wire_name().to_owned()),
+        choices: decl
+            .kind
+            .choices()
+            .map(|list| list.iter().map(|&choice| choice.to_owned()).collect()),
+        min: decl.kind.range().map(|(min, _)| min),
+        max: decl.kind.range().map(|(_, max)| max),
     }
 }

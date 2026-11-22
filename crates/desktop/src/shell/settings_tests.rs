@@ -115,6 +115,7 @@ fn config_value(path: &str, is_default: bool) -> ConfigValue {
         value: path.to_owned().into(),
         default: DEFAULT.to_owned().into(),
         is_default,
+        ..Default::default()
     }
 }
 
