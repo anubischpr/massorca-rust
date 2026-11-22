@@ -10,6 +10,7 @@ mod migrations;
 mod projects;
 mod settings;
 mod store;
+mod team_projects;
 mod teams;
 mod workspaces;
 
@@ -22,6 +23,7 @@ pub use error::StoreError;
 pub use migrations::{MIGRATIONS, Migration};
 pub use projects::{ProjectKind, ProjectRow};
 pub use store::Store;
+pub use team_projects::TeamProjectRow;
 pub use teams::TeamRow;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
 

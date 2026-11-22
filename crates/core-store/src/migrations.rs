@@ -127,6 +127,21 @@ CREATE UNIQUE INDEX bots_one_lead ON bots(team_id) WHERE lead = 1;
 "#,
         foreign_keys_off: false,
     },
+    // Team projects (decision 0072): each has its own Board and Brief; a team's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE team_projects (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
