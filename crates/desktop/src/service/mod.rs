@@ -6,9 +6,11 @@ mod agents;
 mod bridge;
 mod connection;
 mod git;
+mod hosts;
 mod launch;
 mod refusal;
 mod secrets;
+mod teams;
 mod terminals;
 mod update;
 
@@ -24,15 +26,20 @@ pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
+pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+pub use teams::{TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]
 pub(crate) use terminals::{TerminalCommand, TerminalWrite};
-pub use update::{GitUpdate, SecretsState, SecretsUpdate, StoreState, StoreUpdate, WorkspaceGit};
+pub use update::{
+    GitUpdate, HostEntry, HostLink, SecretsState, SecretsUpdate, StoreState, StoreUpdate,
+    WorkspaceGit,
+};
 
 #[cfg(test)]
 pub(crate) use update::fixtures;

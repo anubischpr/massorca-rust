@@ -3692,6 +3692,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "massorca-client",
+ "massorca-core-remote",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
@@ -3740,6 +3741,7 @@ name = "massorca-profile"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "getrandom 0.4.3",
  "interprocess",
  "libc",
  "tempfile",

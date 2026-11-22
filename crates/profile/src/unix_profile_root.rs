@@ -108,6 +108,26 @@ pub(crate) fn open_private_dir(dir: &Path) -> io::Result<fs::File> {
     Ok(file)
 }
 
+/// The read-only part of a start's location check: nothing is created or repaired, and the content is not scanned.
+pub(crate) fn check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    let uid = current_uid();
+    let owner: Owner = &|_, metadata| metadata.uid();
+    check_link_home(home, uid, owner)?;
+    if let Ok(metadata) = fs::metadata(home) {
+        check_ancestor(home, &metadata, uid, owner)?;
+    }
+    let profiles = profiles_dir(home, dir);
+    if let Ok(metadata) = fs::symlink_metadata(profiles) {
+        check_ancestor(profiles, &metadata, uid, owner)?;
+    }
+    if fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 /// A home that is itself a symlink is replaceable by whoever can write its parent, so the parent must be as safe as an
 /// ancestor.
 fn check_link_home(home: &Path, uid: u32, owner: Owner) -> Result<(), RootAccessError> {

@@ -34,6 +34,12 @@ pub enum RootAccessError {
         list_paths(paths)
     )]
     WritableByOthers { paths: Vec<PathBuf> },
+    /// Other users could read a folder that holds secrets, such as a device key. Up to `MAX_LISTED_ENTRIES` paths.
+    #[error(
+        "other programs on this computer could read these files, which hold secrets: {}; remove the folder or restrict it to yourself, then try again",
+        list_paths(paths)
+    )]
+    ReadableByOthers { paths: Vec<PathBuf> },
     /// A folder from the home down to the root is a link, belongs to another user, or other users can change it.
     #[error(
         "the profile location is unsafe: {} is a link, belongs to another user, or other users can change it; other programs on this computer could change these files. Run `massorca profile secure` to make the home private, or set MASSORCA_HOME to a folder only you can write to",
@@ -75,58 +81,26 @@ pub fn create_private_dir(dir: &Path) -> io::Result<bool> {
     platform_create_private_dir(dir)
 }
 
-/// A folder of the profile held open without following links. While it is held, the folder cannot be swapped for a
-/// link: on Windows it cannot be renamed or deleted at all; on Unix its parent is the private root, which only the
-/// user can change. Write into it by path while it is held.
-#[derive(Debug)]
-pub struct PrivateDir {
-    #[cfg(windows)]
-    _pin: crate::windows_dir_access::PinnedDir,
-    #[cfg(unix)]
-    _dir: std::fs::File,
-}
-
-/// Creates `dir` private to its owner when it is missing, then opens it without following links. Refuses a link or
-/// a file there with `UnsafeLocation`, and a folder another user owns with `ForeignEntries`. Run `secure_root` first,
-/// so the folder it sits in is checked.
-pub fn open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
-    platform_create_private_dir(dir)?;
-    platform_open_private_dir(dir)
+/// Checks the location without creating anything: a home that is a link needs a safe parent, an existing home and
+/// `profiles` must pass the ancestor check, and an existing root must not be a link. Run before folders are created
+/// for a profile that has not been checked yet, so a link there cannot redirect the creation.
+pub fn check_location(profile: &Profile) -> Result<(), RootAccessError> {
+    platform_check_location(profile.home(), profile.dir())
 }
 
 #[cfg(windows)]
-fn platform_open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
-    match crate::windows_dir_access::PinnedDir::open(dir) {
-        Ok(pin) => Ok(PrivateDir { _pin: pin }),
-        Err(error) => Err(refused_open(dir, error)),
-    }
+fn platform_check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    crate::windows_profile_root::check_location(home, dir)
 }
 
 #[cfg(unix)]
-fn platform_open_private_dir(dir: &Path) -> Result<PrivateDir, RootAccessError> {
-    match crate::unix_profile_root::open_private_dir(dir) {
-        Ok(file) => Ok(PrivateDir { _dir: file }),
-        Err(error) => Err(refused_open(dir, error)),
-    }
+fn platform_check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    crate::unix_profile_root::check_location(home, dir)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn platform_open_private_dir(_dir: &Path) -> Result<PrivateDir, RootAccessError> {
-    Ok(PrivateDir {})
-}
-
-/// How a no-follow open failed: a link or a file is an unsafe location, a folder another user owns is foreign.
-#[cfg(any(unix, windows))]
-fn refused_open(dir: &Path, error: io::Error) -> RootAccessError {
-    match error.kind() {
-        io::ErrorKind::InvalidInput => RootAccessError::UnsafeLocation {
-            path: dir.to_path_buf(),
-        },
-        io::ErrorKind::PermissionDenied => RootAccessError::ForeignEntries {
-            paths: vec![dir.to_path_buf()],
-        },
-        _ => RootAccessError::Io(error),
-    }
+fn platform_check_location(_home: &Path, _dir: &Path) -> Result<(), RootAccessError> {
+    Ok(())
 }
 
 /// What `profile secure` changes in one folder of the profile's location.

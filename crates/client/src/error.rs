@@ -83,6 +83,10 @@ pub fn profile_refusal(error: &RootAccessError) -> Option<ErrorBody> {
             codes::PROFILE_WRITABLE_BY_OTHERS,
             json!({ "paths": shown(paths) }),
         ),
+        RootAccessError::ReadableByOthers { paths } => (
+            codes::PROFILE_READABLE_BY_OTHERS,
+            json!({ "paths": shown(paths) }),
+        ),
         RootAccessError::UnsafeLocation { path } => (
             codes::PROFILE_UNSAFE_LOCATION,
             json!({ "path": path.display().to_string() }),
