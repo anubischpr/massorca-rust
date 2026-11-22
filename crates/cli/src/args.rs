@@ -367,6 +367,11 @@ pub enum DeviceCommand {
         /// Device id, or its name when that is unique.
         device: String,
     },
+    /// Removes a revoked device from the list. Needs host-admin; an active device is refused.
+    Forget {
+        /// Device id, or its name when exactly one revoked device has it.
+        device: String,
+    },
     /// Shows the device this command runs as.
     Whoami,
 }
