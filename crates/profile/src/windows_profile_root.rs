@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::ptr;
+use std::time::SystemTime;
 
 use interprocess::os::windows::security_descriptor::{
     AsSecurityDescriptor, AsSecurityDescriptorExt, SecurityDescriptor,
@@ -26,7 +27,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, GetVolumeInformationW,
+    GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL,
 };
 
 use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
@@ -34,6 +36,9 @@ use crate::scan_cache::{ScanCache, stamp};
 use crate::windows_dir_access::Sid;
 use crate::windows_sddl::{Descriptor, verbatim};
 use crate::windows_trust::{Trusted, current_user};
+
+/// `GetDriveTypeW` for a network drive (`DRIVE_REMOTE` in WinBase.h).
+const DRIVE_REMOTE: u32 = 4;
 
 /// Whether a descriptor read opens a link itself or what it points to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,14 +125,7 @@ fn secure_root_with(
         // leaves the root owner-only: that only takes access away and trusts nothing.
         disk.protect(dir, &owner_only_dir_dacl_sddl(&user)?)?;
     }
-    // A root that was already private kept everyone else out since the last clean scan, so unchanged folders are
-    // skipped; a new or repaired root is read in full.
-    let cache = if repaired {
-        ScanCache::default()
-    } else {
-        ScanCache::load(dir)
-    };
-    let (findings, scanned) = scan_entries(dir, &trusted, disk, &cache)?;
+    let (findings, scanned) = scan_entries(dir, &trusted, disk, start_cache(dir, repaired))?;
     if let Err(refused) = findings.into_result() {
         ScanCache::clear(dir);
         return Err(refused);
@@ -139,6 +137,53 @@ fn secure_root_with(
     } else {
         RootAccess::Private
     })
+}
+
+/// The scan cache a start may use: none after a repair, off a local NTFS volume, or when a full scan is due.
+pub(crate) fn start_cache(dir: &Path, repaired: bool) -> Option<ScanCache> {
+    if repaired || !folder_times_are_reliable(dir) {
+        ScanCache::clear(dir);
+        return None;
+    }
+    ScanCache::load(dir, SystemTime::now())
+}
+
+/// Whether folder modification times on `dir`'s volume can be trusted to change when an entry is added, removed or
+/// renamed: only on a local NTFS volume. A remote drive, FAT, exFAT, ReFS or a volume that cannot be read count as
+/// unreliable, so every start reads every descriptor there.
+fn folder_times_are_reliable(dir: &Path) -> bool {
+    let Ok(path) = wide_path(dir) else {
+        return false;
+    };
+    let mut volume = [0_u16; 1024];
+    // SAFETY: `path` is NUL-terminated, and `volume` is a writable buffer of the length passed.
+    if unsafe { GetVolumePathNameW(path.as_ptr(), volume.as_mut_ptr(), volume.len() as u32) } == 0 {
+        return false;
+    }
+    // SAFETY: on success `volume` holds a NUL-terminated volume root path.
+    if unsafe { GetDriveTypeW(volume.as_ptr()) } == DRIVE_REMOTE {
+        return false;
+    }
+    let mut name = [0_u16; 64];
+    // SAFETY: `volume` is a NUL-terminated root path; only the file system name buffer is requested, with its length,
+    // and the other out-pointers may be null.
+    let read = unsafe {
+        GetVolumeInformationW(
+            volume.as_ptr(),
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+        )
+    };
+    let len = name
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(name.len());
+    read != 0 && String::from_utf16_lossy(&name[..len]) == "NTFS"
 }
 
 /// A home that is itself a link is checked through its target, but the link lives in its parent: whoever can change
@@ -193,10 +238,13 @@ fn scan_entries(
     root: &Path,
     trusted: &Trusted,
     disk: &dyn Disk,
-    cache: &ScanCache,
+    cache: Option<ScanCache>,
 ) -> io::Result<(Findings, ScanCache)> {
     let mut findings = Findings::default();
-    let mut scanned = ScanCache::default();
+    let mut scanned = cache
+        .as_ref()
+        .map_or_else(|| ScanCache::full_scan(SystemTime::now()), ScanCache::next);
+    let cache = cache.unwrap_or_default();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
         // Read from the folder itself before it is listed: the copy in its parent's listing is updated lazily.

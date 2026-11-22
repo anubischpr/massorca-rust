@@ -550,3 +550,41 @@ fn a_junction_home_in_a_private_parent_is_accepted() {
         RootAccess::Created
     );
 }
+
+#[test]
+fn a_changed_access_list_on_an_existing_deep_entry_is_caught_by_the_next_full_scan() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let deep = layout
+        .root
+        .join("agents")
+        .join("homes")
+        .join("claude")
+        .join(".claude");
+    fs::create_dir_all(&deep).expect("deep folders");
+    let settings = deep.join("settings.json");
+    fs::write(&settings, b"{}").expect("a file");
+    assert_eq!(layout.secure().expect("full scan"), RootAccess::Private);
+
+    set_dacl(&settings, "D:(A;;FA;;;WD)", false).expect("a grant to everyone");
+    // The folder's time did not change, so a start within the day skips it where the cache is used.
+    if super::folder_times_are_reliable(&layout.root) {
+        assert_eq!(layout.secure().expect("cached scan"), RootAccess::Private);
+    }
+    let cache = layout.root.join(crate::scan_cache::CACHE_FILE);
+    let text = fs::read_to_string(&cache).expect("the cache");
+    let (header, rest) = text.split_once('\n').expect("a header");
+    let (version, _) = header.split_once('\t').expect("version and time");
+    fs::write(&cache, format!("{version}\t0\n{rest}")).expect("a day-old cache");
+
+    let (kind, paths) = refused_paths(layout.secure());
+
+    assert_eq!((kind, paths), ("writable", vec![settings]));
+}
+
+#[test]
+fn the_temporary_folder_of_this_test_machine_is_on_local_ntfs() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    assert!(super::folder_times_are_reliable(&layout.root));
+}
