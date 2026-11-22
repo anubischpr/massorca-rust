@@ -3262,6 +3262,7 @@ dependencies = [
 name = "massorca-core-agents"
 version = "0.1.0"
 dependencies = [
+ "massorca-core-git",
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-workspace",
@@ -3270,6 +3271,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
  "uuid",
 ]
 
