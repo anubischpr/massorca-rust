@@ -1,0 +1,40 @@
+{
+  "id": "massorca.claude",
+  "name": "Claude",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "Anthropic's Claude Code agent, run in your workspaces.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["claude"] }, "reason": "Runs the Claude Code CLI." },
+    { "kind": "credentials", "scope": { "agents": ["claude"] }, "reason": "Keeps your Claude sign-ins for its sessions." }
+  ],
+  "contributes": {
+    "agentAdapters": [{
+      "id": "claude",
+      "kind": "agents/claude.json",
+      "cli": {
+        "binary": "claude",
+        "verify": ["claude", "--version"],
+        "source": "https://code.claude.com/docs/en/setup",
+        "install": [
+          { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"] },
+          { "os": "linux", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] },
+          { "os": "macos", "command": ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "agents",
+    "developer": { "name": "MassOrca" },
+    "mention": "claude",
+    "banner": {
+      "examples": [{ "kind": "mention", "text": "@claude", "caption": "Ask Claude to review the workspace changes" }]
+    },
+    "connections": [{ "id": "account", "kind": "agent-login", "title": "Claude account", "multiple": true }]
+  }
+}

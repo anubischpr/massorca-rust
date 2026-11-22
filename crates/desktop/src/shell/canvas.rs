@@ -2,6 +2,7 @@
 
 use super::Shell;
 use super::marketplace::{self, MarketplaceFrame};
+use super::pairing::{self, PairingFrame};
 use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
@@ -42,6 +43,8 @@ pub(super) struct PageFrames<'a> {
     pub diff: Option<AnyElement>,
     /// The Marketplace page's frame, while a Marketplace view or item page is on screen.
     pub marketplace: Option<MarketplaceFrame>,
+    /// The Pairing page's state and fields (D-PR-01).
+    pub pairing: PairingFrame,
 }
 
 pub(super) fn canvas(
@@ -119,6 +122,9 @@ fn conversation(
     }
     if model.canvas() == Canvas::Page(Page::Setup) {
         return setup::setup_page(&pages.setup_rows, cx);
+    }
+    if model.canvas() == Canvas::Page(Page::Pairing) {
+        return pairing::pairing_page(&pages.pairing, cx);
     }
     // The Marketplace fills the Canvas too, with its own navigation column (D-EX-01).
     if let (Canvas::Page(Page::Marketplace(_)), Some(frame)) = (model.canvas(), pages.marketplace) {

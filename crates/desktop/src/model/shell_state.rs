@@ -2,6 +2,7 @@
 //! command palette and the snapshot the views draw. Actions change it through plain methods.
 
 use super::canvas::Canvas;
+use super::hosts::HostState;
 use super::marketplace::MarketplaceSnapshot;
 use super::navigation::{Mode, Navigation, Page};
 use super::palette::{Command, PaletteAction, PaletteMode, PaletteModel, palette_items};
@@ -9,7 +10,7 @@ use super::palette_recent::RecentActions;
 use super::region_cycle::Zone;
 use super::regions::{Placement, Region, RegionState};
 use super::shell::{ShellSnapshot, find_session};
-use super::sidebar::{SidebarContent, sidebar_content};
+use super::sidebar::{SidebarContent, TreeRow, sidebar_content};
 use super::status_items::{StatusItem, StatusItemVisibility};
 use super::teams::{TeamPage, TeamsSidebar, TeamsState, teams_sidebar};
 use super::work_panel::TerminalSelection;
@@ -24,6 +25,8 @@ const INLINE_ORDER: [Region; 3] = [
 /// What the shell shows and what the user has changed by acting on it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellModel {
+    /// The paired remote hosts and their states, listed under the projects in the Sidebar (D-HO-01).
+    remote_hosts: Vec<(String, HostState)>,
     snapshot: ShellSnapshot,
     navigation: Navigation,
     regions: RegionState,
@@ -57,6 +60,7 @@ impl ShellModel {
             snapshot,
             navigation: Navigation::default(),
             regions: RegionState::default(),
+            remote_hosts: Vec::new(),
             teams: TeamsState::unavailable(),
             marketplace: MarketplaceSnapshot::default(),
             marketplace_query: String::new(),
@@ -107,8 +111,23 @@ impl ShellModel {
     }
 
     /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
+    /// The hosts the Marketplace lists while a service answers: This PC and the paired hosts.
+    pub fn set_marketplace_hosts(&mut self, hosts: Vec<crate::model::marketplace::Host>) {
+        self.marketplace.hosts = hosts;
+    }
+
+    /// The paired remote hosts and their states, as the store holds them now.
+    pub fn set_remote_hosts(&mut self, hosts: Vec<(String, HostState)>) {
+        self.remote_hosts = hosts;
+    }
+
     pub fn set_teams(&mut self, teams: TeamsState) {
         self.teams = teams;
+    }
+
+    /// Swaps in the Bot Teams a service read reports, keeping what the user has open in them.
+    pub fn refresh_teams(&mut self, fresh: TeamsState) {
+        self.teams = self.teams.refreshed(fresh);
     }
 
     /// The Marketplace data the Marketplace pages draw.
@@ -214,7 +233,18 @@ impl ShellModel {
 
     /// What the Sidebar lists in the current mode.
     pub fn sidebar(&self) -> SidebarContent {
-        sidebar_content(&self.snapshot, self.navigation.mode)
+        let mut content = sidebar_content(&self.snapshot, self.navigation.mode);
+        if let SidebarContent::Workspaces { tree, .. } = &mut content {
+            tree.extend(
+                self.remote_hosts
+                    .iter()
+                    .map(|(name, state)| TreeRow::RemoteHost {
+                        name: name.clone(),
+                        state: state.clone(),
+                    }),
+            );
+        }
+        content
     }
 
     /// The Sidebar toggle: shows or hides the Sidebar, inline or as the overlay.
@@ -653,5 +683,27 @@ mod tests {
         model.set_marketplace_advanced_open(true);
         assert_eq!(model.marketplace_query(), "github");
         assert!(model.marketplace_advanced_open());
+    }
+
+    #[test]
+    fn a_paired_remote_host_is_listed_after_the_projects_with_its_state() {
+        use crate::model::hosts::{HostState, HostTone};
+        let mut model = shell(1440.0);
+        model.set_remote_hosts(vec![(
+            "vps".to_owned(),
+            HostState {
+                word: "Connected",
+                tone: HostTone::Connected,
+                detail: Some("vps-server 0.1.0".to_owned()),
+            },
+        )]);
+        let SidebarContent::Workspaces { tree, .. } = model.sidebar() else {
+            panic!("the workspaces sidebar is shown");
+        };
+        let last = tree.last().expect("the tree has rows");
+        assert!(
+            matches!(last, TreeRow::RemoteHost { name, state } if name == "vps" && state.word == "Connected"),
+            "the host comes last, with its state: {last:?}"
+        );
     }
 }
