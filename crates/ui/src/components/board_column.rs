@@ -32,6 +32,7 @@ pub struct BoardCard {
     status: Option<(AgentState, SharedString)>,
     time: Option<SharedString>,
     note: Option<SharedString>,
+    unavailable: Option<SharedString>,
     unreachable: Option<SharedString>,
     lifted: bool,
     /// Drawn as the dashed slot the lifted card left behind.
@@ -63,6 +64,7 @@ impl BoardCard {
             status: None,
             time: None,
             note: None,
+            unavailable: None,
             unreachable: None,
             lifted: false,
             slot: false,
@@ -90,6 +92,12 @@ impl BoardCard {
     /// A line under the meta row, such as "Needs your reply in the Conference room".
     pub fn note(mut self, note: impl Into<SharedString>) -> Self {
         self.note = Some(note.into());
+        self
+    }
+
+    /// The bot's agent cannot run on this host: the card says so under the bot.
+    pub fn unavailable(mut self, text: impl Into<SharedString>) -> Self {
+        self.unavailable = Some(text.into());
         self
     }
 
@@ -184,6 +192,13 @@ impl RenderOnce for BoardCard {
         if let Some(note) = self.note {
             card = card.child(meta(note, &theme));
         }
+        if let Some(text) = self.unavailable {
+            card = card.child(
+                div()
+                    .debug_selector(|| "board-card-unavailable".into())
+                    .child(meta(text, &theme)),
+            );
+        }
         if let Some(last_known) = self.unreachable {
             card = card.child(unreachable_line(last_known, &theme));
         }
@@ -217,7 +232,10 @@ fn source_slot(card: BoardCard, theme: &Theme) -> impl IntoElement {
     if let Some((_, word)) = card.status {
         content = content.child(div().text_style(TYPE_CAPTION).child(word));
     }
-    for line in [card.bot, card.note].into_iter().flatten() {
+    for line in [card.bot, card.note, card.unavailable]
+        .into_iter()
+        .flatten()
+    {
         content = content.child(div().text_style(TYPE_BODY_SM).child(line));
     }
     for line in [card.unreachable, card.time].into_iter().flatten() {
@@ -410,6 +428,27 @@ mod tests {
         cx.run_until_parked();
         let empty = cx.debug_bounds("board-empty").expect("No tasks is drawn");
         assert!(empty.size.height > gpui::px(SIZE_CONTROL_COMFORTABLE * 2.));
+    }
+
+    /// One card on an open column, for the card's own lines.
+    struct CardHarness;
+
+    impl gpui::Render for CardHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            let card = BoardCard::new("card", "Write release notes", cx.focus_handle())
+                .bot("Nora")
+                .unavailable("Not available on this host");
+            div()
+                .h(gpui::px(400.))
+                .child(BoardColumn::new("open", "Open").card(card))
+        }
+    }
+
+    #[gpui::test]
+    fn a_card_whose_bot_cannot_run_here_says_so(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| CardHarness);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("board-card-unavailable").is_some());
     }
 
     #[gpui::test]
