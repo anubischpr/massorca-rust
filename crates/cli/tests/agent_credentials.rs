@@ -5,6 +5,7 @@
 mod harness;
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -48,12 +49,20 @@ fn fake_source(sandbox: &Sandbox) -> std::path::PathBuf {
     source
 }
 
+/// The home the deprecated `agent credentials` calls act on: the kind's active account's home (decision 0059). When no
+/// account is active, a path that does not exist.
 fn home(sandbox: &Sandbox) -> std::path::PathBuf {
-    sandbox
+    let accounts = sandbox
         .profile_dir("default")
         .join("agents")
-        .join("homes")
-        .join("fake")
+        .join("accounts")
+        .join("fake");
+    let listed = sandbox.json_ok("default", &["agent", "accounts", "list", "fake"]);
+    let active = listed["accounts"]
+        .as_array()
+        .and_then(|accounts| accounts.iter().find(|account| account["active"] == true))
+        .and_then(|account| account["id"].as_str().map(str::to_owned));
+    accounts.join(active.unwrap_or_else(|| "no-active-account".to_owned()))
 }
 
 fn path_text(path: &Path) -> &str {
@@ -205,10 +214,6 @@ fn a_file_over_one_mebibyte_fails() {
 
 /// A link in the source fails the import. Unix always runs it; Windows only when it may make a symbolic link.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must name why it skipped"
-)]
 fn a_source_symlink_fails_the_import() {
     let sandbox = Sandbox::new();
     declare_kinds(&sandbox, &["token.json"]);
@@ -221,7 +226,10 @@ fn a_source_symlink_fails_the_import() {
     #[cfg(windows)]
     let made = std::os::windows::fs::symlink_file(&real, source.join("token.json"));
     if let Err(error) = made {
-        eprintln!("skipped: symbolic links cannot be made here ({error})");
+        let _ = writeln!(
+            std::io::stderr(),
+            "skipped: symbolic links cannot be made here ({error})"
+        );
         return;
     }
     let error = error_of(

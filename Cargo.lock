@@ -3556,6 +3556,7 @@ dependencies = [
 name = "massorca-client"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "interprocess",
  "massorca-net",
  "massorca-profile",
@@ -3580,12 +3581,14 @@ dependencies = [
  "massorca-core-workspace",
  "massorca-profile",
  "massorca-protocol",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "win32job",
 ]
 
 [[package]]

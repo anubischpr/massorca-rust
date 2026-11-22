@@ -180,6 +180,7 @@ pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
 pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
+pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
