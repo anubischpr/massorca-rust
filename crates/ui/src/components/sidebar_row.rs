@@ -181,8 +181,9 @@ impl SidebarRow {
         self.map_row(|r| r.dimmed(dimmed))
     }
 
+    /// A loading row: one bar where its label goes (SidebarRow.md, States).
     pub fn loading(self, loading: bool) -> Self {
-        self.map_row(|r| r.loading(loading))
+        self.map_row(|r| r.loading(loading).label_placeholder(loading))
     }
 
     /// A failed row: the alert glyph replaces the leading icon and the reason is the

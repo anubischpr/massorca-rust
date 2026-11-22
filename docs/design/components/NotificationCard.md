@@ -85,6 +85,7 @@ Inventory IDs: D-NT-01 (notification card stack), X-UP-01 (app update notice, sh
 
 - Kind words: "Waiting for you", "Error", "Update", "Sign-in needed", "Note".
 - Actions: "Open", "Dismiss", "Download", "Later", "Restart now", "Retry", "Sign in".
+- Answers on an approval card: "Approve" and "Deny", the words of the chat's approval card (X-CH-02).
 - Update: "MassOrca 1.4.2 is available", "Checking for updates", "Downloading, 64%", "Restart to finish the update", "Update failed: <reason>".
 - Account: "Claude was signed out".
 - Host: "Last known: waiting for you, 5 min ago".

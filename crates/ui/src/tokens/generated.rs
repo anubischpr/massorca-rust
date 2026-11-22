@@ -1311,7 +1311,9 @@ pub const LAYOUT_TOAST_WIDTH_DEFAULT: f32 = 360.0;
 /// `layout.toast.width.max`
 pub const LAYOUT_TOAST_WIDTH_MAX: f32 = 400.0;
 /// `layout.palette.width`
-pub const LAYOUT_PALETTE_WIDTH: f32 = 560.0;
+pub const LAYOUT_PALETTE_WIDTH: f32 = 600.0;
+/// `layout.palette.input-height`
+pub const LAYOUT_PALETTE_INPUT_HEIGHT: f32 = 44.0;
 /// `layout.palette.max-height`
 pub const LAYOUT_PALETTE_MAX_HEIGHT: f32 = 480.0;
 /// `layout.palette.top`
