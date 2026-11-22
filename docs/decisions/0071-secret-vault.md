@@ -238,8 +238,20 @@ massorca secret reset-key
 
 ## Consequences
 
-- The agents domain launches with `vault.environment_for(project)`. It is not
-  wired here, because agent sessions are still on the phase-4 branches.
+- Every agent run (start, delegated start and resume) receives
+  `vault.environment_for(project)` of its workspace's project, read before the
+  launch is planned and with no agents lock held. Precedence, last wins: the
+  run's own variables, the kind's credential home, the vault's variables, the
+  caller's `env`.
+  - A vault name equal to a `MASSORCA_*` variable or to the kind's credential
+    home variable is refused.
+  - A vault name in the kind's `strip_env` is set, not emptied: the vault
+    granted it, so for that agent it takes precedence over the login in the
+    profile's credential home.
+  - A refusal, or a vault that is locked, has a case clash or a row that does
+    not open, fails the launch with `agent.secrets_unavailable` before any
+    session exists. The message names the cause and variable names, never a
+    value.
 - Profile backups contain ciphertext only. A restore on another machine opens
   as `locked` until the key is restored.
 - On a host whose key protection is `file`, anyone who can read the profile
