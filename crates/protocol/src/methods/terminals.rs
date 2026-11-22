@@ -96,6 +96,10 @@ pub struct TerminalAttachParams {
     pub cols: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u16>,
+    /// `true` when the client is a terminal emulator that answers the cursor queries (`ESC [ 6 n`)
+    /// in the output. Absent or `false`: the service answers them for the terminal (decision 0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers_queries: Option<bool>,
 }
 
 /// Params of `terminal.input`. `data` is standard base64 with padding of the bytes to write.

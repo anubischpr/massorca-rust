@@ -307,6 +307,26 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.prompt",
+            "Type a prompt into an agent session's terminal",
+            "agent.prompt",
+            json!({
+                "type": "object",
+                "required": ["session", "text"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "text": { "type": "string" },
+                    "force": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.resume",
+            "Start a new run of an exited agent session",
+            "agent.resume",
+            selector("session"),
+        ),
+        command(
             "agent.forget",
             "Forget an agent session whose run has ended",
             "agent.forget",
