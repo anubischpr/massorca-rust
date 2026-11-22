@@ -230,7 +230,7 @@ fn a_pending_sign_in_is_listed_until_cleared_and_a_kind_keeps_the_record_of_its_
         .into_iter()
         .map(|row| row.id)
         .collect();
-    assert_eq!(pending, [signing.id.clone()]);
+    assert_eq!(pending, vec![signing.id.clone()]);
     assert!(store.kind_has_had_account("fake").unwrap());
 
     let imported = account("fake", "imported", 2);
