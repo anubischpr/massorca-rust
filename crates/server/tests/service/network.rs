@@ -368,3 +368,29 @@ async fn a_hello_without_auth_gets_no_service() {
     assert!(closed.is_none(), "{closed:?}");
     stop(running).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_without_host_admin_inspects_only_the_catalogue() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (standard, _) = pair(&hosts, &standard_offer, "plain").await.unwrap();
+    let folder = temp_home();
+
+    standard
+        .extension_inspect("catalogue:massorca.claude")
+        .await
+        .expect("the catalogue needs only Read");
+    for source in [
+        format!("dir:{}", folder.path().display()),
+        format!("file:{}", folder.path().join("kit.mxt").display()),
+    ] {
+        let denied = standard
+            .extension_inspect(&source)
+            .await
+            .expect_err("a host path needs HostAdmin");
+        assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED, "{source}");
+    }
+    stop(running).await;
+}

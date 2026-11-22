@@ -29,7 +29,7 @@ use crate::error::ServiceError;
 use crate::features::NoParams;
 use crate::features::workspace_domain::publish;
 use crate::owner::Owner;
-use crate::permission::Permission;
+use crate::permission::{Permission, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -102,11 +102,19 @@ async fn inspect(
     ctx: RequestCtx,
     params: ExtensionInspectParams,
 ) -> Result<ExtensionReview, ErrorBody> {
-    let review = on_extensions(&ctx, move |extensions| {
-        extensions.inspect(&Source::parse(&params.source)?)
-    })
-    .await?;
+    let source = Source::parse(&params.source).map_err(error_body)?;
+    authorize(&ctx.principal, inspect_permission(&source))?;
+    let review = on_extensions(&ctx, move |extensions| extensions.inspect(&source)).await?;
     wire(&review)
+}
+
+/// The catalogue is built in, so `Read` reviews it. A `dir:` or `file:` source reads a host path, which only a host
+/// administrator may probe.
+fn inspect_permission(source: &Source) -> Permission {
+    match source {
+        Source::Catalogue(_) => Permission::Read,
+        Source::Dir(_) | Source::File(_) => Permission::HostAdmin,
+    }
 }
 
 async fn asset(ctx: RequestCtx, params: ExtensionAssetParams) -> Result<ExtensionAsset, ErrorBody> {
