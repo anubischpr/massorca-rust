@@ -1,5 +1,7 @@
 //! The seam between the Marketplace pages and the service that owns installs and agent accounts.
 
+use massorca_protocol::methods::agents::AgentKind;
+
 use super::types::{AccountId, MarketplaceItemId, MarketplaceSnapshot};
 
 /// Reads the Marketplace and changes it. The sample implements it in memory; the real service
@@ -8,6 +10,9 @@ use super::types::{AccountId, MarketplaceItemId, MarketplaceSnapshot};
 pub trait MarketplaceSource: std::fmt::Debug {
     /// Everything the pages show now.
     fn snapshot(&self) -> MarketplaceSnapshot;
+
+    /// Takes the agent kinds the connected service lists. A source that lists no service's kinds ignores them.
+    fn follow_agent_kinds(&mut self, _kinds: &[AgentKind]) {}
 
     /// Turns an installed item on or off.
     fn set_enabled(&mut self, item: MarketplaceItemId, enabled: bool) -> Result<(), SourceError>;

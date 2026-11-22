@@ -28,16 +28,16 @@ pub(super) fn sample_items() -> Vec<MarketplaceItem> {
                 update: None,
             },
             host: HostId(2),
-            agent_kind: Some("gemini".to_owned()),
+            agent_kind: Some("codex".to_owned()),
             examples: strings(&[
-                "@Gemini CLI explain the last build log",
-                "@Gemini CLI suggest a name for this branch",
-                "@Gemini CLI list the files changed today",
+                "@Codex explain the last build log",
+                "@Codex suggest a name for this branch",
+                "@Codex list the files changed today",
             ]),
             adds: strings(&["Agent in the model picker"]),
-            description: "Adds the Gemini CLI as an agent you can pick in the model picker, with its own models and effort levels."
+            description: "Starts Codex sessions from MassOrca and lets you pick Codex in the model picker."
                 .to_owned(),
-            ..sample_item(2, ItemKind::Agent, "Gemini CLI", "MassOrca extras", "1.0.0", "Agent")
+            ..sample_item(2, ItemKind::Agent, "Codex", "MassOrca extras", "1.0.0", "Agent")
         },
         MarketplaceItem {
             third_party: true,
