@@ -411,10 +411,10 @@ fn clean(line: &str) -> String {
 /// The sign-out (decision 0059): writes the marker `FAKE_AGENT_LOGOUT_MARKER` names, outside the home, and leaves the
 /// token alone. Without a marker it does nothing.
 fn logout() -> ExitCode {
-    if let Some(marker) = env::var_os(LOGOUT_MARKER_ENV).filter(|path| !path.is_empty()) {
-        if fs::write(&marker, "logged out\n").is_err() {
-            return ExitCode::from(1);
-        }
+    if let Some(marker) = env::var_os(LOGOUT_MARKER_ENV).filter(|path| !path.is_empty())
+        && fs::write(&marker, "logged out\n").is_err()
+    {
+        return ExitCode::from(1);
     }
     ExitCode::SUCCESS
 }
