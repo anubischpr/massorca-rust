@@ -13,6 +13,7 @@ use massorca_protocol::methods::agents::{
     AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
     BringBackResult, PromptReceipt,
 };
+use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
@@ -193,19 +194,21 @@ async fn bring_back(
     params: AgentBringBackParams,
 ) -> Result<BringBackResult, ErrorBody> {
     let child = params.child.clone();
-    let parent_workspace = on_agents(&ctx, move |agents| {
-        let parent = agents.show(&child)?.parent_id;
-        parent
-            .map(|parent| agents.show(&parent).map(|parent| parent.workspace_id))
-            .transpose()
+    let merge = params.merge;
+    // The workspace a merge would go into: only a child with a workspace of its own is merged (0055).
+    let merge_into = on_agents(&ctx, move |agents| {
+        let child = agents.show(&child)?;
+        let Some(parent) = child.parent_id else {
+            return Ok(None);
+        };
+        let parent = agents.show(&parent)?;
+        Ok((merge && parent.workspace_id != child.workspace_id).then_some(parent.workspace_id))
     })
     .await?;
-    // A folder or missing workspace has no lock to take; core-agents refuses what it must for them.
-    let _guard = match parent_workspace {
-        Some(workspace) => match super::git::repository(&ctx, workspace).await {
-            Ok(repository) => Some(repository.lock().await),
-            Err(_) => None,
-        },
+    // A merge never runs unlocked: a workspace that is not a git worktree, is missing or is being removed refuses the
+    // bring-back here.
+    let _guard = match merge_into {
+        Some(workspace) => Some(super::git::repository(&ctx, workspace).await?.lock().await),
         None => None,
     };
     let git = WorktreeGit(ctx.state.workspaces.git().clone());
@@ -218,6 +221,21 @@ struct WorktreeGit(Git);
 impl RepoOps for WorktreeGit {
     fn is_dirty(&self, dir: &Path) -> Result<bool, AgentError> {
         self.0.status_dirty(dir).map_err(agent_git_error)
+    }
+
+    fn operation_in_progress(&self, dir: &Path) -> Result<Option<String>, AgentError> {
+        let operation = self.0.operation_in_progress(dir).map_err(agent_git_error)?;
+        Ok(operation.map(|operation| {
+            match operation {
+                GitOperation::Merge => "a merge",
+                GitOperation::Rebase => "a rebase",
+                GitOperation::CherryPick => "a cherry-pick",
+                GitOperation::Revert => "a revert",
+                GitOperation::ApplyMailbox => "a mailbox apply",
+                GitOperation::Unknown => "a git operation",
+            }
+            .to_owned()
+        }))
     }
 
     fn merge_no_ff(&self, dir: &Path, branch: &str) -> Result<MergeResult, AgentError> {

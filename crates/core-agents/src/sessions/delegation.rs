@@ -4,9 +4,9 @@
 //! The git work of a bring-back (the clean check and the `--no-ff` merge) goes through [`RepoOps`], which the service
 //! implements with `core-git`, so this crate keeps no git dependency of its own.
 
-use std::collections::BTreeMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 
 use massorca_core_store::now_ms;
 use massorca_protocol::codes;
@@ -34,6 +34,8 @@ pub enum MergeResult {
 pub trait RepoOps {
     /// Whether the work tree at `dir` has staged, unstaged or untracked changes.
     fn is_dirty(&self, dir: &Path) -> Result<bool, AgentError>;
+    /// The operation git stopped in the middle of in the work tree at `dir` (`a rebase`, `a merge`...), if any.
+    fn operation_in_progress(&self, dir: &Path) -> Result<Option<String>, AgentError>;
     /// `git merge --no-ff --no-edit <branch>` in `dir`, aborted when it stops on conflicts.
     fn merge_no_ff(&self, dir: &Path, branch: &str) -> Result<MergeResult, AgentError>;
 }
@@ -53,17 +55,24 @@ impl Agents {
     /// (`agent.hook_refused`). A repeated `request_id` returns the first child.
     pub fn delegate(&self, params: AgentDelegateParams) -> Result<AgentDelegated, AgentError> {
         launch::check_prompt(&params.prompt)?;
+        let parent = self.resolve(&params.parent)?;
+        if let Some(token) = &params.token {
+            self.check_run_token(&parent.id, token)?;
+        }
+        // A retry returns its first child, but only to the same parent: request ids are unique across sessions.
         if let Some(request_id) = &params.request_id
             && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
         {
+            if row.parent_id.as_deref() != Some(parent.id.as_str()) {
+                return Err(AgentError::new(
+                    codes::REQUEST_INVALID_PARAMS,
+                    format!("request id {request_id} belongs to a call for another session"),
+                ));
+            }
             return Ok(AgentDelegated {
                 session: self.view(row)?,
                 note: None,
             });
-        }
-        let parent = self.resolve(&params.parent)?;
-        if let Some(token) = &params.token {
-            self.check_run_token(&parent.id, token)?;
         }
         if parent.parent_id.is_some() {
             return Err(AgentError::new(
@@ -82,17 +91,21 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&parent.workspace_id)?;
-        let (workspace, note) = if params.read_only {
-            (parent_workspace.id, None)
+        let (workspace, note, kept) = if params.read_only {
+            (parent_workspace.id, None, None)
         } else {
             let child = self.child_workspace(
                 &parent_workspace,
                 params.name.as_deref(),
                 params.request_id.as_deref(),
             )?;
-            (child.id, Some(NOT_CARRIED_OVER.to_owned()))
+            (
+                child.id.clone(),
+                Some(NOT_CARRIED_OVER.to_owned()),
+                Some(child),
+            )
         };
-        let session = self.start_session(
+        let started = self.start_session(
             AgentStartParams {
                 workspace,
                 kind,
@@ -106,7 +119,12 @@ impl Agents {
                 request_id: params.request_id,
             },
             Some(parent.id),
-        )?;
+        );
+        let session = match (started, kept) {
+            (Ok(session), _) => session,
+            (Err(error), None) => return Err(error),
+            (Err(error), Some(kept)) => return Err(kept_workspace(error, &kept)),
+        };
         Ok(AgentDelegated { session, note })
     }
 
@@ -175,11 +193,22 @@ impl Agents {
             merge_commit = Some(self.merge_child(&parent, &child_workspace, repo)?);
         }
 
-        if !self
+        // Merge, then mark: when the mark fails after a merge, the error carries the merge commit, so a refused retry
+        // does not hide that the merge happened.
+        match self
             .store()
-            .set_agent_session_brought_back(&child.id, now_ms())?
+            .set_agent_session_brought_back(&child.id, now_ms())
         {
-            return Err(already_brought_back(&child.id));
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(with_merge_commit(
+                    already_brought_back(&child.id),
+                    merge_commit.as_deref(),
+                ));
+            }
+            Err(error) => {
+                return Err(with_merge_commit(error.into(), merge_commit.as_deref()));
+            }
         }
         let child = {
             let mut live = lock(&self.inner.status);
@@ -217,27 +246,15 @@ impl Agents {
         })
     }
 
-    /// Merges the child workspace's branch into the parent's worktree (0055, step 2). The parent must not be working
-    /// and its worktree must be clean; a conflict is aborted and reported with its paths. Returns the merge commit.
+    /// Merges the child workspace's branch into the parent's worktree (0055, step 2). The parent must not be working,
+    /// no other session may write in its workspace, and its worktree must be clean with no rebase or merge stopped in it;
+    /// a conflict is aborted and reported with its paths. Returns the merge commit.
     fn merge_child(
         &self,
         parent: &AgentSession,
         child_workspace: &Workspace,
         repo: &dyn RepoOps,
     ) -> Result<String, AgentError> {
-        if parent
-            .activity
-            .as_ref()
-            .is_some_and(|activity| activity.state == ActivityState::Working)
-        {
-            return Err(AgentError::new(
-                codes::AGENT_PARENT_BUSY,
-                format!(
-                    "the parent session {} is working; bring the child back once it is not",
-                    parent.id
-                ),
-            ));
-        }
         let branch = child_workspace.branch.as_deref().ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_DELEGATE_NEEDS_GIT,
@@ -261,7 +278,18 @@ impl Agents {
                 ),
             ));
         }
+        // Held until the merge ends: no prompt to the parent and no start in its workspace can land meanwhile.
+        let _claim = self.claim_for_merge(&parent.id, &parent_workspace.id)?;
         let dir = Path::new(&parent_workspace.path);
+        if let Some(operation) = repo.operation_in_progress(dir)? {
+            return Err(AgentError::new(
+                codes::AGENT_PARENT_DIRTY,
+                format!(
+                    "{operation} is in progress in the parent workspace {}; finish or abort it first",
+                    parent_workspace.name
+                ),
+            ));
+        }
         if repo.is_dirty(dir)? {
             return Err(AgentError::new(
                 codes::AGENT_PARENT_DIRTY,
@@ -284,6 +312,68 @@ impl Agents {
                 error.data = Some(json!({ "paths": paths }));
                 Err(error)
             }
+        }
+    }
+
+    /// Claims the parent's workspace for a merge (0055). Under the start gate, so no start slips in, it checks that no
+    /// session other than the parent writes there (`agent.workspace_busy`). Under the status lock, so no prompt slips
+    /// in, it reads the parent's activity again (`agent.parent_busy` while it works or has a prompt it has not answered)
+    /// and lists the workspace as merging. The claim ends when it is dropped.
+    fn claim_for_merge(
+        &self,
+        parent_id: &str,
+        workspace_id: &str,
+    ) -> Result<MergeClaim<'_>, AgentError> {
+        let _gate = lock(&self.inner.start_gate);
+        for row in self.store().list_agent_sessions(Some(workspace_id))? {
+            if row.read_only || row.id == parent_id {
+                continue;
+            }
+            let session = self.view(row)?;
+            if session.execution.state != TerminalState::Exited {
+                let mut error = AgentError::new(
+                    codes::AGENT_WORKSPACE_BUSY,
+                    format!(
+                        "session {} writes in the parent workspace; bring the child back once it has stopped",
+                        session.id
+                    ),
+                );
+                error.data = Some(json!({ "session": session.id }));
+                return Err(error);
+            }
+        }
+        let mut live = lock(&self.inner.status);
+        let parent = self.view_with(&mut live, self.reload(parent_id)?)?;
+        let working = parent
+            .activity
+            .as_ref()
+            .is_some_and(|activity| activity.state == ActivityState::Working)
+            || live
+                .get(parent_id)
+                .is_some_and(|run| run.typed_since_report);
+        if working {
+            return Err(AgentError::new(
+                codes::AGENT_PARENT_BUSY,
+                format!(
+                    "the parent session {parent_id} is working; bring the child back once it is not"
+                ),
+            ));
+        }
+        if !lock(&self.inner.merging).insert(workspace_id.to_owned()) {
+            return Err(merging_busy(workspace_id));
+        }
+        Ok(MergeClaim {
+            merging: &self.inner.merging,
+            workspace_id: workspace_id.to_owned(),
+        })
+    }
+
+    /// Refuses a start, a resume or a prompt in a workspace a bring-back is merging into (0055).
+    pub(super) fn refuse_while_merging(&self, workspace_id: &str) -> Result<(), AgentError> {
+        if lock(&self.inner.merging).contains(workspace_id) {
+            Err(merging_busy(workspace_id))
+        } else {
+            Ok(())
         }
     }
 
@@ -327,6 +417,19 @@ impl Agents {
             .clone()
             .ok_or_else(|| needs_git("has no branch"))?;
         let workspaces = &self.inner.config.workspaces;
+        let request_key = request_id.map(|id| format!("agent.delegate:{id}"));
+        // A retry reuses the workspace its first call created, whatever its name.
+        if let Some(key) = &request_key
+            && let Some(row) = self.store().find_workspace_by_request_id(key)?
+        {
+            if row.project_id != parent.project_id {
+                return Err(AgentError::new(
+                    codes::REQUEST_INVALID_PARAMS,
+                    "the request id belongs to a call in another project",
+                ));
+            }
+            return Ok(workspaces.show_workspace(&row.id)?);
+        }
         let create = |name: String| {
             workspaces.create_workspace(WorkspaceCreateParams {
                 project: parent.project_id.clone(),
@@ -335,7 +438,7 @@ impl Agents {
                 base: Some(base.clone()),
                 existing_branch: false,
                 path: None,
-                request_id: request_id.map(|id| format!("agent.delegate:{id}")),
+                request_id: request_key.clone(),
             })
         };
         if let Some(name) = name {
@@ -389,6 +492,61 @@ impl Agents {
     }
 }
 
+/// A workspace listed as merging; the listing ends when the claim is dropped, on every path out of the merge.
+struct MergeClaim<'a> {
+    merging: &'a Mutex<HashSet<String>>,
+    workspace_id: String,
+}
+
+impl Drop for MergeClaim<'_> {
+    fn drop(&mut self) {
+        lock(self.merging).remove(&self.workspace_id);
+    }
+}
+
+fn merging_busy(workspace_id: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_BUSY,
+        format!("a bring-back is merging into workspace {workspace_id}; try again once it ends"),
+    )
+}
+
+/// `error` with the merge commit a bring-back already made, in its data and message.
+fn with_merge_commit(mut error: AgentError, merge_commit: Option<&str>) -> AgentError {
+    if let Some(commit) = merge_commit {
+        error.message = format!(
+            "{}; the child was already merged as commit {commit}",
+            error.message
+        );
+        add_data(&mut error, "merge_commit", json!(commit));
+    }
+    error
+}
+
+/// A start that failed after the child workspace was created: the error names the workspace, which is kept.
+fn kept_workspace(mut error: AgentError, workspace: &Workspace) -> AgentError {
+    error.message = format!(
+        "{}; the child workspace {} was kept, and a retry with the same request id reuses it",
+        error.message, workspace.name
+    );
+    add_data(
+        &mut error,
+        "workspace",
+        json!({ "id": workspace.id, "name": workspace.name }),
+    );
+    error
+}
+
+/// Adds `key` to an error's data object, creating the object when there is none.
+fn add_data(error: &mut AgentError, key: &str, value: serde_json::Value) {
+    match &mut error.data {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert(key.to_owned(), value);
+        }
+        _ => error.data = Some(json!({ key: value })),
+    }
+}
+
 fn already_brought_back(session: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_ALREADY_BROUGHT_BACK,
@@ -431,6 +589,269 @@ fn one_line(text: &str, max: usize) -> String {
 mod tests {
     use super::one_line;
     use crate::launch::check_prompt;
+
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::process::Command;
+
+    use massorca_core_store::{AgentSessionRow, RunExit, RunExitReason, new_id, now_ms};
+    use massorca_protocol::codes;
+    use massorca_protocol::methods::agents::{
+        AgentBringBackParams, AgentDelegateParams, AgentStartParams,
+    };
+    use massorca_protocol::methods::projects::ProjectAddParams;
+    use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
+
+    use super::super::tests::service;
+    use super::super::{LiveRun, PromptRules, lock};
+    use super::{AgentError, MergeResult, RepoOps};
+    use crate::kind::PasteMode;
+    use crate::status::HookRules;
+
+    /// Git operations a test must never reach.
+    struct NoGit;
+
+    impl RepoOps for NoGit {
+        fn is_dirty(&self, _dir: &Path) -> Result<bool, AgentError> {
+            unreachable!("no git work in this test")
+        }
+        fn operation_in_progress(&self, _dir: &Path) -> Result<Option<String>, AgentError> {
+            unreachable!("no git work in this test")
+        }
+        fn merge_no_ff(&self, _dir: &Path, _branch: &str) -> Result<MergeResult, AgentError> {
+            unreachable!("no git work in this test")
+        }
+    }
+
+    /// A session row in `workspace_id`, delegated from `parent` when given; its run has ended.
+    fn session_row(workspace_id: &str, parent: Option<&str>) -> AgentSessionRow {
+        AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            parent_id: parent.map(str::to_owned),
+            title: None,
+            read_only: parent.is_some(),
+            agent_ref: None,
+            terminal_id: Some(new_id()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: Some(RunExit {
+                code: Some(0),
+                signal: None,
+                reason: RunExitReason::Exited,
+                at: now_ms(),
+            }),
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        }
+    }
+
+    /// Registers a live run with `token` for `session`, as a start does.
+    fn live_run(agents: &super::Agents, session: &str, token: &str) {
+        lock(&agents.inner.status).insert(
+            session.to_owned(),
+            LiveRun {
+                token: token.to_owned(),
+                rules: HookRules::default(),
+                prompt: PromptRules {
+                    has_status: true,
+                    paste: PasteMode::Plain,
+                    submit: "\r".to_owned(),
+                },
+                pending: None,
+                typed_since_report: false,
+            },
+        );
+    }
+
+    fn delegate_params(parent: &str, request_id: &str) -> AgentDelegateParams {
+        AgentDelegateParams {
+            parent: parent.to_owned(),
+            prompt: "look".to_owned(),
+            kind: None,
+            name: None,
+            read_only: true,
+            token: None,
+            request_id: Some(request_id.to_owned()),
+        }
+    }
+
+    #[test]
+    fn only_the_parents_run_token_brings_its_child_back() {
+        let (agents, workspace_id, _profile) = service();
+        let parent = session_row(&workspace_id, None);
+        let child = session_row(&workspace_id, Some(&parent.id));
+        agents.store().insert_agent_session(&parent).unwrap();
+        agents.store().insert_agent_session(&child).unwrap();
+        live_run(&agents, &parent.id, "parent-token");
+        let params = |token: &str| AgentBringBackParams {
+            child: child.id.clone(),
+            merge: false,
+            prompt: false,
+            token: Some(token.to_owned()),
+        };
+
+        let refused = agents
+            .bring_back(&params("child-token"), &NoGit)
+            .unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_HOOK_REFUSED);
+        assert!(agents.show(&child.id).unwrap().brought_back_at_ms.is_none());
+
+        let brought = agents.bring_back(&params("parent-token"), &NoGit).unwrap();
+        assert!(!brought.merged);
+        assert!(brought.child.brought_back_at_ms.is_some());
+    }
+
+    #[test]
+    fn a_request_id_of_another_parents_child_is_refused() {
+        let (agents, workspace_id, _profile) = service();
+        let parent = session_row(&workspace_id, None);
+        let other = session_row(&workspace_id, None);
+        let mut child = session_row(&workspace_id, Some(&parent.id));
+        child.request_id = Some("req-1".to_owned());
+        for row in [&parent, &other, &child] {
+            agents.store().insert_agent_session(row).unwrap();
+        }
+
+        let refused = agents
+            .delegate(delegate_params(&other.id, "req-1"))
+            .unwrap_err();
+        assert_eq!(refused.code, codes::REQUEST_INVALID_PARAMS);
+
+        let replayed = agents
+            .delegate(delegate_params(&parent.id, "req-1"))
+            .unwrap();
+        assert_eq!(replayed.session.id, child.id);
+    }
+
+    #[test]
+    fn a_workspace_being_merged_into_refuses_starts_and_unforced_prompts() {
+        let (agents, workspace_id, _profile) = service();
+        let row = session_row(&workspace_id, None);
+        agents.store().insert_agent_session(&row).unwrap();
+        lock(&agents.inner.merging).insert(workspace_id.clone());
+
+        let start = agents
+            .start(AgentStartParams {
+                workspace: workspace_id.clone(),
+                kind: "any".to_owned(),
+                prompt: None,
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                read_only: true,
+                title: None,
+                cols: None,
+                rows: None,
+                request_id: None,
+            })
+            .unwrap_err();
+        assert_eq!(start.code, codes::AGENT_BUSY);
+        assert_eq!(
+            agents.prompt(&row.id, "hello", false).unwrap_err().code,
+            codes::AGENT_BUSY
+        );
+        // A forced prompt is not held by the merge; this run has ended, so it is refused for that.
+        assert_eq!(
+            agents.prompt(&row.id, "hello", true).unwrap_err().code,
+            codes::AGENT_NOT_LIVE
+        );
+
+        lock(&agents.inner.merging).remove(&workspace_id);
+        assert_eq!(
+            agents.prompt(&row.id, "hello", false).unwrap_err().code,
+            codes::AGENT_NOT_LIVE
+        );
+    }
+
+    /// Runs git in `dir` with a fixed identity; panics on failure.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn a_child_whose_start_fails_keeps_one_workspace_and_names_it() {
+        let (agents, _workspace_id, profile) = service();
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+        let workspaces = &agents.inner.config.workspaces;
+        let project = workspaces
+            .add_project(ProjectAddParams {
+                path: repo.to_string_lossy().into_owned(),
+                name: Some("repo".to_owned()),
+                kind: None,
+                workspaces_root: Some(root.path().join("ws").to_string_lossy().into_owned()),
+            })
+            .unwrap();
+        let lead = workspaces
+            .create_workspace(WorkspaceCreateParams {
+                project: project.id.clone(),
+                name: "lead".to_owned(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                path: None,
+                request_id: None,
+            })
+            .unwrap();
+        let parent = session_row(&lead.id, None);
+        agents.store().insert_agent_session(&parent).unwrap();
+        // A kind whose program is a file that is not a program: it resolves, and its start fails at the spawn.
+        let program = root.path().join("broken.exe");
+        std::fs::write(&program, "not a program\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let kinds = profile.path().join("agents").join("kinds");
+        std::fs::create_dir_all(&kinds).unwrap();
+        let kind = serde_json::json!({
+            "id": "broken",
+            "name": "Broken",
+            "program": [program.to_string_lossy()],
+            "prompt": { "mode": "argv" },
+            "status": { "mechanism": "none" }
+        });
+        std::fs::write(kinds.join("broken.json"), kind.to_string()).unwrap();
+        let params = || AgentDelegateParams {
+            kind: Some("broken".to_owned()),
+            read_only: false,
+            ..delegate_params(&parent.id, "req-broken")
+        };
+
+        for _ in 0..2 {
+            let failed = agents.delegate(params()).unwrap_err();
+            assert!(failed.message.contains("lead-1"), "{failed}");
+            let data = failed.data.expect("data names the kept workspace");
+            assert_eq!(data["workspace"]["name"], "lead-1");
+        }
+
+        let names: Vec<String> = workspaces
+            .list_workspaces(Some(&project.id))
+            .unwrap()
+            .into_iter()
+            .map(|workspace| workspace.name)
+            .collect();
+        assert_eq!(names, ["lead", "lead-1"]);
+    }
 
     #[test]
     fn a_quoted_result_is_one_line_without_control_characters_and_within_its_limit() {
