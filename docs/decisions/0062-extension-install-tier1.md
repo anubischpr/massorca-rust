@@ -84,10 +84,11 @@ file as read; its install still needs the pin.
   - the version;
   - the package hash;
   - the sorted permissions;
-  - the planned installer commands.
+  - the planned installer commands;
+  - each agent CLI's `verify` command and its `uninstall` command for this OS.
 
-  They are encoded as one JSON array, never a map, so the fingerprint does not
-  depend on key order.
+  They are encoded as one JSON array tagged `massorca.consent/2`, never a map,
+  so the fingerprint does not depend on key order.
 - `extensions.install { source, consent, run_installer, sha256? }` refuses with
   `extension.consent_required` when `consent` is missing. It refuses with
   `extension.consent_mismatch` when the package or plan changed since the review.
@@ -96,7 +97,8 @@ file as read; its install still needs the pin.
   review does not accept running a program.
 - The CLI never prompts. `massorca extension install <source>` prints the review
   and exits with `extension.consent_required`. `--yes` accepts the review it just
-  printed. `--yes-run-installer` also accepts running the vendor command. This is
+  printed. `--consent <FINGERPRINT>` accepts the review an earlier run printed,
+  exactly. `--yes-run-installer` also accepts running the vendor command. This is
   the headless-host path from 0059. The desktop sends the same fields from its
   review dialog.
 
@@ -108,7 +110,8 @@ file as read; its install still needs the pin.
 - It is never elevated by MassOrca. If the vendor's installer asks for elevation
   itself, that prompt is the vendor's, and the person answers it there.
 - Output goes to `data/<id>/install.log`, capped at 1 MiB. It runs with a
-  15-minute limit, and the child process is killed on timeout.
+  15-minute limit. On timeout the child and every process it started are
+  killed. It gets only an allowlisted part of the service environment.
 - Afterwards the `verify` command must exit 0, and `binary` must resolve.
   Otherwise the install fails with `extension.installer_failed` or
   `extension.verify_failed`. Nothing is registered, and the unpacked folder is
@@ -190,7 +193,9 @@ listing names.
 ### Protocol and CLI
 
 - Capability `extensions/1`. Methods, owner `core`:
-  - `extensions.list`, `get`, `catalogue`, `inspect` and `asset` require `Read`;
+  - `extensions.list`, `get`, `catalogue` and `asset` require `Read`;
+  - `extensions.inspect` requires `Read` for a `catalogue:` source and
+    `HostAdmin` for `dir:` and `file:`, which read a host path;
   - `extensions.install`, `set_enabled` and `remove` require `HostAdmin`,
     because they can run programs on the host.
 - Error codes are `extension.*` in `protocol::codes`. The format codes from
@@ -198,8 +203,8 @@ listing names.
   `invalid_source`, `not_found` (no catalogue entry), `not_installed`,
   `already_installed`, `kind_conflict`, `hash_required`, `consent_required`,
   `consent_mismatch`, `installer_consent_required`, `installer_failed`,
-  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`
-  and `io`. A guard's refusal keeps the guard's own code, such as
+  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`,
+  `tampered` and `io`. A guard's refusal keeps the guard's own code, such as
   `agent.busy`.
 - The CLI group is `massorca extension`, with the reserved `massorca ext` as a
   visible alias:
@@ -207,7 +212,7 @@ listing names.
   - `show <id>`;
   - `catalogue`;
   - `inspect <source>`;
-  - `install <source> [--sha256] [--yes] [--yes-run-installer]`;
+  - `install <source> [--sha256] [--yes | --consent <fingerprint>] [--yes-run-installer]`;
   - `enable <id>`;
   - `disable <id>`;
   - `remove <id> [--delete-agent-homes] [--uninstall-cli]`.
@@ -221,14 +226,41 @@ listing names.
   field of the view that the protocol type names; unknown fields are ignored by decoders.
 - `extensions.get` and `extensions.list` carry `installed.cli`: the lockfile's record of each CLI, with the vendor
   command that ran. The desktop and `extension show` read what ran from there.
-- `--yes-run-installer` needs `--yes`. A script that wants the vendor command to run passes both.
+- `--yes-run-installer` needs `--yes` or `--consent`. A script that wants the vendor command to run passes both.
 - Without `--yes` the CLI prints the review on stderr and fails with `extension.consent_required`. In `--json` mode
   the review is the error's `data`. A relative `dir:` or `file:` path is made absolute by the CLI for the local
   service; for a paired host the path is read on that host as typed.
-- The host runner kills only the child process at the timeout. A grandchild the installer started can outlive it, and
-  the runner stops waiting for its output two seconds after the child ends.
-- `extensions.inspect` needs only `Read` and reads `dir:` and `file:` paths on the host, so a read-only device can
-  learn whether a path holds a package. Install, enable, disable and remove need `HostAdmin`.
+- The runner stops waiting for output two seconds after the child ends, then closes the log, so a process the
+  installer left behind cannot keep writing to it.
+
+### Security review
+
+The independent review of the path that runs a vendor command (2026-11-22) found two blockers and several
+hardening points. All were fixed before merge:
+
+- **Path aliases (blocker).** Windows drops a trailing dot or space, resolves 8.3 short names and maps device
+  names, so `extension.json.` could overwrite the reviewed manifest at unpack. Package paths now refuse a
+  trailing dot or space, `~` followed by a digit, and reserved device names on every OS. Unpacking creates
+  each file new, the unpacked folder must hash to the reviewed files before `lock.json` is written, and
+  the lockfile keeps that hash as `files_sha256`. Every manifest read back from disk (agent kinds, item
+  pages, removal) is checked against it first; a mismatch is `extension.tampered` and nothing it names runs.
+- **Inspect exposure (blocker).** `inspect` with `Read` let a read-only device probe any host path,
+  including devices, FIFOs and UNC shares. Host paths now need `HostAdmin`; `dir:` and `file:` refuse UNC
+  and device namespace paths; each file is opened once, must be a regular file on the opened handle, and is
+  read with its cap enforced while reading. Errors name only the path the caller sent.
+- **Process tree.** The installer runs in its own process group on Unix and in a kill-on-close job object
+  on Windows, so a timeout ends what it started.
+- **Environment.** Vendor commands get only `PATH`, `PATHEXT`, the home, profile and temporary folders,
+  `SystemRoot`, `SYSTEMDRIVE`, `ComSpec`, locale and proxy variables, never a token the service holds.
+  Relative `PATH` entries are skipped when the host resolves a program.
+- **Review fidelity.** Manifest validation refuses control characters in every CLI argv, and the CLI quotes
+  any argument with more than plain characters using Rust escaping.
+- **Consent.** The fingerprint now covers `verify` and `uninstall` (`massorca.consent/2`), the CLI prints
+  it, and `--consent` approves exactly a review read in an earlier run instead of re-inspecting.
+- **Smaller points.** Lockfile entries are validated on read (an extension id, a path inside `pkgs/<id>/`)
+  before any path is built from them, and the folder is synced after the rename on Unix. A failed verify
+  after a successful installer says, in the error data and in `install.log`, that the CLI may remain. The
+  catalogue's piped `bash -c` installs start with `set -o pipefail`.
 
 ## Alternatives
 
