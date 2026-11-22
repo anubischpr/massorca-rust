@@ -194,6 +194,9 @@ jobs:
       contents: read
     env:
       GLIBC_FLOOR: "2.31"
+    outputs:
+      sha256_x86_64: ${{ steps.stage.outputs.sha256_x86_64 }}
+      sha256_aarch64: ${{ steps.stage.outputs.sha256_aarch64 }}
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
@@ -219,12 +222,15 @@ jobs:
               --target "$arch-unknown-linux-gnu.$GLIBC_FLOOR"
           done
       - name: Stage the programs as the desktop bundle carries them
+        id: stage
         run: |
           set -euo pipefail
           mkdir -p dist/resources
           install -m 0755 target/x86_64-unknown-linux-gnu/release/massorca dist/resources/massorca-linux-x86_64
           install -m 0755 target/aarch64-unknown-linux-gnu/release/massorca dist/resources/massorca-linux-aarch64
           sha256sum dist/resources/*
+          echo "sha256_x86_64=$(sha256sum dist/resources/massorca-linux-x86_64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha256_aarch64=$(sha256sum dist/resources/massorca-linux-aarch64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Check the glibc floor and the ELF machine of each program
         run: |
           set -euo pipefail
@@ -244,4 +250,69 @@ jobs:
         with:
           name: massorca-linux-resources
           path: dist/resources
+          if-no-files-found: error
+
+  # Desktop bundle per OS: the app plus resources/massorca-linux-<arch> next to its executable (decisions 0075, 0077).
+  # Build and check only: no release, no signing, no secrets.
+  desktop-bundle:
+    name: Desktop bundle (${{ matrix.os }})
+    needs: [changes, linux-programs]
+    if: needs.changes.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      GLIBC_FLOOR: "2.31"
+      SHA256_X86_64: ${{ needs.linux-programs.outputs.sha256_x86_64 }}
+      SHA256_AARCH64: ${{ needs.linux-programs.outputs.sha256_aarch64 }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - name: Install GPUI system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig-dev libwayland-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libglib2.0-dev libasound2-dev libva-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-bundle
+      - name: Build the desktop app in release mode
+        run: cargo build --release --locked -p massorca-desktop --bin massorca-desktop
+      - name: Assemble the bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          mkdir -p bundle
+          cp "target/release/massorca-desktop$ext" "bundle/massorca-desktop$ext"
+      - name: Put the Linux programs in resources/
+        uses: actions/download-artifact@v8
+        with:
+          name: massorca-linux-resources
+          path: bundle/resources
+      - name: Check the layout, the checksums and the glibc floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          test -f "bundle/massorca-desktop$ext"
+          test "$(ls -1 bundle/resources | sort)" = "$(printf 'massorca-linux-aarch64\nmassorca-linux-x86_64')"
+          test "$(sha256sum bundle/resources/massorca-linux-x86_64 | cut -d' ' -f1)" = "$SHA256_X86_64"
+          test "$(sha256sum bundle/resources/massorca-linux-aarch64 | cut -d' ' -f1)" = "$SHA256_AARCH64"
+          # The floor check reads ELF headers with readelf; the Linux bundle job runs it on the same bytes.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            scripts/check-glibc-floor.sh "$GLIBC_FLOOR" bundle/resources/massorca-linux-x86_64 bundle/resources/massorca-linux-aarch64
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: massorca-desktop-bundle-${{ runner.os }}
+          path: bundle
           if-no-files-found: error
