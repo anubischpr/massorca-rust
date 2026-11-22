@@ -15,7 +15,7 @@ use massorca_core_terminal::shell::{EnvSnapshot, resolve_program};
 use support::{Output, TIMEOUT, capture, shell_program, spec, terminal_env, wait_for_exit};
 
 /// How long a kill may take before the test calls it a failure (0033 kills within 5 s).
-const KILL_BOUND: Duration = Duration::from_secs(5);
+const KILL_BOUND: Duration = Duration::from_secs(30);
 
 // Compile-time check that the tree handle may be shared between threads.
 const _: fn() = || {

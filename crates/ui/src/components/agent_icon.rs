@@ -105,6 +105,24 @@ pub fn png_corner_radius(px: f32) -> f32 {
     px * PNG_CORNER_RATIO
 }
 
+/// The copy of a PNG mark for a window at `scale`: the smallest of 1x, 2x or 3x that covers the
+/// drawn device size. GPUI samples without mipmaps, so a copy over twice the size would alias.
+pub fn png_mark_step(scale: f32) -> u32 {
+    scale.ceil().clamp(1.0, 3.0) as u32
+}
+
+/// The bundled copy of a PNG mark (`master`, as `AgentKind::asset` names it) drawn `edge` logical
+/// px wide on a window at `scale`, e.g. `agents/gemini-16-2x.png`.
+pub fn png_mark_path(master: &str, edge: f32, scale: f32) -> SharedString {
+    let stem = master.strip_suffix(".png").unwrap_or(master);
+    format!(
+        "{stem}-{}-{}x.png",
+        edge.round() as u32,
+        png_mark_step(scale)
+    )
+    .into()
+}
+
 /// The sizes a mark is drawn at: 12, 14 (A17), 16 (default), 20 and 24 px.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AgentIconSize {
@@ -156,9 +174,10 @@ impl AgentIcon {
 }
 
 impl RenderOnce for AgentIcon {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let p = cx.theme().palette;
         let edge = self.size.px();
+        let scale = window.scale_factor();
         let mark = match (self.kind.asset(), self.kind.ink()) {
             (None, _) => svg()
                 .path(IconName::Bot.path())
@@ -166,7 +185,7 @@ impl RenderOnce for AgentIcon {
                 .flex_none()
                 .text_color(p.text.secondary)
                 .into_any_element(),
-            (Some(path), MarkInk::Asset) => img(path)
+            (Some(path), MarkInk::Asset) => img(png_mark_path(path, edge, scale))
                 .size(px(edge))
                 .flex_none()
                 .rounded(px(png_corner_radius(edge)))
@@ -336,5 +355,92 @@ mod tests {
     fn png_corner_matches_the_app_at_fourteen_pixels() {
         assert!((png_corner_radius(14.0) - 2.0).abs() < 1e-6);
         assert!((png_corner_radius(28.0) - 4.0).abs() < 1e-6);
+    }
+
+    /// The sizes the app draws marks at, from the size enum, so the tests cover each one.
+    const DRAWN_SIZES: [AgentIconSize; 5] = [
+        AgentIconSize::XSmall,
+        AgentIconSize::Name,
+        AgentIconSize::Small,
+        AgentIconSize::Medium,
+        AgentIconSize::Large,
+    ];
+
+    /// Width and height from the IHDR chunk of a PNG file.
+    fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
+        let word =
+            |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().expect("four bytes"));
+        (word(16), word(20))
+    }
+
+    #[test]
+    fn a_png_mark_comes_from_the_copy_for_its_scale() {
+        assert_eq!(png_mark_step(1.0), 1);
+        assert_eq!(png_mark_step(1.25), 2);
+        assert_eq!(png_mark_step(1.5), 2);
+        assert_eq!(png_mark_step(2.0), 2);
+        assert_eq!(png_mark_step(2.5), 3);
+        assert_eq!(png_mark_step(3.0), 3);
+        assert_eq!(
+            &*png_mark_path("agents/gemini.png", 16.0, 1.25),
+            "agents/gemini-16-2x.png"
+        );
+    }
+
+    #[test]
+    fn a_png_mark_is_never_minified_by_more_than_two() {
+        for size in DRAWN_SIZES {
+            for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+                let drawn = size.px() * scale;
+                let copy = size.px() * png_mark_step(scale) as f32;
+                assert!(copy >= drawn, "{size:?} at {scale}x");
+                assert!(copy <= 2.0 * drawn, "{size:?} at {scale}x");
+            }
+        }
+    }
+
+    #[test]
+    fn at_the_standard_windows_scales_a_png_mark_is_minified_by_at_most_1_6() {
+        for size in DRAWN_SIZES {
+            for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+                let ratio = size.px() * png_mark_step(scale) as f32 / (size.px() * scale);
+                assert!(ratio <= 1.6 + 1e-4, "{size:?} at {scale}x: {ratio}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_png_copy_is_bundled_at_its_pixel_size() {
+        for kind in AgentKind::ALL {
+            let (Some(master), MarkInk::Asset) = (kind.asset(), kind.ink()) else {
+                continue;
+            };
+            for size in DRAWN_SIZES {
+                for steps in 1..=3 {
+                    let path = png_mark_path(master, size.px(), steps as f32);
+                    let bytes =
+                        Assets::get(&path).unwrap_or_else(|| panic!("{path} is not bundled"));
+                    let edge = size.px() as u32 * steps;
+                    assert_eq!(png_dimensions(bytes), (edge, edge), "{path}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn an_agent_icon_is_an_image_named_by_its_agent(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(AgentIcon::new(AgentKind::Claude).render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Image);
+        assert_eq!(node.label(), Some(AgentKind::Claude.label()));
     }
 }
