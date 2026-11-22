@@ -68,6 +68,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - Not changed in this branch: the grouping. `sh-empty-app` puts Memory, terminals and ports at the left with hosts at the right. `ws-start` and `ws-session` keep agents at the left and the rest at the right, as the code does. The code keeps the Workspaces grouping; the owner decides the start page grouping.
 - Artboard conflict for the owner: `ws-start`, `ws-session` and every `bt-*` status bar draw "1.22 GB" with no label. The label is applied in every mode.
 - The live status view has no memory source and reads "Memory -" until the service reports one.
+- Owner decision: the Memory label stays in every mode. The status bar keeps the grouping it has now.
 
 **Cannot match yet**
 - A1 start frame: sample data and "not listed by the service" heading. Open (L4).
