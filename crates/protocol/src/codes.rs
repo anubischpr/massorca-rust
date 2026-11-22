@@ -157,6 +157,8 @@ pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
 pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
 /// Names stored before case clashes were refused would reach one process together; the data names each one.
 pub const SECRET_NAME_CLASH: &str = "secret.name_clash";
+/// The name loads code, redirects lookups or swaps an endpoint (decision 0071); the data names it.
+pub const SECRET_RESERVED_NAME: &str = "secret.reserved_name";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
