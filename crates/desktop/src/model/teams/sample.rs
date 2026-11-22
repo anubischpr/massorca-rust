@@ -63,7 +63,7 @@ fn bot(id: BotId, name: &str, role: &str, agent: Agent) -> Bot {
         id,
         name: name.into(),
         role: role.into(),
-        agent,
+        agent: Some(agent),
     }
 }
 

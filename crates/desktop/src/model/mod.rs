@@ -1,6 +1,7 @@
 //! View models and pure UI logic, free of GPUI types so they test as plain Rust.
 
 pub mod add_host;
+pub mod agent_sessions;
 pub mod canvas;
 pub mod devices;
 pub mod hosts;
@@ -15,6 +16,8 @@ pub mod rail;
 pub mod region_cycle;
 pub mod regions;
 pub mod roving;
+pub mod secret_form;
+pub mod secret_vault;
 pub mod service_view;
 pub mod settings;
 pub mod settings_sections;

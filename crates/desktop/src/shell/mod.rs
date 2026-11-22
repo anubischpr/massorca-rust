@@ -2,6 +2,7 @@
 
 mod actions;
 mod add_host;
+mod bring_back;
 mod canvas;
 mod debug_focus;
 mod diff_page;
@@ -13,6 +14,8 @@ mod rail;
 mod resize_edges;
 mod service_banner;
 mod settings;
+mod settings_remove_dialog;
+mod settings_secret_dialog;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
@@ -66,6 +69,8 @@ use zones::ZoneFocus;
 
 #[cfg(test)]
 mod add_host_tests;
+#[cfg(test)]
+mod bring_back_tests;
 #[cfg(test)]
 mod debug_focus_tests;
 #[cfg(test)]
@@ -145,6 +150,10 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
+    vault_dialog: Option<settings_secret_dialog::VaultDialog>,
+    /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
+    vault_remove: Option<settings_remove_dialog::RemoveDialog>,
     /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
     marketplace: Box<dyn MarketplaceSource>,
     /// The catalogue's search field; its settled text becomes the Marketplace query.
@@ -162,6 +171,8 @@ pub struct Shell {
     stop_prompt: Option<String>,
     /// A refused terminal call, as its title and its reason, under the Work panel's strip.
     terminal_notice: Option<(String, String)>,
+    /// The bring-back confirm on screen, if any (decision 0055).
+    bring_back: Option<bring_back::BringBackConfirm>,
 }
 
 impl Shell {
@@ -232,6 +243,9 @@ impl Shell {
                 let hosts =
                     crate::model::hosts::marketplace_hosts(store.read(cx).state(), Instant::now());
                 shell.model.set_marketplace_hosts(hosts);
+            }
+            if let Some(teams) = store.read(cx).teams() {
+                shell.model.refresh_teams(teams);
             }
             cx.notify();
         });
@@ -343,6 +357,8 @@ impl Shell {
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            vault_dialog: None,
+            vault_remove: None,
             marketplace,
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
@@ -352,6 +368,7 @@ impl Shell {
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
+            bring_back: None,
         }
     }
 
@@ -542,6 +559,10 @@ impl Render for Shell {
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
             agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
+            vault: {
+                let state = self.store.read(cx).state();
+                crate::model::secret_vault::VaultPage::from_state(&state.secrets, &state.projects)
+            },
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),
@@ -706,7 +727,16 @@ impl Render for Shell {
             .add_host
             .as_ref()
             .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
+        let vault_dialog = self.vault_dialog.as_ref().map(|dialog| {
+            let connected = self.store.read(cx).state().connection.is_connected();
+            settings_secret_dialog::secret_dialog(dialog, &shell, connected, cx)
+        });
+        let vault_remove = self.vault_remove.as_ref().map(|dialog| {
+            let connected = self.store.read(cx).state().connection.is_connected();
+            settings_remove_dialog::remove_dialog_view(dialog, &shell, connected, cx)
+        });
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
+        let bring_back_dialog = bring_back::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -775,7 +805,10 @@ impl Render for Shell {
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
             .when_some(add_host, |el, dialog| el.child(dialog))
+            .when_some(vault_dialog, |el, dialog| el.child(dialog))
+            .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
+            .when_some(bring_back_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }

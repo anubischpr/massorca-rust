@@ -50,11 +50,17 @@ pub enum TreeRow {
     },
     /// A session at `depth` (0 for a top session, 1 for its child sessions, A83).
     Session {
+        /// The session's id, for the actions on its row.
+        id: String,
         title: String,
         agent: Agent,
         state: AgentState,
         depth: usize,
         selected: bool,
+        /// Where a child session runs, shown after its title.
+        place: Option<String>,
+        /// Whether the row offers to bring this child back.
+        can_bring_back: bool,
     },
 }
 
@@ -138,11 +144,14 @@ fn flatten(projects: &[ProjectGroup], active: Option<&str>) -> Vec<TreeRow> {
 
 fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, active: Option<&str>) {
     rows.push(TreeRow::Session {
+        id: session.id.clone(),
         title: session.title.clone(),
         agent: session.agent,
         state: session.state,
         depth,
         selected: active == Some(session.id.as_str()),
+        place: session.place.clone(),
+        can_bring_back: session.can_bring_back,
     });
     for child in &session.children {
         push_session(rows, child, depth + 1, active);

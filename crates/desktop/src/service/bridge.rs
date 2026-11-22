@@ -12,18 +12,22 @@ use std::time::{Duration, Instant};
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord, Subscription};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
+    ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
+    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
     TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::tasks::Task;
+use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
@@ -31,12 +35,15 @@ use massorca_protocol::methods::workspaces::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
+use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
 use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
+use super::secrets::{self, SecretCommand, SecretsFreshness};
+use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -67,9 +74,16 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
+    /// A Bot Teams write, answered on its oneshot.
+    Team(TeamCommand),
+    Secret(SecretCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    BringBack {
+        params: AgentBringBackParams,
+        reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -214,6 +228,30 @@ impl ServiceHandle {
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
+    /// `team.create`. The teams change through the read that follows the answer, not from the answer.
+    pub async fn create_team(&self, params: TeamCreateParams) -> Result<Team, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::CreateTeam { params, reply }))
+            .await
+    }
+
+    /// `team.bot_add`. The bot is listed once the service's answer is folded in.
+    pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
+            .await
+    }
+
+    /// `task.done`. The card moves to Done when the read that follows the answer lands.
+    pub async fn finish_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskDone { task, reply }))
+            .await
+    }
+
+    /// `task.reopen`. The card moves back to Open when the read that follows the answer lands.
+    pub async fn reopen_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskReopen { task, reply }))
+            .await
+    }
+
     /// `workspace.remove`. Pass the flags of the waivers the user confirmed.
     pub async fn remove_workspace(
         &self,
@@ -303,6 +341,8 @@ impl ServiceBridge {
             connection: connection_tx,
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
+            team_reads: Arc::new(Sequence::default()),
+            secrets_order: Arc::new(SecretsFreshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -354,6 +394,10 @@ struct Link {
     watching: BTreeSet<String>,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
+    /// Numbers the Bot Teams reads across the connections of this bridge.
+    team_reads: Arc<Sequence>,
+    /// Orders the vault reads across the connections of this bridge.
+    secrets_order: Arc<SecretsFreshness>,
 }
 
 impl Link {
@@ -482,8 +526,13 @@ impl Link {
             projects,
             workspaces,
         });
+        let teams = teams::read(client, &self.team_reads).await?;
+        self.emit(StoreUpdate::Teams(teams));
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
+        let sessions = agents::list_sessions(client).await?;
+        self.emit(StoreUpdate::AgentsResync(sessions));
+        secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
 
@@ -517,6 +566,17 @@ impl Link {
                             Some(Command::Terminal(command)) => {
                                 terminals::spawn_call(client, &writes, &self.updates, command);
                             }
+                            Some(Command::Team(command)) => {
+                                teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                            }
+                            Some(Command::Secret(command)) => {
+                                secrets::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.secrets_order,
+                                );
+                            }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
                                 self.watching.insert(workspace);
@@ -548,6 +608,11 @@ impl Link {
     async fn on_event(&self, client: &Client, event: ChangeEvent) -> Outcome {
         let ChangeEvent { topic, id } = event;
         let refetched = match topic.as_str() {
+            TOPIC_SECRET_CHANGED => {
+                // The event names a scope and a name; the store takes the whole list again, names only.
+                secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
+                return Outcome::Continue;
+            }
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
@@ -570,8 +635,21 @@ impl Link {
                         StoreUpdate::ProjectGone(id.clone())
                     })
                 }),
+            // A team or task change re-reads every team: the events carry only an id, and the read is cheap.
+            TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
+                .await
+                .map(StoreUpdate::Teams),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
+            TOPIC_AGENT_CHANGED => client
+                .agent_show(&id)
+                .await
+                .map(StoreUpdate::AgentChanged)
+                .or_else(|error| {
+                    gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
+                        StoreUpdate::AgentGone(id.clone())
+                    })
+                }),
             _ => return Outcome::Continue,
         };
         match refetched {
@@ -701,8 +779,15 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::BringBack { params, reply } => {
+            agents::spawn_bring_back(&client, params, reply, updates);
+        }
         // Routed by the session, which owns the terminal writes and store updates.
-        Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
+        Command::Terminal(_)
+        | Command::Team(_)
+        | Command::Secret(_)
+        | Command::RetryNow
+        | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -739,6 +824,7 @@ fn refuse_while_down(command: Command) {
         Command::SetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::Team(command) => teams::refuse(command, refusal),
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -751,7 +837,11 @@ fn refuse_while_down(command: Command) {
         Command::NetworkStatus { reply } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::BringBack { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Terminal(command) => terminals::refuse_while_down(command),
+        Command::Secret(command) => secrets::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }
