@@ -13,8 +13,8 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscripti
 use massorca_profile::Profile;
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
+    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -28,6 +28,7 @@ use massorca_protocol::{PeerInfo, codes};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
+use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
@@ -400,6 +401,8 @@ impl Link {
         });
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
+        let sessions = agents::list_sessions(client).await?;
+        self.emit(StoreUpdate::AgentsResync(sessions));
         Ok(events)
     }
 
@@ -485,6 +488,15 @@ impl Link {
                 }),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
+            TOPIC_AGENT_CHANGED => client
+                .agent_show(&id)
+                .await
+                .map(StoreUpdate::AgentChanged)
+                .or_else(|error| {
+                    gone_if_missing(error, codes::AGENT_NOT_FOUND, || {
+                        StoreUpdate::AgentGone(id.clone())
+                    })
+                }),
             _ => return Outcome::Continue,
         };
         match refetched {
