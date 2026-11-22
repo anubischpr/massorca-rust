@@ -7,7 +7,6 @@ use super::types::{
     AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
     RoutineId, Task, Team, TeamId,
 };
-use crate::model::shell::Agent;
 
 /// Names hold at most this many characters (screens 4.5, 4.7).
 pub const NAME_LIMIT: usize = 40;
@@ -436,6 +435,7 @@ mod tests {
     use super::super::sample::{SampleTeamsSource, TeamsSource};
     use super::super::types::{BoardOwner, TaskId};
     use super::*;
+    use crate::model::shell::Agent;
 
     fn new_team(name: &str, host: usize) -> NewTeam {
         NewTeam {
