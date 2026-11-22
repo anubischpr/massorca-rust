@@ -772,13 +772,17 @@ impl MenuView {
         if let Some(name) = item.icon {
             row = row.child(Icon::new(name).size(IconSize::Small).color(icon_colour));
         }
-        let mut label = div().flex_1().min_w_0().flex().flex_col().child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_color(label_colour)
-                .child(item.label.clone()),
-        );
+        // A destructive label wraps rather than truncates, so the loss it names stays visible (Menu.md, Copy).
+        let mut name = div().min_w_0().text_color(label_colour);
+        if !item.destructive {
+            name = name.truncate();
+        }
+        let mut label = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(name.child(item.label.clone()));
         if let Some(reason) = &item.disabled_reason {
             label = label.child(
                 div()
@@ -1187,6 +1191,33 @@ mod element_tests {
         assert!(
             cx.debug_bounds("menu-item-5").is_some(),
             "the last row is drawn"
+        );
+    }
+
+    #[gpui::test]
+    fn a_destructive_label_wraps_so_the_loss_it_names_stays_visible(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            opener: cx.focus_handle(),
+            menu: None,
+        });
+        cx.run_until_parked();
+        let opener = view.read_with(cx, |h, _| h.opener.clone());
+        focus_and_draw(cx, &opener);
+        let events: Events = Rc::default();
+        let _menu = open(&view, cx, &events);
+        let one_line = cx
+            .debug_bounds("menu-item-1")
+            .expect("duplicate is drawn")
+            .size
+            .height;
+        let wrapped = cx
+            .debug_bounds("menu-item-5")
+            .expect("delete is drawn")
+            .size
+            .height;
+        assert!(
+            wrapped > one_line,
+            "the destructive row is {wrapped:?} tall, one line is {one_line:?}"
         );
     }
 

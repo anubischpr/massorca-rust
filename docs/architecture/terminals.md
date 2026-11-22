@@ -85,19 +85,23 @@ An attach is a stream. It starts in one of two ways:
   cursor, colours and input modes, as escape sequences any VT emulator
   accepts. Output then continues from the snapshot's offset.
 
-A client that attaches must answer terminal queries such as the
-cursor-position request `ESC [ 6 n`, as any terminal emulator does; the
-service answers it while nobody is attached, and answers a held query itself
-when another client attaches or when every client that received it has
-detached; a late client reply to an answered query is dropped (0034). ConPTY
-and PowerShell stall until it is answered.
+A client that attaches declares whether it is a terminal emulator that answers
+the cursor-position request `ESC [ 6 n` (`answers_queries`, 0036). Only a
+declared emulator can hold a query: while one is attached the service waits
+for its answer, and otherwise the service answers at once, as it does while
+nobody is attached, so a log tail or a script never stalls the shell. The
+service answers a held query itself when another client attaches or when every
+emulator that received it has detached; a late reply to an answered query is
+dropped (0034). ConPTY and PowerShell stall until it is answered.
 
 The CLI's `terminal attach` is the first interactive client, in
-`crates/cli/src/terminal_attach.rs`. On Unix it forwards raw stdin bytes, so the
-cursor-position answer reaches the program: crossterm's Unix reader drops that reply.
-On Windows raw console reads carry no arrow keys, so key events are turned back into
-the bytes a terminal sends. `terminal screen` replays one snapshot through a `vt100`
-parser of the same scrollback size and prints the rows as text.
+`crates/cli/src/terminal_attach.rs`. It declares `answers_queries`: the user's
+terminal answers the program's queries and the CLI forwards those replies. On
+Unix it forwards raw stdin bytes, so the cursor-position answer reaches the
+program: crossterm's Unix reader drops that reply. On Windows raw console reads
+carry no arrow keys, so key events are turned back into the bytes a terminal
+sends. `terminal screen` replays one snapshot through a `vt100` parser of the
+same scrollback size and prints the rows as text; it declares nothing.
 
 Attachments never slow the shell. Each attachment has a bounded queue; one
 that falls behind (a slow or stalled client) has its queue dropped and gets a
@@ -115,7 +119,7 @@ Capability `terminals/1`. Terminal output uses binary frames, which need
 | `terminal.create` | `workspace`, `shell?`, `cwd?`, `env?`, `cols?`, `rows?`, `title?`, `request_id?` | `Terminal` |
 | `terminal.list` | `workspace?` | `{ terminals }` |
 | `terminal.show` | `terminal` | `Terminal` |
-| `terminal.attach` | `terminal`, `since?`, `cols?`, `rows?` | stream (below) |
+| `terminal.attach` | `terminal`, `since?`, `cols?`, `rows?`, `answers_queries?` | stream (below) |
 | `terminal.input` | `terminal`, `data` (base64) | `null` |
 | `terminal.resize` | `terminal`, `cols`, `rows` | `Terminal` |
 | `terminal.kill` | `terminal`, `force?` | `Terminal` |

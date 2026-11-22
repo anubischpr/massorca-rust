@@ -20,7 +20,7 @@ place.
 | Rail active bar position | Artboard: 6 px left of the button (x = 0 of the rail); RailItem.md silent | At the rail edge | Same place as the artboard |
 | Status bar item gap | Artboard 14 px; StatusBar.md 12 px | 12 px (`space.3`) | A token value; the artboard copy lags the spec |
 | Region toggles in the Title bar | RegionToggle.md list; D-SH-03 list | D-SH-03 | Screen spec is the later reading |
-| Collapse thresholds (X1) | FrameCanvas.md Conversation minimum 360; thresholds assume 480 | Thresholds 1528 / 1288 / 1048 / 848 | design-system 5.1 and P8 |
+| Collapse thresholds (X1) | FrameCanvas.md Conversation minimum 360; thresholds assume 480 | Thresholds 1408 / 1168 / 928 / 728, the artboard values (last row) | design-system 5.1 and P8 |
 | Skeleton delay | Handoff row 200 ms; Skeleton.md and design-system 4.8: 100 ms | 100 ms (`SKELETON_DELAY_MS`) | 4.8 is the resolved constant |
 | Agent marks when dimmed | Specs: `text.disabled` mark; P32: full colour | Full colour | P32, and GPUI cannot tint PNG images |
 | Overlays inside a dialog | Popover `z.popover` (40) is below `z.dialog` (50) | Overlays take a layer; inside a dialog they paint above it | Otherwise a Select in a dialog paints under the scrim |
@@ -32,6 +32,7 @@ place.
 | SessionSummaryCard icons | Spec silent for Child sessions and Plan | `git-branch`, `list` | Closest Lucide meaning |
 | Bot Teams characters | Team character art; agent icons | Agent icons | No character assets yet |
 | Composer on an unreachable host | Composer.md behaviour: the message queues; state table: it does not | State table: the message stays in the composer, Send is disabled, nothing is queued | Owner decision, 2026-11-21; Composer.md behaviour section corrected |
+| Collapse thresholds (X1) and palette size (X56), amending the rows above | Derived: thresholds 1528 / 1288 / 1048 / 848 px; a 560 px palette (dialog width `lg`) with a 32 px input (`size.control.comfortable`). The code drew the input row at 44 px (a 28 px field with 8 px padding), with no fixed height | Artboard values: `ws-narrow` Steps 1 to 4 (1408 / 1168 / 928 / 728 px); `ws-palette` 600 px card with a 44 px input row | The owner's artboards are the source of truth. They were not available when the derived values were set, so the derived values are replaced. |
 
 ## What GPUI cannot do here (at the pinned commit)
 

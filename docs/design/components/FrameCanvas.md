@@ -20,7 +20,7 @@ Inventory IDs: D-SH-01 (Desktop). Android counterpart: M-SH-01 (compact stack; m
 ## Variants and sizes
 
 - Desktop: any region can be open or hidden. With the Sidebar hidden, the Canvas corner sits next to the rail.
-- Narrow desktop: regions give way in this order. Session summary below 1528 px, Project sidebar below 1288, Sidebar below 1048, Work panel below 848. These are the sums of the minimums of the regions still open, with the Conversation at 480 px (design system 5.1). A hidden region opens as an overlay.
+- Narrow desktop: regions give way in this order. Session summary below 1408 px, Project sidebar below 1168, Sidebar below 928, Work panel below 728. These are the steps drawn on artboard `ws-narrow` (design system 5.1). A hidden region opens as an overlay.
 - Android compact (under 600 dp): one pane, a 56 dp top app bar (`size.appbar.android`) on `surface.frame`, square content on `surface.canvas`.
 - Android medium (600 to 839 dp) and expanded (840 dp and up): master pane 360 dp (`layout.android.master`) on `surface.frame`; detail on `surface.canvas` with the rounded corner. Expanded caps the detail column at 720 dp.
 
