@@ -6,6 +6,7 @@ mod connect;
 mod device_calls;
 mod device_name;
 mod error;
+mod extension_calls;
 mod git_calls;
 mod handshake;
 mod hosts;

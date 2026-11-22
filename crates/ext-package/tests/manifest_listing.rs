@@ -50,7 +50,7 @@ fn agent_package(publisher: &str, id: &str) -> Value {
                     "source": "https://vendor.example/docs/install",
                     "install": [
                         { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm x | iex"] },
-                        { "os": "linux", "command": ["sh", "-c", "curl x | sh"] }
+                        { "os": "linux", "command": ["bash", "-c", "curl x | sh"] }
                     ]
                 }
             }]

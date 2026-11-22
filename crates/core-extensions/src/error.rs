@@ -21,10 +21,14 @@ pub mod codes {
     pub const ASSET_TOO_LARGE: &str = "extension.asset_too_large";
     pub const INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
     pub const IO: &str = "extension.io";
+    pub const TAMPERED: &str = "extension.tampered";
+    pub const RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
+    pub const BUSY: &str = "extension.busy";
+    pub const VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct HookError {
     pub code: String,
     pub message: String,
@@ -50,12 +54,25 @@ pub enum Error {
     NotFound(String),
     #[error("extension {0} is not installed")]
     NotInstalled(String),
+    #[error(
+        "{id} from {reference} declares a vendor command; only the built-in catalogue may run one"
+    )]
+    VendorCommandRefused { id: String, reference: String },
+    #[error("extension {0} is busy: its install or removal is still running")]
+    Busy(String),
     #[error("extension {0} is already installed")]
     AlreadyInstalled(String),
     #[error("agent kind {kind} is already installed by {installed_by}")]
     KindConflict { kind: String, installed_by: String },
     #[error("a package archive needs its SHA-256")]
     HashRequired,
+    #[error(
+        "removing runs a vendor uninstall command; accept it with --yes or --uninstall-consent {fingerprint}"
+    )]
+    UninstallConsentRequired {
+        commands: Vec<Vec<String>>,
+        fingerprint: String,
+    },
     #[error("the install review was not accepted")]
     ConsentRequired,
     #[error("the package or its install plan changed since the review")]
@@ -64,8 +81,13 @@ pub enum Error {
     InstallerConsentRequired,
     #[error("the installer for {agent} failed: {message}")]
     InstallerFailed { agent: String, message: String },
-    #[error("the {agent} CLI did not verify after its installer: {message}")]
-    VerifyFailed { agent: String, message: String },
+    #[error("the {agent} CLI did not verify after its installer: {message}{}", if .installer.is_some() { "; the installer ran, so the CLI it installed may remain" } else { "" })]
+    VerifyFailed {
+        agent: String,
+        message: String,
+        /// The vendor command that ran and succeeded before verify failed, when one did.
+        installer: Option<Vec<String>>,
+    },
     #[error("removal refused by {owner}: {}", .error.message)]
     Refused { owner: String, error: HookError },
     #[error("{0} is not a file the listing names")]
@@ -74,6 +96,12 @@ pub enum Error {
     AssetTooLarge { path: String, size: u64, limit: u64 },
     #[error("invalid lockfile: {0}")]
     InvalidLockfile(String),
+    #[error(
+        "{id} is reserved to the built-in catalogue: publisher massorca and massorca.* ids are refused from {reference}"
+    )]
+    ReservedIdentity { id: String, reference: String },
+    #[error("the installed files of {0} differ from what was reviewed; reinstall it")]
+    Tampered(String),
     #[error("{context} {}: {source}", .path.display())]
     Io {
         context: &'static str,
@@ -91,6 +119,8 @@ impl Error {
             Self::NotFound(_) => codes::NOT_FOUND,
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
+            Self::Busy(_) => codes::BUSY,
+            Self::VendorCommandRefused { .. } => codes::VENDOR_COMMAND_REFUSED,
             Self::KindConflict { .. } => codes::KIND_CONFLICT,
             Self::HashRequired => codes::HASH_REQUIRED,
             Self::ConsentRequired => codes::CONSENT_REQUIRED,
@@ -102,7 +132,32 @@ impl Error {
             Self::AssetNotListed(_) => codes::ASSET_NOT_LISTED,
             Self::AssetTooLarge { .. } => codes::ASSET_TOO_LARGE,
             Self::InvalidLockfile(_) => codes::INVALID_LOCKFILE,
+            Self::Tampered(_) => codes::TAMPERED,
+            Self::ReservedIdentity { .. } => codes::RESERVED_PUBLISHER,
+            Self::UninstallConsentRequired { .. } => codes::CONSENT_REQUIRED,
             Self::Io { .. } => codes::IO,
+        }
+    }
+
+    /// Structured detail for the protocol error's `data`: after a vendor installer ran and verify failed, the command
+    /// that ran and that its CLI may remain on the host.
+    pub fn data(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::UninstallConsentRequired {
+                commands,
+                fingerprint,
+            } => Some(serde_json::json!({ "uninstall": commands, "fingerprint": fingerprint })),
+            Self::VerifyFailed {
+                agent,
+                installer: Some(command),
+                ..
+            } => Some(serde_json::json!({
+                "agent": agent,
+                "installer_ran": true,
+                "cli_may_remain": true,
+                "command": command,
+            })),
+            _ => None,
         }
     }
 
