@@ -762,3 +762,135 @@ fn a_label_with_control_characters_or_too_long_is_refused_as_invalid_params() {
         "nothing is created for a refused label"
     );
 }
+
+/// Stops the running service and starts it again with `env`, as a restart does.
+fn restart_service(sandbox: &Sandbox, env: &[(&str, &str)]) -> ChildGuard {
+    sandbox.run("default", &["service", "stop"]).success();
+    sandbox.wait_for_running("default", false);
+    spawn_service_with(sandbox, env)
+}
+
+/// A login the vendor cannot be reached to confirm: the check exits without saying the login expired.
+const OFFLINE_TOKEN: &str = r#"{"fake":true,"offline":true}"#;
+
+#[test]
+fn the_sweep_leaves_an_imported_account_in_needs_sign_in_alone() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let token = account_home(&sandbox, &id).join("token.json");
+    fs::write(&token, OFFLINE_TOKEN).expect("write an offline token");
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "needs_sign_in", "{checked}");
+
+    let _service = restart_service(&sandbox, &[]);
+    let listed = account_labelled(&sandbox, "work");
+    assert_eq!(listed["id"], id.as_str());
+    assert_eq!(
+        listed["state"], "needs_sign_in",
+        "a state only, not a sign-in to decide"
+    );
+    assert!(
+        token.is_file(),
+        "a restart does not delete an imported login"
+    );
+}
+
+#[test]
+fn the_sweep_leaves_a_migrated_account_in_needs_sign_in_alone() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let legacy = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("homes")
+        .join("fake");
+    fs::create_dir_all(&legacy).expect("create the 0056 home");
+    fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
+    let _service = spawn_service_with(&sandbox, &[]);
+    let migrated = first_account(&sandbox);
+    assert_eq!(migrated["state"], "migrated");
+    let id = migrated["id"].as_str().expect("an account id").to_owned();
+    let token = account_home(&sandbox, &id).join("token.json");
+    fs::write(&token, OFFLINE_TOKEN).expect("write an offline token");
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "needs_sign_in", "{checked}");
+
+    let _service = restart_service(&sandbox, &[]);
+    let listed = account_labelled(&sandbox, "default");
+    assert_eq!(listed["state"], "needs_sign_in");
+    assert!(
+        token.is_file(),
+        "a restart does not delete a migrated login"
+    );
+}
+
+#[test]
+fn a_removed_active_account_refuses_the_next_start_until_another_is_activated() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let (_, workspace) = project_with_main(&sandbox, "notes");
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
+    let first_id = import(&sandbox, &first, "first")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let second_id = import(&sandbox, &second, "second")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    sandbox.json_ok(
+        "default",
+        &["agent", "accounts", "remove", "fake", &first_id],
+    );
+
+    let error = error_of(
+        &sandbox,
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            &workspace,
+            "--read-only",
+        ],
+    );
+    assert_eq!(error["code"], "agent.credentials_invalid", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("was removed")),
+        "{error}"
+    );
+
+    sandbox.json_ok(
+        "default",
+        &["agent", "accounts", "activate", "fake", &second_id],
+    );
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            &workspace,
+            "--read-only",
+        ],
+    );
+    assert!(started["terminal_id"].as_str().is_some(), "{started}");
+}
+
+#[test]
+fn a_kind_that_never_had_an_account_starts_on_the_usual_home() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let (_, workspace) = project_with_main(&sandbox, "notes");
+    let terminal = start_in(&sandbox, &workspace);
+    wait_for_line(&sandbox, &terminal, "fake-agent: credentials missing");
+}

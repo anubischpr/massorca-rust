@@ -46,6 +46,8 @@ const EXPIRED_LOGIN_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 const FAKE_LOGIN_TOKEN: &str = r#"{"fake":true}"#;
 /// A token containing this is expired: `whoami` then reports `expired`.
 const EXPIRED_MARK: &str = r#""expired":true"#;
+/// A token containing this is unreachable: `whoami` exits 2 without the word `expired`, as a check that cannot reach its vendor.
+const OFFLINE_MARK: &str = r#""offline":true"#;
 /// The identity `whoami` reports for a token that names none.
 const DEFAULT_IDENTITY: &str = "fake@example.com";
 
@@ -327,6 +329,10 @@ fn whoami() -> ExitCode {
     let token =
         credential_home().and_then(|home| fs::read_to_string(home.join(CREDENTIAL_FILE)).ok());
     match token {
+        Some(text) if text.contains(OFFLINE_MARK) => {
+            let _ = writeln!(io::stdout().lock(), "unreachable");
+            ExitCode::from(2)
+        }
         Some(text) if !text.contains(EXPIRED_MARK) => {
             let identity = email_of(&text).unwrap_or_else(|| DEFAULT_IDENTITY.to_owned());
             let _ = writeln!(io::stdout().lock(), "signed in as {identity}");
