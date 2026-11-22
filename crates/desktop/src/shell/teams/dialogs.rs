@@ -4,10 +4,16 @@
 
 use super::super::Shell;
 use crate::model::shell::Agent;
-use crate::model::teams::{HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamId, TeamPage};
-use gpui::{
-    App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*, px,
+use crate::model::teams::{
+    HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamError, TeamId, TeamPage, check_name,
+    kind_of_agent,
 };
+use crate::service::ServiceHandle;
+use gpui::{
+    App, Context, Entity, Focusable, SharedString, Subscription, WeakEntity, Window, div,
+    prelude::*, px,
+};
+use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::select::{SelectEvent, SelectView};
@@ -40,7 +46,7 @@ pub(in crate::shell) struct NewTeamDialog {
     host_select: Entity<SelectView>,
     host: usize,
     workspaces: bool,
-    error: Option<&'static str>,
+    error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -52,7 +58,7 @@ pub(in crate::shell) struct AddBotDialog {
     agent: usize,
     agent_select: Entity<SelectView>,
     host_select: Entity<SelectView>,
-    error: Option<&'static str>,
+    error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -61,7 +67,7 @@ pub(in crate::shell) struct EditBriefDialog {
     team: TeamId,
     project: ProjectId,
     field: Entity<TextField>,
-    error: Option<&'static str>,
+    error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -235,6 +241,16 @@ impl Shell {
         let Some(dialog) = self.team_dialog.take() else {
             return;
         };
+        // With a service connected, the form goes to it; sample data changes locally, as before.
+        let dialog = match (dialog, self.service.clone()) {
+            (TeamDialog::NewTeam(dialog), Some(service)) => {
+                return self.send_new_team(service, dialog, cx);
+            }
+            (TeamDialog::AddBot(dialog), Some(service)) => {
+                return self.send_add_bot(service, dialog, cx);
+            }
+            (dialog, _) => dialog,
+        };
         self.team_dialog = match dialog {
             TeamDialog::NewTeam(mut dialog) => {
                 let result = self.model.teams_mut().create_team(NewTeam {
@@ -246,7 +262,7 @@ impl Shell {
                 match result {
                     Ok(_) => None,
                     Err(error) => {
-                        dialog.error = Some(error.message());
+                        dialog.error = Some(error.message().into());
                         Some(TeamDialog::NewTeam(dialog))
                     }
                 }
@@ -260,7 +276,7 @@ impl Shell {
                 {
                     Ok(()) => None,
                     Err(error) => {
-                        dialog.error = Some(error.message());
+                        dialog.error = Some(error.message().into());
                         Some(TeamDialog::EditBrief(dialog))
                     }
                 }
@@ -277,13 +293,128 @@ impl Shell {
                 match result {
                     Ok(_) => None,
                     Err(error) => {
-                        dialog.error = Some(error.message());
+                        dialog.error = Some(error.message().into());
                         Some(TeamDialog::AddBot(dialog))
                     }
                 }
             }
         };
         cx.notify();
+    }
+
+    /// Sends the New team form. A name the form cannot use reopens it at once; the service's refusal reopens it
+    /// with its message. An accepted team shows once the teams are read again.
+    fn send_new_team(
+        &mut self,
+        service: ServiceHandle,
+        dialog: NewTeamDialog,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let name = dialog.name.read(cx).text().to_owned();
+        let purpose = dialog.purpose.read(cx).text().to_owned();
+        let workspaces = dialog.workspaces;
+        let form = TeamDialog::NewTeam(dialog);
+        let name = match check_name(&name) {
+            Ok(name) => name,
+            Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
+        };
+        let params = TeamCreateParams {
+            name,
+            purpose: Self::non_empty(&purpose),
+            character: None,
+            access: None,
+            workspaces: Some(workspaces),
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.create_team(params).await;
+            this.update(cx, |shell, cx| {
+                let message = answer.err().map(|refusal| refusal.message().into());
+                shell.finish_team_dialog(form, message, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Sends the Add bot form, as `send_new_team` sends a team. The bot's team is the service's id for it.
+    fn send_add_bot(
+        &mut self,
+        service: ServiceHandle,
+        dialog: AddBotDialog,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let name = dialog.name.read(cx).text().to_owned();
+        let job = dialog.role.read(cx).text().trim().to_owned();
+        let kind = kind_of_agent(BOT_AGENTS[dialog.agent]);
+        let team = self.team_key(dialog.team, cx);
+        let form = TeamDialog::AddBot(dialog);
+        let name = match check_name(&name) {
+            Ok(name) => name,
+            Err(error) => return self.finish_team_dialog(form, Some(error.message().into()), cx),
+        };
+        let Some(team) = team else {
+            let missing = TeamError::Missing.message();
+            return self.finish_team_dialog(form, Some(missing.into()), cx);
+        };
+        let params = BotAddParams {
+            team,
+            name,
+            job,
+            kind: kind.to_owned(),
+            model: None,
+            effort: None,
+            lead: false,
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.add_bot(params).await;
+            this.update(cx, |shell, cx| {
+                let message = answer.err().map(|refusal| refusal.message().into());
+                shell.finish_team_dialog(form, message, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Closes a form the service accepted (`message` is `None`). Otherwise the form comes back with the message,
+    /// unless another form has been opened meanwhile.
+    fn finish_team_dialog(
+        &mut self,
+        mut form: TeamDialog,
+        message: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(message) = message else {
+            return cx.notify();
+        };
+        if self.team_dialog.is_some() {
+            return cx.notify();
+        }
+        match &mut form {
+            TeamDialog::NewTeam(dialog) => dialog.error = Some(message),
+            TeamDialog::AddBot(dialog) => dialog.error = Some(message),
+            TeamDialog::EditBrief(dialog) => dialog.error = Some(message),
+        }
+        self.team_dialog = Some(form);
+        cx.notify();
+    }
+
+    /// The service's id for a team of this shell, as the store numbered it.
+    fn team_key(&self, team: TeamId, cx: &App) -> Option<String> {
+        self.store
+            .read(cx)
+            .state()
+            .team_ids
+            .key(team.0)
+            .map(str::to_owned)
+    }
+
+    /// The text without its surrounding spaces, or none when it is blank.
+    fn non_empty(text: &str) -> Option<String> {
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
     }
 
     pub(super) fn close_team_dialog(&mut self, cx: &mut Context<Self>) {
@@ -431,7 +562,7 @@ fn new_team_view(form: &NewTeamDialog, shell: &WeakEntity<Shell>, cx: &App) -> D
         .on_dismiss(move |_, cx| {
             let _ = on_dismiss.update(cx, |shell, cx| shell.close_team_dialog(cx));
         });
-    if let Some(error) = form.error {
+    if let Some(error) = form.error.clone() {
         dialog = dialog.error(error);
     }
     dialog
@@ -461,7 +592,7 @@ fn add_bot_view(form: &AddBotDialog, shell: &WeakEntity<Shell>, cx: &App) -> Dia
         .on_dismiss(move |_, cx| {
             let _ = on_dismiss.update(cx, |shell, cx| shell.close_team_dialog(cx));
         });
-    if let Some(error) = form.error {
+    if let Some(error) = form.error.clone() {
         dialog = dialog.error(error);
     }
     dialog
@@ -480,7 +611,7 @@ fn edit_brief_view(form: &EditBriefDialog, shell: &WeakEntity<Shell>, cx: &App) 
         .on_dismiss(move |_, cx| {
             let _ = on_dismiss.update(cx, |shell, cx| shell.close_team_dialog(cx));
         });
-    if let Some(error) = form.error {
+    if let Some(error) = form.error.clone() {
         dialog = dialog.error(error);
     }
     dialog
@@ -554,7 +685,7 @@ mod tests {
         shell.update(cx, |shell, cx| shell.submit_team_dialog(cx));
         shell.read_with(cx, |shell, _| match &shell.team_dialog {
             Some(TeamDialog::NewTeam(form)) => {
-                assert_eq!(form.error, Some("Name is required."));
+                assert_eq!(form.error.as_deref(), Some("Name is required."));
             }
             other => panic!("the New team form should stay open, found {other:?}"),
         });

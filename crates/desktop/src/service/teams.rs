@@ -3,13 +3,19 @@
 //! never replaces a newer one.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
-use massorca_protocol::methods::teams::{Board, BoardParams, Team};
+use massorca_protocol::methods::teams::{
+    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams,
+};
+use tokio::sync::{mpsc, oneshot};
 
 use super::refusal::Refusal;
+use super::update::StoreUpdate;
 
 /// A team as the service reports it, with its Board: every task of the team, in four columns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +79,115 @@ async fn fetch(client: &Client) -> Result<Vec<TeamRecord>, ClientError> {
     Ok(records)
 }
 
+/// A Bot Teams write the pages ask the bridge to send. Each one answers through its oneshot.
+pub(crate) enum TeamCommand {
+    CreateTeam {
+        params: TeamCreateParams,
+        reply: oneshot::Sender<Result<Team, Refusal>>,
+    },
+    AddBot {
+        params: BotAddParams,
+        reply: oneshot::Sender<Result<Bot, Refusal>>,
+    },
+}
+
+/// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
+/// the service and not the call.
+pub(super) fn spawn_call(
+    client: &Client,
+    command: TeamCommand,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    sequence: &Arc<Sequence>,
+) {
+    match command {
+        TeamCommand::CreateTeam { params, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_create(&params).await
+            });
+        }
+        TeamCommand::AddBot { params, reply } => {
+            let client = client.clone();
+            let updates = updates.clone();
+            let sequence = sequence.clone();
+            tokio::spawn(async move {
+                let answer = client.team_bot_add(&params).await;
+                // The bot is kept before the answer goes back, so the read that follows lists it.
+                if let Ok(bot) = &answer {
+                    let _ = updates.send(StoreUpdate::TeamBot(bot.clone()));
+                }
+                let _ = reply.send(answer.map_err(|error| teams_refusal(&error)));
+                refresh(&client, &updates, &sequence).await;
+            });
+        }
+    }
+}
+
+/// Answers a write with `refusal`, while there is no connection to ask.
+pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
+    match command {
+        TeamCommand::CreateTeam { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::AddBot { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+    }
+}
+
+fn spawn_write<T, Fut>(
+    client: &Client,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    sequence: &Arc<Sequence>,
+    reply: oneshot::Sender<Result<T, Refusal>>,
+    call: impl FnOnce(Client) -> Fut + Send + 'static,
+) where
+    T: Send + 'static,
+    Fut: Future<Output = Result<T, ClientError>> + Send + 'static,
+{
+    let client = client.clone();
+    let updates = updates.clone();
+    let sequence = sequence.clone();
+    tokio::spawn(async move {
+        let answer = call(client.clone()).await;
+        let _ = reply.send(answer.map_err(|error| teams_refusal(&error)));
+        refresh(&client, &updates, &sequence).await;
+    });
+}
+
+/// Reads the teams again and sends the answer. A lost link is left to the session, which reconnects.
+async fn refresh(
+    client: &Client,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+    sequence: &Sequence,
+) {
+    if let Ok(read) = read(client, sequence).await {
+        let _ = updates.send(StoreUpdate::Teams(read));
+    }
+}
+
+/// A refused write: a name the service already uses keeps its message for the name field, a team or bot that is
+/// gone reads as the pages say it, and anything else is the service's own sentence.
+fn teams_refusal(error: &ClientError) -> Refusal {
+    match error {
+        ClientError::Remote(body)
+            if body.code == codes::TEAM_NAME_IN_USE || body.code == codes::BOT_NAME_IN_USE =>
+        {
+            Refusal::NameProblem {
+                message: body.message.clone(),
+            }
+        }
+        ClientError::Remote(body)
+            if body.code == codes::TEAM_NOT_FOUND || body.code == codes::BOT_NOT_FOUND =>
+        {
+            Refusal::Failed {
+                code: body.code.clone(),
+                message: "That item is gone. Nothing was changed.".to_owned(),
+            }
+        }
+        _ => Refusal::from(error),
+    }
+}
+
 /// Numbers the protocol's ids for the pages, which key on numbers. An id keeps the number the first read that
 /// names it gave it, for the life of the store, so a page keeps pointing at the same team, card or bot.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -92,6 +207,19 @@ impl TeamIds {
                 }
             }
         }
+    }
+
+    /// Numbers the id of a bot this desktop added.
+    pub fn register_bot(&mut self, bot: &Bot) {
+        self.number(&bot.id);
+    }
+
+    /// The protocol id numbered `number`, if one is.
+    pub fn key(&self, number: u32) -> Option<&str> {
+        self.numbers
+            .iter()
+            .find(|(_, known)| **known == number)
+            .map(|(id, _)| id.as_str())
     }
 
     /// The number of `id`, if a read has named it.

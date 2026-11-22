@@ -20,6 +20,7 @@ use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
@@ -31,7 +32,7 @@ use tokio::time::sleep;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
-use super::teams::{self, Sequence};
+use super::teams::{self, Sequence, TeamCommand};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -65,6 +66,8 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
     Terminal(TerminalCommand),
+    /// A Bot Teams write, answered on its oneshot.
+    Team(TeamCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
@@ -177,6 +180,18 @@ impl ServiceHandle {
         answer
             .await
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
+    }
+
+    /// `team.create`. The teams change through the read that follows the answer, not from the answer.
+    pub async fn create_team(&self, params: TeamCreateParams) -> Result<Team, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::CreateTeam { params, reply }))
+            .await
+    }
+
+    /// `team.bot_add`. The bot is listed once the service's answer is folded in.
+    pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
+            .await
     }
 
     /// `workspace.remove`. Pass the flags of the waivers the user confirmed.
@@ -437,6 +452,9 @@ impl Link {
                         Some(Command::Terminal(command)) => {
                             terminals::spawn_call(client, &writes, &self.updates, command);
                         }
+                        Some(Command::Team(command)) => {
+                            teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                        }
                         Some(Command::GitWatch { workspace }) => {
                             watches.start(client, &workspace, &self.updates, &self.freshness);
                             self.watching.insert(workspace);
@@ -575,7 +593,7 @@ fn spawn_call(
             });
         }
         // Routed by the session, which owns the terminal writes and store updates.
-        Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
+        Command::Terminal(_) | Command::Team(_) | Command::RetryNow | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -612,6 +630,7 @@ fn refuse_while_down(command: Command) {
         Command::SetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::Team(command) => teams::refuse(command, refusal),
         Command::Terminal(command) => terminals::refuse_while_down(command),
         other => git::refuse(other, refusal),
     }

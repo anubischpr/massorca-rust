@@ -7,6 +7,7 @@ use std::time::Instant;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::teams::Bot;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -36,6 +37,8 @@ pub enum StoreUpdate {
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
+    /// A bot this desktop added, as the service answered it; its team lists it from now on.
+    TeamBot(Bot),
 }
 
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
@@ -98,6 +101,8 @@ pub struct StoreState {
     pub team_read: u64,
     /// The numbers the pages give the ids of the teams, their cards and their bots.
     pub team_ids: TeamIds,
+    /// The bots this desktop added, as the service answered them.
+    pub team_bots: Vec<Bot>,
 }
 
 impl Default for StoreState {
@@ -113,6 +118,7 @@ impl Default for StoreState {
             teams: None,
             team_read: 0,
             team_ids: TeamIds::default(),
+            team_bots: Vec::new(),
         }
     }
 }
@@ -168,6 +174,11 @@ impl StoreState {
             StoreUpdate::TerminalGone(id) => self.terminals.retain(|t| t.id != id),
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::TeamBot(bot) => {
+                self.team_ids.register_bot(&bot);
+                self.team_bots.retain(|known| known.id != bot.id);
+                self.team_bots.push(bot);
+            }
         }
     }
 

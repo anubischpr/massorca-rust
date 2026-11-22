@@ -152,7 +152,7 @@ pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 pub fn teams_view(state: &StoreState) -> TeamsState {
     match &state.teams {
         Some(records) if state.connection.is_connected() => {
-            live_teams(&state.team_ids, LOCAL_HOST, records)
+            live_teams(&state.team_ids, LOCAL_HOST, records, &state.team_bots)
         }
         _ => TeamsState::unavailable(),
     }
