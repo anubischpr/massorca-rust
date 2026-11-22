@@ -69,6 +69,8 @@ pub struct TeamsState {
     pick: Option<Pick>,
     /// The memory tab the Memory page shows.
     memory_tab: MemoryTab,
+    /// Why the last card move was refused, shown on the Board until the next pick.
+    notice: Option<String>,
     next_id: u32,
 }
 
@@ -88,6 +90,7 @@ impl TeamsState {
             selected: None,
             pick: None,
             memory_tab: MemoryTab::default(),
+            notice: None,
             next_id,
         }
     }
@@ -131,6 +134,7 @@ impl TeamsState {
         fresh.selected = selected;
         fresh.pick = pick;
         fresh.memory_tab = self.memory_tab;
+        fresh.notice = self.notice.clone();
         fresh
     }
 
@@ -344,6 +348,20 @@ impl TeamsState {
         self.pick = pick;
     }
 
+    /// Takes the picked card back, leaving the Board as it is.
+    pub fn take_pick(&mut self) -> Option<Pick> {
+        self.pick.take()
+    }
+
+    /// Why the last card move was refused, if it was.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    pub fn set_notice(&mut self, notice: Option<String>) {
+        self.notice = notice;
+    }
+
     /// The team a page shows, when it belongs to a team that exists.
     pub fn page_team(&self, page: TeamPage) -> Option<&Team> {
         self.team(page.team())
@@ -518,6 +536,17 @@ mod tests {
         let gone = state.refreshed(TeamsState::unavailable());
         assert_eq!(gone.selected(), None);
         assert!(gone.pick().is_none());
+    }
+
+    #[test]
+    fn taking_a_pick_leaves_the_board_as_it_was() {
+        let mut state = SampleTeamsSource.teams();
+        let before = state.clone();
+        let task = state.team(TeamId(1)).unwrap().tasks[0].id;
+        state.pick_task(BoardOwner::Team(TeamId(1)), task).unwrap();
+        assert!(state.take_pick().is_some());
+        assert!(state.pick().is_none());
+        assert_eq!(state.teams(), before.teams());
     }
 
     #[test]

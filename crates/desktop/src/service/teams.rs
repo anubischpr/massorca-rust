@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
+use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams,
 };
@@ -89,6 +90,14 @@ pub(crate) enum TeamCommand {
         params: BotAddParams,
         reply: oneshot::Sender<Result<Bot, Refusal>>,
     },
+    TaskDone {
+        task: String,
+        reply: oneshot::Sender<Result<Task, Refusal>>,
+    },
+    TaskReopen {
+        task: String,
+        reply: oneshot::Sender<Result<Task, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -103,6 +112,16 @@ pub(super) fn spawn_call(
         TeamCommand::CreateTeam { params, reply } => {
             spawn_write(client, updates, sequence, reply, move |client| async move {
                 client.team_create(&params).await
+            });
+        }
+        TeamCommand::TaskDone { task, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.task_done(&TaskRef { task }).await
+            });
+        }
+        TeamCommand::TaskReopen { task, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.task_reopen(&TaskRef { task }).await
             });
         }
         TeamCommand::AddBot { params, reply } => {
@@ -129,6 +148,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::AddBot { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::TaskDone { reply, .. } | TeamCommand::TaskReopen { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }

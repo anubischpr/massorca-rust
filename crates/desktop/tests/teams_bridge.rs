@@ -370,3 +370,77 @@ async fn a_write_is_refused_while_the_service_is_down() {
         "{refusal:?}"
     );
 }
+
+#[tokio::test]
+async fn a_card_is_finished_and_reopened_through_the_service() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .task_create(&TaskCreateParams {
+            team: team.id.clone(),
+            title: "Rotate the keys".to_owned(),
+            body: None,
+            bot: None,
+            project: None,
+            origin: None,
+        })
+        .await
+        .expect("the task is created");
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the card", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| !team.tasks.is_empty())
+    })
+    .await;
+    let task_key = {
+        let view = teams_view(&state);
+        let task = view.teams()[0].tasks[0].id;
+        state
+            .team_ids
+            .key(task.0)
+            .expect("the card is numbered")
+            .to_owned()
+    };
+
+    handle
+        .finish_task(task_key.clone())
+        .await
+        .expect("the task is finished");
+    until(&mut updates, &mut state, "the card in Done", |state| {
+        teams_view(state).teams().iter().any(|team| {
+            team.tasks
+                .iter()
+                .any(|task| task.column == PageColumn::Done)
+        })
+    })
+    .await;
+
+    handle
+        .reopen_task(task_key)
+        .await
+        .expect("the task is reopened");
+    until(&mut updates, &mut state, "the card back in Open", |state| {
+        teams_view(state).teams().iter().any(|team| {
+            team.tasks
+                .iter()
+                .any(|task| task.column == PageColumn::Open)
+        })
+    })
+    .await;
+    stop_service(service).await;
+}

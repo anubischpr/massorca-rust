@@ -20,6 +20,7 @@ use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
+use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
@@ -191,6 +192,18 @@ impl ServiceHandle {
     /// `team.bot_add`. The bot is listed once the service's answer is folded in.
     pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
+            .await
+    }
+
+    /// `task.done`. The card moves to Done when the read that follows the answer lands.
+    pub async fn finish_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskDone { task, reply }))
+            .await
+    }
+
+    /// `task.reopen`. The card moves back to Open when the read that follows the answer lands.
+    pub async fn reopen_task(&self, task: String) -> Result<Task, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::TaskReopen { task, reply }))
             .await
     }
 
