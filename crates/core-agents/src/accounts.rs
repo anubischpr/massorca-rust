@@ -331,6 +331,14 @@ impl Agents {
             None => self.store().get_active_agent_account(kind)?,
         };
         let Some(account) = chosen else {
+            // A kind that had an account, and has none now, is not sent back to the vendor's usual home: its login may be
+            // the person's own (decision 0059). Only a kind that never had an account keeps the usual home.
+            if self.store().kind_has_had_account(kind)? {
+                return Err(AgentError::new(
+                    codes::AGENT_CREDENTIALS_INVALID,
+                    format!("the active account for {kind} was removed; choose or add an account"),
+                ));
+            }
             return Ok(AccountUse::default());
         };
         if self.account_busy().removing.contains(&account) {
@@ -425,7 +433,11 @@ impl Agents {
                         credentials::usable_account_home(&profile, &row.kind, &row.id),
                         Ok(None)
                     );
-                    if gone {
+                    // Only a crash leftover: the 0056 home is still there to be moved again. A migrated home lost by hand
+                    // keeps its row, and the kind refuses to start until its account is removed or replaced.
+                    let legacy_present =
+                        matches!(credentials::usable_home(&profile, &row.kind), Ok(Some(_)));
+                    if gone && legacy_present {
                         tracing::warn!(kind = %row.kind, "a migrated account has no home; its row is deleted");
                         let _ = self.store().delete_agent_account(&row.id);
                     }
@@ -458,13 +470,18 @@ impl Agents {
                 }
             }
         }
-        let open: Vec<(String, String)> = match self.store().list_all_agent_accounts() {
+        // Only a sign-in still open is decided here. A `needs_sign_in` state alone can be an imported or migrated account
+        // whose check failed, and such a login is never discarded at startup (decision 0059).
+        let open: Vec<(String, String)> = match self.store().list_pending_sign_ins() {
             Ok(rows) => rows
                 .into_iter()
-                .filter(|row| parse_state(&row.state) == AccountState::NeedsSignIn)
+                .filter(|row| row.origin == ORIGIN_SIGN_IN)
                 .map(|row| (row.kind, row.id))
                 .collect(),
-            Err(_) => Vec::new(),
+            Err(error) => {
+                tracing::error!(code = %error, "the open sign-ins could not be read at startup");
+                Vec::new()
+            }
         };
         if !open.is_empty() {
             let agents = self.clone();
@@ -529,12 +546,15 @@ impl Agents {
             state: state_name(AccountState::Migrated).to_owned(),
             origin: ORIGIN_MIGRATED.to_owned(),
         })?;
+        // The active mark is recorded before the move, so a crash after the move leaves the kind on this account, never on
+        // the usual home. A move that fails takes the row, and with it the mark; the kind's history record stays, so the
+        // kind refuses to start until an account is activated, and the next start tries the move again.
+        if !had_active {
+            self.store().set_active_agent_account(kind, &account)?;
+        }
         if let Err(error) = credentials::adopt_legacy_home(self.profile_dir(), kind, &account) {
             let _ = self.store().delete_agent_account(&account);
             return Err(error);
-        }
-        if !had_active {
-            self.store().set_active_agent_account(kind, &account)?;
         }
         tracing::info!(kind, "made the credential home an account");
         Ok(())

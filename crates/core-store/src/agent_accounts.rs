@@ -155,3 +155,56 @@ impl Store {
         Ok(removed > 0)
     }
 }
+
+impl Store {
+    /// Inserts the row of a sign-in that is still open, so the startup sweep may decide it (decision 0059). The row and its
+    /// pending mark are written together.
+    pub fn insert_pending_sign_in(&self, row: &AgentAccountRow) -> Result<(), StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO agent_accounts (id, kind, label, created_at, identity, state, origin, sign_in_pending) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+            params![
+                row.id,
+                row.kind,
+                row.label,
+                row.created_at,
+                row.identity,
+                row.state,
+                row.origin
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The sign-ins still open, oldest first. Only these are the startup sweep's to decide.
+    pub fn list_pending_sign_ins(&self) -> Result<Vec<AgentAccountRow>, StoreError> {
+        self.query_all(
+            &format!("{SELECT_ACCOUNTS} WHERE sign_in_pending = 1 ORDER BY created_at, id"),
+            [],
+            account_from_row,
+        )
+    }
+
+    /// Marks an account's sign-in open or decided. Returns whether the account exists.
+    pub fn set_agent_account_pending(&self, id: &str, pending: bool) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_accounts SET sign_in_pending = ?2 WHERE id = ?1",
+            params![id, pending],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Whether the kind has ever had an account. The record outlives its accounts, so a kind that had one is never sent
+    /// back to the agent's usual home (decision 0059).
+    pub fn kind_has_had_account(&self, kind: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT 1 FROM agent_account_history WHERE kind = ?1",
+                [kind],
+                |_| Ok(()),
+            )?
+            .is_some())
+    }
+}

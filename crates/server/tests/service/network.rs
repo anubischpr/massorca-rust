@@ -5,14 +5,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use massorca_client::{Client, ClientError, HostRecord, Hosts};
+use massorca_core_store::Store;
 use massorca_net::TlsIdentity;
+use massorca_protocol::methods::agents;
 use massorca_protocol::methods::devices::{
     self, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret, WhoAmI,
 };
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
-use massorca_server::{ListenSpec, NetworkConfig, RunningService, Service};
+use massorca_server::{ListenSpec, NetworkConfig, RunningService, Scopes, Service};
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
@@ -366,5 +368,67 @@ async fn a_hello_without_auth_gets_no_service() {
         .await
         .unwrap();
     assert!(closed.is_none(), "{closed:?}");
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_is_refused_every_agent_account_write_and_may_list() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    // The pairing flow grants `read` and `workspace`; hold this device to `read` alone, then reconnect so it is checked.
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let standard_set = Scopes::STANDARD.names();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|device| device.scopes == standard_set)
+        .expect("the paired device holds the standard scopes");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("the narrowed device reconnects");
+
+    let kind = "fake";
+    let account = "0195c0de-0000-7000-8000-000000000001";
+    let writes = [
+        (agents::ACCOUNTS_ADD, serde_json::json!({ "kind": kind })),
+        (
+            agents::ACCOUNTS_IMPORT,
+            serde_json::json!({ "kind": kind, "from": "/no-such-source" }),
+        ),
+        (
+            agents::ACCOUNTS_ACTIVATE,
+            serde_json::json!({ "kind": kind, "account": account }),
+        ),
+        (
+            agents::ACCOUNTS_REMOVE,
+            serde_json::json!({ "kind": kind, "account": account }),
+        ),
+        (
+            agents::ACCOUNTS_CHECK,
+            serde_json::json!({ "kind": kind, "account": account }),
+        ),
+    ];
+    for (method, params) in writes {
+        let denied = reader
+            .call::<_, serde_json::Value>(method, &params)
+            .await
+            .expect_err("denied");
+        assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED, "{method}");
+    }
+    let listed: serde_json::Value = reader
+        .call(agents::ACCOUNTS_LIST, &serde_json::json!({ "kind": kind }))
+        .await
+        .expect("a read is allowed to a read-only device");
+    assert_eq!(listed["accounts"], serde_json::json!([]));
     stop(running).await;
 }
