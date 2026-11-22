@@ -135,15 +135,24 @@ owner then makes the home private once with `massorca profile secure`.
   `hosts` and the host folder open with `open_private_dir`, without
   following links: a pinned handle on Windows, an
   `O_NOFOLLOW | O_DIRECTORY` descriptor on Unix. An existing link at
-  either is refused, and so is an existing folder whose access lets others
-  change it (`profile.writable_by_others`). That check is made on the folder
-  itself, because the scan cache can skip it. Such a folder is refused, not
-  tightened: as with the root, its content could have been changed.
-  Files are written through the open folder, on Unix relative to its
-  descriptor (`openat` with `O_CREAT | O_EXCL | O_NOFOLLOW`, then
-  `renameat`). `remove` moves the host folder aside under a unique name
-  through its open handle (`FileRenameInfo` on Windows, `renameat` on Unix),
-  and deletes only the moved folder. `Client::pair` checks before it uses
+  either is refused. The folder's own access is checked too, because the
+  scan cache can skip it. Write access for others is refused
+  (`profile.writable_by_others`): its content could have been changed. On
+  Windows read access for others is refused as well
+  (`profile.readable_by_others`), because the folder holds a device key,
+  and a folder only the accepted owners and Administrators can reach is
+  given the owner-only DACL. On Unix a folder others can only read (such as
+  `0755` or `0750`) is set to `0700`. Files are written through a temporary
+  file with a random name, created new and the owner's alone from the start
+  (an owner-only descriptor passed to `CreateFileW` on Windows, `openat`
+  with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode `0600` on Unix), renamed
+  into place, and deleted on any failure. `remove` renames the host folder
+  through its open handle to a tombstone with a random name
+  (`FileRenameInfo` on Windows, `renameat` on Unix), then deletes the
+  tombstone by path inside the held `hosts` folder with
+  `fs::remove_dir_all`, which never follows links. `list` skips tombstones
+  and temporary files, and `add` and `remove` delete those a crash left,
+  retrying each a few times. `Client::pair` checks before it uses
   the offer, which works only once. Autostart first checks the location
   without creating anything (a link home needs a safe parent, an existing
   home and `profiles` pass the ancestor check, the root is not a link),

@@ -57,7 +57,16 @@ impl Hosts {
         };
         let mut hosts = Vec::new();
         for entry in entries {
-            let path = entry?.path().join(HOST_FILE);
+            let entry = entry?;
+            // A folder an interrupted removal or write left behind is not a host.
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(massorca_profile::is_leftover)
+            {
+                continue;
+            }
+            let path = entry.path().join(HOST_FILE);
             match read_record(&path) {
                 Ok(Some(record)) => hosts.push(record),
                 Ok(None) => {}
@@ -109,7 +118,9 @@ impl Hosts {
         }
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        hosts.sweep_leftovers()?;
         let host = hosts.child(&record.name)?;
+        host.sweep_leftovers()?;
         let (key_pem, cert_pem) = identity.to_pem().map_err(|error| {
             ClientError::Protocol(format!("cannot save the device key: {error}"))
         })?;
@@ -126,12 +137,13 @@ impl Hosts {
     /// only the moved folder is deleted.
     pub fn remove(&self, name: &str) -> Result<(), ClientError> {
         validate_host_name(name)?;
-        let dir = self.dir.join(name);
-        if !dir.join(HOST_FILE).exists() {
+        if !self.dir.join(name).join(HOST_FILE).exists() {
             return Err(ClientError::HostNotFound(name.to_owned()));
         }
         massorca_profile::secure_root(&self.profile)?;
-        massorca_profile::open_private_dir(&self.dir)?.remove_child_dir(name)?;
+        let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        hosts.sweep_leftovers()?;
+        hosts.remove_child_dir(name)?;
         Ok(())
     }
 }
@@ -376,6 +388,80 @@ mod tests {
         match Hosts::of(&profile).add(&office(), &identity) {
             Err(crate::ClientError::ProfileRefused(body)) => {
                 assert_eq!(body.code, "profile.writable_by_others", "{body:?}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert!(!hosts.join("office").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_tombstone_left_by_a_crash_is_not_listed_and_is_swept_on_add_and_remove() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        let hosts = Hosts::of(&profile);
+        hosts.add(&office(), &identity).expect("a host");
+        let dir = profile.dir().join("hosts");
+        let crashed = |suffix: &str| {
+            let tombstone = dir.join(format!(
+                "{}office-{suffix}",
+                massorca_profile::TOMBSTONE_PREFIX
+            ));
+            std::fs::create_dir(&tombstone).expect("a tombstone");
+            std::fs::write(tombstone.join("host.json"), b"{\"name\":\"office\"}")
+                .expect("a host file");
+            std::fs::write(tombstone.join("device.key"), b"old key").expect("a key left behind");
+            tombstone
+        };
+
+        let first = crashed("first");
+        let listed: Vec<String> = hosts
+            .list()
+            .expect("listed")
+            .into_iter()
+            .map(|host| host.name)
+            .collect();
+        assert_eq!(listed, vec!["office".to_owned()]);
+
+        let mut other = office();
+        other.name = "home".to_owned();
+        hosts.add(&other, &identity).expect("another host");
+        assert!(!first.exists(), "add swept the tombstone");
+
+        let second = crashed("second");
+        hosts.remove("office").expect("removed");
+        assert!(!second.exists(), "remove swept the tombstone");
+        let listed: Vec<String> = hosts
+            .list()
+            .expect("listed")
+            .into_iter()
+            .map(|host| host.name)
+            .collect();
+        assert_eq!(listed, vec!["home".to_owned()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn adding_a_host_to_a_hosts_folder_others_can_read_is_refused() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let hosts = profile.dir().join("hosts");
+        drop(massorca_profile::open_private_dir(&hosts).expect("hosts"));
+        let granted = std::process::Command::new("icacls")
+            .arg(&hosts)
+            .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
+            .output()
+            .expect("icacls runs");
+        assert!(
+            granted.status.success(),
+            "{}",
+            String::from_utf8_lossy(&granted.stderr)
+        );
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+
+        match Hosts::of(&profile).add(&office(), &identity) {
+            Err(crate::ClientError::ProfileRefused(body)) => {
+                assert_eq!(body.code, "profile.readable_by_others", "{body:?}");
             }
             other => panic!("expected a refusal, got {other:?}"),
         }
