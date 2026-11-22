@@ -36,7 +36,7 @@ mod tests {
     fn settings_lists_only_the_installed_agents_by_name() {
         let links = installed_agent_links(&SampleMarketplaceSource::default().snapshot());
         let names: Vec<&str> = links.iter().map(|link| link.name.as_str()).collect();
-        assert_eq!(names, ["Claude", "Gemini CLI"]);
+        assert_eq!(names, ["Claude", "Codex"]);
         assert_eq!(links[0].state, "Connected");
         assert_eq!(links[0].item, MarketplaceItemId(1));
     }

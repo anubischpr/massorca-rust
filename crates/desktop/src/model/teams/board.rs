@@ -64,6 +64,7 @@ impl TeamsState {
     /// Picks a card up. Only one card can be picked up at a time.
     pub fn pick_task(&mut self, board: BoardOwner, task: TaskId) -> Result<(), TeamError> {
         self.require_connected()?;
+        self.set_notice(None);
         let tasks = self.tasks(board).ok_or(TeamError::Missing)?;
         let at = tasks
             .iter()
