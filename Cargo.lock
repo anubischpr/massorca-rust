@@ -3786,6 +3786,7 @@ dependencies = [
  "massorca-core-vault",
  "massorca-core-watch",
  "massorca-core-workspace",
+ "massorca-ext-package",
  "massorca-net",
  "massorca-profile",
  "massorca-protocol",
