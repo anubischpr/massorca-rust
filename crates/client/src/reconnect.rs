@@ -143,9 +143,11 @@ impl Retry {
         }
     }
 
+    /// Cancel-safe: a wait cut short by another branch of a `select!` keeps its schedule.
     async fn wait(&mut self) {
-        if let Some(at) = self.retry_at.take() {
+        if let Some(at) = self.retry_at {
             tokio::time::sleep_until(at.into()).await;
+            self.retry_at = None;
         }
     }
 
