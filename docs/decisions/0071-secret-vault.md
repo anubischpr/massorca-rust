@@ -273,17 +273,40 @@ massorca secret reset-key
     still see the run, its state and its mark. `agent.changed` carries the
     session id only. `terminal.show`, `terminal.kill`, `terminal.close`,
     `agent.stop` and `agent.forget` stay ungated.
+  - The mark is sticky and lives on the terminal record too: a terminal
+    created for a run that got secrets keeps it for its whole life in the
+    registry, exited included, and a later resume never clears the session's
+    mark. A run marked only through its parent still refuses a dangerous
+    caller variable.
   - Residual risk: a HostAdmin client sees whatever the agent prints, its
     environment included.
+- **The trust boundary, as ruled.** Workspace scope on a host can create
+  terminals that run any program as the host user, so holding it is
+  equivalent to acting as that user on that host. On Windows the vault key is
+  user-scope DPAPI, so such a process could unwrap it; on every system it can
+  read the files agents wrote in the workspace. The scope gating above
+  therefore protects against Read-scope clients, against accidental display,
+  and against other OS users. It is defence in depth, not a boundary against a
+  Workspace-scope device.
+- **Open design item**, not in this change: a real boundary needs pairing
+  scopes that exclude `terminal.create` and arbitrary programs, or OS-level
+  isolation of the vault.
 - **Dangerous names**, refused when a secret is set, linked or requested
   (`secret.reserved_name`) and again at launch, compared without case: `PATH`,
   `PATHEXT`, `COMSPEC`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`,
   `TEMP`, `TMPDIR`, `SHELL`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`,
-  `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`, every `LD_*`, `DYLD_*`, `PYTHON*`,
-  `GIT_*` and `SSH_*` name, every `*_BASE_URL`, `OPENAI_API_BASE` and
+  `RUBYOPT`, `PERL5OPT`, `PERL5LIB`, `RUBYLIB`, `JAVA_TOOL_OPTIONS`,
+  `_JAVA_OPTIONS`, `CLASSPATH`, `EDITOR`, `VISUAL`, `PAGER`, `SYSTEMROOT`,
+  `WINDIR`, the proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+  `ALL_PROXY`, `NO_PROXY`, `NODE_TLS_REJECT_UNAUTHORIZED`,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`,
+  `REQUESTS_CA_BUNDLE`, `OPENSSL_CONF`), every `LD_*`, `DYLD_*`, `PYTHON*`,
+  `GIT_*`, `SSH_*`, `BASH_FUNC_*` and `NPM_CONFIG_*` name, every `*_BASE_URL`,
+  `OPENAI_API_BASE` and
   `CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY`. Provider API keys stay allowed:
   they are what the vault is for. A caller's `env` cannot add a dangerous name
-  to a run that holds secrets (`request.invalid_params`).
+  to a marked run, including one marked only through its parent
+  (`request.invalid_params`).
 - Profile backups contain ciphertext only. A restore on another machine opens
   as `locked` until the key is restored.
 - On a host whose key protection is `file`, anyone who can read the profile
