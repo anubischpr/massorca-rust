@@ -83,6 +83,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let profile = Profile::resolve(home, profile)?;
             block_on(agent::execute(&profile, autostart, command, output, json))
         }
+        Commands::Git { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            block_on(crate::git::execute(&profile, autostart, command, output))
+        }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
 }

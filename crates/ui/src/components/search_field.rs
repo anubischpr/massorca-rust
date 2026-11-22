@@ -119,6 +119,7 @@ impl SearchField {
                 .placeholder(placeholder)
                 .leading_icon(IconName::Search)
                 .clearable()
+                .search()
                 .with_text(query)
         });
         let field_events = cx.subscribe(&field, Self::on_field_event);
