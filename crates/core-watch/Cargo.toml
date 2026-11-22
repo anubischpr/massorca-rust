@@ -12,6 +12,7 @@ notify.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+massorca-process.workspace = true
 dunce.workspace = true
 tempfile.workspace = true
 

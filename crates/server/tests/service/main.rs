@@ -22,6 +22,7 @@ mod handshake;
 mod lifecycle;
 mod network;
 mod projects;
+mod reconnect;
 mod registries;
 mod secrets;
 mod secrets_hardening;

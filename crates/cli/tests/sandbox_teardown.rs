@@ -5,7 +5,7 @@ mod harness;
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use harness::{Sandbox, eventually};
 
@@ -92,7 +92,7 @@ fn opened_lock(_dir: &Path, profile: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn kill(pid: u32) {
-    let _ = Command::new("kill")
+    let _ = massorca_process::command("kill")
         .args(["-KILL", &pid.to_string()])
         .status();
 }
@@ -105,7 +105,7 @@ fn service_processes(profile: &str) -> Vec<u32> {
          Where-Object {{ $_.CommandLine -match 'service run --profile {profile}(\\s|$)' }} | \
          ForEach-Object {{ $_.ProcessId }}"
     );
-    let output = Command::new("powershell")
+    let output = massorca_process::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .stdin(Stdio::null())
         .output()
@@ -125,7 +125,7 @@ fn opened_lock(dir: &Path, _profile: &str) -> bool {
 
 #[cfg(windows)]
 fn kill(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = massorca_process::command("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

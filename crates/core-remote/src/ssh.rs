@@ -2,7 +2,6 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use thiserror::Error;
@@ -75,7 +74,7 @@ impl SystemSsh {
 
 impl RemoteShell for SystemSsh {
     fn run(&self, command: &str, stdin: Option<&[u8]>) -> Result<RemoteOutput, SshError> {
-        let mut ssh_command = Command::new(&self.program);
+        let mut ssh_command = massorca_process::command(&self.program);
         ssh_command.args(self.arguments(command));
         let captured = process::run_captured(ssh_command, stdin, COMMAND_TIMEOUT).map_err(
             |err| match err {

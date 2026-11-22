@@ -1,11 +1,12 @@
 //! The dialog that adds or rotates a secret from Settings (X-VT-01, decision 0071). The value is typed into a masked
 //! field or pasted there: the field paints bullets, and its Show button reveals only the value being typed. Save sends
-//! the value once and clears the field as it goes, and the dialog closes only when the service has stored it.
+//! the value once and locks the field until the service answers. A stored value clears the field and closes the
+//! dialog; a refusal keeps the value in the field so the save can be retried.
 
 use std::fmt;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, Subscription, WeakEntity, Window, div, px};
+use gpui::{AnyElement, App, Context, Entity, EntityId, Subscription, WeakEntity, Window, div, px};
 use massorca_protocol::methods::secrets::SecretEntry;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogWidth};
@@ -28,7 +29,7 @@ pub(super) struct VaultDialog {
     pub(super) form: SecretForm,
     /// The name an add types. A rotation shows its name as text and has no field.
     pub(super) name_field: Option<Entity<TextField>>,
-    /// The value, typed or pasted. Save reads it and clears it as the value is sent.
+    /// The value, typed or pasted. Save reads it; it stays here until the service stores it or the dialog closes.
     pub(super) value_field: Entity<TextField>,
     /// Redraws the dialog as the name changes, so Save follows what is typed.
     _name_changes: Option<Subscription>,
@@ -155,8 +156,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Save: checks the name, reads the value from the field and sends it once. The field is cleared as the value
-    /// goes, and the dialog stays until the service stores the secret.
+    /// Save: checks the name, then sends the value the field holds once. The field is locked while the service
+    /// answers and keeps the value, so a refused save can be retried as it is.
     pub(super) fn save_secret(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let service = self.service.clone();
         let Some(dialog) = self.vault_dialog.as_mut() else {
@@ -169,22 +170,24 @@ impl Shell {
             Some(field) => field.read(cx).text().to_owned(),
             None => dialog.form.name.clone(),
         };
-        let value = dialog.value_field.read(cx).text().to_owned();
         let Some(service) = service else {
             let refusal = Refusal::unavailable("The service is not connected.");
             dialog.form.refused(refusal_sentence(&refusal, &name));
             cx.notify();
             return;
         };
-        match dialog.form.request(&name, &value) {
+        match dialog
+            .form
+            .request(&name, dialog.value_field.read(cx).text())
+        {
             Ok(params) => {
-                dialog
-                    .value_field
-                    .update(cx, |field, cx| field.clear_text(window, cx));
                 dialog.lock_fields(true, cx);
-                cx.spawn(async move |this, cx| {
+                let dialog_id = dialog.value_field.entity_id();
+                cx.spawn_in(window, async move |this, cx| {
                     let result = service.secret_set(params).await;
-                    let _ = this.update(cx, |shell, cx| shell.secret_answered(&name, result, cx));
+                    let _ = this.update_in(cx, |shell, window, cx| {
+                        shell.secret_answered(dialog_id, &name, result, window, cx)
+                    });
                 })
                 .detach();
             }
@@ -193,28 +196,43 @@ impl Shell {
         cx.notify();
     }
 
-    /// The service's answer to a save: stored closes the dialog, and a refusal keeps it open, unlocks it and says why.
+    /// The service's answer to a save: stored clears the value and closes the dialog; a refusal keeps the value,
+    /// unlocks the fields and says why. An answer for a dialog that is no longer open is dropped, so it never
+    /// acts on a newer dialog.
     fn secret_answered(
         &mut self,
+        dialog_id: EntityId,
         name: &str,
         result: Result<SecretEntry, Refusal>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let answers_open_dialog = self
+            .vault_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.value_field.entity_id() == dialog_id);
+        if !answers_open_dialog {
+            return;
+        }
         match result {
-            Ok(_) => self.vault_dialog = None,
+            Ok(_) => self.close_secret_dialog(window, cx),
             Err(refusal) => {
                 if let Some(dialog) = self.vault_dialog.as_mut() {
                     dialog.form.refused(refusal_sentence(&refusal, name));
                     dialog.lock_fields(false, cx);
                 }
+                cx.notify();
             }
         }
-        cx.notify();
     }
 
-    /// Cancel, Escape or the scrim: the dialog goes, and the value it held with it.
-    pub(super) fn close_secret_dialog(&mut self, cx: &mut Context<Self>) {
-        self.vault_dialog = None;
+    /// Cancel, Escape or the scrim: the value is cleared from the field, then the dialog goes.
+    pub(super) fn close_secret_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.vault_dialog.take() {
+            dialog
+                .value_field
+                .update(cx, |field, cx| field.clear_text(window, cx));
+        }
         cx.notify();
     }
 }
@@ -264,8 +282,8 @@ pub(super) fn secret_dialog(
         .on_action(move |window, cx| {
             let _ = save.update(cx, |shell, cx| shell.save_secret(window, cx));
         })
-        .on_dismiss(move |_, cx| {
-            let _ = dismiss.update(cx, |shell, cx| shell.close_secret_dialog(cx));
+        .on_dismiss(move |window, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.close_secret_dialog(window, cx));
         });
     if let FormStatus::Refused(text) = &form.status {
         view = view.error(text.clone());
@@ -324,7 +342,7 @@ fn value_field(
     theme: &Theme,
 ) -> AnyElement {
     let state = if has_value {
-        "A value is ready. It is sent on save, then cleared from this dialog."
+        "A value is ready. It is sent on save and cleared once the vault stores it."
     } else {
         "Type the value, or copy it and choose Paste value."
     };

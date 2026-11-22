@@ -6,6 +6,9 @@ Run 2026-11-21 by the Phase 3 session. Code: branch `phase3/cli` (the tip of the
 Phase 3 chain, which sits on the Phase 2 terminal chain). Design: decisions 0040
 to 0047 and `docs/architecture/network.md`.
 
+Sections 1 to 4 are the first run. Section 5 is the redeploy from `main` after
+the security fixes, run 2026-11-22, and "Rerun it" lists the commands to repeat it.
+
 ## Environments
 
 | Role | Machine | Build |
@@ -153,23 +156,303 @@ $ ls -la ~/.massorca/home/profiles/default/network
 Paired devices left on the server: `win-desktop` (active, its key is in the
 throwaway client home on this machine) and `second-device` (revoked).
 
-## After the security review
+## 5. Redeploy from main after the security fixes (2026-11-22)
 
-The independent security review of the Phase 3 chain found a revocation race
-(a device revoked while it was connecting could keep its connection) and
-asked for hardening of pairing limits, unauthenticated connections, `PATH`
-lookup, Windows key files and logging; the fixes are on
-`phase3/security-fixes`. The server on the VPS still runs the build from
-before those fixes. It listens on the tailnet address only, so it stays up
-until the fixes are merged. Then the new binary replaces
-`~/.massorca/bin/massorca` and the unit restarts; the server key and the paired
-devices live in `~/.massorca/home` and are kept. This section will record that
-redeploy.
+Sections 1 to 4 ran the build from before the security review. On 2026-11-22
+the server was redeployed from `main` at `612dd983` (the merge of the security
+fixes) and every check below was run again against it. Only the redeployed
+build is described in this section.
+
+### Build
+
+| Role | Build |
+|---|---|
+| Client | `cargo build --release --locked -p massorca-cli` on Windows 11 |
+| Server | `cargo zigbuild --release --locked -p massorca-cli --target x86_64-unknown-linux-gnu.2.31` on Windows 11 (cargo-zigbuild 0.24.1, zig 0.17.1 from `uv tool install ziglang`); the binary needs glibc 2.30 at most |
+
+WSL was not used: it was unavailable on this machine during the run.
+
+### Redeploy
+
+The store's migrations were renumbered when the agent sessions table landed
+before the devices table on `main`, so the database written by the old build
+cannot be opened by the new one. The service was stopped, the old database and
+binary were moved to `~/.massorca/backup-20261122/`, and the server key in
+`~/.massorca/home/profiles/default/network` was kept. Paired devices were
+therefore paired again, from a new throwaway client home.
+
+```
+$ systemctl --user stop massorca                       (on the VPS)
+$ mv ~/.massorca/home/profiles/default/store.sqlite3* ~/.massorca/backup-20261122/
+$ massorca host add-ssh deploy@100.64.0.10 --name vps \
+    --binary massorca-linux-x86_64 --device-name win-desktop \
+    --ssh-arg=-i --ssh-arg=<key> --ssh-arg=-o --ssh-arg=UserKnownHostsFile=<checked file>
+Checking the remote system
+Uploading the binary
+Writing the systemd user unit
+Waiting for the service
+Creating a pairing offer
+installed massorca on deploy@100.64.0.10 (Linux x86_64)
+binary: ~/.massorca/bin/massorca
+unit: ~/.config/systemd/user/massorca.service
+service version: unknown
+host: vps
+server: vps
+address: 100.64.0.10:7347
+address: vps.example.ts.net:7347
+pin: sha256:<server-pin>
+device: win-desktop (01a203ac-bec9-7265-8725-318b3243a2cd)
+scopes: read, workspace, host-admin, device-admin
+paired: 2026-11-22 14:33 UTC
+[exit 0]
+```
+
+The pin is the same as on 2026-11-21: the server key survived the redeploy.
+
+### Results
+
+| Check | Result |
+|---|---|
+| Connect, `device whoami`, `server status` | passed: connected, listening on `100.64.0.10:7347` only |
+| Folder workspace and a terminal | passed (second attempt, see below) |
+| Git through the remote: worktree, status, stage, commit, log, branches | passed |
+| Pair a second device; replay the same offer | passed: paired; replay refused with `pairing.invalid`, exit 4 |
+| Second device without `device-admin` | passed: `permission.denied` |
+| Revoke while the device is connected and connecting | passed, with one finding (see below) |
+| Restart the server, reconnect | passed: data and revocation kept |
+| Tailscale path | passed: `host discover` finds the server listening |
+
+**Folder workspace and terminal.** The first `workspace create demo w1 --path
+.../demo/w1` failed with `path.not_found`: `main` now registers a folder
+workspace only when the folder exists, and the folder had not been made. With
+the folder made first:
+
+```
+$ massorca --host vps project add /home/deploy/.massorca/demo --folder --name demo
+added project demo (folder) at /home/deploy/.massorca/demo
+$ massorca --host vps workspace create demo w1 --path /home/deploy/.massorca/demo/w1
+created workspace w1 (folder) at /home/deploy/.massorca/demo/w1
+$ massorca --host vps terminal create w1 --shell /bin/bash --title m2
+$ massorca --host vps terminal send <id> 'echo M2-from-windows $(uname -sr)'
+$ massorca --host vps terminal screen <id>
+[deploy@vps w1]$ echo M2-from-windows $(uname -sr)
+M2-from-windows Linux 7.2.9-arch1-1
+$ massorca --host vps terminal close <id>
+```
+
+**Git through the remote.** A repository with one commit was made on the VPS
+over SSH (`~/.massorca/demo-git`). Everything else ran from Windows:
+
+```
+$ massorca --host vps project add /home/deploy/.massorca/demo-git --git --name demo-git \
+    --workspaces-root /home/deploy/.massorca/workspaces
+$ massorca --host vps workspace create demo-git w2 --branch m2-check
+created workspace w2 (worktree) at /home/deploy/.massorca/workspaces/w2
+$ massorca --host vps terminal send <id> 'echo from-m2 > m2.txt'
+$ massorca --host vps git status -w w2
+on m2-check
+?? m2.txt
+$ massorca --host vps git stage --all -w w2
+staged
+$ massorca --host vps git commit -m 'm2: a commit made from Windows' -w w2
+[m2-check 2e1581e1b411] m2: a commit made from Windows
+$ massorca --host vps git log -w w2
+2e1581e1b411 m2 m2: a commit made from Windows
+49c33c84b5cc m2 init
+$ massorca --host vps git branches -w w2
+* m2-check 2e1581e1b411
+  main 49c33c84b5cc (checked out elsewhere)
+```
+
+Without `--workspaces-root`, the first attempt put the worktree under the
+default root `~/massorca/workspaces`, outside the install folder. That
+attempt was removed (`workspace rm w2 --force`, `project rm demo-git`, the
+directory deleted) before the run above.
+
+**Revocation, including the race fixed by the security review.** The second
+device (`read`, `workspace`) held a live `git watch -w w2` stream, and a loop
+ran `device whoami` as the second device 60 times in a row, one connection
+after another. `win-desktop` revoked the device while both were running:
+
+```
+$ massorca --host vps device revoke second-device
+revoked second-device (01a203af-a781-7204-b582-4b5ece1c50f8)
+git watch ended on its own when the revoke returned
+loop: 60 calls, 2 succeeded, 58 refused; started after the revoke returned: 57, of which succeeded: 0
+$ massorca --host vps workspace list                  (as second-device)
+error: this device's access was revoked; pair it again to reconnect (auth.device_revoked)
+[exit 4]
+```
+
+No connection that started after the revoke returned was admitted, and the open
+stream was closed. The exact interleaving of the race (a revoke between reading
+the device row and registering the connection) cannot be forced from outside;
+it is covered by the server test
+`a_revoke_between_the_row_read_and_registration_refuses_the_device`.
+
+Finding: the revoked `git watch` printed `watching` and then exited **0** with
+no message. A stream the server closes because the device was revoked should
+end with `auth.device_revoked` and a non-zero exit. Not fixed here.
+
+**Restart.**
+
+```
+$ systemctl --user restart massorca                   (on the VPS)
+$ massorca host status vps
+vps: connected, server 0.1.0, scopes read, workspace, host-admin, device-admin
+$ massorca --host vps device whoami
+device: win-desktop (01a203ac-bec9-7265-8725-318b3243a2cd)
+$ massorca --host vps workspace list
+w2  worktree  m2-check  /home/deploy/massorca/workspaces/demo-git/w2  ready
+$ massorca --host vps git log -w w2
+3d66a07aca82 m2 m2: a commit made from Windows
+1863b8b71f84 m2 init
+$ massorca --host vps device whoami                   (as second-device)
+error: this device's access was revoked; pair it again to reconnect (auth.device_revoked)
+[exit 4]
+```
+
+The restart ran during the first attempt, so it shows that attempt's `w2` and
+commit; that attempt was removed afterwards, as described above. Terminals end
+with the service, as documented.
+
+**Tailscale path.**
+
+```
+$ massorca host discover
+NAME        DNS NAME                    IP           OS     MASSORCA   HOST
+vps         vps.example.ts.net          100.64.0.10  linux  listening  vps
+other-node  other-node.example.ts.net   100.64.0.11  linux  no         -
+$ ss -ltn | grep -E ':(7347|6768|6775) '              (on the VPS)
+LISTEN 0  128  100.64.0.10:7347  0.0.0.0:*
+LISTEN 0  511      0.0.0.0:6768  0.0.0.0:*
+LISTEN 0  511      0.0.0.0:6775  0.0.0.0:*
+```
+
+Port 7347 listens on the Tailscale address only. Ports 6768 and 6775 belong to
+the production install, which was not touched; no firewall, `sshd` or package
+change was made.
+
+### State left on the VPS
+
+| What | Value |
+|---|---|
+| Binary | `~/.massorca/bin/massorca`, built from `612dd983` |
+| Backup of the old build | `~/.massorca/backup-20261122/` (old binary and database) |
+| Projects | `demo` (folder) and `demo-git` (git), with workspaces `w1` and `w2` |
+| Devices | `win-desktop` (active), `second-device` (revoked) |
+
+## Rerun it
+
+What a second person needs: SSH to the VPS as `deploy` over the tailnet, this
+repository at `612dd983` or later, Rust with the `x86_64-unknown-linux-gnu`
+target, and `jq`. Run from Git Bash on Windows with `MSYS_NO_PATHCONV=1` (or
+from any Linux or macOS shell). Use a new client home so nothing of yours is
+touched, and new names (`v1`, `v2`) so the state above stays.
+
+```sh
+export MSYS_NO_PATHCONV=1 MASSORCA_HOME=$PWD/validate-home
+cargo build --release --locked -p massorca-cli
+M=target/release/massorca            # massorca.exe on Windows
+SSH="ssh deploy@100.64.0.10"
+R=/home/deploy/.massorca
+
+# Pair: the offer travels from the server to the client through a pipe and is never shown.
+$SSH "MASSORCA_HOME=$R/home $R/bin/massorca --json pair offer --admin --ttl 120" \
+  | jq -r .result.offer | $M pair accept - --name vps --device-name validator
+$M host status vps
+$M --host vps server status
+
+# Folder workspace and terminal.
+$SSH "mkdir -p $R/validate/v1"
+$M --host vps project add $R/validate --folder --name validate
+$M --host vps workspace create validate v1 --path $R/validate/v1
+T=$($M --host vps --json terminal create v1 --shell /bin/bash | jq -r .result.id)
+$M --host vps terminal send "$T" 'echo hello-from-validator $(uname -sr)'; sleep 2
+$M --host vps terminal screen "$T"
+$M --host vps terminal close "$T"
+
+# Git through the remote, in the existing demo-git project.
+$M --host vps workspace create demo-git v2 --branch validate
+T=$($M --host vps --json terminal create v2 --shell /bin/bash | jq -r .result.id)
+$M --host vps terminal send "$T" 'echo v > v.txt'; sleep 2; $M --host vps terminal close "$T"
+$M --host vps git status -w v2
+$M --host vps git stage --all -w v2
+$M --host vps git commit -m 'validate: a commit from the client' -w v2
+$M --host vps git log -w v2
+
+# Second device, replay, revocation while connected and connecting.
+B=$PWD/validate-second; C=$PWD/validate-replay; mkdir -p "$B" "$C"
+O=$($M --host vps --json pair offer --ttl 120)
+jq -r .result.offer <<<"$O" | MASSORCA_HOME=$B $M pair accept - --name vps --device-name validator-second
+jq -r .result.offer <<<"$O" | MASSORCA_HOME=$C $M pair accept - --name vps --device-name replay   # expect pairing.invalid, exit 4
+unset O
+MASSORCA_HOME=$B $M --host vps device list                                                        # expect permission.denied
+(MASSORCA_HOME=$B $M --host vps git watch -w v2; echo "watch exit $?") &
+(for i in $(seq 1 60); do s=$(date -u +%s.%N); MASSORCA_HOME=$B $M --host vps device whoami >/dev/null 2>&1; echo "$s $?"; done > loop.log) &
+sleep 4; $M --host vps device revoke validator-second; REVOKED=$(date -u +%s.%N); wait
+awk -v r="$REVOKED" '$1 > r && $2 == 0 { bad++ } END { print "admitted after the revoke:", bad+0 }' loop.log   # expect 0
+MASSORCA_HOME=$B $M --host vps workspace list                                                     # expect auth.device_revoked, exit 4
+
+# Restart and reconnect.
+$SSH 'systemctl --user restart massorca'; sleep 3
+$M host status vps
+$M --host vps git log -w v2
+MASSORCA_HOME=$B $M --host vps device whoami                                                      # expect auth.device_revoked
+
+# Tailscale path.
+$M host discover
+$SSH "ss -ltn | grep 7347"                                                                        # expect the Tailscale address only
+
+# Clean up what this added.
+$M --host vps workspace rm v2 --force
+$M --host vps workspace rm v1
+$M --host vps project rm validate
+$SSH "rm -rf $R/validate"
+$M host remove vps          # revokes the validator device on the server; the branch `validate` stays in demo-git
+```
 
 ## Not checked
 
 - `host discover` against the real tailnet with a second MassOrca server (there
   is only one).
+- Connecting by the Tailscale DNS name alone: the host stores the IP and the
+  name, and only the stored host was used; the name was not tried on its own.
 - A reboot of the VPS (the unit is enabled and lingering is on, so it should
   start; not tried, to leave the production machine alone).
+- Linux client: only the Windows client was run against the server. WSL was
+  unavailable, so Linux coverage is CI plus the VPS server itself.
 - Android (M5) and the desktop UI (M4) are later milestones.
+
+## Sign-off
+
+M2 was signed off on 2026-11-22 with open items, after an independent
+validation. The validator used a client built from main `ca5685db`, against the
+deploy built from `612dd983`. It started from a fresh client home and used the
+client protocol only, with no SSH access to the VPS. The validator's device was
+paired from a single-use standard offer, with scopes read and workspace.
+
+| Check | Result |
+|---|---|
+| Pair with a single-use standard offer (19:27 UTC) | pass |
+| Remote terminal: create, send, read (`m2-validate-ok`, `Linux`), close | pass |
+| Worktree workspace in the `demo-git` project: `git status` before and after a change, then removal with its branch | pass |
+| About 15 separate commands, each reconnecting without pairing again | pass |
+| `git watch` live, reporting a worktree change | pass |
+| A device-admin call refused with `permission.denied`, exit 1 | pass |
+| After the revoke at 19:36:22 UTC: `server status`, `terminal list` and a new `git watch` each refused at once with `auth.device_revoked`, exit 4 | pass |
+
+The validator's client home, with its device key, was deleted afterwards.
+
+Open items, not verified independently:
+
+- The server side: the service unit, the listeners, and surviving a restart.
+- Reconnecting after a server restart.
+- A stream already open when its device is revoked. This is fixed in #162,
+  which is not deployed yet.
+- The revoked devices `second-device` and `m2-validate` still appear in the
+  server's device list.
+
+To close them: once #162, #165 and #166 are on main, redeploy once from main.
+Then rerun only two checks: a stream open when its device is revoked, and
+reconnecting after a server restart.
