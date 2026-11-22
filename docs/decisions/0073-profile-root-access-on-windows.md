@@ -7,53 +7,106 @@ Status: accepted, 2026-11-22. Revises the Windows part of 0004's
 
 0004 let the Windows profile directory keep the access it inherits from its
 parent, and relied on the owner-only pipe descriptor (0003). The service also
-reads files from the profile, for example `agents/kinds/*.json`. When
-`MASSORCA_HOME` sits in a folder other users can write to, another user can
-create the profile directory or plant files in it before the service first
-runs, and the service would trust them.
+reads files from the profile, for example `agents/kinds/*.json` and agent
+homes such as `agents/homes/claude/.claude/settings.json`, whose hooks run
+code as the user. When `MASSORCA_HOME` sits in a folder other users can
+change, another user can create the profile directory, plant files in it,
+rewrite files the user owns, or swap a folder on the path for a link to one
+they control.
+
+The default home, under the user's own profile, is not exposed. Every case
+above needs a home in a place other users can change, so the rule is to
+refuse such a place rather than try to make it safe.
 
 ## Decision
 
-- **At creation.** The profile root `<home>/profiles/<name>` is created with
-  `CreateDirectoryW` and a descriptor that names the current user as owner and
-  carries a protected DACL with one entry: full access for that user,
-  inherited by every file and folder below (`O:<user>D:P(A;OICI;FA;;;<user>)`).
-  The directory is never reachable by others, not even briefly. Folders made
-  later inherit from it. On Unix the root is created `0700` in one step.
-- **At every service start**, before the lock file or the store is opened,
-  the existing root is checked (`massorca_profile::secure_root`):
-  - **Refuse** when the root's owner is not the current user, or when a file
-    or folder up to four levels below it is owned by anyone other than the
-    current user, SYSTEM or Administrators, or its owner cannot be read. The
-    service fails with `ServiceError::ForeignEntries`; the CLI reports
-    `profile.foreign_entries` with up to ten paths in `data.paths`. Links are
-    read themselves, never followed.
-  - **Repair** otherwise, when the root's DACL is not the protected owner-only
-    one: the DACL is replaced, Windows passes the change on to the inherited
-    entries of everything below, and the service logs a warning naming the
-    path. On Unix a root that is not `0700` is set to `0700`.
+- **At creation.** Each missing folder of `<home>`, `<home>/profiles` and
+  `<home>/profiles/<name>` is created with `CreateDirectoryW` and a descriptor
+  that names the current user as owner and carries a protected DACL with one
+  entry: full access for that user, inherited by every file and folder below
+  (`O:<user>D:P(A;OICI;FA;;;<user>)`). The folder is never reachable by
+  others, not even briefly, and folders made later inherit from it. The
+  service, `service run` and a client that autostarts the service all create
+  them this way (`create_root`). On Unix they are created `0700` in one step.
+  Folders above the home are created as usual.
+- **At every start**, before anything in the profile is written or opened,
+  `massorca_profile::secure_root` checks, in this order:
+  1. **Location.** `<home>` and `<home>/profiles` must be owned by the user,
+     SYSTEM or Administrators, and no other SID may hold a right that changes
+     them (add a file or folder, delete a child, delete, change the DACL or
+     owner, generic write or all). `profiles` must not be a link; the home may
+     be one the user chose. Otherwise the start is refused with
+     `profile.unsafe_location`, naming the folder. On Unix an ancestor must be
+     owned by the user or root and not group- or world-writable unless it is
+     sticky.
+  2. **Root.** A root that is a link or junction is refused with
+     `profile.unsafe_location`. A root another user owns is refused with
+     `profile.foreign_entries`. A root whose DACL, inherited entries included,
+     let another SID change it is refused with `profile.writable_by_others`
+     and left as it is: files the user owns may have been rewritten, and a
+     repair would lock the changed content in. On Unix a group- or
+     world-writable root is refused the same way.
+  3. **Repair.** Otherwise, when the root's DACL is not the protected
+     owner-only one, it is replaced; Windows passes the change on to the
+     inherited entries of everything below, and a warning names the path. On
+     Unix a root that is not `0700` is set to `0700`.
+  4. **Content.** The whole tree below the root is scanned after the repair,
+     so nothing can be planted between the listing and the new access. Links
+     are read themselves, never followed. An entry another user owns, or whose
+     owner cannot be read, is refused with `profile.foreign_entries`; an entry
+     whose own DACL lets another SID change it is refused with
+     `profile.writable_by_others`. On Unix the owner must be the user or root,
+     and an entry must not be writable by others; group write is allowed,
+     since entries have sat below a `0700` root since 0004.
 
-Repair keeps an ordinary existing profile working after an upgrade. Refusal
-stops content another user may have planted before the repair from being
-trusted; the user removes it, or takes ownership, and starts again.
+  A refusal lists up to ten paths (`data.paths`, or `data.path` for a
+  location). Nothing is repaired once the location or the root is refused.
+- SIDs are compared as SIDs (`EqualSid`), never as text: SDDL writes some
+  accounts as aliases, such as `SY`, `BA` and `LA` for the built-in
+  Administrator. Every SID read from a descriptor is parsed back into its
+  binary form, SYSTEM and Administrators come from `CreateWellKnownSid`, and
+  the user from the process token. "Already owner-only" is decided from the
+  parsed DACL: protected, exactly one allow entry, full access inherited by
+  files and folders, for the user's SID. A user running as the built-in
+  Administrator is therefore neither refused nor locked out.
+- Paths are passed to Win32 in their `\\?\` form, so homes past the old
+  248-character limit work.
+
+Repair keeps an ordinary existing profile working after an upgrade: only
+trusted users could reach it, so its content is what the user left. Refusal
+does not prove that nothing was changed; it stops the service from trusting a
+profile that someone else could have changed. The user reviews it, then
+recreates the profile or removes the other users' access themselves (for
+example with `icacls`), and starts again. There is no override command.
 
 ## Alternatives
 
 - **Create, then restrict.** Leaves a window in which another user can open
-  the directory or plant files in it.
-- **Repair everything, refuse nothing.** Hides planted files behind a new
-  access list instead of exposing them.
+  the folder or plant files in it, and a handle opened then keeps its rights.
+- **Repair everything, refuse nothing.** Locks in content others could have
+  changed, and hides planted files behind a new access list.
 - **Refuse any non-private root.** Breaks every profile created before this
-  decision.
+  decision, although only the user could reach it.
+- **Check every folder up to the drive root.** Folders above the home belong
+  to whoever chose the home, and the user's own profile folders carry entries
+  for system components that a strict check would refuse.
+- **Hold a handle to the root while the service runs.** Would need every path
+  open in the service to go through it; refusing an unsafe location is
+  simpler and leaves no swappable folder.
 
 ## Consequences
 
-- `service run` checks the root before it creates the logs folder, so a refused
-  profile receives nothing, not even a log file.
+- `service run` checks the root before it creates the logs folder, so a
+  refused profile receives nothing, not even a log file.
+- Folders above the home are not checked. Someone who can change them can
+  move the home itself; choosing a home in such a place is outside this rule.
 - Entries an elevated process created belong to Administrators and are
   accepted. A root owned by Administrators is refused, since a normal user
   could not repair it.
-- An entry more than four levels deep is not checked; the folders the service
-  reads are shallower.
-- The refusal is tested with an injected owner, because setting another
-  user's owner on a file needs privileges a test does not have.
+- Every start reads the descriptor of every entry in the profile. Large
+  agent homes make the start slower.
+- A temporary folder shared with other users is an unsafe location, so tests
+  put their home one level below it, where the service creates it private.
+- A foreign owner cannot be set without a second account or privileges, so
+  those refusals are tested with an injected owner. Real descriptors are used
+  for every other case.
