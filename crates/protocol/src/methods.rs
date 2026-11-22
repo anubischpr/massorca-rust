@@ -7,6 +7,7 @@ pub mod agents;
 pub mod config;
 pub mod devices;
 pub mod events;
+pub mod extensions;
 pub mod git;
 pub mod projects;
 pub mod secrets;
