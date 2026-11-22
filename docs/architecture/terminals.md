@@ -87,8 +87,10 @@ An attach is a stream. It starts in one of two ways:
 
 A client that attaches must answer terminal queries such as the
 cursor-position request `ESC [ 6 n`, as any terminal emulator does; the
-service answers it only while nobody is attached (0034). ConPTY and
-PowerShell stall until it is answered.
+service answers it while nobody is attached, and answers a held query itself
+when another client attaches or when every client that received it has
+detached; a late client reply to an answered query is dropped (0034). ConPTY
+and PowerShell stall until it is answered.
 
 The CLI's `terminal attach` is the first interactive client, in
 `crates/cli/src/terminal_attach.rs`. On Unix it forwards raw stdin bytes, so the

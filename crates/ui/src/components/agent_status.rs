@@ -541,3 +541,20 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn an_agent_status_is_an_image_named_by_its_state_word(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(AgentStatus::new(AgentState::Running).render(window, cx))
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::Image);
+        assert_eq!(node.label(), Some(AgentState::Running.label()));
+    }
+}

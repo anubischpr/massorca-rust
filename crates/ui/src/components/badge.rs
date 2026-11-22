@@ -408,3 +408,18 @@ mod tests {
         assert_eq!(dot_colour(BadgeTone::Neutral, &p), p.badge.neutral_fg);
     }
 }
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn a_badge_adds_no_node_because_its_text_belongs_to_its_row(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(Badge::count(3).render(window, cx))
+        });
+        assert!(node.is_none());
+    }
+}

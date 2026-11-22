@@ -4,6 +4,7 @@
 //! element that opened the dialog when it closes. A destructive dialog never starts on its
 //! danger action, so Enter cannot run it by accident.
 
+use crate::a11y;
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::popover::{DismissHandler, OpenEdge, OpenTracker, overlay_surface};
 use crate::components::switch::ease;
@@ -15,9 +16,9 @@ use crate::tokens::{
     TYPE_TITLE, Z_DIALOG,
 };
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, KeyDownEvent, MouseButton, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, deferred, div, px,
+    Animation, AnimationExt, AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, RenderOnce, Role, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Window, deferred, div, px,
 };
 use std::fmt;
 use std::rc::Rc;
@@ -266,6 +267,43 @@ impl Dialog {
     }
 }
 
+/// The dialog panel, framed so that it carries the dialog's role, title and state. The panel
+/// fades in over `duration.moderate`; reduced motion shows it at once.
+fn dialog_frame(
+    id: ElementId,
+    panel: Div,
+    variant: DialogVariant,
+    title: SharedString,
+    busy: bool,
+    modal: bool,
+    cx: &App,
+) -> a11y::Annotated<Stateful<Div>> {
+    let content = if cx.reduce_motion() {
+        panel.into_any_element()
+    } else {
+        // Opacity only: GPUI in the pinned version has no scale transform for divs.
+        panel
+            .with_animation(
+                (id.clone(), "enter"),
+                Animation::new(DURATION_MODERATE),
+                |el, delta| el.opacity(ease(EASE_ENTER, delta)),
+            )
+            .into_any_element()
+    };
+    let role = match variant {
+        DialogVariant::Destructive | DialogVariant::Error => Role::AlertDialog,
+        DialogVariant::Confirm | DialogVariant::OneField => Role::Dialog,
+    };
+    a11y::annotate(a11y::framed(id, role, Some(title), content), move |node| {
+        if modal {
+            node.set_modal();
+        }
+        if busy {
+            node.set_busy();
+        }
+    })
+}
+
 impl RenderOnce for Dialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = *cx.theme();
@@ -444,20 +482,17 @@ impl RenderOnce for Dialog {
         let scrim_closes = self.dismiss_on_scrim && self.variant.scrim_dismisses(false);
         let outside = self.on_dismiss.clone();
 
-        let panel = if cx.reduce_motion() {
-            panel.into_any_element()
-        } else {
-            // Opacity only: GPUI in the pinned version has no scale transform for divs.
-            panel
-                .with_animation(
-                    (self.id.clone(), "enter"),
-                    Animation::new(DURATION_MODERATE),
-                    |el, delta| el.opacity(ease(EASE_ENTER, delta)),
-                )
-                .into_any_element()
-        };
+        let panel = dialog_frame(
+            self.id.clone(),
+            panel,
+            self.variant,
+            self.title.clone(),
+            self.busy,
+            !self.inline,
+            cx,
+        );
         if self.inline {
-            return panel;
+            return panel.into_any_element();
         }
         // The scrim is a sibling below the panel, not its parent: only a press on the scrim
         // itself dismisses. A press on the panel, or on an overlay opened from it, never reaches it.
@@ -794,5 +829,65 @@ mod element_tests {
             0,
             "a press on the menu does not dismiss the dialog"
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_confirm_dialog_is_a_modal_dialog_named_by_its_title(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            reported(dialog_frame(
+                ElementId::from("rename"),
+                div(),
+                DialogVariant::Confirm,
+                "Rename session".into(),
+                false,
+                true,
+                cx,
+            ))
+        })
+        .expect("the dialog is reported");
+        assert_eq!(node.role(), Role::Dialog);
+        assert_eq!(node.label(), Some("Rename session"));
+        assert!(node.is_modal());
+    }
+
+    #[gpui::test]
+    fn a_destructive_dialog_is_an_alert_dialog(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            reported(dialog_frame(
+                ElementId::from("delete"),
+                div(),
+                DialogVariant::Destructive,
+                "Delete secret".into(),
+                false,
+                true,
+                cx,
+            ))
+        })
+        .expect("the dialog is reported");
+        assert_eq!(node.role(), Role::AlertDialog);
+    }
+
+    #[gpui::test]
+    fn a_busy_dialog_reports_busy(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            reported(dialog_frame(
+                ElementId::from("delete"),
+                div(),
+                DialogVariant::Destructive,
+                "Delete secret".into(),
+                true,
+                true,
+                cx,
+            ))
+        })
+        .expect("the dialog is reported");
+        assert!(node.is_busy());
     }
 }

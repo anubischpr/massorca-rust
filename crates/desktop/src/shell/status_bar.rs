@@ -1,9 +1,15 @@
 //! The Status bar under the Canvas column: agent status, memory, terminals, ports and hosts
 //! (D-SH-05). Values come from the status view model; the glyphs are the shell's own.
 
+use super::Shell;
 use super::tooltip::tooltip;
-use crate::model::shell::StatusBarModel;
-use gpui::{AnyElement, Div, IntoElement, SharedString, div, prelude::*, px};
+use super::zones::region_focus_ring;
+use crate::model::shell::{ServiceStatus, ServiceTone, StatusBarModel};
+use crate::model::status_items::{StatusItem, StatusItemVisibility};
+use gpui::{
+    AnyElement, Div, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, Role, SharedString,
+    Stateful, WeakEntity, div, point, prelude::*, px,
+};
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
 };
@@ -14,11 +20,46 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
-/// The Status bar: 24 px on the Canvas surface with caption text. Items share one hover and
-/// press treatment and show their full value in a tooltip (StatusItem spec).
-pub(super) fn status_bar(status: &StatusBarModel, theme: &Theme) -> Div {
+/// The Status bar: 24 px on the Canvas surface with caption text. Agent status sits at the left;
+/// memory, terminals, ports and hosts at the right (StatusBar spec). Items share one hover and
+/// press treatment and show their full value in a tooltip (StatusItem spec). Right click, or the
+/// menu key, opens the visibility menu; the items it hides are left out (StatusBar spec).
+pub(super) fn status_bar(
+    status: &StatusBarModel,
+    service: Option<&ServiceStatus>,
+    visible: &StatusItemVisibility,
+    shell: &WeakEntity<Shell>,
+    theme: &Theme,
+) -> Stateful<Div> {
     let secondary = theme.palette.text.secondary;
-    div()
+    let open_by_mouse = shell.clone();
+    let open_by_key = shell.clone();
+    let mut bar = div()
+        .id("status-bar")
+        .role(Role::Status)
+        .aria_label("Status bar")
+        .on_mouse_down(
+            MouseButton::Right,
+            move |event: &MouseDownEvent, window, cx| {
+                let _ = open_by_mouse.update(cx, |shell, cx| {
+                    shell.open_status_menu(event.position, window, cx);
+                });
+            },
+        )
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let key = event.keystroke.key.as_str();
+            if key == "menu" || (key == "f10" && event.keystroke.modifiers.shift) {
+                // The keyboard has no pointer to anchor the menu to: it opens at the bar's left.
+                let at = point(
+                    px(SPACE_3),
+                    window.viewport_size().height - px(SIZE_STATUSBAR),
+                );
+                let _ = open_by_key.update(cx, |shell, cx| {
+                    shell.open_status_menu(at, window, cx);
+                });
+                cx.stop_propagation();
+            }
+        })
         .flex()
         .flex_row()
         .flex_none()
@@ -28,41 +69,53 @@ pub(super) fn status_bar(status: &StatusBarModel, theme: &Theme) -> Div {
         .h(px(SIZE_STATUSBAR))
         .px(px(SPACE_3))
         .bg(theme.palette.surface.canvas)
-        .text_style(TYPE_CAPTION)
-        .child(item(
+        .focus_visible(|style| style.shadow(region_focus_ring(theme)))
+        .text_style(TYPE_CAPTION);
+    if visible.is_shown(StatusItem::Agents) {
+        bar = bar.child(item(
             "status-agents",
             Some(agents_glyph(status)),
             status.agents_text(),
             status.agents_tooltip(),
             secondary,
             theme,
-        ))
-        .child(item(
+        ));
+    }
+    bar = bar.child(div().flex_1());
+    if visible.is_shown(StatusItem::Memory) {
+        bar = bar.child(item(
             "status-memory",
             None,
-            format!("Memory {}", status.memory),
+            status.memory.clone(),
             format!("Memory {}", status.memory),
             secondary,
             theme,
-        ))
-        .child(item(
+        ));
+    }
+    if visible.is_shown(StatusItem::Terminals) {
+        bar = bar.child(item(
             "status-terminals",
             Some(glyph(IconName::SquareTerminal, theme)),
             status.terminals_text(),
             status.terminals_text(),
             secondary,
             theme,
-        ))
-        .child(item(
+        ));
+    }
+    if visible.is_shown(StatusItem::Ports) {
+        bar = bar.child(item(
             "status-ports",
             Some(glyph(IconName::Plug, theme)),
             status.ports_text(),
             status.ports_text(),
             secondary,
             theme,
-        ))
-        .child(div().flex_1())
-        .child(hosts_item(status, theme))
+        ));
+    }
+    if visible.is_shown(StatusItem::Hosts) {
+        bar = bar.child(hosts_item(status, service, theme));
+    }
+    bar
 }
 
 /// One status item: an optional glyph and a caption. Its hover fill sits on the Canvas.
@@ -99,10 +152,16 @@ fn item(
     row.child(div().min_w_0().truncate().child(text))
 }
 
-/// The hosts item: a dot that is solid when every host is reached and a ring when one is not,
-/// and the count dimmed when a host is unreachable (D-SH-05).
-fn hosts_item(status: &StatusBarModel, theme: &Theme) -> impl IntoElement {
-    let unreachable = status.hosts_unreachable > 0;
+/// The hosts item. While the service link is not up it names that state instead of a host count
+/// (D-SH-05, "Service not running"). Its dot is solid when every host is reached and a ring when
+/// one is not.
+fn hosts_item(
+    status: &StatusBarModel,
+    service: Option<&ServiceStatus>,
+    theme: &Theme,
+) -> AnyElement {
+    let link = service.filter(|link| link.tone != ServiceTone::Ok);
+    let unreachable = link.is_some() || status.hosts_unreachable > 0;
     let dot = div()
         .flex_none()
         .size(px(SIZE_INDICATOR_DOT))
@@ -117,14 +176,19 @@ fn hosts_item(status: &StatusBarModel, theme: &Theme) -> impl IntoElement {
     } else {
         theme.palette.text.secondary
     };
+    let (text, tip) = match link {
+        Some(link) => (link.text.clone(), link.tooltip.clone()),
+        None => (status.hosts_text(), status.hosts_tooltip()),
+    };
     item(
         "status-hosts",
         Some(dot.into_any_element()),
-        status.hosts_text(),
-        status.hosts_tooltip(),
+        text,
+        tip,
         color,
         theme,
     )
+    .into_any_element()
 }
 
 fn glyph(name: IconName, theme: &Theme) -> AnyElement {

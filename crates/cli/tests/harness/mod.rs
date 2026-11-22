@@ -1,7 +1,8 @@
 //! Shared harness for the CLI tests.
 //!
 //! Every test gets a temporary home. It reaches the `massorca` child through that child's
-//! environment only, and a `Sandbox` stops the services of the profiles it used when dropped.
+//! environment only, and a `Sandbox` stops the services of the profiles it used when dropped,
+//! including one autostarted so late that it comes up after its first stop.
 //!
 //! Child output goes to temporary files, not pipes: an autostarted service inherits the caller's
 //! handles on Windows, and a pipe would then stay open until the service stops. The regression
@@ -10,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::fs::File;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -24,6 +25,8 @@ use tempfile::TempDir;
 /// Generous bounds: CI machines can be slow to start a service process.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Covers a late service's own ten-second wait for a lock that nothing answers for (ADR 0003).
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const WAIT: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_millis(100);
 
@@ -206,20 +209,145 @@ impl Sandbox {
     }
 }
 
-impl Drop for Sandbox {
-    /// Stops the services of the profiles this sandbox used. Best effort, and it never panics:
-    /// a test may have stopped the services already, and a panic here would abort the test run.
-    fn drop(&mut self) {
-        let profiles = std::mem::take(self.profiles.get_mut());
-        for profile in profiles {
-            let mut command = massorca_in(self.home());
-            command
-                .arg("--profile")
-                .arg(&profile)
-                .args(["service", "stop"]);
-            let _ = capture(&mut command, STOP_TIMEOUT);
+impl Sandbox {
+    /// Runs `service stop` for `profile`, ignoring its outcome.
+    fn stop_service(&self, profile: &str) {
+        let mut command = massorca_in(self.home());
+        command
+            .arg("--profile")
+            .arg(profile)
+            .args(["service", "stop"]);
+        let _ = capture(&mut command, STOP_TIMEOUT);
+    }
+
+    /// Stops a service of `profile` that came up after the first stop, killing it when it does not stop.
+    #[cfg(not(target_os = "linux"))]
+    fn stop_late_service(&self, profile: &str) {
+        let dir = self.profile_dir(profile);
+        if lock_is_held(&dir) {
+            self.stop_service(profile);
+        }
+        if lock_is_held(&dir) {
+            kill_recorded_service(&dir);
         }
     }
+
+    /// Waits until no process of this sandbox serves or still starts a service of `profiles`. A process holds its
+    /// profile directory as working directory and keeps files open in it, and Windows refuses to rename a directory
+    /// in that state, so a successful rename proves the profile free.
+    #[cfg(windows)]
+    fn release(&self, profiles: &BTreeSet<String>, deadline: Instant) {
+        for profile in profiles {
+            let dir = self.profile_dir(profile);
+            let released = dir.with_file_name(format!("{profile}.released"));
+            loop {
+                match std::fs::rename(&dir, &released) {
+                    Ok(()) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(_) if Instant::now() >= deadline => break,
+                    Err(_) => self.stop_late_service(profile),
+                }
+                thread::sleep(POLL);
+            }
+        }
+    }
+
+    /// Kills every process whose environment names this sandbox's home, which only processes it started carry.
+    #[cfg(target_os = "linux")]
+    fn release(&self, _profiles: &BTreeSet<String>, deadline: Instant) {
+        loop {
+            let pids = processes_in_home(self.home());
+            if pids.is_empty() || Instant::now() >= deadline {
+                return;
+            }
+            for pid in pids {
+                kill(pid);
+            }
+            thread::sleep(POLL);
+        }
+    }
+
+    /// Without a way to see a service that is still starting, only one that came up late is stopped.
+    #[cfg(not(any(windows, target_os = "linux")))]
+    fn release(&self, profiles: &BTreeSet<String>, _deadline: Instant) {
+        for profile in profiles {
+            self.stop_late_service(profile);
+        }
+    }
+}
+
+impl Drop for Sandbox {
+    /// Stops the services of the profiles this sandbox used, then waits until none of them runs or still starts.
+    /// Best effort, and it never panics: a test may have stopped the services already, and a panic here would abort
+    /// the test run.
+    fn drop(&mut self) {
+        let profiles = std::mem::take(self.profiles.get_mut());
+        for profile in &profiles {
+            self.stop_service(profile);
+        }
+        self.release(&profiles, Instant::now() + RELEASE_TIMEOUT);
+    }
+}
+
+/// `true` while a process holds the service lock of the profile in `dir`.
+fn lock_is_held(dir: &Path) -> bool {
+    let Ok(file) = OpenOptions::new().read(true).open(dir.join("service.lock")) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(TryLockError::WouldBlock))
+}
+
+/// Kills the process that the profile's `service.json` names. Only a pid this sandbox's own service recorded is trusted.
+#[cfg(not(target_os = "linux"))]
+fn kill_recorded_service(dir: &Path) {
+    let pid = std::fs::read(dir.join("service.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|info| info["pid"].as_u64());
+    if let Some(pid) = pid.and_then(|pid| u32::try_from(pid).ok()) {
+        kill(pid);
+    }
+}
+
+/// The processes, other than this one, whose environment sets `MASSORCA_HOME` to `home`.
+#[cfg(target_os = "linux")]
+fn processes_in_home(home: &Path) -> Vec<u32> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut entry = b"MASSORCA_HOME=".to_vec();
+    entry.extend_from_slice(home.as_os_str().as_bytes());
+    let Ok(processes) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    processes
+        .filter_map(Result::ok)
+        .filter_map(|process| process.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| *pid != std::process::id())
+        .filter(|pid| {
+            std::fs::read(format!("/proc/{pid}/environ"))
+                .is_ok_and(|environ| environ.split(|byte| *byte == 0).any(|var| var == entry))
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn kill(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(windows)]
+fn kill(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// A spawned child, killed when the guard drops unless it already exited.

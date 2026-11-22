@@ -122,6 +122,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))
         }
+        Commands::Git { command } => {
+            let target = globals.target()?;
+            block_on(crate::git::execute(&target, autostart, command, output))
+        }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }
 }
