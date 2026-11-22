@@ -1,6 +1,7 @@
 //! Bot Teams (capability `teams/1`, decision 0072): teams, their bots and projects, and the tasks on their Boards.
 //! Store calls run on the blocking pool, and each change publishes its event after it is committed.
 
+mod bot;
 mod selectors;
 mod team;
 
@@ -21,6 +22,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             .register(capabilities::TEAMS, Owner::Core)?,
     ];
     handles.extend(team::register(registries)?);
+    handles.extend(bot::register(registries)?);
     Ok(handles)
 }
 

@@ -53,5 +53,56 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 "properties": { "team": { "type": "string" }, "force": { "type": "boolean" } }
             }),
         ),
+        command(
+            "team.bot.add",
+            "Add a bot to a team",
+            "team.bot_add",
+            json!({
+                "type": "object",
+                "required": ["team", "name", "job", "kind"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "name": { "type": "string" },
+                    "job": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "lead": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "team.bot.update",
+            "Change a team's bot",
+            "team.bot_update",
+            json!({
+                "type": "object",
+                "required": ["team", "bot"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "name": { "type": "string" },
+                    "job": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "lead": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "team.bot.rm",
+            "Remove a bot from a team",
+            "team.bot_rm",
+            json!({
+                "type": "object",
+                "required": ["team", "bot"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "unassign": { "type": "boolean" }
+                }
+            }),
+        ),
     ]
 }
