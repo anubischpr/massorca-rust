@@ -99,7 +99,9 @@ impl Store {
     }
 
     /// Replaces a device's permission classes, as their wire names. The pairing flow sets them once; this lets a test hold
-    /// a paired device to a narrower set. Returns whether the device exists.
+    /// a paired device to a narrower set. Returns whether the device exists. Test-only: built under `cfg(test)` or the
+    /// `test-support` feature, so production code cannot call it.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_device_scopes(&self, id: &str, scopes: &[String]) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
             "UPDATE devices SET scopes = ?2 WHERE id = ?1",
