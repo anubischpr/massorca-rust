@@ -11,6 +11,8 @@ pub enum Agent {
     Gemini,
     OpenCode,
     Cursor,
+    /// A kind the desktop has no mark for, such as one the profile declares.
+    Unknown,
 }
 
 /// The six agent states (P30).

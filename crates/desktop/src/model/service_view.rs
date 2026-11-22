@@ -4,9 +4,10 @@
 
 use std::time::{Duration, Instant};
 
+use super::agent_sessions::{session_state, sessions_by_workspace};
 use super::shell::{
-    HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone, ShellSnapshot,
-    StatusBarModel, WorkspaceRow,
+    AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
+    ShellSnapshot, StatusBarModel, WorkspaceRow,
 };
 use crate::service::{ConnectionState, StoreState};
 
@@ -15,10 +16,11 @@ pub const LOCAL_HOST: &str = "This PC";
 /// The usage colours cycle over workspaces; they are labels, never status (P29).
 const USAGE_SLOTS: usize = 6;
 
-/// The snapshot for a service store: projects with their workspaces under one host row, and the
-/// service's own status. Sessions, usage and prototypes do not exist in the service yet.
+/// The snapshot for a service store: projects with their workspaces under one host row, each with the
+/// agent sessions it runs, and the service's own status. Usage and prototypes do not exist in the service yet.
 pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
     let reach = reach_of(state, now);
+    let sessions = sessions_by_workspace(state);
     let projects = state
         .projects
         .iter()
@@ -33,7 +35,7 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
                     name: workspace.name.clone(),
                     branch: workspace.branch.clone(),
                     usage_slot: u8::try_from(index % USAGE_SLOTS + 1).unwrap_or(1),
-                    sessions: Vec::new(),
+                    sessions: sessions.get(&workspace.id).cloned().unwrap_or_default(),
                 })
                 .collect();
             ProjectGroup {
@@ -50,8 +52,8 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         projects,
         usage: Vec::new(),
         status: StatusBarModel {
-            waiting: 0,
-            running: 0,
+            waiting: count_in(state, AgentState::Waiting),
+            running: count_in(state, AgentState::Running),
             memory: "-".to_owned(),
             terminals: super::terminals::running_count(state),
             ports: 0,
@@ -64,6 +66,16 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         service_status: Some(service_status(&state.connection, now)),
         service_notice: service_notice(state),
     }
+}
+
+/// How many agent sessions show `wanted`, for the Status bar's agents item.
+fn count_in(state: &StoreState, wanted: AgentState) -> u32 {
+    let count = state
+        .agents
+        .iter()
+        .filter(|session| session_state(session) == wanted)
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Connected, or unreachable for as long as the link has been down (honest state: show the age).
@@ -150,11 +162,13 @@ pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 mod tests {
     use super::*;
     use crate::model::navigation::Mode;
+    use crate::model::shell::AgentState;
     use crate::model::sidebar::{SidebarContent, TreeRow, sidebar_content};
     use crate::service::{
         StoreUpdate,
-        fixtures::{project, workspace},
+        fixtures::{agent, project, workspace},
     };
+    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
 
     fn connected() -> ConnectionState {
         ConnectionState::Connected {
@@ -326,6 +340,42 @@ mod tests {
         );
         let snapshot = service_snapshot(&state, now);
         assert_eq!(snapshot.status.hosts_text(), "1 of 1 hosts unreachable");
+    }
+
+    #[test]
+    fn live_sessions_sit_under_their_workspace_and_count_in_the_status_bar() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        let report = |state, outcome| Activity {
+            state,
+            outcome,
+            source: ActivitySource::Hook,
+            at_ms: 1,
+        };
+        let mut working = agent("s1", "w1", 10);
+        working.activity = Some(report(ActivityState::Working, None));
+        let mut waiting = agent("s2", "w1", 20);
+        waiting.activity = Some(report(ActivityState::Waiting, None));
+        let mut done = agent("s3", "w3", 30);
+        done.activity = Some(report(ActivityState::Done, Some(Outcome::Success)));
+        state.apply(StoreUpdate::AgentsResync(vec![working, waiting, done]), now);
+
+        let snapshot = service_snapshot(&state, now);
+        let listed = |project: usize, workspace: usize| {
+            snapshot.projects[project].hosts[0].workspaces[workspace]
+                .sessions
+                .iter()
+                .map(|row| (row.id.as_str(), row.state))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            listed(0, 0),
+            vec![("s1", AgentState::Running), ("s2", AgentState::Waiting)]
+        );
+        assert!(listed(0, 1).is_empty(), "a workspace with no session");
+        assert_eq!(listed(1, 0), vec![("s3", AgentState::Done)]);
+        assert_eq!(snapshot.status.running, 1);
+        assert_eq!(snapshot.status.waiting, 1);
     }
 
     #[test]
