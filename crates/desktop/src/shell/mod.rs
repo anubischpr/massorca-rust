@@ -4,6 +4,7 @@ mod actions;
 mod canvas;
 mod debug_focus;
 mod diff_page;
+mod marketplace;
 mod palette;
 mod project_sidebar;
 mod rail;
@@ -27,6 +28,10 @@ mod zones;
 
 use crate::data::DataSource;
 use crate::launch_options::DebugFocus;
+use crate::model::canvas::Canvas;
+use crate::model::marketplace::{
+    MarketplaceSource, SampleMarketplaceSource, UnavailableMarketplace,
+};
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
@@ -116,6 +121,11 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
+    marketplace: Box<dyn MarketplaceSource>,
+    /// The catalogue's search field; its settled text becomes the Marketplace query.
+    marketplace_search: Entity<SearchField>,
+    _marketplace_search_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -134,7 +144,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let store = cx.new(|_| ServiceStore::sample(data));
-        Self::with_store(store, None, None, teams.teams(), window, cx)
+        let marketplace = Box::new(SampleMarketplaceSource::default());
+        Self::with_store(store, None, None, teams.teams(), marketplace, window, cx)
     }
 
     /// Follows a running service through the bridge of `source`.
@@ -151,6 +162,7 @@ impl Shell {
             Some(handle),
             Some(bridge),
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )
@@ -161,6 +173,7 @@ impl Shell {
         service: Option<ServiceHandle>,
         bridge: Option<ServiceBridge>,
         teams: TeamsState,
+        marketplace: Box<dyn MarketplaceSource>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -182,6 +195,16 @@ impl Shell {
         let search = cx.new(|cx| SearchField::new("Search", cx));
         let mut model = ShellModel::new(snapshot, width);
         model.set_teams(teams);
+        model.set_marketplace(marketplace.snapshot());
+        let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
+        let marketplace_search_changes = cx.subscribe(
+            &marketplace_search,
+            |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.set_marketplace_query(query.as_ref(), cx);
+                }
+            },
+        );
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
@@ -246,6 +269,9 @@ impl Shell {
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            marketplace,
+            marketplace_search,
+            _marketplace_search_changes: marketplace_search_changes,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
@@ -439,6 +465,12 @@ impl Render for Shell {
             .model
             .region_visible(Region::ProjectSidebar)
             .then(|| project_sidebar::project_body(self, &shell, cx));
+        let marketplace = match self.model.canvas() {
+            Canvas::Page(Page::Marketplace(page)) => {
+                Some(marketplace::frame(self, page, shell.clone()))
+            }
+            _ => None,
+        };
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -449,6 +481,7 @@ impl Render for Shell {
                 work_panel,
                 project,
                 diff,
+                marketplace,
             },
             window,
             cx,

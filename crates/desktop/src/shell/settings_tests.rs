@@ -80,6 +80,7 @@ fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
             Some(handle),
             None,
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )

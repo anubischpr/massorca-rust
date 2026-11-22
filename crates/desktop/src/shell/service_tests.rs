@@ -53,6 +53,7 @@ pub(super) fn rig<'a>(
             Some(handle),
             None,
             UnavailableTeams.teams(),
+            Box::new(UnavailableMarketplace),
             window,
             cx,
         )
