@@ -395,6 +395,51 @@ async fn a_terminal_is_created_attached_typed_into_resized_detached_and_killed()
     )
     .await;
 
+    // Detach and attach again without an offset: a snapshot redraws the screen, and output keeps
+    // flowing after it.
+    drop(stream);
+    let mut stream = handle
+        .attach_terminal(attach_params(&id, None))
+        .await
+        .expect("the terminal reattaches from a snapshot");
+    let mut fresh = TerminalFeed::new(100, 30);
+    let seen = read_until(
+        &mut stream,
+        &mut fresh,
+        &handle,
+        &id,
+        "the snapshot",
+        |seen, _| {
+            seen.iter()
+                .any(|u| matches!(u, AttachUpdate::Snapshot { .. }))
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            seen.first(),
+            Some(AttachUpdate::Attached {
+                mode: AttachMode::Snapshot,
+                ..
+            })
+        ),
+        "an attach without an offset starts with a snapshot: {seen:?}"
+    );
+    assert!(
+        has_row(&fresh, "again"),
+        "the snapshot redraws the screen it was taken from"
+    );
+    handle.send_terminal_input(&id, b"echo third\r".to_vec());
+    read_until(
+        &mut stream,
+        &mut fresh,
+        &handle,
+        &id,
+        "output after a snapshot reattach",
+        |_, f| has_row(f, "third"),
+    )
+    .await;
+
     // Kill: the terminal is exited with its reason, and the attach ends after Exited.
     let killed = handle
         .kill_terminal(&id, true)
@@ -405,7 +450,7 @@ async fn a_terminal_is_created_attached_typed_into_resized_detached_and_killed()
         killed.exit.as_ref().map(|exit| exit.reason),
         Some(ExitReason::Killed)
     );
-    read_until(&mut stream, &mut feed, &handle, &id, "the exit", |_, f| {
+    read_until(&mut stream, &mut fresh, &handle, &id, "the exit", |_, f| {
         f.exit().is_some()
     })
     .await;
