@@ -4,6 +4,7 @@
 //! hold what the panel asked for and what the service refused.
 
 use gpui::{Context, Entity, Subscription, Window};
+use massorca_protocol::methods::git::index::GitPathsParams;
 use massorca_ui::components::text_field::TextField;
 
 use super::Shell;
@@ -64,7 +65,9 @@ pub(super) struct SourceControl {
     /// Set after a commit, so the next frame (which has the window) empties the field.
     pub clear_field: bool,
     /// A stage or unstage call is out, and its controls wait for the answer.
+    pub busy: bool,
     /// What the last stage or unstage refused, under the panel's header.
+    pub error: Option<String>,
     _field_changes: Subscription,
 }
 
@@ -77,6 +80,8 @@ impl SourceControl {
             commit: CommitForm::default(),
             commit_field,
             clear_field: false,
+            busy: false,
+            error: None,
             _field_changes: field_changes,
         }
     }
@@ -103,6 +108,7 @@ impl Shell {
         let selected = self.model.selected_workspace().map(str::to_owned);
         if self.source_control.workspace != selected {
             self.source_control.workspace = selected.clone();
+            self.source_control.error = None;
         }
         if self.source_control.clear_field {
             self.source_control.clear_field = false;
@@ -131,6 +137,52 @@ impl Shell {
         let text = self.source_control.commit_field.read(cx).text().to_owned();
         self.source_control.commit.message = text;
         self.source_control.commit.message_error = None;
+        cx.notify();
+    }
+
+    /// Stages or unstages `path`, or every change when `path` is `None`. The status follows through
+    /// the refetch the bridge makes after the call.
+    pub(super) fn set_staged(
+        &mut self,
+        path: Option<String>,
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(workspace), Some(handle)) =
+            (self.source_control.workspace.clone(), self.service.clone())
+        else {
+            return;
+        };
+        if self.source_control.busy {
+            return;
+        }
+        let (paths, all) = match path {
+            Some(path) => (vec![path], false),
+            None => (Vec::new(), true),
+        };
+        let params = GitPathsParams {
+            workspace,
+            paths,
+            all,
+        };
+        self.source_control.busy = true;
+        self.source_control.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = if staged {
+                handle.git_unstage(params).await
+            } else {
+                handle.git_stage(params).await
+            };
+            this.update(cx, |shell, cx| shell.finish_index(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn finish_index(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+        self.source_control.busy = false;
+        self.source_control.error = result.err().map(|refusal| refusal.message());
         cx.notify();
     }
 

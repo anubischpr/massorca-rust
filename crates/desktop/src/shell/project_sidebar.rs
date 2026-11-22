@@ -4,17 +4,22 @@
 use gpui::{AnyElement, App, Div, IntoElement, SharedString, WeakEntity, div, prelude::*, px};
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::banner::{Banner, BannerVariant};
-use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::error_state::ErrorState;
+use massorca_ui::components::icon_button::IconButton;
+use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::components::project_sidebar_tabs::{ProjectSidebarTabs, core_tabs};
 use massorca_ui::components::scroll_area::ScrollArea;
-use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_STRONG, TYPE_CAPTION};
+use massorca_ui::tokens::{
+    SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM, TYPE_BODY_STRONG, TYPE_CAPTION, TYPE_MONO_SM,
+    TYPE_OVERLINE,
+};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use super::source_control::ProjectTab;
-use crate::model::source_control::{Panel, PanelView, panel_view};
+use crate::model::source_control::{ChangeRow, CommitRow, History, Panel, PanelView, panel_view};
 
 /// The Project sidebar's body under its header: the tab strip, then the open tab.
 pub(super) fn project_body(shell: &Shell, handle: &WeakEntity<Shell>, cx: &App) -> AnyElement {
@@ -102,6 +107,7 @@ fn panel_body(
     panel: &Panel,
     theme: &Theme,
 ) -> AnyElement {
+    let busy = shell.source_control.busy;
     let mut column = div()
         .flex()
         .flex_col()
@@ -128,6 +134,13 @@ fn panel_body(
             .detail(reason.clone()),
         );
     }
+    if let Some(error) = &shell.source_control.error {
+        column = column.child(Banner::new(
+            "source-control-error",
+            BannerVariant::Danger,
+            error.clone(),
+        ));
+    }
     if panel.truncated {
         column = column.child(Banner::new(
             "source-control-truncated",
@@ -139,7 +152,48 @@ fn panel_body(
     if panel.is_clean() {
         column = column.child(note("Nothing to commit.", "", theme));
     }
-    column.into_any_element()
+    let groups = [
+        group(
+            "Conflicted",
+            &panel.conflicted,
+            Group::Conflicted,
+            None,
+            handle,
+            busy,
+            theme,
+        ),
+        group(
+            "Staged changes",
+            &panel.staged,
+            Group::Staged,
+            Some(bulk_button(handle, busy, "Unstage all", true)),
+            handle,
+            busy,
+            theme,
+        ),
+        group(
+            "Changes",
+            &panel.changes,
+            Group::Changed,
+            Some(bulk_button(handle, busy, "Stage all", false)),
+            handle,
+            busy,
+            theme,
+        ),
+        group(
+            "Untracked",
+            &panel.untracked,
+            Group::Untracked,
+            None,
+            handle,
+            busy,
+            theme,
+        ),
+    ];
+    column
+        .children(groups.into_iter().flatten())
+        .child(history(&panel.history, theme))
+        .into_any_element()
 }
 
 /// The branch with its upstream, its ahead and behind counts, and the states that need a word.
@@ -223,6 +277,226 @@ fn commit_box(
             ),
         )
         .into_any_element()
+}
+
+/// The groups the changes are listed in. Each has its own actions (stage, unstage, or none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Group {
+    Conflicted,
+    Staged,
+    Changed,
+    Untracked,
+}
+
+/// One group with its heading, its count, an optional bulk action and its rows. None when empty.
+fn group(
+    title: &str,
+    rows: &[ChangeRow],
+    kind: Group,
+    action: Option<AnyElement>,
+    handle: &WeakEntity<Shell>,
+    busy: bool,
+    theme: &Theme,
+) -> Option<AnyElement> {
+    if rows.is_empty() {
+        return None;
+    }
+    let heading = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_style(TYPE_OVERLINE)
+                .text_color(theme.palette.text.tertiary)
+                .child(format!("{title} · {}", rows.len())),
+        )
+        .children(action);
+    let rows: Vec<AnyElement> = rows
+        .iter()
+        .map(|row| change_row(row, kind, handle, busy, theme))
+        .collect();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1))
+            .child(heading)
+            .children(rows)
+            .into_any_element(),
+    )
+}
+
+/// One changed file: its name and folder, its line counts and status letter, and its stage action.
+fn change_row(
+    row: &ChangeRow,
+    kind: Group,
+    handle: &WeakEntity<Shell>,
+    busy: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let key = format!("source-control-{kind:?}-{}", row.path);
+    let mut item = ListRow::new(SharedString::from(key.clone()), row.name.clone())
+        .leading(RowLeading::Icon(IconName::FileText))
+        .tooltip(row.path.clone());
+    if !row.directory.is_empty() {
+        item = item.secondary(row.directory.clone());
+    }
+    let mut trailing = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .children(counts(row, theme))
+        .child(
+            div()
+                .text_style(TYPE_MONO_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(row.letter),
+        );
+    if let Some(action) = row_action(row, kind, handle, busy) {
+        trailing = trailing.child(action);
+    }
+    item.trailing(trailing).into_any_element()
+}
+
+/// "+3 -1" for a text change, "binary" for a binary one, nothing where git counts no lines.
+fn counts(row: &ChangeRow, theme: &Theme) -> Option<Div> {
+    if row.binary {
+        return Some(
+            div()
+                .text_style(TYPE_MONO_SM)
+                .text_color(theme.palette.text.tertiary)
+                .child("binary"),
+        );
+    }
+    let (added, removed) = row.lines?;
+    Some(
+        div()
+            .flex()
+            .gap(px(SPACE_1))
+            .text_style(TYPE_MONO_SM)
+            .child(
+                div()
+                    .text_color(theme.palette.diff.add_fg)
+                    .child(format!("+{added}")),
+            )
+            .child(
+                div()
+                    .text_color(theme.palette.diff.remove_fg)
+                    .child(format!("-{removed}")),
+            ),
+    )
+}
+
+/// The row's own action: unstage in the staged group, stage in the others, none for a conflict.
+fn row_action(
+    row: &ChangeRow,
+    kind: Group,
+    handle: &WeakEntity<Shell>,
+    busy: bool,
+) -> Option<AnyElement> {
+    let (icon, name, staged) = match kind {
+        Group::Staged => (IconName::Minus, format!("Unstage {}", row.name), true),
+        Group::Changed | Group::Untracked => (IconName::Plus, format!("Stage {}", row.name), false),
+        Group::Conflicted => return None,
+    };
+    let path = row.path.clone();
+    let handle = handle.clone();
+    Some(
+        IconButton::new(
+            SharedString::from(format!("source-control-action-{}", row.path)),
+            icon,
+            name,
+        )
+        .disabled(busy)
+        .on_click(move |_, cx| {
+            let _ = handle.update(cx, |shell, cx| {
+                shell.set_staged(Some(path.clone()), staged, cx);
+            });
+        })
+        .into_any_element(),
+    )
+}
+
+/// "Stage all" or "Unstage all" for a whole group.
+fn bulk_button(
+    handle: &WeakEntity<Shell>,
+    busy: bool,
+    label: &'static str,
+    staged: bool,
+) -> AnyElement {
+    let handle = handle.clone();
+    Button::new(label, label)
+        .variant(ButtonVariant::Ghost)
+        .size(ButtonSize::Compact)
+        .disabled(busy)
+        .on_click(move |_, cx| {
+            let _ = handle.update(cx, |shell, cx| shell.set_staged(None, staged, cx));
+        })
+        .into_any_element()
+}
+
+/// The first page of the branch's commits, newest first.
+fn history(history: &History, theme: &Theme) -> AnyElement {
+    let mut column = div().flex().flex_col().gap(px(SPACE_1)).child(
+        div()
+            .text_style(TYPE_OVERLINE)
+            .text_color(theme.palette.text.tertiary)
+            .child("Commits in branch"),
+    );
+    match history {
+        History::Loading => column = column.child(caption("Reading the history", theme)),
+        History::Failed { message } => {
+            column = column.child(
+                div()
+                    .text_style(TYPE_CAPTION)
+                    .text_color(theme.palette.text.tertiary)
+                    .child(message.clone()),
+            );
+        }
+        History::Loaded { commits, more } => {
+            if commits.is_empty() {
+                column = column.child(caption("No commits yet.", theme));
+            }
+            for commit in commits {
+                column = column.child(commit_line(commit, theme));
+            }
+            if *more {
+                column = column.child(caption("Showing the latest commits.", theme));
+            }
+        }
+    }
+    column.into_any_element()
+}
+
+fn commit_line(commit: &CommitRow, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_2))
+        .min_w_0()
+        .child(
+            div()
+                .flex_none()
+                .text_style(TYPE_MONO_SM)
+                .text_color(theme.palette.text.tertiary)
+                .child(commit.short_id.clone()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.primary)
+                .child(commit.subject.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.tertiary)
+                .child(commit.author.clone()),
+        )
 }
 
 /// A title and a line of explanation, for a state the panel is in.
