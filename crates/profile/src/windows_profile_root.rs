@@ -332,3 +332,7 @@ fn wide_path(path: &Path) -> io::Result<U16CString> {
     U16CString::from_os_str(verbatim(path))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
+
+#[cfg(test)]
+#[path = "windows_profile_root_tests.rs"]
+mod tests;
