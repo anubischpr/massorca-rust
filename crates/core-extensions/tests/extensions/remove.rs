@@ -217,3 +217,37 @@ fn a_changed_installed_manifest_is_never_trusted_or_run() {
     );
     assert!(!s.exists("pkgs/acme.kit"));
 }
+
+#[test]
+fn a_forged_lockfile_path_is_refused_and_nothing_outside_the_package_is_deleted() {
+    let s = setup(FakeHost::new());
+    let keep = s.service.layout().data_dir("keep");
+    std::fs::create_dir_all(&keep).expect("a folder the forged path would reach");
+    std::fs::write(keep.join("notes.txt"), b"kept").expect("a file in it");
+    let path = s.service.layout().lock_path();
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("the profile folder");
+    std::fs::write(
+        &path,
+        serde_json::json!({ "version": 1, "packages": [{
+            "id": "acme.kit", "version": "1.0.0", "source": { "kind": "dir", "ref": "C:/x" },
+            "sha256": "ab", "path": "pkgs/acme.kit/../../data/keep", "enabled": true,
+            "consent": "c", "installed_at_ms": 0
+        }] })
+        .to_string(),
+    )
+    .expect("the forged lockfile");
+
+    let error = s
+        .service
+        .remove("acme.kit", false, false)
+        .expect_err("a path outside the package is refused");
+
+    assert_eq!(
+        error.code(),
+        massorca_core_extensions::codes::INVALID_LOCKFILE
+    );
+    assert!(
+        keep.join("notes.txt").exists(),
+        "nothing outside was deleted"
+    );
+}

@@ -65,6 +65,10 @@ pub struct ExtensionInstallParams {
     /// Pins the package. Required for a `file:` source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// The run token of the agent that sent this request, when an agent sent it. The CLI sets it from its environment.
+    /// A request carrying one may not run a vendor installer (`extension.needs_person`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
 }
 
 /// Params of `extensions.set_enabled`.
@@ -84,6 +88,10 @@ pub struct ExtensionRemoveParams {
     /// Also runs the uninstall command of each CLI this package installed.
     #[serde(default)]
     pub uninstall_cli: bool,
+    /// The run token of the agent that sent this request, when an agent sent it. The CLI sets it from its environment.
+    /// A request carrying one may not run a vendor uninstaller (`extension.needs_person`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
 }
 
 /// Result of `extensions.list` and `extensions.catalogue`.

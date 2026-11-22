@@ -230,3 +230,5 @@ pub const EXTENSION_TAMPERED: &str = "extension.tampered";
 pub const EXTENSION_RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
 /// Another install or removal of the same package is running; try again when it has finished.
 pub const EXTENSION_BUSY: &str = "extension.busy";
+/// A vendor installer or uninstaller needs a person: an agent run may not start one.
+pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";

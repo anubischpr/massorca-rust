@@ -9,6 +9,9 @@ use massorca_net::TlsIdentity;
 use massorca_protocol::methods::devices::{
     self, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret, WhoAmI,
 };
+use massorca_protocol::methods::extensions::{
+    ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams,
+};
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
@@ -391,6 +394,58 @@ async fn a_device_without_host_admin_inspects_only_the_catalogue() {
             .await
             .expect_err("a host path needs HostAdmin");
         assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED, "{source}");
+    }
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_without_host_admin_cannot_install_enable_or_remove_extensions() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (standard, _) = pair(&hosts, &standard_offer, "plain").await.unwrap();
+
+    let install = standard
+        .extension_install(&ExtensionInstallParams {
+            source: "catalogue:massorca.codex".to_owned(),
+            consent: None,
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("installing needs HostAdmin");
+    assert_eq!(remote_code(&install), codes::PERMISSION_DENIED);
+    let toggle = standard
+        .extension_set_enabled(&ExtensionSetEnabledParams {
+            id: "massorca.claude".to_owned(),
+            enabled: false,
+        })
+        .await
+        .expect_err("enabling needs HostAdmin");
+    assert_eq!(remote_code(&toggle), codes::PERMISSION_DENIED);
+    let removal = standard
+        .extension_remove(&ExtensionRemoveParams {
+            id: "massorca.claude".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .expect_err("removing needs HostAdmin");
+    assert_eq!(remote_code(&removal), codes::PERMISSION_DENIED);
+
+    let review = standard
+        .extension_inspect("catalogue:massorca.claude")
+        .await
+        .expect("the catalogue needs only Read");
+    for plan in &review.cli {
+        if let massorca_protocol::methods::extensions::CliPlanState::Detected { path } = &plan.state
+        {
+            assert!(
+                path.is_none(),
+                "a host path reaches only a host administrator"
+            );
+        }
     }
     stop(running).await;
 }

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use massorca_core_extensions::item::Item;
 use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{Error, Extensions};
 use massorca_protocol::methods::events::{
@@ -16,9 +17,10 @@ use massorca_protocol::methods::events::{
     TOPIC_EXTENSION_REMOVED,
 };
 use massorca_protocol::methods::extensions::{
-    self, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInspectParams,
-    ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRef,
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionSetEnabledParams,
+    self, CliPlanState, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled,
+    ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
+    ExtensionList, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
+    ExtensionSetEnabledParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -80,21 +82,24 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ExtensionList, ErrorBody> {
-    let items = on_extensions(&ctx, |extensions| extensions.list()).await?;
+    let mut items = on_extensions(&ctx, |extensions| extensions.list()).await?;
+    hide_host_paths(&ctx, &mut items);
     Ok(ExtensionList {
         extensions: wire_all(&items)?,
     })
 }
 
 async fn catalogue(ctx: RequestCtx, _params: NoParams) -> Result<ExtensionList, ErrorBody> {
-    let items = on_extensions(&ctx, |extensions| extensions.catalogue()).await?;
+    let mut items = on_extensions(&ctx, |extensions| extensions.catalogue()).await?;
+    hide_host_paths(&ctx, &mut items);
     Ok(ExtensionList {
         extensions: wire_all(&items)?,
     })
 }
 
 async fn get(ctx: RequestCtx, params: ExtensionRef) -> Result<ExtensionItem, ErrorBody> {
-    let item = on_extensions(&ctx, move |extensions| extensions.get(&params.id)).await?;
+    let mut item = on_extensions(&ctx, move |extensions| extensions.get(&params.id)).await?;
+    hide_item_path(&ctx, &mut item);
     wire(&item)
 }
 
@@ -105,7 +110,15 @@ async fn inspect(
     let source = Source::parse(&params.source).map_err(error_body)?;
     authorize(&ctx.principal, inspect_permission(&source))?;
     let review = on_extensions(&ctx, move |extensions| extensions.inspect(&source)).await?;
-    wire(&review)
+    let mut review: ExtensionReview = wire(&review)?;
+    if !may_see_host_paths(&ctx) {
+        for plan in &mut review.cli {
+            if let CliPlanState::Detected { path } = &mut plan.state {
+                *path = None;
+            }
+        }
+    }
+    Ok(review)
 }
 
 /// The catalogue is built in, so `Read` reviews it. A `dir:` or `file:` source reads a host path, which only a host
@@ -134,6 +147,12 @@ async fn install(
     ctx: RequestCtx,
     params: ExtensionInstallParams,
 ) -> Result<ExtensionInstalled, ErrorBody> {
+    if params.run_installer {
+        refuse_agent_run(
+            params.agent_token.as_deref(),
+            "an agent cannot run a vendor installer; ask the person to run the command",
+        )?;
+    }
     let entry = on_extensions(&ctx, move |extensions| {
         extensions.install(
             &Source::parse(&params.source)?,
@@ -170,12 +189,53 @@ async fn remove(
     ctx: RequestCtx,
     params: ExtensionRemoveParams,
 ) -> Result<ExtensionRemoved, ErrorBody> {
+    if params.uninstall_cli {
+        refuse_agent_run(
+            params.agent_token.as_deref(),
+            "an agent cannot run a vendor uninstaller; ask the person to run the command",
+        )?;
+    }
     let removed = on_extensions(&ctx, move |extensions| {
         extensions.remove(&params.id, params.delete_agent_homes, params.uninstall_cli)
     })
     .await?;
     publish(&ctx, TOPIC_EXTENSION_REMOVED, &removed.id);
     wire(&removed)
+}
+
+/// Whether the caller may see host paths: only a host administrator, since a path names the service host's files.
+fn may_see_host_paths(ctx: &RequestCtx) -> bool {
+    authorize(&ctx.principal, Permission::HostAdmin).is_ok()
+}
+
+/// Host paths of detected programs reach a host administrator only; anyone else sees that the program is detected.
+fn hide_host_paths(ctx: &RequestCtx, items: &mut [Item]) {
+    if !may_see_host_paths(ctx) {
+        for item in items {
+            strip_program_paths(item);
+        }
+    }
+}
+
+fn hide_item_path(ctx: &RequestCtx, item: &mut Item) {
+    if !may_see_host_paths(ctx) {
+        strip_program_paths(item);
+    }
+}
+
+fn strip_program_paths(item: &mut Item) {
+    for agent in &mut item.agents {
+        agent.program_path = None;
+    }
+}
+
+/// Refuses a vendor installer or uninstaller that a request from an agent run asks for: a person must run it (0062,
+/// second review). A request carries the run's token when an agent sent it.
+fn refuse_agent_run(agent_token: Option<&str>, message: &str) -> Result<(), ErrorBody> {
+    if agent_token.is_some_and(|token| !token.is_empty()) {
+        return Err(ErrorBody::new(codes::EXTENSION_NEEDS_PERSON, message));
+    }
+    Ok(())
 }
 
 /// Runs one blocking call of the extension service and maps its refusal to the protocol error.

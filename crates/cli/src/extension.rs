@@ -14,6 +14,7 @@ use massorca_protocol::methods::extensions::{
     ExtensionSetEnabledParams, ExtensionState,
 };
 
+use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
@@ -92,6 +93,9 @@ pub async fn execute(
     command: ExtensionCommand,
     output: Output,
 ) -> Result<(), CliError> {
+    if let Some(refusal) = agent_refusal(&command) {
+        return Err(refusal);
+    }
     let client = connect(target, autostart).await?;
     match command {
         ExtensionCommand::List => {
@@ -127,6 +131,7 @@ pub async fn execute(
                     id: args.id,
                     delete_agent_homes: args.delete_agent_homes,
                     uninstall_cli: args.uninstall_cli,
+                    agent_token: agent_token(),
                 })
                 .await?;
             output.success(&removed, &removed_lines(&removed));
@@ -150,6 +155,7 @@ async fn install(
                 consent: Some(consent),
                 run_installer: args.yes_run_installer,
                 sha256: args.sha256,
+                agent_token: agent_token(),
             })
             .await?;
         output.success(&installed, &installed_lines(&installed));
@@ -213,6 +219,7 @@ async fn install(
             consent: Some(review.consent),
             run_installer: args.yes_run_installer,
             sha256: args.sha256,
+            agent_token: agent_token(),
         })
         .await?;
     output.success(&installed, &installed_lines(&installed));
@@ -275,4 +282,37 @@ fn source_for(source: &str, target: &Target) -> String {
         Ok(cwd) => format!("{kind}:{}", cwd.join(path).display()),
         Err(_) => source.to_owned(),
     }
+}
+
+/// The run token this CLI runs under, when an agent's run started it. The service refuses a vendor command that carries
+/// one (0062, second review).
+fn agent_token() -> Option<String> {
+    std::env::var(ENV_TOKEN)
+        .ok()
+        .filter(|token| !token.is_empty())
+}
+
+/// Refuses, before anything connects, a vendor installer or uninstaller asked for from an agent's run: a person must
+/// run it. The check reads the run's environment, which an agent that strips it can avoid; the service still refuses
+/// any request that carries a run token.
+fn agent_refusal(command: &ExtensionCommand) -> Option<CliError> {
+    let message = match command {
+        ExtensionCommand::Install(args) if args.yes_run_installer => {
+            "an agent cannot run a vendor installer; ask the person to run the command"
+        }
+        ExtensionCommand::Remove(args) if args.uninstall_cli => {
+            "an agent cannot run a vendor uninstaller; ask the person to run the command"
+        }
+        _ => return None,
+    };
+    let in_agent_run = [ENV_SESSION, ENV_TOKEN]
+        .into_iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()));
+    in_agent_run.then(|| {
+        CliError::new(
+            codes::EXTENSION_NEEDS_PERSON,
+            message.to_owned(),
+            exit::ERROR,
+        )
+    })
 }

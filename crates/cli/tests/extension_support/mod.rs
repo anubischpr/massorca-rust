@@ -165,6 +165,20 @@ impl Host {
         single_document(&outcome)["result"].clone()
     }
 
+    /// The error of a command that must fail with exit code 1, run with `--json` and extra environment variables,
+    /// such as the ones an agent's run sets.
+    pub fn json_error_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Value {
+        let mut command = self.sandbox.command("default");
+        let args = with_json(args);
+        command
+            .env("PATH", self.bin.path())
+            .envs(env.iter().copied())
+            .args(&args);
+        let document = single_document(&execute(&mut command).code(1));
+        assert_eq!(document["ok"], false, "{document}");
+        document["error"].clone()
+    }
+
     /// The error of a command that must fail with exit code 1, run with `--json`.
     pub fn json_error(&self, args: &[&str]) -> Value {
         let outcome = self.run(&with_json(args)).code(1);

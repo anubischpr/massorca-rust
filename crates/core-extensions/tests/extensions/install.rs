@@ -226,3 +226,26 @@ fn without_a_verify_command_an_installer_that_leaves_no_binary_fails_and_install
     assert_eq!(error.code(), codes::VERIFY_FAILED);
     assert!(s.lock_json().is_none(), "nothing is registered");
 }
+
+#[test]
+fn a_folder_changed_after_its_review_is_refused_for_the_reviewed_consent() {
+    let s = setup(FakeHost::new().with_program("kit"));
+    let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
+    let reviewed = s.service.inspect(&source).expect("the review").consent;
+    let Source::Dir(dir) = &source else {
+        unreachable!("a folder source");
+    };
+    std::fs::write(
+        dir.join("media/logo.svg"),
+        b"<svg>changed after review</svg>",
+    )
+    .expect("edit");
+
+    let error = s
+        .service
+        .install(&source, Some(&reviewed), false, None)
+        .expect_err("the consent is for what was reviewed");
+
+    assert_eq!(error.code(), codes::CONSENT_MISMATCH);
+    assert!(s.lock_json().is_none(), "nothing is registered");
+}

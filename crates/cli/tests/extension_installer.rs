@@ -226,3 +226,37 @@ fn uninstall_cli_leaves_a_cli_the_package_did_not_install() {
         .success()
         .stdout(contains("no extensions installed"));
 }
+
+#[test]
+fn an_agent_run_cannot_start_a_vendor_installer_or_uninstaller() {
+    let host = Host::new();
+    let source = source_installing(&host);
+    let agent = [
+        ("MASSORCA_AGENT_SESSION", "session-1"),
+        ("MASSORCA_AGENT_TOKEN", "not-a-real-token"),
+    ];
+
+    let install = host.json_error_with_env(
+        &[
+            "extension",
+            "install",
+            &source,
+            "--consent",
+            "unused",
+            "--yes-run-installer",
+        ],
+        &agent,
+    );
+    assert_eq!(install["code"], "extension.needs_person");
+    assert!(
+        install["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("ask the person to run the command")),
+        "{install}"
+    );
+
+    let removal =
+        host.json_error_with_env(&["extension", "remove", KIT.id, "--uninstall-cli"], &agent);
+    assert_eq!(removal["code"], "extension.needs_person");
+    assert!(!host.has_cli(KIT.binary), "nothing was installed");
+}

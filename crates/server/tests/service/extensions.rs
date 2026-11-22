@@ -115,6 +115,7 @@ async fn install_needs_the_accepted_review_and_publishes_events_after_each_chang
             consent: None,
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect_err("no consent");
@@ -125,6 +126,7 @@ async fn install_needs_the_accepted_review_and_publishes_events_after_each_chang
             consent: Some("not the fingerprint".to_owned()),
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect_err("a stale consent");
@@ -144,6 +146,7 @@ async fn install_needs_the_accepted_review_and_publishes_events_after_each_chang
             consent: Some(review.consent.clone()),
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect("the install");
@@ -162,6 +165,7 @@ async fn install_needs_the_accepted_review_and_publishes_events_after_each_chang
             consent: Some(review.consent),
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect_err("already installed");
@@ -264,6 +268,7 @@ async fn a_registered_guard_stops_a_disable_and_a_remove_with_its_own_code() {
             consent: Some(review.consent),
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect("the install");
@@ -328,6 +333,7 @@ async fn bad_sources_and_unknown_ids_have_stable_codes() {
             consent: None,
             run_installer: false,
             sha256: None,
+            agent_token: None,
         })
         .await
         .expect_err("an archive needs its hash");
@@ -335,5 +341,48 @@ async fn bad_sources_and_unknown_ids_have_stable_codes() {
     assert_eq!(remote_code(&source), codes::EXTENSION_INVALID_SOURCE);
     assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_FOUND);
     assert_eq!(remote_code(&archive), codes::EXTENSION_HASH_REQUIRED);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_request_carrying_an_agent_run_token_cannot_run_a_vendor_installer_or_uninstaller() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let install = client
+        .extension_install(&ExtensionInstallParams {
+            source,
+            consent: Some("unused".to_owned()),
+            run_installer: true,
+            sha256: None,
+            agent_token: Some("a-run-token".to_owned()),
+        })
+        .await
+        .expect_err("an agent run may not run the installer");
+    assert_eq!(remote_code(&install), codes::EXTENSION_NEEDS_PERSON);
+
+    let removal = client
+        .extension_remove(&ExtensionRemoveParams {
+            id: "acme.kit".to_owned(),
+            uninstall_cli: true,
+            agent_token: Some("a-run-token".to_owned()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("an agent run may not run the uninstaller");
+    assert_eq!(remote_code(&removal), codes::EXTENSION_NEEDS_PERSON);
+    assert!(
+        client
+            .extension_list()
+            .await
+            .expect("the list")
+            .extensions
+            .is_empty(),
+        "nothing was installed"
+    );
     stop(running).await;
 }
