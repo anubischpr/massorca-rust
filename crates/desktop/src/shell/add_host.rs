@@ -491,7 +491,7 @@ fn key_field(flow: &AddHostFlow, theme: &Theme) -> AnyElement {
     let helper = div()
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.tertiary)
-        .child("Lists the keys in your SSH config. The passphrase is asked only when needed.");
+        .child("Keys from ~/.ssh. A key with a passphrase must be loaded in your SSH agent first.");
     field_row(
         "SSH key",
         div()
