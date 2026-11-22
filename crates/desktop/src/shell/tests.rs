@@ -232,6 +232,36 @@ fn palette_query(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<St
     })
 }
 
+/// A shell with the palette open, drawn.
+fn shell_with_palette_open(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
+    setup(cx);
+    let (shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    draw(cx);
+    cx.simulate_keystrokes(palette_key());
+    draw(cx);
+    (shell, cx)
+}
+
+#[gpui::test]
+fn the_command_palette_is_600_px_wide(cx: &mut TestAppContext) {
+    let (_shell, cx) = shell_with_palette_open(cx);
+    let panel = cx
+        .debug_bounds("command-palette")
+        .expect("the palette is drawn");
+    assert_eq!(f32::from(panel.size.width), 600.0);
+}
+
+#[gpui::test]
+fn the_palette_input_row_is_44_px_tall(cx: &mut TestAppContext) {
+    let (_shell, cx) = shell_with_palette_open(cx);
+    let row = cx
+        .debug_bounds("palette-input-row")
+        .expect("the input row is drawn");
+    assert_eq!(f32::from(row.size.height), 44.0);
+}
+
 #[gpui::test]
 fn mod_k_opens_the_palette_and_a_command_typed_into_it_runs_on_enter(cx: &mut TestAppContext) {
     setup(cx);
