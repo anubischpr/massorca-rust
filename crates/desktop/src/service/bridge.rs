@@ -9,10 +9,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscription};
+use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord, Subscription};
 use massorca_profile::Profile;
+use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
+use massorca_protocol::methods::devices::{
+    DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
+};
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
     TOPIC_SECRET_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
@@ -26,26 +30,23 @@ use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
 };
-use massorca_protocol::{PeerInfo, codes};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
+use super::hosts::{self, SshAdded, SshFailed, SshHost};
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
-const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
+pub(super) const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
 
 /// Who the desktop says it is in the handshake, and whether it may start the service.
 pub fn connect_options(autostart: Option<Autostart>) -> ConnectOptions {
-    let mut options = ConnectOptions::new(PeerInfo {
-        name: "massorca-desktop".to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-    });
+    let mut options = ConnectOptions::new(hosts::peer());
     options.autostart = autostart;
     options
 }
@@ -103,6 +104,33 @@ pub(crate) enum Command {
     },
     GitUnwatch {
         workspace: String,
+    },
+    /// Re-reads the paired hosts and checks each one. Needs no connection to this computer's service.
+    RefreshHosts,
+    /// Installs the service on an SSH host and pairs with it. Needs no connection to this computer's service.
+    AddSshHost {
+        host: SshHost,
+        reply: oneshot::Sender<Result<SshAdded, SshFailed>>,
+    },
+    /// Pairs with the server of an offer and keeps it as a host. Needs no connection to this computer's service.
+    AcceptOffer {
+        offer: String,
+        name: Option<String>,
+        reply: oneshot::Sender<Result<HostRecord, Refusal>>,
+    },
+    ListDevices {
+        reply: oneshot::Sender<Result<DeviceList, Refusal>>,
+    },
+    RevokeDevice {
+        params: DeviceRevokeParams,
+        reply: oneshot::Sender<Result<DeviceInfo, Refusal>>,
+    },
+    CreateOffer {
+        params: PairingCreateParams,
+        reply: oneshot::Sender<Result<PairingCreated, Refusal>>,
+    },
+    NetworkStatus {
+        reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
     },
     Stop,
 }
@@ -204,6 +232,31 @@ impl ServiceHandle {
     /// and the caller shows "Saved" only from that answer.
     pub async fn config_set(&self, params: ConfigSet) -> Result<ConfigValue, Refusal> {
         self.ask(|reply| Command::SetConfig { params, reply }).await
+    }
+
+    /// `device.list` on this computer's service. The store's device list follows the answer too.
+    pub async fn list_devices(&self) -> Result<DeviceList, Refusal> {
+        self.ask(|reply| Command::ListDevices { reply }).await
+    }
+
+    /// `device.revoke`. The store's device list is read again after a revoke that worked.
+    pub async fn revoke_device(&self, params: DeviceRevokeParams) -> Result<DeviceInfo, Refusal> {
+        self.ask(|reply| Command::RevokeDevice { params, reply })
+            .await
+    }
+
+    /// `pairing.create`: an offer another device can redeem once.
+    pub async fn create_offer(
+        &self,
+        params: PairingCreateParams,
+    ) -> Result<PairingCreated, Refusal> {
+        self.ask(|reply| Command::CreateOffer { params, reply })
+            .await
+    }
+
+    /// `network.status`: this computer's listeners and counts. The store keeps the answer too.
+    pub async fn network_status(&self) -> Result<NetworkStatus, Refusal> {
+        self.ask(|reply| Command::NetworkStatus { reply }).await
     }
 
     /// Sends one command without waiting for an answer. A bridge that has stopped takes it nowhere.
@@ -350,6 +403,18 @@ impl Link {
         }
     }
 
+    /// Host calls need no connection to this computer's service, so they run whatever the link is doing.
+    /// Hands back every other command.
+    fn host_call(&self, command: Command) -> Option<Command> {
+        match command {
+            Command::RefreshHosts | Command::AddSshHost { .. } | Command::AcceptOffer { .. } => {
+                hosts::spawn(self.profile.clone(), command, self.updates.clone());
+                None
+            }
+            other => Some(other),
+        }
+    }
+
     fn publish(&self, state: ConnectionState) {
         self.connection.send_replace(state.clone());
         self.emit(StoreUpdate::Connection(state));
@@ -371,7 +436,11 @@ impl Link {
                 result = &mut attempt => return Some(result),
                 command = self.commands.recv() => match command {
                     None | Some(Command::Stop) => return None,
-                    Some(command) => decline_while_down(&mut self.watching, command),
+                    Some(command) => {
+                        if let Some(command) = self.host_call(command) {
+                            decline_while_down(&mut self.watching, command);
+                        }
+                    }
                 },
                 () = self.updates.closed() => return None,
             }
@@ -391,7 +460,11 @@ impl Link {
                         backoff.reset();
                         return true;
                     }
-                    Some(command) => decline_while_down(&mut self.watching, command),
+                    Some(command) => {
+                        if let Some(command) = self.host_call(command) {
+                            decline_while_down(&mut self.watching, command);
+                        }
+                    }
                 },
                 () = self.updates.closed() => return false,
             }
@@ -443,21 +516,24 @@ impl Link {
                 command = self.commands.recv() => {
                     match command {
                         None | Some(Command::Stop) => return SessionEnd::Stop,
-                        Some(Command::Terminal(command)) => {
-                            terminals::spawn_call(client, &writes, &self.updates, command);
-                        }
-                        Some(Command::Secret(command)) => {
-                            secrets::spawn_call(client, command, &self.updates, &self.secrets_order);
-                        }
-                        Some(Command::GitWatch { workspace }) => {
-                            watches.start(client, &workspace, &self.updates, &self.freshness);
-                            self.watching.insert(workspace);
-                        }
-                        Some(Command::GitUnwatch { workspace }) => {
-                            watches.stop(&workspace);
-                            self.watching.remove(&workspace);
-                        }
-                        Some(command) => spawn_call(client, command, &self.updates, &self.freshness),
+                        Some(command) => match self.host_call(command) {
+                            None => {}
+                            Some(Command::Terminal(command)) => {
+                                terminals::spawn_call(client, &writes, &self.updates, command);
+                            }
+                            Some(Command::Secret(command)) => {
+                                secrets::spawn_call(client, command, &self.updates, &self.secrets_order);
+                            }
+                            Some(Command::GitWatch { workspace }) => {
+                                watches.start(client, &workspace, &self.updates, &self.freshness);
+                                self.watching.insert(workspace);
+                            }
+                            Some(Command::GitUnwatch { workspace }) => {
+                                watches.stop(&workspace);
+                                self.watching.remove(&workspace);
+                            }
+                            Some(command) => spawn_call(client, command, &self.updates, &self.freshness),
+                        },
                     }
                     Outcome::Continue
                 }
@@ -596,6 +672,56 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::ListDevices { reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .device_list()
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = updates.send(StoreUpdate::Devices(
+                    result.clone().map(|list| list.devices),
+                ));
+                let _ = reply.send(result);
+            });
+        }
+        Command::RevokeDevice { params, reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .device_revoke(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                if result.is_ok() {
+                    let listed = client
+                        .device_list()
+                        .await
+                        .map_err(|error| Refusal::from(&error));
+                    let _ = updates.send(StoreUpdate::Devices(listed.map(|list| list.devices)));
+                }
+                let _ = reply.send(result);
+            });
+        }
+        Command::CreateOffer { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .pairing_create(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::NetworkStatus { reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .network_status()
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = updates.send(StoreUpdate::Network(result.clone()));
+                let _ = reply.send(result);
+            });
+        }
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -635,6 +761,18 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::SetConfig { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::ListDevices { reply } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::RevokeDevice { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::CreateOffer { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::NetworkStatus { reply } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
