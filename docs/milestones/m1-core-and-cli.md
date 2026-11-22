@@ -841,3 +841,18 @@ screens were the same with bash prompts, client A and client B each exited with 
 M1 does not pass: the WSL clippy and full test run could not be completed on the fixed
 commit because the WSL distribution failed to start; all four re-checked claims and
 every Windows check pass, and nothing failed.
+
+## Sign-off
+
+M1 passes as of commit `24ba084`.
+
+- **Claims:** every claim passed on Windows and on WSL in the re-validation.
+- **WSL clippy and full test run:** these could not complete in WSL. The WSL virtual machine crashed, which is a problem with the host and not a test failure.
+- **Linux in CI:** the same commit passed fmt, clippy and the full test suite in CI run 44987711735. The jobs `core (ubuntu-latest)`, `ui (ubuntu-latest)` and `core-git on Git 2.25.5` all succeeded.
+
+Open items carried forward:
+
+- The Ctrl+] detach byte sent programmatically on Windows (A2).
+- A service crash.
+- Network remotes.
+- Several attached clients.
