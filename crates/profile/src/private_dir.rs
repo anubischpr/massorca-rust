@@ -82,7 +82,7 @@ impl PrivateDir {
     }
 
     /// Writes `name` in this folder: a temporary file created new and never through a link, then renamed over `name`.
-    /// On Unix the file is `0600`.
+    /// The file is the owner's alone before any byte lands: `0600` on Unix, an owner-only DACL on Windows.
     pub fn write_file(&self, name: &str, contents: &[u8]) -> io::Result<()> {
         let temp = format!("{name}.tmp");
         #[cfg(unix)]
@@ -103,6 +103,8 @@ impl PrivateDir {
                 .write(true)
                 .create_new(true)
                 .open(&temp)?;
+            #[cfg(windows)]
+            crate::windows_endpoint_access::restrict_to_owner(&temp)?;
             file.write_all(contents)?;
             file.sync_all()?;
             drop(file);
