@@ -1,5 +1,6 @@
 //! Components of the design system, one module per spec in docs/design/components.
 
+pub mod account_connection_list;
 pub mod agent_icon;
 pub mod agent_status;
 pub mod avatar;
