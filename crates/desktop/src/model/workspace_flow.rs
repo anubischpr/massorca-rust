@@ -289,6 +289,7 @@ impl RemoveFlow {
             Refusal::NameProblem { .. }
             | Refusal::PathProblem { .. }
             | Refusal::Failed { .. }
+            | Refusal::GitRefused { .. }
             | Refusal::Unavailable { .. } => {
                 self.error = Some(refusal.message());
                 return false;
