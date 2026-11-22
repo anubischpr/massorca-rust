@@ -8,7 +8,6 @@ use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::badge::Badge;
 use crate::components::banner::{Banner, BannerVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::components::empty_state::EmptyState;
 use crate::components::error_state::ErrorState;
 use crate::components::icon_button::IconButton;
 use crate::components::progress::Spinner;
@@ -18,7 +17,7 @@ use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, Theme};
 use crate::tokens::{
     Color, Palette, SIZE_DIFF_GUTTER, SIZE_DIFF_MARKER, SIZE_TOOLBAR, SPACE_1, SPACE_2, SPACE_3,
-    TYPE_BODY_SM, TYPE_CAPTION, TYPE_MONO, TYPE_MONO_SM,
+    SPACE_4, TYPE_BODY, TYPE_BODY_SM, TYPE_CAPTION, TYPE_MONO, TYPE_MONO_SM,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -1137,7 +1136,7 @@ fn split_path(path: &str) -> (&str, &str) {
 }
 
 /// The file chip's icon: the agent mark for CLAUDE.md and AGENTS.md, else a grey document.
-fn file_icon(path: &str, p: &Palette) -> AnyElement {
+pub(crate) fn file_icon(path: &str, p: &Palette) -> AnyElement {
     match split_path(path).1 {
         "CLAUDE.md" => AgentIcon::new(AgentKind::Claude)
             .size(AgentIconSize::Small)
@@ -1329,11 +1328,14 @@ impl RenderOnce for DiffView {
                     .disabled(model.next_change(change).is_none())
                     .on_click(step(true)),
             )
-            .child(
-                IconButton::new("diff-edit", IconName::Pencil, "Edit")
-                    .disabled(!editable)
-                    .on_click(on(&handler, DiffAction::Edit)),
-            )
+            // A read-only compare has no Edit; an unreachable host disables it.
+            .when(!self.read_only, |bar| {
+                bar.child(
+                    IconButton::new("diff-edit", IconName::Pencil, "Edit")
+                        .disabled(!editable)
+                        .on_click(on(&handler, DiffAction::Edit)),
+                )
+            })
             .child(
                 IconButton::new("diff-more", IconName::Ellipsis, "More")
                     .on_click(on(&handler, DiffAction::More)),
@@ -1392,8 +1394,23 @@ impl RenderOnce for DiffView {
                 scroll,
             ),
             DiffStatus::Loading => loading_body(&id, &p),
-            DiffStatus::Empty => EmptyState::new("diff-empty", "No changes in this file.")
-                .action(
+            // DiffView.md States (empty): the line in text.secondary, not an EmptyState title.
+            DiffStatus::Empty => div()
+                .id("diff-empty")
+                .role(Role::Group)
+                .aria_label("No changes in this file.")
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(SPACE_2))
+                .p(px(SPACE_4))
+                .child(
+                    div()
+                        .text_style(TYPE_BODY)
+                        .text_color(p.text.secondary)
+                        .child("No changes in this file."),
+                )
+                .child(
                     Button::new("diff-show-file", "Show file")
                         .variant(ButtonVariant::Ghost)
                         .on_click(on(&handler, DiffAction::ShowFile)),

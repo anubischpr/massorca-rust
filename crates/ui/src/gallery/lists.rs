@@ -308,6 +308,7 @@ fn list_row(_: &mut Window, cx: &mut App) -> AnyElement {
             list()
                 .child(
                     ListRow::new("lr-action", "Session with a trailing action")
+                        .leading(RowLeading::Agent(AgentKind::Claude, AgentIconSize::Small))
                         .trailing(Badge::count(1))
                         .hover_action(IconButton::new(
                             "lr-action-more",

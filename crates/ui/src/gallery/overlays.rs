@@ -12,7 +12,7 @@ use crate::components::text_field::TextField;
 use crate::components::tooltip::{Tooltip, TooltipTrigger};
 use crate::icon::IconName;
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{SPACE_2, TYPE_BODY_SM};
+use crate::tokens::{SPACE_2, SPACE_12, TYPE_BODY_SM};
 use gpui::{
     AnyElement, App, Focusable, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
@@ -140,18 +140,33 @@ fn popover_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .flex()
         .flex_wrap()
         .gap(px(SPACE_2))
-        .child(variant("Closed (trigger only)", slot(closed), cx))
-        .child(variant("Info, open", slot(info), cx))
-        .child(variant("Form, focus in first field", slot(form), cx))
-        .child(variant("Action, 320 px", slot(action), cx))
-        .child(variant("Loading", slot(loading), cx))
-        .child(variant("Empty", slot(empty), cx))
+        .child(variant("Closed (trigger only)", popover_slot(closed), cx))
+        .child(variant("Info, open", popover_slot(info), cx))
+        .child(variant(
+            "Form, focus in first field",
+            popover_slot(form),
+            cx,
+        ))
+        .child(variant("Action, 320 px", popover_slot(action), cx))
+        .child(variant("Loading", popover_slot(loading), cx))
+        .child(variant("Empty", popover_slot(empty), cx))
         .into_any_element()
 }
 
 /// A fixed-height slot so the open panel has room to float below its trigger.
 fn slot(content: impl IntoElement) -> impl IntoElement {
     div().h(px(SLOT_HEIGHT)).child(content)
+}
+
+/// A popover column, wider than the widest popover (360 px), so neighbouring popovers never overlap.
+const POPOVER_COLUMN: f32 = 400.0;
+
+/// A popover's slot, sized to its column so an open panel cannot cover its neighbour.
+fn popover_slot(content: impl IntoElement) -> impl IntoElement {
+    div()
+        .w(px(POPOVER_COLUMN))
+        .h(px(SLOT_HEIGHT))
+        .child(content)
 }
 
 fn tooltip_story(window: &mut Window, cx: &mut App) -> AnyElement {
@@ -218,9 +233,9 @@ fn menu_story(window: &mut Window, cx: &mut App) -> AnyElement {
 
     div()
         .flex()
-        .flex_wrap()
+        .flex_col()
         .items_start()
-        .gap(px(SPACE_2))
+        .gap(px(SPACE_12))
         .child(variant(
             "Actions, icons, shortcut, disabled and destructive",
             actions,
