@@ -7,7 +7,7 @@ use massorca_protocol::methods::teams::Bot as WireBot;
 
 use super::state::TeamsState;
 use super::types::{Bot, BotId, Column, HostChoice, Task, TaskId, Team, TeamId};
-use crate::model::agent_kinds::kind_unavailable;
+use crate::model::agent_kinds::kind_unavailable_reason;
 use crate::model::shell::{Agent, HostReach};
 use crate::service::{TeamIds, TeamRecord};
 
@@ -52,7 +52,7 @@ fn live_team(
             name: bot.name.clone(),
             role: bot.job.clone(),
             agent: agent_of_kind(&bot.kind),
-            kind_unavailable: kind_unavailable(kinds, &bot.kind),
+            kind_unavailable: kind_unavailable_reason(kinds, &bot.kind),
         });
     }
     let mut tasks = Vec::new();
@@ -72,7 +72,7 @@ fn live_team(
                     name: name.clone(),
                     role: String::new(),
                     agent: None,
-                    kind_unavailable: false,
+                    kind_unavailable: None,
                 });
             }
             if let Some(id) = ids.get(&card.id) {
@@ -136,6 +136,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::model::agent_kinds::{NOT_AVAILABLE_ON_HOST, TURNED_OFF};
     use crate::model::teams::BoardOwner;
     use crate::service::fixtures::agent_kind;
     use massorca_protocol::methods::agents::PackageState;
@@ -281,7 +282,10 @@ mod tests {
         let mut codex = agent_kind("codex", "Codex", PackageState::Enabled);
         codex.detected = false;
         let view = live_teams(&ids, "This PC", &records, &added, &[codex]);
-        assert!(view.teams()[0].bots[0].kind_unavailable);
+        assert_eq!(
+            view.teams()[0].bots[0].kind_unavailable,
+            Some(NOT_AVAILABLE_ON_HOST)
+        );
     }
 
     #[test]
@@ -294,7 +298,33 @@ mod tests {
         let claude = agent_kind("claude", "Claude", PackageState::Enabled);
         let view = live_teams(&ids, "This PC", &records, &added, &[claude]);
         let bots = &view.teams()[0].bots;
-        assert!(bots.iter().all(|bot| !bot.kind_unavailable));
+        assert!(bots.iter().all(|bot| bot.kind_unavailable.is_none()));
+    }
+
+    #[test]
+    fn a_bot_and_card_on_a_turned_off_kind_carry_turned_off() {
+        let records = [record(
+            "t1",
+            vec![(
+                WireColumn::Running,
+                vec![card("k1", "Review", Some(("b9", "Nora")), None)],
+            )],
+        )];
+        let mut ids = numbered(&records);
+        let added = [bot_of_kind("b9", "codex")];
+        ids.register_bot(&added[0]);
+        let codex = agent_kind("codex", "Codex", PackageState::Disabled);
+        let view = live_teams(&ids, "This PC", &records, &added, &[codex]);
+        assert_eq!(view.teams()[0].bots[0].kind_unavailable, Some(TURNED_OFF));
+        let board = view
+            .board_view(BoardOwner::Team(view.teams()[0].id))
+            .expect("the team has a board");
+        let running = board
+            .columns
+            .iter()
+            .find(|column| column.column == Column::Running)
+            .expect("the running column");
+        assert_eq!(running.cards[0].kind_unavailable, Some(TURNED_OFF));
     }
 
     #[test]
@@ -320,7 +350,10 @@ mod tests {
             .iter()
             .find(|column| column.column == Column::Running)
             .expect("the running column");
-        assert!(running.cards[0].kind_unavailable);
+        assert_eq!(
+            running.cards[0].kind_unavailable,
+            Some(NOT_AVAILABLE_ON_HOST)
+        );
     }
 
     fn bot_of_kind(id: &str, kind: &str) -> WireBot {
