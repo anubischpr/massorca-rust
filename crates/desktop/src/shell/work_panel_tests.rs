@@ -220,6 +220,42 @@ fn keep_running_hides_the_pane_and_leaves_the_tab_and_the_process(cx: &mut TestA
 }
 
 #[gpui::test]
+fn a_kept_terminal_still_counts_in_the_status_bar(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page(cx);
+    let _items = open_and_show(&mut rig, cx);
+
+    click(cx, "close-0");
+    click(cx, "dialog-cancel");
+    // Any store change recomputes the status bar; the store still holds the kept terminal.
+    rig.updates
+        .send(StoreUpdate::Connection(connected()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+
+    rig.shell.read_with(cx, |shell, cx| {
+        assert!(
+            !shell.terminal_views.contains_key("t1"),
+            "the pane is hidden"
+        );
+        assert!(
+            shell
+                .store
+                .read(cx)
+                .state()
+                .terminals
+                .iter()
+                .any(|terminal| terminal.id == "t1"),
+            "the store still holds the kept terminal"
+        );
+        let status = &shell.model().snapshot().status;
+        assert_eq!(status.terminals, 1, "the kept terminal may still run");
+        assert_eq!(status.terminals_text(), "1 terminal");
+    });
+    assert!(cx.debug_bounds("status-terminals").is_some());
+}
+
+#[gpui::test]
 fn stop_process_closes_the_terminal_and_its_tab_goes(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page(cx);
     let _items = open_and_show(&mut rig, cx);
