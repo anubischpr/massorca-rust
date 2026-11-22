@@ -55,3 +55,59 @@ fn a_folder_with_a_missing_referenced_file_is_refused() {
     let error = load(&Source::Dir(dir.path().to_path_buf()), None).expect_err("incomplete");
     assert_eq!(error.code(), codes::MISSING_FILE);
 }
+
+#[test]
+fn a_folder_with_a_windows_short_name_is_refused() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut files = package_files(&agent_package("acme", "kit", "kit"));
+    files.insert("EXTENS~1.JSO".to_owned(), b"{}".to_vec());
+    write_dir(dir.path(), &files);
+    let error = load(&Source::Dir(dir.path().to_path_buf()), None).expect_err("an alias");
+    assert_eq!(error.code(), codes::UNSAFE_PATH);
+}
+
+#[test]
+fn network_and_device_paths_are_never_a_source() {
+    let mut refused = vec![
+        r"dir:\\host\share\kit",
+        r"file:\\?\C:\kit.mxt",
+        r"file:\\.\PhysicalDrive0",
+        r"dir:\??\C:\kit",
+    ];
+    if cfg!(windows) {
+        refused.extend([
+            "dir://host/share/kit",
+            r"file:\/host/share/kit.mxt",
+            r"dir:/\host\share",
+        ]);
+    }
+    for text in refused {
+        let error = Source::parse(text).expect_err(text);
+        assert_eq!(
+            error.code(),
+            massorca_core_extensions::codes::INVALID_SOURCE,
+            "{text}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_in_a_folder_or_as_an_archive_is_refused_without_blocking() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_dir(
+        dir.path(),
+        &package_files(&agent_package("acme", "kit", "kit")),
+    );
+    let fifo = dir.path().join("pipe");
+    let made = massorca_process::command("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+    let error = load(&Source::Dir(dir.path().to_path_buf()), None).expect_err("a fifo entry");
+    assert_eq!(error.code(), codes::UNSAFE_ENTRY);
+    // No writer ever opens the FIFO: the check must refuse it without opening it, or this test hangs.
+    let error = load(&Source::File(fifo), Some(WRONG)).expect_err("a fifo archive");
+    assert_eq!(error.code(), codes::INVALID_ARCHIVE);
+}
