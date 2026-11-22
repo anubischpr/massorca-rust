@@ -96,6 +96,10 @@ pub struct Shell {
     team_confirm: Option<teams::TeamConfirm>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal whose closing waits for the stop question.
+    stop_prompt: Option<String>,
+    /// A refused terminal call, as its title and its reason, under the Work panel's strip.
+    terminal_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -207,6 +211,8 @@ impl Shell {
             team_dialog: None,
             team_confirm: None,
             terminal_views: BTreeMap::new(),
+            stop_prompt: None,
+            terminal_notice: None,
         }
     }
 
@@ -372,7 +378,7 @@ impl Render for Shell {
         let work_panel = self
             .model
             .region_visible(Region::WorkPanel)
-            .then(|| self.work_frame(cx));
+            .then(|| self.work_frame(shell.clone(), cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -486,6 +492,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let stop_terminal = self
+            .stop_prompt
+            .is_some()
+            .then(|| work_panel::stop_dialog(&shell, cx));
         div()
             .size_full()
             .flex()
@@ -543,5 +553,6 @@ impl Render for Shell {
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }
