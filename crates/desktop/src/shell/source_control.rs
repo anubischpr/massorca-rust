@@ -15,7 +15,9 @@ use massorca_ui::components::text_field::TextField;
 use super::Shell;
 use crate::model::regions::Region;
 use crate::model::source_control_diff::{diff_status, file_status, parse_patch};
-use crate::model::source_control_flow::{CommitForm, DiscardFlow, DiscardStage, DiscardTarget};
+use crate::model::source_control_flow::{
+    Answer, CommitForm, DiscardFlow, DiscardStage, DiscardTarget,
+};
 use crate::service::Refusal;
 
 /// The Project sidebar's tabs in their fixed order (ProjectSidebarTabs.md).
@@ -102,6 +104,8 @@ pub(super) struct SourceControl {
     diff_request: u64,
     /// The discard dialog's flow, while the dialog is open.
     pub discard: Option<DiscardFlow>,
+    /// The last id given to a discard dialog or to one of its calls. Ids are never reused.
+    next_id: u64,
     _field_changes: Subscription,
 }
 
@@ -120,8 +124,17 @@ impl SourceControl {
             diff: None,
             diff_request: 0,
             discard: None,
+            next_id: 0,
             _field_changes: field_changes,
         }
+    }
+}
+
+impl SourceControl {
+    /// A fresh id, for a discard dialog or for one of its calls.
+    fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
     }
 }
 
@@ -152,7 +165,7 @@ impl Shell {
             self.source_control.clear_field = true;
             self.source_control.open = None;
             self.source_control.diff = None;
-            self.source_control.discard = None;
+            self.cancel_discard();
             self.source_control.diff_request += 1;
         }
         if self.source_control.clear_field {
@@ -349,40 +362,59 @@ impl Shell {
         if self.service.is_none() || self.source_control.discard.is_some() {
             return;
         }
-        self.source_control.discard = Some(DiscardFlow::new(workspace, targets));
+        let id = self.source_control.next_id();
+        self.source_control.discard = Some(DiscardFlow::new(id, workspace, targets));
         cx.notify();
     }
 
-    /// The dialog's action: gives the waiver its stage asks for and discards with it.
+    /// The dialog's action: gives the waiver its stage asks for and sends the call. The answer is matched
+    /// against this dialog, this call, and the workspace the call was sent in.
     pub(super) fn confirm_discard(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = self.service.clone() else {
             return;
         };
+        let call = self.source_control.next_id();
         let Some(flow) = self.source_control.discard.as_mut() else {
             return;
         };
-        if !flow.confirm() {
+        let (flow_id, workspace) = (flow.id(), flow.workspace_id().to_owned());
+        let Some(params) = flow.confirm(call) else {
             let plain = matches!(flow.stage(), DiscardStage::Refused { .. });
             if plain {
                 self.close_discard(cx);
             }
             return;
-        }
-        let params = flow.params();
+        };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = handle.git_discard(params).await.map(|_| ());
-            this.update(cx, |shell, cx| shell.finish_discard(result, cx))
-                .ok();
+            this.update(cx, |shell, cx| {
+                shell.finish_discard(flow_id, call, &workspace, result, cx);
+            })
+            .ok();
         })
         .detach();
     }
 
-    fn finish_discard(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+    /// The discard call's answer. It applies only to the dialog that sent the call, and only while the
+    /// panel still shows the workspace the call was sent in. Any other answer is dropped.
+    fn finish_discard(
+        &mut self,
+        flow_id: u64,
+        call: u64,
+        workspace: &str,
+        result: Result<(), Refusal>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(flow) = self.source_control.discard.as_mut() else {
+            cx.notify();
             return;
         };
-        if !flow.answered(result) {
+        if flow.id() != flow_id || flow.workspace_id() != workspace {
+            cx.notify();
+            return;
+        }
+        if flow.answered(call, result) != Answer::Finished {
             cx.notify();
             return;
         }
@@ -397,6 +429,13 @@ impl Shell {
         } else {
             cx.notify();
         }
+    }
+
+    /// Ends the discard dialog because the panel moved to another workspace. A call already sent still
+    /// runs, since the user confirmed it, but its answer is dropped: it cannot reshape a dialog that is
+    /// open for another workspace.
+    fn cancel_discard(&mut self) {
+        self.source_control.discard = None;
     }
 
     pub(super) fn close_discard(&mut self, cx: &mut Context<Self>) {

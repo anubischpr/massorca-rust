@@ -39,23 +39,38 @@ pub struct DiscardTarget {
     pub untracked: bool,
 }
 
-/// One discard of the files the user picked, from the confirmation to the answer.
+/// What an answer did to the dialog it reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// The answer belongs to another call, so the dialog did not change.
+    Ignored,
+    /// The discard ran, so the dialog is over.
+    Finished,
+    /// The dialog stays open: a waiver is asked for, or the call failed and can be tried again.
+    Continues,
+}
+
+/// One discard of the files the user picked, from the confirmation to the answer. The dialog has an id,
+/// and each call it makes has one: an answer counts only for the call the dialog is waiting for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscardFlow {
+    id: u64,
     workspace_id: String,
     targets: Vec<DiscardTarget>,
     stage: DiscardStage,
     waivers: DiscardWaivers,
-    busy: bool,
+    /// The call out for this dialog, while one is.
+    pending: Option<u64>,
     error: Option<String>,
 }
 
 impl DiscardFlow {
     /// The first dialog names the deletion when a target is untracked, so the first call carries that
     /// waiver: the user confirms once, for exactly what the dialog says.
-    pub fn new(workspace_id: impl Into<String>, targets: Vec<DiscardTarget>) -> Self {
+    pub fn new(id: u64, workspace_id: impl Into<String>, targets: Vec<DiscardTarget>) -> Self {
         let delete_untracked = targets.iter().any(|target| target.untracked);
         Self {
+            id,
             workspace_id: workspace_id.into(),
             targets,
             stage: DiscardStage::Confirm,
@@ -63,9 +78,17 @@ impl DiscardFlow {
                 delete_untracked,
                 include_staged: false,
             },
-            busy: false,
+            pending: None,
             error: None,
         }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
     }
 
     pub fn paths(&self) -> Vec<String> {
@@ -79,8 +102,9 @@ impl DiscardFlow {
         &self.stage
     }
 
+    /// A call is out for this dialog.
     pub fn busy(&self) -> bool {
-        self.busy
+        self.pending.is_some()
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -99,38 +123,45 @@ impl DiscardFlow {
         }
     }
 
-    /// The primary action: gives the waiver this stage asks for and goes busy. False when there is
-    /// nothing to run (a plain refusal), or a call is out already.
-    pub fn confirm(&mut self) -> bool {
-        if self.busy {
-            return false;
+    /// The primary action: gives the waiver this stage asks for and sends the call under `call`. None when
+    /// nothing can run (a plain refusal, or a call is out already).
+    pub fn confirm(&mut self, call: u64) -> Option<GitDiscardParams> {
+        if self.pending.is_some() {
+            return None;
         }
         match self.stage {
             DiscardStage::Confirm => {}
             DiscardStage::Untracked { .. } => self.waivers.delete_untracked = true,
             DiscardStage::Staged { .. } => self.waivers.include_staged = true,
-            DiscardStage::Refused { .. } => return false,
+            DiscardStage::Refused { .. } => return None,
         }
-        self.busy = true;
+        self.pending = Some(call);
         self.error = None;
-        true
+        Some(self.params())
     }
 
-    /// The service answered. True when the discard is over: it ran.
-    pub fn answered(&mut self, result: Result<(), Refusal>) -> bool {
-        self.busy = false;
+    /// The service answered `call`. Only the call this dialog waits for counts, and any other answer
+    /// changes nothing. A refusal can offer a waiver only for files this dialog covers.
+    pub fn answered(&mut self, call: u64, result: Result<(), Refusal>) -> Answer {
+        if self.pending != Some(call) {
+            return Answer::Ignored;
+        }
+        self.pending = None;
         match result {
-            Ok(()) => return true,
+            Ok(()) => return Answer::Finished,
             Err(Refusal::GitRefused {
                 code,
                 paths,
                 message,
             }) => {
+                let covered = paths
+                    .iter()
+                    .all(|path| self.targets.iter().any(|target| target.path == *path));
                 self.stage = match code.as_str() {
-                    codes::GIT_DISCARD_UNTRACKED if !self.waivers.delete_untracked => {
+                    codes::GIT_DISCARD_UNTRACKED if covered && !self.waivers.delete_untracked => {
                         DiscardStage::Untracked { paths }
                     }
-                    codes::GIT_DISCARD_STAGED if !self.waivers.include_staged => {
+                    codes::GIT_DISCARD_STAGED if covered && !self.waivers.include_staged => {
                         DiscardStage::Staged { paths }
                     }
                     _ => DiscardStage::Refused { message },
@@ -144,7 +175,7 @@ impl DiscardFlow {
                 };
             }
         }
-        false
+        Answer::Continues
     }
 
     /// What the dialog says at the current stage.
@@ -288,6 +319,7 @@ impl CommitForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const CALL: u64 = 1;
 
     fn paths(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
@@ -324,9 +356,9 @@ mod tests {
 
     #[test]
     fn a_discard_asks_first_and_gives_no_waiver_until_one_is_asked_for() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["src/a.rs"]));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["src/a.rs"]));
         assert_eq!(flow.stage(), &DiscardStage::Confirm);
-        assert!(flow.confirm());
+        assert!(flow.confirm(CALL).is_some());
         assert!(flow.busy());
         let params = flow.params();
         assert_eq!(params.workspace, "w1");
@@ -338,56 +370,62 @@ mod tests {
 
     #[test]
     fn an_untracked_refusal_asks_for_delete_untracked_only() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt", "b.txt"]));
-        flow.confirm();
-        assert!(!flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["b.txt"]))));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt", "b.txt"]));
+        flow.confirm(CALL);
+        assert_eq!(
+            flow.answered(CALL, Err(refused(codes::GIT_DISCARD_UNTRACKED, &["b.txt"]))),
+            Answer::Continues
+        );
         assert_eq!(
             flow.stage(),
             &DiscardStage::Untracked {
                 paths: paths(&["b.txt"])
             }
         );
-        assert!(flow.confirm());
+        assert!(flow.confirm(CALL).is_some());
         let params = flow.params();
         assert!(params.delete_untracked && !params.include_staged);
-        assert!(flow.answered(Ok(())));
+        assert_eq!(flow.answered(CALL, Ok(())), Answer::Finished);
     }
 
     #[test]
     fn a_staged_refusal_has_its_own_waiver_after_the_untracked_one() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_DISCARD_STAGED, &["a.txt"])));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        flow.confirm(CALL);
+        flow.answered(CALL, Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
+        flow.confirm(CALL);
+        flow.answered(CALL, Err(refused(codes::GIT_DISCARD_STAGED, &["a.txt"])));
         assert_eq!(
             flow.stage(),
             &DiscardStage::Staged {
                 paths: paths(&["a.txt"])
             }
         );
-        flow.confirm();
+        flow.confirm(CALL);
         let params = flow.params();
         assert!(params.delete_untracked && params.include_staged);
     }
 
     #[test]
     fn a_refusal_that_comes_back_after_its_waiver_does_not_loop() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        flow.confirm(CALL);
+        flow.answered(CALL, Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
+        flow.confirm(CALL);
+        flow.answered(CALL, Err(refused(codes::GIT_DISCARD_UNTRACKED, &["a.txt"])));
         assert!(matches!(flow.stage(), DiscardStage::Refused { .. }));
-        assert!(!flow.confirm(), "a plain refusal runs nothing");
+        assert!(flow.confirm(CALL).is_none(), "a plain refusal runs nothing");
         assert_eq!(flow.copy().kind, DialogKind::Error);
     }
 
     #[test]
     fn a_conflicted_file_is_a_plain_refusal_with_the_service_text() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["Cargo.lock"]));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_PATH_CONFLICTED, &["Cargo.lock"])));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["Cargo.lock"]));
+        flow.confirm(CALL);
+        flow.answered(
+            CALL,
+            Err(refused(codes::GIT_PATH_CONFLICTED, &["Cargo.lock"])),
+        );
         assert_eq!(
             flow.stage(),
             &DiscardStage::Refused {
@@ -398,40 +436,46 @@ mod tests {
 
     #[test]
     fn a_link_that_is_down_keeps_the_dialog_and_the_call_can_be_tried_again() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
-        flow.confirm();
-        flow.answered(Err(Refusal::unavailable("The service is not connected.")));
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        flow.confirm(CALL);
+        flow.answered(
+            CALL,
+            Err(Refusal::unavailable("The service is not connected.")),
+        );
         assert_eq!(flow.stage(), &DiscardStage::Confirm);
         assert!(!flow.busy());
         assert_eq!(flow.error(), Some("The service is not connected."));
-        assert!(flow.confirm(), "the same call goes out again");
+        assert!(flow.confirm(CALL).is_some(), "the same call goes out again");
         assert_eq!(flow.error(), None);
     }
 
     #[test]
     fn a_second_confirm_while_a_call_is_out_does_nothing() {
-        let mut flow = DiscardFlow::new("w1", tracked(&["a.txt"]));
-        assert!(flow.confirm());
-        assert!(!flow.confirm());
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        assert!(flow.confirm(CALL).is_some());
+        assert!(flow.confirm(CALL).is_none());
     }
 
     #[test]
     fn each_dialog_names_its_loss_and_counts_the_files_past_the_list() {
         let many: Vec<String> = (1..=7).map(|n| format!("dir/f{n}.txt")).collect();
-        let mut flow = DiscardFlow::new("w1", tracked_owned(many));
+        let mut flow = DiscardFlow::new(1, "w1", tracked_owned(many));
         let copy = flow.copy();
         assert_eq!(copy.title, "Discard changes in 7 files?");
         assert_eq!(copy.kind, DialogKind::Destructive);
         assert_eq!(copy.loss.len(), LISTED_FILES + 1);
         assert_eq!(copy.loss.last().map(String::as_str), Some("and 2 more"));
-        flow.confirm();
-        flow.answered(Err(refused(codes::GIT_DISCARD_UNTRACKED, &["dir/f1.txt"])));
+        flow.confirm(CALL);
+        flow.answered(
+            CALL,
+            Err(refused(codes::GIT_DISCARD_UNTRACKED, &["dir/f1.txt"])),
+        );
         assert_eq!(flow.copy().title, "Delete untracked f1.txt?");
     }
 
     #[test]
     fn a_single_file_is_named_by_its_name_alone() {
-        let flow = DiscardFlow::new("w1", tracked(&["src/deep/a.rs"]));
+        let flow = DiscardFlow::new(1, "w1", tracked(&["src/deep/a.rs"]));
         assert_eq!(flow.copy().title, "Discard changes in a.rs?");
     }
 
@@ -474,7 +518,7 @@ mod tests {
 
     #[test]
     fn an_untracked_only_selection_is_a_deletion_from_its_first_dialog() {
-        let mut flow = DiscardFlow::new("w1", vec![target("notes.md", true)]);
+        let mut flow = DiscardFlow::new(1, "w1", vec![target("notes.md", true)]);
         let copy = flow.copy();
         assert_eq!(copy.title, "Delete notes.md?");
         assert_eq!(copy.kind, DialogKind::Destructive);
@@ -485,13 +529,17 @@ mod tests {
             flow.params().delete_untracked,
             "the first call carries the waiver the dialog names"
         );
-        assert!(flow.confirm());
-        assert!(flow.answered(Ok(())), "one confirmation is enough");
+        assert!(flow.confirm(CALL).is_some());
+        assert_eq!(
+            flow.answered(CALL, Ok(())),
+            Answer::Finished,
+            "one confirmation is enough"
+        );
     }
 
     #[test]
     fn several_untracked_files_are_counted_in_the_first_dialog() {
-        let flow = DiscardFlow::new("w1", vec![target("a.md", true), target("b.md", true)]);
+        let flow = DiscardFlow::new(1, "w1", vec![target("a.md", true), target("b.md", true)]);
         assert_eq!(flow.copy().title, "Delete 2 untracked files?");
         assert_eq!(flow.copy().action, "Delete files");
         assert!(flow.params().delete_untracked);
@@ -499,7 +547,11 @@ mod tests {
 
     #[test]
     fn a_mixed_selection_names_both_losses_in_the_first_dialog() {
-        let flow = DiscardFlow::new("w1", vec![target("src/a.rs", false), target("b.txt", true)]);
+        let flow = DiscardFlow::new(
+            1,
+            "w1",
+            vec![target("src/a.rs", false), target("b.txt", true)],
+        );
         let copy = flow.copy();
         assert_eq!(copy.title, "Discard changes in 2 files?");
         assert!(copy.body.contains("untracked files are deleted"));
@@ -509,10 +561,51 @@ mod tests {
 
     #[test]
     fn a_tracked_selection_names_only_the_edits_and_sends_no_deletion_waiver() {
-        let flow = DiscardFlow::new("w1", vec![target("src/a.rs", false)]);
+        let flow = DiscardFlow::new(1, "w1", vec![target("src/a.rs", false)]);
         let copy = flow.copy();
         assert_eq!(copy.title, "Discard changes in a.rs?");
         assert!(!copy.body.contains("deleted"));
         assert!(!flow.params().delete_untracked);
+    }
+
+    #[test]
+    fn an_answer_for_another_call_changes_nothing() {
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        assert!(flow.confirm(CALL).is_some());
+        assert_eq!(
+            flow.answered(
+                CALL + 1,
+                Err(refused(codes::GIT_DISCARD_STAGED, &["a.txt"]))
+            ),
+            Answer::Ignored
+        );
+        assert_eq!(flow.stage(), &DiscardStage::Confirm);
+        assert!(flow.busy(), "the call the dialog waits for is still out");
+        assert_eq!(flow.answered(CALL, Ok(())), Answer::Finished);
+    }
+
+    #[test]
+    fn a_refusal_offers_a_waiver_only_for_files_the_dialog_covers() {
+        let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+        flow.confirm(CALL);
+        flow.answered(CALL, Err(refused(codes::GIT_DISCARD_STAGED, &["b.txt"])));
+        assert_eq!(
+            flow.stage(),
+            &DiscardStage::Refused {
+                message: "the service says no".into()
+            },
+            "no waiver for a file this dialog does not cover"
+        );
+    }
+
+    #[test]
+    fn a_new_dialog_has_no_call_out_so_an_old_answer_cannot_reach_it() {
+        let mut flow = DiscardFlow::new(2, "w1", tracked(&["b.txt"]));
+        assert_eq!(
+            flow.answered(CALL, Err(refused(codes::GIT_DISCARD_STAGED, &["b.txt"]))),
+            Answer::Ignored
+        );
+        assert_eq!(flow.stage(), &DiscardStage::Confirm);
+        assert_eq!(flow.id(), 2);
     }
 }
