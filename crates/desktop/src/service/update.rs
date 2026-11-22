@@ -7,6 +7,7 @@ use std::time::Instant;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -33,6 +34,17 @@ pub enum StoreUpdate {
     TerminalGone(String),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
+    /// What the vault reads learned; each part replaces what it names.
+    Secrets(SecretsUpdate),
+}
+
+/// One answer of the vault reads. Names and times only: no answer carries a secret's value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SecretsUpdate {
+    /// The key's state and the count of owned secrets, or why they could not be read.
+    Status(Result<SecretStatus, Refusal>),
+    /// Every name in every scope, owned and linked, or why they could not be read.
+    List(Result<Vec<SecretEntry>, Refusal>),
 }
 
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
@@ -75,6 +87,13 @@ pub struct WorkspaceGit {
     pub degraded: Option<String>,
 }
 
+/// The vault as the service last reported it. A part is `None` until its first answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretsState {
+    pub status: Option<Result<SecretStatus, Refusal>>,
+    pub list: Option<Result<Vec<SecretEntry>, Refusal>>,
+}
+
 /// The projects and workspaces the service reported, and how the link to it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreState {
@@ -89,6 +108,8 @@ pub struct StoreState {
     pub down_since: Option<Instant>,
     /// The git state of each workspace the store holds, by workspace id.
     pub git: BTreeMap<String, WorkspaceGit>,
+    /// The secret vault: its status and every name it lists.
+    pub secrets: SecretsState,
 }
 
 impl Default for StoreState {
@@ -101,6 +122,7 @@ impl Default for StoreState {
             loaded: false,
             down_since: None,
             git: BTreeMap::new(),
+            secrets: SecretsState::default(),
         }
     }
 }
@@ -152,6 +174,12 @@ impl StoreState {
             }
             StoreUpdate::TerminalGone(id) => self.terminals.retain(|t| t.id != id),
             StoreUpdate::Git(update) => self.apply_git(update),
+            StoreUpdate::Secrets(SecretsUpdate::Status(result)) => {
+                self.secrets.status = Some(result);
+            }
+            StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
+                self.secrets.list = Some(result);
+            }
         }
     }
 
@@ -353,5 +381,35 @@ mod tests {
         );
         state.apply(StoreUpdate::Connection(up), later);
         assert_eq!(state.down_since, None);
+    }
+
+    #[test]
+    fn a_vault_answer_replaces_only_the_part_it_names() {
+        let mut state = StoreState::default();
+        let status = SecretStatus {
+            protection: "file".into(),
+            state: "ready".into(),
+            count: 1,
+            name_clashes: Vec::new(),
+        };
+        let now = Instant::now();
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status.clone()))),
+            now,
+        );
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::List(Ok(Vec::new()))),
+            now,
+        );
+        assert_eq!(state.secrets.status, Some(Ok(status)));
+        assert_eq!(state.secrets.list, Some(Ok(Vec::new())));
+
+        let gone = Refusal::unavailable("the service cannot be reached right now");
+        state.apply(
+            StoreUpdate::Secrets(SecretsUpdate::Status(Err(gone.clone()))),
+            now,
+        );
+        assert_eq!(state.secrets.status, Some(Err(gone)));
+        assert_eq!(state.secrets.list, Some(Ok(Vec::new())), "the list stays");
     }
 }

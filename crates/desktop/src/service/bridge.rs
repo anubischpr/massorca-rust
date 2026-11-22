@@ -13,8 +13,8 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, Subscripti
 use massorca_profile::Profile;
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED,
+    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -31,6 +31,7 @@ use tokio::time::sleep;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::git::{self, Freshness, Watches};
 use super::refusal::Refusal;
+use super::secrets::{self, SecretsFreshness};
 use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
@@ -242,6 +243,7 @@ impl ServiceBridge {
             connection: connection_tx,
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
+            secrets_order: Arc::new(SecretsFreshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -293,6 +295,8 @@ struct Link {
     watching: BTreeSet<String>,
     /// Orders the git answers across the connections of this bridge.
     freshness: Arc<Freshness>,
+    /// Orders the vault reads across the connections of this bridge.
+    secrets_order: Arc<SecretsFreshness>,
 }
 
 impl Link {
@@ -400,6 +404,7 @@ impl Link {
         });
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
+        secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
 
@@ -461,6 +466,11 @@ impl Link {
     async fn on_event(&self, client: &Client, event: ChangeEvent) -> Outcome {
         let ChangeEvent { topic, id } = event;
         let refetched = match topic.as_str() {
+            TOPIC_SECRET_CHANGED => {
+                // The event names a scope and a name; the store takes the whole list again, names only.
+                secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
+                return Outcome::Continue;
+            }
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
                 .workspace_show(&WorkspaceRef {
                     workspace: id.clone(),
