@@ -100,6 +100,29 @@ Per-window UI state lives in `ShellModel`, not in the store: the open usage
 popover, the Status bar items the window hides, and the palette's Recent rows
 (the last five commands and workspaces run). None of it is saved to disk yet.
 
+## Source control
+
+The Project sidebar's Source control tab (D-DF-02) shows the selected workspace's branch, its changes
+in four groups, the commit box and the first page of history. It runs on `git/1` through the bridge
+(decisions 0010 to 0013):
+
+- **Calls.** `service/git.rs` runs diff, stage, unstage, discard and commit on the bridge runtime. A
+  mutation refetches the workspace's status (and history after a commit) before it replies, whatever
+  the answer.
+- **Watch.** While the tab is on screen, the bridge follows the selected workspace with `git.watch`.
+  Each event refetches the status. Watches survive a reconnect and end with their connection.
+- **Store.** `StoreState.git` holds each workspace's status, first history page and degraded-watch
+  state. A removed workspace takes them with it.
+- **Models.** `model::source_control` derives the panel from the store; `model::source_control_diff`
+  parses a patch into DiffView's data; `model::source_control_flow` holds the discard waivers and the
+  commit form.
+- **Shell.** `shell::source_control` holds the panel's own state and calls. `project_sidebar` draws the
+  tabs and the panel. `diff_page` draws a file's diff in the Canvas, in place of the start page.
+  `source_control_dialogs` draws the discard flow with the same `flow_dialog` as the remove dialog.
+- **Not built.** Fetch, pull, push, branch operations and abort; the Work panel tab (the diff takes the
+  Canvas until the Work panel is on main); a multi-line commit message, since the message field is one
+  line; history beyond the first page.
+
 ## Bot Teams
 
 Bot Teams is a mode of the same shell (D-SH-10), not a second app. Its data is
