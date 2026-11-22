@@ -1,6 +1,6 @@
 //! `git.commit`: commit the staged set or amend HEAD, with the refusals of decision 0013. Hooks always run.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use massorca_protocol::codes;
@@ -117,7 +117,22 @@ impl Git {
         Ok(captured.text()?.lines().map(str::to_owned).collect())
     }
 
-    fn absolute_git_dir(&self, dir: &Path) -> Result<std::path::PathBuf, GitError> {
+    /// The work tree's own git directory and the common directory where refs live, both absolute.
+    pub fn repository_dirs(&self, dir: &Path) -> Result<(PathBuf, PathBuf), GitError> {
+        let git_dir = self.absolute_git_dir(dir)?;
+        let captured = self.run(Some(dir), ["rev-parse", "--git-common-dir"])?;
+        captured.require_success()?;
+        let common = path_from_git(captured.text()?.trim_end_matches(['\r', '\n']));
+        // Git prints the common directory relative to `dir` when it is not absolute.
+        let common = if common.is_absolute() {
+            common
+        } else {
+            dir.join(common)
+        };
+        Ok((git_dir, common))
+    }
+
+    fn absolute_git_dir(&self, dir: &Path) -> Result<PathBuf, GitError> {
         let captured = self.run(Some(dir), ["rev-parse", "--absolute-git-dir"])?;
         captured.require_success()?;
         Ok(path_from_git(

@@ -17,6 +17,9 @@ massorca-protocol.workspace = true
 massorca-ui.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
+[build-dependencies]
+embed-resource.workspace = true
+
 [dev-dependencies]
 massorca-server.workspace = true
 tempfile.workspace = true
