@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::endpoint::fnv1a_64;
 use crate::error::ProfileError;
+use crate::root_access::create_private_dir;
 
 const DEFAULT_PROFILE: &str = "default";
 const PROFILE_ENV: &str = "MASSORCA_PROFILE";
@@ -94,9 +95,10 @@ impl Profile {
 }
 
 /// Creates the profile and logs directories. Extension directories are left to the extension host.
-/// On Unix the profile directory is made private to its owner (0700) even when it already existed, so no other user can reach the socket in it.
+/// A new profile directory is created private to its owner in one step (ADR 0073); `secure_root` checks an existing one.
+/// On Unix it is also made 0700 when it already existed, so no other user can reach the socket in it.
 pub fn ensure_dir(profile: &Profile) -> io::Result<()> {
-    fs::create_dir_all(profile.dir())?;
+    create_private_dir(profile.dir())?;
     restrict_dir(profile.dir())?;
     fs::create_dir_all(profile.logs_dir())
 }
@@ -107,7 +109,7 @@ fn restrict_dir(dir: &Path) -> io::Result<()> {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
-/// Windows directories take their access from the profile's parent; the pipe carries its own descriptor.
+/// Windows sets the access when the directory is created, and `secure_root` repairs it on start.
 #[cfg(not(unix))]
 fn restrict_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
