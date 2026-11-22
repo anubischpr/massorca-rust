@@ -83,6 +83,21 @@ CREATE INDEX agent_sessions_by_parent ON agent_sessions(parent_id);
 "#,
         foreign_keys_off: false,
     },
+    Migration {
+        // Paired network devices (decision 0041). Only the hash of a device's public key is kept.
+        sql: r#"
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_pin TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER,
+    revoked_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
