@@ -25,7 +25,7 @@ pub mod codes {
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct HookError {
     pub code: String,
     pub message: String,

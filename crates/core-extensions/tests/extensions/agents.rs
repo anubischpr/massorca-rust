@@ -44,9 +44,11 @@ fn installed_kinds_list_enabled_and_disabled_packages_in_lockfile_order() {
     );
     assert_eq!(kinds[0].package_version, "1.2.0");
     for kind in &kinds {
-        assert!(kind.path.is_absolute(), "{}", kind.path.display());
-        assert!(kind.path.ends_with(format!("agents/{}.json", kind.kind_id)));
-        assert!(kind.path.is_file());
+        let path = kind.path.as_ref().expect("a trusted package has a path");
+        assert!(path.is_absolute(), "{}", path.display());
+        assert!(path.ends_with(format!("agents/{}.json", kind.kind_id)));
+        assert!(path.is_file());
+        assert_eq!(kind.error, None);
     }
 }
 

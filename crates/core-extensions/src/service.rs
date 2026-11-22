@@ -135,6 +135,12 @@ impl Extensions {
                 consent: expected,
                 installed_at_ms: now_ms(),
                 cli,
+                agent_kinds: manifest
+                    .contributes
+                    .agent_adapters
+                    .iter()
+                    .map(|adapter| adapter.id.clone())
+                    .collect(),
                 extra: Default::default(),
             })
             .and_then(|entry| {
@@ -155,14 +161,19 @@ impl Extensions {
 
     fn check_kind_conflicts(&self, lockfile: &Lockfile, manifest: &Manifest) -> Result<(), Error> {
         for entry in &lockfile.packages {
-            let installed = self.installed_manifest(entry)?;
-            for adapter in &manifest.contributes.agent_adapters {
-                if installed
+            // The ids recorded at install, so a package whose files changed never blocks installing another one.
+            let installed: Vec<String> = if entry.agent_kinds.is_empty() {
+                self.installed_manifest(entry)?
                     .contributes
                     .agent_adapters
-                    .iter()
-                    .any(|other| other.id == adapter.id)
-                {
+                    .into_iter()
+                    .map(|adapter| adapter.id)
+                    .collect()
+            } else {
+                entry.agent_kinds.clone()
+            };
+            for adapter in &manifest.contributes.agent_adapters {
+                if installed.contains(&adapter.id) {
                     return Err(Error::KindConflict {
                         kind: adapter.id.clone(),
                         installed_by: entry.id.clone(),

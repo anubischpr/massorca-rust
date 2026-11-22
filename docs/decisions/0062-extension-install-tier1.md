@@ -159,6 +159,11 @@ file as read; its install still needs the pin.
   - `path`: the absolute path of `agents/<id>.json`;
   - `enabled`;
   - `cli_installed_by_package`.
+  - `error`: set, with `path` empty, when the package's files no longer match the
+    lockfile (`extension.tampered`). Its kinds are still listed, from the
+    `agent_kinds` ids the lockfile records at install, so one changed package
+    never hides the others. The kind-conflict check on install uses the same
+    recorded ids. Only an unreadable lockfile fails the whole call.
 - `catalogue_agent_kinds() -> Vec<CatalogueAgentKind>` returns, for every
   catalogue entry, the declaration bytes and its `cli` block. Each
   declaration's content is checked by `core-agents`, not here.

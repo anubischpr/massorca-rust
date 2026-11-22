@@ -180,9 +180,20 @@ fn a_changed_installed_manifest_is_never_trusted_or_run() {
     let path = s.service.layout().resolve(&format!("{rel}/extension.json"));
     std::fs::write(path, serde_json::to_vec(&manifest).expect("json")).expect("tamper");
 
-    let error = massorca_core_extensions::installed_agent_kinds(&s.profile)
-        .expect_err("a tampered package");
-    assert_eq!(error.code(), codes::TAMPERED);
+    let other = s.package_dir("other", &agent_package("other", "other", "other"));
+    s.install(&other, true)
+        .expect("a tampered package never blocks installing another");
+    let kinds = massorca_core_extensions::installed_agent_kinds(&s.profile)
+        .expect("one tampered package never fails the whole call");
+    assert_eq!(kinds.len(), 2);
+    assert_eq!(kinds[1].kind_id, "other");
+    assert!(kinds[1].path.is_some() && kinds[1].error.is_none());
+    assert_eq!(kinds[0].kind_id, "kit");
+    assert_eq!(kinds[0].path, None);
+    assert_eq!(
+        kinds[0].error.as_ref().map(|error| error.code.as_str()),
+        Some(codes::TAMPERED)
+    );
     let item = s.service.get("acme.kit").expect_err("not trusted");
     assert_eq!(item.code(), codes::TAMPERED);
 

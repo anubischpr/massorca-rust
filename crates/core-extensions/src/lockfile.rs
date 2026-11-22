@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use massorca_ext_package::ids::is_extension_id;
+use massorca_ext_package::ids::{is_extension_id, is_kind_id};
 use massorca_ext_package::package_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -55,6 +55,9 @@ pub struct LockEntry {
     pub installed_at_ms: u64,
     #[serde(default)]
     pub cli: Vec<LockCli>,
+    /// The package's agent kind ids at install, so its kinds can be named even when its files cannot be trusted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_kinds: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -177,6 +180,12 @@ impl LockEntry {
             .and_then(|rest| rest.strip_prefix(self.id.as_str()))
             .and_then(|rest| rest.strip_prefix('/'))
             .is_some_and(|version| !version.is_empty() && !version.contains('/'));
+        if let Some(kind) = self.agent_kinds.iter().find(|kind| !is_kind_id(kind)) {
+            return Err(Error::InvalidLockfile(format!(
+                "{kind:?} in {} is not an agent kind id",
+                self.id
+            )));
+        }
         if !inside || package_path::check(&self.path, false).is_err() {
             return Err(Error::InvalidLockfile(format!(
                 "the path of {} is not under pkgs/{}/",
