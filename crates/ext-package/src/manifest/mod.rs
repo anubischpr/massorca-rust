@@ -4,6 +4,7 @@
 //! Every semantic rule is checked in one pass and reported together.
 
 pub mod contributes;
+pub mod data;
 mod references;
 
 use std::collections::HashSet;
@@ -121,6 +122,7 @@ pub fn validate(manifest: &Manifest) -> Vec<Problem> {
     validate_identity(manifest, &mut problems);
     validate_surfaces_modes_views(manifest, &mut problems);
     problems.extend(permission::validate(&manifest.permissions, "/permissions"));
+    contributes::validate(manifest, &mut problems);
     problems.into_vec()
 }
 

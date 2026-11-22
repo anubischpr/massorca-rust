@@ -3,16 +3,39 @@
 use std::collections::BTreeSet;
 
 use super::Manifest;
-use crate::error::{Error, Problem};
+use crate::error::{Error, Problem, at};
 
 /// Every package file the manifest names, each with the pointer that names it. Assumes a validated manifest.
 pub(crate) fn referenced(manifest: &Manifest) -> Vec<(String, String)> {
+    let contributes = &manifest.contributes;
     let mut out = Vec::new();
     if let Some(main) = &manifest.main {
         out.push(("/main".to_owned(), main.clone()));
     }
     if let Some(readme) = &manifest.readme {
         out.push(("/readme".to_owned(), readme.clone()));
+    }
+    for (index, theme) in contributes.themes.iter().enumerate() {
+        let here = format!("/contributes/themes/{index}");
+        out.push((at(&here, "document"), theme.document.clone()));
+    }
+    for (index, theme) in contributes.icon_themes.iter().enumerate() {
+        let here = format!("/contributes/iconThemes/{index}");
+        out.push((at(&here, "document"), theme.document.clone()));
+    }
+    for (kind, items) in [
+        ("locales", &contributes.locales),
+        ("recipes", &contributes.recipes),
+        ("agentRules", &contributes.agent_rules),
+    ] {
+        for (index, item) in items.iter().enumerate() {
+            let here = format!("/contributes/{kind}/{index}");
+            out.push((at(&here, "document"), item.document.clone()));
+        }
+    }
+    for (index, skill) in contributes.skills.iter().enumerate() {
+        let here = format!("/contributes/skills/{index}");
+        out.push((at(&here, "path"), format!("{}/SKILL.md", skill.path)));
     }
     out
 }
