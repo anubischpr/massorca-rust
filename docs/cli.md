@@ -52,10 +52,11 @@ letters, digits, `-` or `_`.
 | `agent kinds` | Lists the agent kinds: id, name, owner and the resolved program, or `no` / `invalid`. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
-| `agent status [SESSION]` | Shows one session's execution and activity, or every session's. |
+| `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
+| `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -123,8 +124,23 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what
-  the agent reports, or `no status`. Stopping or restarting the service ends every run, and
-  the sessions are listed as `exited` with reason `service stopped`.
+  the agent reports (`working`, `waiting`, `idle`, or `done` with its outcome) and where it
+  came from, for example `done (success) from hook`, or `no status` before any report. A run
+  that ends while `working` or `waiting` shows `done (interrupted) from process`. Stopping or
+  restarting the service ends every run, and the sessions are listed as `exited` with reason
+  `service stopped`.
+- `agent status SESSION --until STATE` waits on the service's status stream until the session
+  reaches `STATE` (`exited` means its run has ended), then prints the session and exits 0.
+  With `--timeout SECS` it gives up after that long and fails with `agent.status_timeout`.
+  `agent status [SESSION] --watch` prints the sessions, then one line per change, until it
+  is interrupted; with `--json` each item is its own `{"ok":true,"result":...}` line.
+- `agent hook EVENT [PAYLOAD]` reads the session and token from `MASSORCA_AGENT_SESSION` and
+  `MASSORCA_AGENT_TOKEN`, which the service sets in every run, and the payload from the
+  argument or else from stdin when stdin is not a terminal (at most 64 KiB). It never starts
+  the service. It always exits 0 within 5 s and prints nothing on success; a problem, such
+  as a refused report (`agent.hook_refused`), goes to stderr only, so a status problem never
+  breaks the agent. Its command line never fails either: a missing event is reported on
+  stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
 

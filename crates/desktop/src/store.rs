@@ -120,12 +120,18 @@ impl ServiceStore {
 
     /// Folds a batch of updates in and notifies once.
     pub fn apply(&mut self, updates: Vec<StoreUpdate>, cx: &mut Context<Self>) {
+        self.apply_quietly(updates);
+        self.keep_time_fresh(cx);
+        cx.notify();
+    }
+
+    /// Folds updates in without notifying observers. A sample shell's observer would take the
+    /// sample snapshot again, so the debug launch seeds its start page this way.
+    pub fn apply_quietly(&mut self, updates: Vec<StoreUpdate>) {
         let now = Instant::now();
         for update in updates {
             self.state.apply(update, now);
         }
-        self.keep_time_fresh(cx);
-        cx.notify();
     }
 
     /// While the link is not up the notice shows a timer and an age, so redraw every second.

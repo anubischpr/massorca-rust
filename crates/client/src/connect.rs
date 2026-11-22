@@ -15,6 +15,7 @@ use crate::error::ClientError;
 use crate::handshake;
 use crate::options::ConnectOptions;
 use crate::spawn;
+use crate::transport;
 
 /// The first pause between attempts to reach a starting service. It doubles up to `MAX_PAUSE`.
 const INITIAL_PAUSE: Duration = Duration::from_millis(25);
@@ -27,10 +28,15 @@ pub(crate) async fn connect(
     let name = local_socket_name(profile)?;
     let deadline = Instant::now() + options.connect_timeout;
     loop {
-        let mut stream = establish(profile, name.clone(), &options).await?;
+        let stream = establish(profile, name.clone(), &options).await?;
         ensure_trusted_endpoint(&stream)?;
-        match handshake::exchange(&mut stream, &options.client).await {
-            Ok(welcome) => return Ok(Client::open(stream, welcome)),
+        let mut io = transport::spawn_local(stream);
+        let exchanged = handshake::exchange(&mut io, &options.client, None).await;
+        if exchanged.is_err() {
+            io.abort();
+        }
+        match exchanged {
+            Ok(welcome) => return Ok(Client::open(io, welcome)),
             // A service that is letting go of the endpoint may close a connection before welcome. With autostart allowed,
             // the next attempt reaches its successor or starts one.
             Err(ClientError::Disconnected)

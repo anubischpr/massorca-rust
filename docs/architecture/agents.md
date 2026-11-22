@@ -133,9 +133,37 @@ prefix shared by several sessions is refused with `selector.ambiguous`. UUID v7
 ids start with their creation time, so sessions started close together need a
 longer prefix.
 
-Until the status store arrives, `agent.forget` of a session whose run is live is
-refused with `agent.busy`, and a first prompt for a kind whose `prompt.mode` is
-`none` is refused with `agent.prompt_invalid` instead of waiting for `idle`.
+`agent.forget` of a session whose run is live is refused with `agent.busy`. Until
+`agent.prompt` arrives, a first prompt for a kind whose `prompt.mode` is `none` is
+refused with `agent.prompt_invalid` instead of waiting for `idle`.
+
+## Status store
+
+`core-agents` applies every status change under one lock: a start, a hook report, a
+run's exit and a forget. Each change is written to the session row (activity, outcome,
+source, time, result and a learned `agent_ref` in one update) and then announced, in
+that order, to the service, which publishes `agent.changed` on the event bus and an item
+to every `agent.watch` stream. The live runs and their hook tokens are held in memory
+only; the activity itself is read from the row, so a restart shows the last known value.
+A row read before the lock is read again under it, so an exit never turns a `done`
+report that landed in between into `interrupted`. `agent.start` registers the run and
+holds the lock from before its program starts until its row exists, so the run's first
+report waits instead of being refused. The exit sweep checks each live run on its own and
+logs one that fails, by session id and error code, without stopping.
+
+- `agent.hook` checks the token of the session's live run, then maps the event through
+  the kind's `status.events`. A `done` report takes `result_field` from a JSON payload
+  (truncated to 16 KiB on a character boundary; a `done` without it clears the result);
+  any accepted report sets `agent_ref` from the `session_ref.learn` field when none is
+  set. A payload over 64 KiB is refused with `request.invalid_params`.
+- Exits: a sweep checks the terminals of live runs every 200 ms; `agent.stop` applies
+  the exit it gets back from the terminal at once. A run that exits while `working` or
+  `waiting` becomes `done` / `interrupted` with source `process`, also for runs found
+  still live in the store when the service starts.
+- `agent.watch` subscribes before it reads the snapshot. A watcher that falls more than
+  1024 changes behind gets a fresh `snapshot`; one whose connection reads too slowly
+  ends with `stream.overflow` on the client, like any stream. A forgotten session sends
+  no `changed` item.
 
 A run whose terminal is gone without an exit the service saw (closed with
 `terminal close`, or dropped from the terminal manager's list of exited
