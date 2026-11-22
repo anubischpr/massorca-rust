@@ -153,7 +153,7 @@ fn notification_story(_: &mut Window, cx: &mut App) -> AnyElement {
     .source("oppm")
     .age("2 min ago")
     .body("Runs in the project folder with workspace access.")
-    .answer(primary("notification-allow", "Allow"))
+    .answer(primary("notification-approve", "Approve"))
     .answer(ghost("notification-deny", "Deny"))
     .on_dismiss(|_, _| {});
 
@@ -196,7 +196,7 @@ fn notification_story(_: &mut Window, cx: &mut App) -> AnyElement {
     .age("5 min ago")
     .unreachable(true)
     .action(ghost("notification-open", "Open"))
-    .answer(primary("notification-unreachable-allow", "Allow"))
+    .answer(primary("notification-unreachable-approve", "Approve"))
     .on_dismiss(|_, _| {});
 
     let updates = [
@@ -242,18 +242,45 @@ fn notification_story(_: &mut Window, cx: &mut App) -> AnyElement {
     let stack = NotificationStack::new("notification-stack")
         .cards(vec![
             NotificationCard::new("stack-1", NotificationKind::Info, "Acme: 2 commands added")
-                .age("1 h ago"),
-            NotificationCard::new("stack-2", NotificationKind::Update, "Update 1.4.2").age("now"),
+                .source("Acme Metrics")
+                .age("1 h ago")
+                .on_dismiss(|_, _| {}),
+            NotificationCard::new(
+                "stack-2",
+                NotificationKind::Update,
+                "MassOrca 1.4.2 is available",
+            )
+            .source("MassOrca")
+            .age("now")
+            .action(primary("stack-2-download", "Download"))
+            .action(ghost("stack-2-later", "Later"))
+            .on_dismiss(|_, _| {}),
             NotificationCard::new("stack-3", NotificationKind::SignIn, "Claude was signed out")
-                .age("4 min ago"),
+                .source("Claude")
+                .age("4 min ago")
+                .action(primary("stack-3-sign-in", "Sign in"))
+                .on_dismiss(|_, _| {}),
             NotificationCard::new(
                 "stack-4",
                 NotificationKind::Error,
                 "NexusCare: the run failed",
             )
-            .age("just now"),
-            NotificationCard::new("stack-5", NotificationKind::Attention, "oppm: Run command?")
-                .age("2 min ago"),
+            .source("NexusCare")
+            .age("just now")
+            .body("Exit code 1 after 42 seconds.")
+            .action(primary("stack-4-retry", "Retry"))
+            .on_dismiss(|_, _| {}),
+            NotificationCard::new(
+                "stack-5",
+                NotificationKind::Attention,
+                "oppm: Run command? pnpm install",
+            )
+            .source("oppm")
+            .age("2 min ago")
+            .body("Runs in the project folder with workspace access.")
+            .answer(primary("stack-5-approve", "Approve"))
+            .answer(ghost("stack-5-deny", "Deny"))
+            .on_dismiss(|_, _| {}),
         ])
         .on_expand(|_, _| {});
 
@@ -347,7 +374,8 @@ fn secret_story(_: &mut Window, cx: &mut App) -> AnyElement {
                         "",
                         SecretState::Stored,
                     )
-                    .scope("for project oppm"),
+                    .scope("for project oppm")
+                    .host("VPS"),
                 )
                 .child(
                     SecretRequestCard::new(
