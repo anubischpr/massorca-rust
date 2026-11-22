@@ -54,6 +54,7 @@ letters, digits, `-` or `_`.
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
@@ -121,6 +122,14 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   session that is not `--read-only`; a second writing start fails with
   `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
   Arguments after `--` go to the agent after its own.
+- `agent prompt SESSION TEXT` types TEXT into the session's terminal, then the kind's submit
+  key (`\r` unless the kind declares another). A kind that declares bracketed paste gets the
+  text between paste markers; a plain kind gets each line break as Enter. The text is at most
+  8 KiB and has no NUL (`agent.prompt_invalid`). An exited run fails with `agent.not_live`.
+  The agent must report `idle` or `done` first, or the call fails with `agent.busy`; a kind
+  with no status mechanism is always ready. `--force` types the text anyway, for example to
+  answer a question. The receipt counts the bytes handed to the terminal; it does not say the
+  agent read them, and the activity turns `working` only when the agent's hooks report it.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what

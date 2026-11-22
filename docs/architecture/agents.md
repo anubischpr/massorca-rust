@@ -137,6 +137,25 @@ longer prefix.
 `agent.prompt` arrives, a first prompt for a kind whose `prompt.mode` is `none` is
 refused with `agent.prompt_invalid` instead of waiting for `idle`.
 
+## Prompts
+
+`agent.prompt` (0054) types text into a live run's terminal as one terminal input: the text,
+then the kind's submit sequence. Plain text is typed as keystrokes, each line break as Enter
+(`\r`), the same as the desktop's paste. Bracketed text sits between the paste markers, with
+any end marker inside the text removed, and keeps its line breaks. The text is at most 8 KiB
+and has no NUL, else `agent.prompt_invalid`; a run that has exited is `agent.not_live`.
+
+A run takes a prompt when its activity is `idle` or `done`, or when its kind has no status
+mechanism. Absent activity, meaning nothing reported yet, is not ready; `working`, `waiting`
+and unknown states are not either. Otherwise the call is `agent.busy`, unless `force` is set.
+The readiness check and the copy of the kind's input rules happen under the status lock. The
+write happens after the lock is released: a write can wait for the agent to read, and the
+agent's own hook reports need the lock to return.
+
+The receipt is `{ receipt: "handed_to_terminal", bytes }`, where `bytes` counts every byte
+written to the terminal, the paste markers and the submit sequence included. It never says the
+agent read them; the activity turns `working` only when the agent's hooks report it.
+
 ## Status store
 
 `core-agents` applies every status change under one lock: a start, a hook report, a

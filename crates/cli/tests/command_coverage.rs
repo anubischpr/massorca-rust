@@ -57,6 +57,7 @@ fn every_cli_command_except_service_run_and_ext_has_a_core_descriptor() {
             "agent.hook",
             "agent.kinds",
             "agent.list",
+            "agent.prompt",
             "agent.start",
             "agent.status",
             "agent.stop",
