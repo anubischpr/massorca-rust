@@ -10,7 +10,9 @@ use gpui::{AnyElement, App, Context, Entity, EntityId, Subscription, WeakEntity,
 use massorca_protocol::methods::secrets::SecretEntry;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogWidth};
+use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
+use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
@@ -36,6 +38,12 @@ pub(super) struct VaultDialog {
     /// Redraws the dialog as the value changes, so Save and its wording follow it.
     _value_changes: Subscription,
     pub(super) scopes: Vec<(String, String)>,
+    /// The project select of an add: every project, with the one the form stores to chosen. Only a project shows it.
+    pub(super) project_select: Option<Entity<SelectView>>,
+    /// The project scopes in the select's order, so a choice maps to the scope it names.
+    pub(super) project_scopes: Vec<String>,
+    /// Keeps the select's choices reaching the dialog.
+    _project_events: Option<Subscription>,
 }
 
 impl fmt::Debug for VaultDialog {
@@ -71,6 +79,11 @@ fn value_entry(cx: &mut Context<Shell>) -> (Entity<TextField>, Subscription) {
     (field, changes)
 }
 
+/// The name a project's scope title carries: "Project oppm" names "oppm".
+fn project_name(title: &str) -> &str {
+    title.strip_prefix("Project ").unwrap_or(title)
+}
+
 impl Shell {
     /// Opens Add with the first project preselected, as the design has it.
     pub(super) fn open_add_secret(&mut self, cx: &mut Context<Self>) {
@@ -96,6 +109,29 @@ impl Shell {
         });
         let name_changes = cx.observe(&name_field, |_, _, cx| cx.notify());
         let (value_field, value_changes) = value_entry(cx);
+        let projects: Vec<(String, String)> = scopes
+            .iter()
+            .filter(|(scope, _)| scope.starts_with("project:"))
+            .cloned()
+            .collect();
+        let project_scopes: Vec<String> = projects.iter().map(|(scope, _)| scope.clone()).collect();
+        let (project_select, project_events) = if projects.is_empty() {
+            (None, None)
+        } else {
+            let names = projects
+                .iter()
+                .map(|(_, title)| project_name(title).to_owned());
+            let select = cx.new(|cx| {
+                SelectView::new(names, cx)
+                    .label("Project")
+                    .selected(Some(0))
+                    .layer(OverlayLayer::Dialog)
+            });
+            let events = cx.subscribe(&select, |shell, _, event: &SelectEvent, cx| match event {
+                SelectEvent::Changed(index) => shell.choose_secret_project(*index, cx),
+            });
+            (Some(select), Some(events))
+        };
         self.vault_dialog = Some(VaultDialog {
             form: SecretForm::add(first),
             name_field: Some(name_field),
@@ -103,6 +139,9 @@ impl Shell {
             _name_changes: Some(name_changes),
             _value_changes: value_changes,
             scopes,
+            project_select,
+            project_scopes,
+            _project_events: project_events,
         });
         cx.notify();
     }
@@ -123,14 +162,44 @@ impl Shell {
             _name_changes: None,
             _value_changes: value_changes,
             scopes: vec![(scope, title)],
+            project_select: None,
+            project_scopes: Vec::new(),
+            _project_events: None,
         });
         cx.notify();
     }
 
-    /// Chooses the scope an add stores to, by the segment the scope control chose.
-    pub(super) fn choose_secret_scope(&mut self, scope: String, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.vault_dialog.as_mut() {
+    /// Chooses the project an add stores to, by the row the project select chose.
+    pub(super) fn choose_secret_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.vault_dialog.as_mut()
+            && let Some(scope) = dialog.project_scopes.get(index).cloned()
+        {
             dialog.form.scope = scope;
+        }
+        cx.notify();
+    }
+
+    /// Chooses a segment of the scope control. Project keeps a project already chosen and takes the first one
+    /// otherwise; Global stores to Global. The project select then shows the scope the form holds.
+    pub(super) fn choose_secret_segment(&mut self, segment: usize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.vault_dialog.as_mut() else {
+            return;
+        };
+        match segment {
+            0 if scope_segment(&dialog.form.scope) != 0 => {
+                if let Some(first) = dialog.project_scopes.first().cloned() {
+                    dialog.form.scope = first;
+                }
+            }
+            2 => dialog.form.scope = "global".to_owned(),
+            _ => {}
+        }
+        let index = dialog
+            .project_scopes
+            .iter()
+            .position(|scope| *scope == dialog.form.scope);
+        if let Some(select) = dialog.project_select.clone() {
+            select.update(cx, |select, cx| select.set_selected(index, cx));
         }
         cx.notify();
     }
@@ -301,20 +370,16 @@ fn name_field(dialog: &VaultDialog, theme: &Theme) -> AnyElement {
 fn scope_field(dialog: &VaultDialog, shell: &WeakEntity<Shell>, theme: &Theme) -> AnyElement {
     match dialog.form.mode {
         FormMode::Add => {
-            let project = dialog
+            let has_projects = !dialog.project_scopes.is_empty();
+            let name = dialog
                 .scopes
                 .iter()
-                .find(|(scope, _)| scope.starts_with("project:"));
-            let project_title =
-                project.map_or_else(|| "Project".to_owned(), |(_, title)| title.clone());
-            let project_scope = project.map(|(scope, _)| scope.clone());
-            let project_name = project_title
-                .strip_prefix("Project ")
-                .unwrap_or(&project_title)
-                .to_owned();
-            let caption = scope_caption(&dialog.form.scope, &project_name);
+                .find(|(scope, _)| *scope == dialog.form.scope)
+                .map(|(_, title)| project_name(title).to_owned())
+                .unwrap_or_default();
+            let caption = scope_caption(&dialog.form.scope, &name);
             let segments = vec![
-                Segment::text(project_title).disabled(project_scope.is_none()),
+                Segment::text("Project").disabled(!has_projects),
                 Segment::text("Team").disabled(true),
                 Segment::text("Global"),
             ];
@@ -322,20 +387,15 @@ fn scope_field(dialog: &VaultDialog, shell: &WeakEntity<Shell>, theme: &Theme) -
             let control = SegmentedControl::new("settings-vault-scope", "Scope", segments)
                 .selected(scope_segment(&dialog.form.scope))
                 .on_change(move |index, _, cx| {
-                    let scope = match index {
-                        0 => project_scope.clone(),
-                        2 => Some("global".to_owned()),
-                        _ => None,
-                    };
-                    if let Some(scope) = scope {
-                        let _ = shell.update(cx, |shell, cx| shell.choose_secret_scope(scope, cx));
-                    }
+                    let _ = shell.update(cx, |shell, cx| shell.choose_secret_segment(index, cx));
                 });
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_1))
-                .child(control)
+            let mut column = div().flex().flex_col().gap(px(SPACE_1)).child(control);
+            if scope_segment(&dialog.form.scope) == 0
+                && let Some(select) = &dialog.project_select
+            {
+                column = column.child(select.clone());
+            }
+            column
                 .child(
                     div()
                         .text_style(TYPE_BODY_SM)
