@@ -186,14 +186,13 @@ fn requests_can_be_listed_and_declined_once() {
     assert_eq!(all["requests"][0]["state"], "declined");
 }
 
-#[test]
-fn a_value_sent_through_secret_set_appears_in_no_file_of_the_profile() {
-    let sandbox = Sandbox::new();
+/// `secret set <scope> API_TOKEN` with the value on stdin, against a service that logs at trace.
+fn set_traced(sandbox: &Sandbox, scope: &str) -> Assert {
     let input = format!("{VALUE}\n");
     let mut command = sandbox.command("default");
     command
         .env("MASSORCA_LOG", "trace")
-        .args(["secret", "set", "global", "API_TOKEN"]);
+        .args(["secret", "set", scope, "API_TOKEN"]);
     let mut stdin = tempfile::tempfile().expect("a temporary stdin");
     std::io::Write::write_all(&mut stdin, input.as_bytes()).expect("stdin is written");
     std::io::Seek::seek(&mut stdin, std::io::SeekFrom::Start(0)).expect("stdin rewinds");
@@ -203,8 +202,17 @@ fn a_value_sent_through_secret_set_appears_in_no_file_of_the_profile() {
         std::process::Stdio::from(stdin),
     )
     .expect("secret set finishes");
-    let outcome = Assert::new(output).success();
-    assert_value_absent(&outcome);
+    Assert::new(output)
+}
+
+#[test]
+fn a_value_sent_through_secret_set_appears_in_no_file_of_the_profile() {
+    let sandbox = Sandbox::new();
+    assert_value_absent(&set_traced(&sandbox, "global").success());
+    // Refused as name_in_use, then as an invalid scope.
+    for refused_scope in ["global", "nowhere"] {
+        assert_value_absent(&set_traced(&sandbox, refused_scope).failure());
+    }
     sandbox.run("default", &["service", "stop"]).success();
 
     let mut files = Vec::new();
