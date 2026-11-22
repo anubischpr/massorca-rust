@@ -102,7 +102,7 @@ fn watched_field(
 
 impl Shell {
     /// "New team" on the Bot teams page. Nothing opens without a connected service.
-    pub(super) fn open_new_team(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn open_new_team(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.model.teams().is_connected() {
             return;
         }
@@ -151,7 +151,7 @@ impl Shell {
     }
 
     /// "Add bot" on a team card (D-AG-33).
-    pub(super) fn open_add_bot(
+    pub(in crate::shell) fn open_add_bot(
         &mut self,
         team: TeamId,
         window: &mut Window,

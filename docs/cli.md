@@ -322,6 +322,35 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 Each profile lives in `<home>/profiles/<name>/`. The service writes daily log files to
 `logs/` as `service.<date>.log`, keeping the last seven days.
 
+## Desktop app
+
+`massorca-desktop` opens the MassOrca window on a profile's service, or on sample data with
+`--sample`. It takes `--profile`, `--home` and `--no-autostart` as the CLI does, and two flags of its
+own:
+
+| Option | Meaning |
+|---|---|
+| `--sample` | Open on sample data and never touch a service. |
+| `--page <NAME>` | Open one page or dialog once the data it shows has arrived. An unknown name exits with status 2 before the window opens, and the error lists the valid names. |
+
+The page names are `workspace`, `settings-general`, `settings-hosts`, `settings-vault`, `pairing`,
+`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team` and `add-bot`.
+
+A page waits while the service is still answering. When the service has answered without the data
+a page or dialog needs, it opens its parent page instead, and stderr says why. `replace-secret` and
+`remove-secret` need an owned secret (parent: Settings, Vault). `board` and `add-bot` need a team, and
+`new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home).
+
+`MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused, so a page can be checked
+without showing it:
+
+```sh
+MASSORCA_DESKTOP_BACKGROUND=1 massorca-desktop --sample --page settings-vault
+```
+
+In PowerShell, set the variable first: `$env:MASSORCA_DESKTOP_BACKGROUND = "1"`, then run
+`massorca-desktop --profile dev --page board`.
+
 ## Not yet available
 
 Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
