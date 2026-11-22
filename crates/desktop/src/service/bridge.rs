@@ -25,6 +25,7 @@ use tokio::time::sleep;
 
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss};
 use super::refusal::Refusal;
+use super::terminals::{self, TerminalCommand};
 use super::update::StoreUpdate;
 
 const BRIDGE_STOPPED: &str = "The link to the service has stopped.";
@@ -56,6 +57,7 @@ pub(crate) enum Command {
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
+    Terminal(TerminalCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
@@ -82,7 +84,7 @@ impl Script {
 /// The UI's side of the link. Clones share it.
 #[derive(Clone, Debug)]
 pub struct ServiceHandle {
-    commands: mpsc::UnboundedSender<Command>,
+    pub(super) commands: mpsc::UnboundedSender<Command>,
     connection: watch::Receiver<ConnectionState>,
 }
 
@@ -158,7 +160,7 @@ impl ServiceHandle {
     }
 
     /// Sends one command and waits for its answer. A bridge that has stopped answers as unavailable.
-    async fn ask<T>(
+    pub(super) async fn ask<T>(
         &self,
         command: impl FnOnce(oneshot::Sender<Result<T, Refusal>>) -> Command,
     ) -> Result<T, Refusal> {
@@ -347,6 +349,8 @@ impl Link {
             projects,
             workspaces,
         });
+        let terminals = terminals::list_terminals(client).await?;
+        self.emit(StoreUpdate::TerminalsResync(terminals));
         Ok(events)
     }
 
@@ -355,6 +359,7 @@ impl Link {
         let Ok(mut events) = self.subscribe_and_list(client).await else {
             return SessionEnd::Lost;
         };
+        let writes = terminals::spawn_writes(client.clone());
         loop {
             let outcome = tokio::select! {
                 event = events.next_as::<ChangeEvent>() => match event {
@@ -369,6 +374,9 @@ impl Link {
                 command = self.commands.recv() => {
                     match command {
                         None | Some(Command::Stop) => return SessionEnd::Stop,
+                        Some(Command::Terminal(command)) => {
+                            terminals::spawn_call(client, &writes, &self.updates, command);
+                        }
                         Some(command) => spawn_call(client, command),
                     }
                     Outcome::Continue
@@ -489,7 +497,8 @@ fn spawn_call(client: &Client, command: Command) {
                 let _ = reply.send(result);
             });
         }
-        Command::RetryNow | Command::Stop => {}
+        // Routed by the session, which owns the terminal writes and store updates.
+        Command::Terminal(_) | Command::RetryNow | Command::Stop => {}
     }
 }
 
@@ -512,6 +521,7 @@ fn refuse_while_down(command: Command) {
         Command::SetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::RetryNow | Command::Stop => {}
     }
 }

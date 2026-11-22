@@ -16,8 +16,10 @@ use std::sync::Arc;
 
 /// Width of every gallery window, the same as the desktop shell's artboard.
 const WIDTH: f32 = 1440.0;
-/// Height of the probe window that measures a story before its real window opens.
+/// Height of the first probe window that measures a story before its real window opens.
 const PROBE_HEIGHT: f32 = 2400.0;
+/// The tallest probe window a story is measured in; a story taller than this fails the test.
+const PROBE_LIMIT: f32 = 16384.0;
 /// Width of the navigation column in `Gallery::render`.
 const NAV_WIDTH: u32 = 220;
 
@@ -51,24 +53,31 @@ fn gallery_screenshots() -> anyhow::Result<()> {
 }
 
 /// The window height that shows story `index` whole, with the body's bottom padding. The story
-/// is first painted in a tall probe window, and its lowest painted row sets the height.
+/// is painted in a probe window, and its lowest painted row sets the height. A story that reaches
+/// the bottom of the probe is painted again in a probe twice as tall, up to `PROBE_LIMIT`.
 fn fitted_height(cx: &mut HeadlessAppContext, index: usize) -> anyhow::Result<f32> {
-    let probe = open_gallery(cx, index, PROBE_HEIGHT)?;
-    support::draw(cx, probe)?;
-    let image = cx.capture_screenshot(probe)?;
-    cx.update_window(probe, |_, window, _| window.remove_window())?;
+    let mut probe_height = PROBE_HEIGHT;
+    loop {
+        let probe = open_gallery(cx, index, probe_height)?;
+        support::draw(cx, probe)?;
+        let image = cx.capture_screenshot(probe)?;
+        cx.update_window(probe, |_, window, _| window.remove_window())?;
 
-    let (width, height) = (image.width(), image.height());
-    let pixel = |x: u32, y: u32| image.get_pixel(x, y).0;
-    // The body is painted over the canvas colour, the navigation over the frame colour.
-    let body = lowest_ink(height, NAV_WIDTH..width, (width - 1, height - 1), pixel);
-    let nav = lowest_ink(height, 0..NAV_WIDTH, (0, height - 1), pixel);
-    let body = body.unwrap_or(0);
-    anyhow::ensure!(
-        body + 2 < height,
-        "story {index} does not fit the {PROBE_HEIGHT}px probe window"
-    );
-    Ok((body.max(nav.unwrap_or(0)) + 1) as f32 + SPACE_6)
+        let (width, height) = (image.width(), image.height());
+        let pixel = |x: u32, y: u32| image.get_pixel(x, y).0;
+        // The body is painted over the canvas colour, the navigation over the frame colour.
+        let body = lowest_ink(height, NAV_WIDTH..width, (width - 1, height - 1), pixel);
+        let nav = lowest_ink(height, 0..NAV_WIDTH, (0, height - 1), pixel);
+        let body = body.unwrap_or(0);
+        if body + 2 < height {
+            return Ok((body.max(nav.unwrap_or(0)) + 1) as f32 + SPACE_6);
+        }
+        anyhow::ensure!(
+            probe_height * 2.0 <= PROBE_LIMIT,
+            "story {index} does not fit the {PROBE_LIMIT}px probe window"
+        );
+        probe_height *= 2.0;
+    }
 }
 
 /// The lowest row, within `columns`, with a pixel unlike the one at `backdrop`.

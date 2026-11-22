@@ -1,9 +1,10 @@
 //! Typed helpers over the methods of the core features.
 
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
+    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -215,6 +216,19 @@ impl Client {
     /// `agent.forget`: deletes the record of a session whose run has ended.
     pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::FORGET, &session_ref(session)).await
+    }
+
+    /// `agent.prompt`: types a prompt into a session's terminal once it is ready; `force` types it at once.
+    pub async fn agent_prompt(
+        &self,
+        params: &AgentPromptParams,
+    ) -> Result<PromptReceipt, ClientError> {
+        self.call(agents::PROMPT, params).await
+    }
+
+    /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
+    pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::RESUME, &session_ref(session)).await
     }
 
     /// `agent.hook`: one status report from a run's hook, with the run's token.

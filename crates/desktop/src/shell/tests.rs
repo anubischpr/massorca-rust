@@ -446,6 +446,34 @@ fn right_clicking_the_status_bar_opens_a_checkable_row_per_item(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn the_status_bar_keeps_agents_left_and_the_other_items_right_in_order(cx: &mut TestAppContext) {
+    setup(cx);
+    let (_shell, cx) = cx.add_window_view(|window, cx| {
+        Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
+    });
+    draw(cx);
+    let agents = cx
+        .debug_bounds("status-agents")
+        .expect("the agent status item is drawn");
+    let memory = cx
+        .debug_bounds("status-memory")
+        .expect("the memory item is drawn");
+    let terminals = cx
+        .debug_bounds("status-terminals")
+        .expect("the terminals item is drawn");
+    let ports = cx
+        .debug_bounds("status-ports")
+        .expect("the ports item is drawn");
+    let hosts = cx
+        .debug_bounds("status-hosts")
+        .expect("the hosts item is drawn");
+    assert!(agents.right() <= memory.left(), "agent status stays left");
+    assert!(memory.right() <= terminals.left(), "memory comes first");
+    assert!(terminals.right() <= ports.left(), "terminals before ports");
+    assert!(ports.right() <= hosts.left(), "ports before hosts");
+}
+
+#[gpui::test]
 fn choosing_a_row_hides_that_item_and_closes_the_menu(cx: &mut TestAppContext) {
     setup(cx);
     let (shell, cx) = cx.add_window_view(|window, cx| {

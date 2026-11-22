@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use massorca_core_agents::{AgentError, Agents, Change, credentials};
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent, AgentWatchParams,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown,
+    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent,
+    AgentWatchParams, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -62,6 +62,20 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             stop,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::PROMPT,
+            agents_cap,
+            Permission::Workspace,
+            prompt,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RESUME,
+            agents_cap,
+            Permission::Workspace,
+            resume,
         )?,
         methods.register(
             Owner::Core,
@@ -138,6 +152,19 @@ async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, 
 
 async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     on_agents(&ctx, move |agents| agents.forget(&params.session)).await
+}
+
+/// Starts a new run of an exited session, which keeps its id (0054).
+async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.resume(&params.session)).await
+}
+
+/// Types a prompt into a run's terminal (0054). The text is never logged.
+async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.prompt(&params.session, &params.text, params.force)
+    })
+    .await
 }
 
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.

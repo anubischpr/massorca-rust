@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{
     Config, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermMode, viewport_to_point,
@@ -176,6 +176,15 @@ impl TerminalFeed {
         self.exit
     }
 
+    /// The text of one visible row of the live screen, trailing blanks removed.
+    pub fn row_text(&self, row: usize) -> String {
+        let grid = self.term.grid();
+        let text: String = (0..self.columns())
+            .map(|column| grid[Line(row as i32)][Column(column)].c)
+            .collect();
+        text.trim_end().to_owned()
+    }
+
     /// The window title the program set with OSC 0 or 2.
     pub fn title(&self) -> Option<String> {
         self.reports
@@ -184,8 +193,8 @@ impl TerminalFeed {
             .and_then(|reports| reports.title.clone())
     }
 
-    /// The bytes the emulator owes the program (cursor reports and the like), taken once.
-    /// The surface does not forward them: with several clients attached, each would answer.
+    /// The bytes the emulator owes the program (cursor reports and the like), taken once. An
+    /// attached client answers queries (decision 0034), so the owner sends these as input.
     pub fn take_replies(&mut self) -> Vec<u8> {
         self.reports
             .lock()
