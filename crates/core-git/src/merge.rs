@@ -16,9 +16,10 @@ pub enum MergeOutcome {
 }
 
 impl Git {
-    /// Merges `branch` into HEAD in `dir` with `git merge --no-ff --no-edit`. A merge that
-    /// stops on conflicts is aborted, and HEAD is checked to be where it was before the
-    /// merge; the conflicting paths are returned. Any other failure is an error.
+    /// Merges the local branch `branch` into HEAD in `dir` with `git merge --no-ff --no-edit refs/heads/<branch>`, so a
+    /// tag of the same name is never taken instead. A merge that stops on conflicts is aborted and the conflicting paths
+    /// are returned. Any other failure (a refusing hook, a missing identity) is an error, and a merge it left in
+    /// progress is aborted too. Either way HEAD is checked to be where it was before the merge.
     pub fn merge_no_ff(&self, dir: &Path, branch: &str) -> Result<MergeOutcome, GitError> {
         // `git merge` takes no `--` before the branch, so a dash-led name is refused here.
         if branch.starts_with('-') {
@@ -28,25 +29,31 @@ impl Git {
                 stderr: format!("refusing branch name `{branch}`: it starts with a dash"),
             });
         }
+        let reference = format!("refs/heads/{branch}");
         let before = self.head(dir)?;
-        let captured = self.run_mutation(Some(dir), ["merge", "--no-ff", "--no-edit", branch])?;
+        let captured = self.run_mutation(
+            Some(dir),
+            ["merge", "--no-ff", "--no-edit", reference.as_str()],
+        )?;
         if captured.succeeded() {
             return Ok(MergeOutcome::Merged {
                 commit: self.head(dir)?,
             });
         }
         let paths = self.unmerged_paths(dir)?;
-        if paths.is_empty() {
-            return Err(captured.failure());
+        if self.operation_in_progress(dir)?.is_some() {
+            self.run_mutation(Some(dir), ["merge", "--abort"])?
+                .require_success()?;
         }
-        self.run_mutation(Some(dir), ["merge", "--abort"])?
-            .require_success()?;
         let after = self.head(dir)?;
         if after != before {
             return Err(GitError::InvalidOutput {
                 args: vec!["merge".to_owned(), "--abort".to_owned()],
-                reason: format!("HEAD is {after} after the abort, not {before}"),
+                reason: format!("HEAD is {after} after the failed merge, not {before}"),
             });
+        }
+        if paths.is_empty() {
+            return Err(captured.failure());
         }
         Ok(MergeOutcome::Conflict { paths })
     }

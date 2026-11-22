@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use massorca_core_git::{Git, GitError, MergeOutcome};
+use massorca_protocol::methods::git::status::GitOperation;
 
-use crate::fixture::{Fixture, commit_file, commit_on_branch, rev, run_git};
+use crate::fixture::{Fixture, commit_file, commit_on_branch, rev, run_git, text};
 
 fn git() -> Git {
     Git::discover().expect("git on PATH")
@@ -109,4 +110,142 @@ fn a_dash_led_name_or_a_missing_branch_is_an_error_that_changes_nothing() {
         Err(GitError::Failed { .. })
     ));
     assert_eq!(rev(&repo, "HEAD"), head);
+}
+
+/// Installs a `pre-merge-commit` hook that refuses every merge commit, overriding any global hooks path.
+fn refuse_merge_commits(repo: &Path) {
+    let hooks = repo.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).expect("create hooks dir");
+    let hook = hooks.join("pre-merge-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write hook");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("make hook executable");
+    }
+    run_git(repo, &["config", "core.hooksPath", text(&hooks)]);
+}
+
+#[test]
+fn a_merge_refused_by_a_hook_is_aborted_and_leaves_head_and_the_index_as_they_were() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    with_identity(&repo);
+    commit_on_branch(&repo, "feature", "feature.txt");
+    commit_file(
+        &repo,
+        "main.txt",
+        "main
+",
+        "main commit",
+    );
+    refuse_merge_commits(&repo);
+    let head = rev(&repo, "HEAD");
+
+    let outcome = git().merge_no_ff(&repo, "feature");
+
+    assert!(
+        matches!(outcome, Err(GitError::Failed { .. })),
+        "{outcome:?}"
+    );
+    assert_eq!(rev(&repo, "HEAD"), head);
+    assert!(!repo.join(".git").join("MERGE_HEAD").exists());
+    assert!(run_git(&repo, &["status", "--porcelain"]).is_empty());
+    assert!(!repo.join("feature.txt").exists());
+}
+
+#[test]
+fn a_tag_named_like_the_branch_does_not_replace_the_branch() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    with_identity(&repo);
+    commit_on_branch(&repo, "feature", "feature.txt");
+    // A tag of the same name on another line of history: a bare name would merge it instead.
+    run_git(&repo, &["checkout", "-q", "-b", "other"]);
+    commit_file(
+        &repo,
+        "tagged.txt",
+        "tagged
+",
+        "tagged commit",
+    );
+    run_git(&repo, &["tag", "feature"]);
+    run_git(&repo, &["checkout", "-q", "main"]);
+    let feature_tip = rev(&repo, "refs/heads/feature");
+
+    let outcome = git().merge_no_ff(&repo, "feature").expect("merge");
+
+    assert!(matches!(outcome, MergeOutcome::Merged { .. }));
+    let parents = run_git(&repo, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+    assert_eq!(
+        parents.split_whitespace().nth(2),
+        Some(feature_tip.as_str())
+    );
+    assert!(repo.join("feature.txt").exists());
+    assert!(!repo.join("tagged.txt").exists());
+}
+
+#[test]
+fn a_stopped_rebase_or_a_merge_in_progress_is_reported() {
+    let fixture = Fixture::new();
+    let repo = fixture.repo();
+    with_identity(&repo);
+    let git = git();
+    assert_eq!(git.operation_in_progress(&repo).expect("state"), None);
+
+    commit_file(
+        &repo,
+        "second.txt",
+        "second
+",
+        "second commit",
+    );
+    // An exec that fails stops the rebase with a clean work tree.
+    let stopped = std::process::Command::new("git")
+        .args([
+            "-c",
+            "core.editor=true",
+            "rebase",
+            "--exec",
+            "exit 1",
+            "HEAD~1",
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("spawn git");
+    assert!(!stopped.status.success());
+    assert!(run_git(&repo, &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        git.operation_in_progress(&repo).expect("state"),
+        Some(GitOperation::Rebase)
+    );
+    run_git(&repo, &["rebase", "--abort"]);
+
+    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    commit_file(
+        &repo,
+        "README.md",
+        "feature
+",
+        "feature change",
+    );
+    run_git(&repo, &["checkout", "-q", "main"]);
+    commit_file(
+        &repo,
+        "README.md",
+        "main
+",
+        "main change",
+    );
+    let conflicted = std::process::Command::new("git")
+        .args(["merge", "feature"])
+        .current_dir(&repo)
+        .output()
+        .expect("spawn git");
+    assert!(!conflicted.status.success());
+    assert_eq!(
+        git.operation_in_progress(&repo).expect("state"),
+        Some(GitOperation::Merge)
+    );
 }
