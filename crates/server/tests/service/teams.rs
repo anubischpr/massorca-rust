@@ -1,4 +1,4 @@
-//! Teams over the wire: their CRUD, their name rule, their refusals and their events.
+//! Teams and bots over the wire: their CRUD, their name and lead rules, their refusals and their events.
 
 use std::time::Duration;
 
@@ -6,8 +6,8 @@ use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::teams::{
-    self, Team, TeamAccess, TeamCharacter, TeamCreateParams, TeamList, TeamRef, TeamRemoveParams,
-    TeamUpdateParams,
+    self, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess, TeamCharacter,
+    TeamCreateParams, TeamList, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use serde_json::Value;
 use tokio::time::timeout;
@@ -31,6 +31,18 @@ async fn next_event(events: &mut Subscription) -> ChangeEvent {
         .expect("the event arrives")
         .expect("stream open")
         .expect("event decodes")
+}
+
+fn bot_params(team: &str, name: &str, lead: bool) -> BotAddParams {
+    BotAddParams {
+        team: team.to_owned(),
+        name: name.to_owned(),
+        job: "Writes the parser".to_owned(),
+        kind: "claude".to_owned(),
+        model: None,
+        effort: None,
+        lead,
+    }
 }
 
 #[tokio::test]
@@ -176,6 +188,205 @@ async fn a_blank_team_name_is_refused_as_invalid_params() {
         .await
         .expect_err("a blank name");
     assert_eq!(remote_code(&blank), codes::REQUEST_INVALID_PARAMS);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn bots_are_added_updated_and_removed_and_their_names_are_unique_within_a_team() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let alpha: Team = client
+        .call(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let beta: Team = client
+        .call(teams::CREATE, &create_params("beta"))
+        .await
+        .expect("beta");
+
+    let mara: Bot = client
+        .call(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect("team.bot_add");
+    assert_eq!(mara.team_id, alpha.id);
+    assert_eq!(mara.kind, "claude");
+    assert!(!mara.lead);
+    client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("beta", "mara", false))
+        .await
+        .expect("another team may use the name");
+    let taken = client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect_err("a name taken in the team");
+    assert_eq!(remote_code(&taken), codes::BOT_NAME_IN_USE);
+
+    let updated: Bot = client
+        .call(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: mara.id.clone(),
+                name: None,
+                job: Some("Reviews the parser".to_owned()),
+                kind: None,
+                model: Some("opus".to_owned()),
+                effort: Some("high".to_owned()),
+                lead: None,
+            },
+        )
+        .await
+        .expect("team.bot_update");
+    assert_eq!(updated.job, "Reviews the parser");
+    assert_eq!(updated.model.as_deref(), Some("opus"));
+    assert_eq!(updated.effort.as_deref(), Some("high"));
+
+    let cleared: Bot = client
+        .call(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                name: None,
+                job: None,
+                kind: None,
+                model: Some(String::new()),
+                effort: None,
+                lead: None,
+            },
+        )
+        .await
+        .expect("an empty model clears it");
+    assert_eq!(cleared.model, None);
+    assert_eq!(cleared.effort.as_deref(), Some("high"));
+
+    client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "bruno", false))
+        .await
+        .expect("bruno");
+    let renamed_taken = client
+        .call::<_, Bot>(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: mara.id.clone(),
+                name: Some("bruno".to_owned()),
+                job: None,
+                kind: None,
+                model: None,
+                effort: None,
+                lead: None,
+            },
+        )
+        .await
+        .expect_err("a rename onto a taken name");
+    assert_eq!(remote_code(&renamed_taken), codes::BOT_NAME_IN_USE);
+
+    let removed: Bot = client
+        .call(
+            teams::BOT_REMOVE,
+            &BotRemoveParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                unassign: false,
+            },
+        )
+        .await
+        .expect("team.bot_rm");
+    assert_eq!(removed.id, mara.id);
+    let gone = client
+        .call::<_, Bot>(
+            teams::BOT_REMOVE,
+            &BotRemoveParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                unassign: false,
+            },
+        )
+        .await
+        .expect_err("a removed bot is gone");
+    assert_eq!(remote_code(&gone), codes::BOT_NOT_FOUND);
+    assert_eq!(beta.name, "beta");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_team_has_one_lead_and_the_lead_moves_only_by_clearing_it_first() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let mara: Bot = client
+        .call(teams::BOT_ADD, &bot_params("alpha", "mara", true))
+        .await
+        .expect("the first lead");
+    assert!(mara.lead);
+
+    let second_lead = client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "bruno", true))
+        .await
+        .expect_err("a second lead is refused");
+    assert_eq!(remote_code(&second_lead), codes::BOT_LEAD_TAKEN);
+    client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "bruno", false))
+        .await
+        .expect("bruno joins as a bot");
+
+    let promote = client
+        .call::<_, Bot>(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: "bruno".to_owned(),
+                name: None,
+                job: None,
+                kind: None,
+                model: None,
+                effort: None,
+                lead: Some(true),
+            },
+        )
+        .await
+        .expect_err("promotion while mara leads is refused");
+    assert_eq!(remote_code(&promote), codes::BOT_LEAD_TAKEN);
+
+    client
+        .call::<_, Bot>(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: "mara".to_owned(),
+                name: None,
+                job: None,
+                kind: None,
+                model: None,
+                effort: None,
+                lead: Some(false),
+            },
+        )
+        .await
+        .expect("clearing the lead");
+    let moved: Bot = client
+        .call(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: "bruno".to_owned(),
+                name: None,
+                job: None,
+                kind: None,
+                model: None,
+                effort: None,
+                lead: Some(true),
+            },
+        )
+        .await
+        .expect("bruno leads once mara has stepped down");
+    assert!(moved.lead);
     stop(running).await;
 }
 
