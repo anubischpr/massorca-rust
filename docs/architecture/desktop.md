@@ -120,7 +120,7 @@ in four groups, the commit box and the first page of history. It runs on `git/1`
   state. A removed workspace takes them with it.
 - **Models.** `model::source_control` derives the panel from the store; `model::source_control_diff`
   parses a patch into DiffView's data; `model::source_control_flow` holds the discard waivers and the
-  commit form.
+  commit form. A refusal that names no file is a failed dialog, never a waiver.
 - **Shell.** `shell::source_control` holds the panel's own state and calls. `project_sidebar` draws the
   tabs and the panel. `diff_page` draws a file's diff in the Canvas, in place of the start page.
   `source_control_dialogs` draws the discard flow with the same `flow_dialog` as the remove dialog.
