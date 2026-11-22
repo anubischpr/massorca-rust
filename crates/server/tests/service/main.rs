@@ -23,5 +23,6 @@ mod lifecycle;
 mod network;
 mod projects;
 mod registries;
+mod tasks;
 mod teams;
 mod workspaces;
