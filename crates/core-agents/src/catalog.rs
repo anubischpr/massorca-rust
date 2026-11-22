@@ -146,6 +146,15 @@ fn load_file(file: &Path, earlier: &[CatalogEntry]) -> CatalogEntry {
     }
 }
 
+/// Until packages land (0059), every compiled-in kind and profile file is an enabled package with no id.
+fn enabled_package() -> wire::KindPackage {
+    wire::KindPackage {
+        state: wire::PackageState::Enabled,
+        id: None,
+        version: None,
+    }
+}
+
 fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind {
     let imported = paths::valid_home(profile_dir, &entry.id).is_some_and(|home| home.is_dir());
     let Some(decl) = &entry.decl else {
@@ -155,7 +164,9 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             icon: "bot".to_owned(),
             owner: entry.owner.clone(),
             installed: false,
+            detected: false,
             program_path: None,
+            package: enabled_package(),
             resumable: false,
             status_mechanism: wire::StatusMechanism::None,
             credentials: KindCredentials {
@@ -176,7 +187,9 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         icon: decl.icon.clone(),
         owner: entry.owner.clone(),
         installed: program_path.is_some(),
+        detected: program_path.is_some(),
         program_path: program_path.map(|path| path.display().to_string()),
+        package: enabled_package(),
         resumable: decl.resumable(),
         status_mechanism: mechanism_of(decl.status.mechanism),
         credentials: KindCredentials {
@@ -421,6 +434,9 @@ mod tests {
         let views = Catalog::load(profile.path()).views(profile.path(), &SearchEnv::default());
         let view = views.iter().find(|kind| kind.id == "fake").unwrap();
         assert!(view.installed);
+        assert!(view.detected, "detected is the same value as installed");
+        assert_eq!(view.package.state, wire::PackageState::Enabled);
+        assert_eq!(view.package.id, None);
         assert_eq!(
             view.program_path.as_deref(),
             Some(program.to_string_lossy().as_ref())
@@ -434,6 +450,8 @@ mod tests {
         );
         let claude = views.iter().find(|kind| kind.id == "claude").unwrap();
         assert!(!claude.installed, "no PATH, so no bare name resolves");
+        assert!(!claude.detected);
+        assert_eq!(claude.package.state, wire::PackageState::Enabled);
         assert_eq!(
             claude.status_mechanism,
             wire::StatusMechanism::ClaudeSettings
