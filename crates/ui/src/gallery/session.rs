@@ -310,6 +310,8 @@ fn delegation_sample() -> Vec<DelegationNode> {
             },
             DelegationNode {
                 last_known: Some("5 min ago".into()),
+                last_state: Some(AgentState::Running),
+                host: Some("VPS".into()),
                 task: "Deploy to staging".into(),
                 ..DelegationNode::new(
                     "deploy",

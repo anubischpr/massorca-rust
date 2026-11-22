@@ -11,7 +11,7 @@ use crate::icon::IconName;
 use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
-    Color, Palette, RADIUS_FULL, SIZE_HIT_POINTER, SIZE_ICON_SM, SPACE_2, SPACE_HALF,
+    Color, Palette, RADIUS_FULL, SIZE_HIT_POINTER, SIZE_ICON_SM, SPACE_2, SPACE_HALF, TYPE_LABEL,
 };
 use gpui::accesskit::Toggled;
 use gpui::{
@@ -272,11 +272,18 @@ impl RenderOnce for RadioGroup {
             .focus_ring(&theme)
             .flex()
             .flex_col()
-            .gap(px(SPACE_2))
-            .child(options);
+            .gap(px(SPACE_2));
         if let Some(label) = self.label.clone() {
-            group = group.aria_label(label);
+            // The name is drawn above the options (Radio.md, Behaviour), not only given to assistive technology.
+            group = group.aria_label(label.clone()).child(
+                div()
+                    .debug_selector(|| "radio-group-label".into())
+                    .text_style(TYPE_LABEL)
+                    .text_color(p.text.secondary)
+                    .child(label),
+            );
         }
+        group = group.child(options);
         if let Some(on_change) = self
             .on_change
             .clone()
@@ -471,6 +478,31 @@ mod tests {
         assert_eq!(group.disabled(true).enabled(), vec![false, false]);
         let mixed = RadioGroup::new("g", vec![RadioOption::new("a").disabled(true)]);
         assert_eq!(mixed.enabled(), vec![false]);
+    }
+
+    #[gpui::test]
+    fn a_labelled_group_draws_its_name_above_the_options(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| NamedHarness);
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("radio-group-label").is_some(),
+            "the group name is drawn"
+        );
+    }
+
+    /// Hosts one group with a visible name.
+    struct NamedHarness;
+
+    impl Render for NamedHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(
+                RadioGroup::new(
+                    "run-on",
+                    vec![RadioOption::new("This PC"), RadioOption::new("VPS")],
+                )
+                .label("Run on"),
+            )
+        }
     }
 
     /// Hosts one group that records each index it asks for and keeps the choice it was given.

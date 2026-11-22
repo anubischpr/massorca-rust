@@ -15,6 +15,13 @@ path = "src/lib.rs"
 name = "massorca"
 path = "src/main.rs"
 
+# The fake agent for the CLI's own tests (ADR 0057); installers ship `massorca` only.
+[[bin]]
+name = "massorca-fake-agent"
+path = "src/bin/fake_agent.rs"
+test = false
+doc = false
+
 [dependencies]
 clap.workspace = true
 crossterm.workspace = true

@@ -90,9 +90,15 @@ pub(in crate::shell) fn project_page(
     let brief_section = section("Brief", &theme)
         .child(body(brief, &theme))
         .child(edit_brief);
-    let board_section = section("Board", &theme).child(div().min_h(px(BOARD_MIN_HEIGHT)).child(
-        board_columns(model, shell, BoardOwner::Project(team, project), window, cx),
-    ));
+    let board_section =
+        section("Board", &theme).child(div().min_h(px(BOARD_MIN_HEIGHT)).child(board_columns(
+            model,
+            shell,
+            BoardOwner::Project(team, project),
+            0.0,
+            window,
+            cx,
+        )));
     let link_section = section("Link to a Workspaces project", &theme)
         .child(link_control)
         .child(note(link_note, &theme));
