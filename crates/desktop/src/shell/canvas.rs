@@ -5,22 +5,24 @@ use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
 use super::teams;
-use super::zones::ZoneFocus;
+use super::zones::{ZoneFocus, region_focus_ring};
 use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
 use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
+use crate::model::shell::{ServiceNotice, ServiceTone};
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, TeamPage};
 use gpui::{
     AnyElement, App, Context, Div, FocusHandle, IntoElement, MouseButton, WeakEntity, Window, div,
     prelude::*, px,
 };
+use massorca_ui::components::error_state::{ErrorState, ErrorStateVariant};
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_MIN, LAYOUT_CONVERSATION_READING, RADIUS_CANVAS, RADIUS_LG, SIZE_TOOLBAR,
-    SPACE_1, SPACE_3, TYPE_BODY_SM, TYPE_HEADING, TYPE_TITLE_SM,
+    SPACE_1, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_HEADING, TYPE_TITLE_SM,
 };
 use massorca_ui::{ActiveTheme, TextStyled, Theme};
 
@@ -45,6 +47,7 @@ pub(super) fn canvas(
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
         .track_focus(zones.get(Zone::Conversation))
+        .focus_visible(|style| style.shadow(region_focus_ring(&theme)))
         .relative()
         .flex()
         .flex_row()
@@ -79,6 +82,15 @@ fn conversation(
     }
     if model.canvas() == Canvas::Page(Page::Setup) {
         return setup::setup_page(&pages.setup_rows, cx);
+    }
+    // A service that cannot be reached takes the Canvas: its page, not a banner over an empty one.
+    if let Some(notice) = model
+        .snapshot()
+        .service_notice
+        .as_ref()
+        .filter(|notice| notice.tone == ServiceTone::Unreachable)
+    {
+        return service_down_page(notice, shell);
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
@@ -180,10 +192,35 @@ fn placeholder(title: &str, note: &str, theme: &Theme) -> impl IntoElement {
         )
 }
 
+/// The page for a service that cannot be reached: what it is, Retry, and the start error behind
+/// Show details (cross-cutting "Service not running").
+fn service_down_page(notice: &ServiceNotice, shell: &WeakEntity<Shell>) -> AnyElement {
+    let retry = shell.clone();
+    let mut page = ErrorState::new("service-down", "MassOrca service is not running")
+        .variant(ErrorStateVariant::Page)
+        .explanation(
+            "Projects, agents and terminals run in the local service on this PC. Retry starts it. Show details has the last start error.",
+        )
+        .on_retry(move |_, cx| {
+            let _ = retry.update(cx, |shell, _| shell.retry_service_now());
+        });
+    if let Some(detail) = &notice.detail {
+        page = page.details(detail.clone());
+    }
+    div()
+        .debug_selector(|| "service-down".to_owned())
+        .w_full()
+        .max_w(px(LAYOUT_CONVERSATION_READING))
+        .p(px(SPACE_4))
+        .child(page)
+        .into_any_element()
+}
+
 /// A region docked beside the Conversation, at its default width (D-SH-01).
 fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
         .track_focus(&focus)
+        .focus_visible(|style| style.shadow(region_focus_ring(theme)))
         .flex_none()
         .w(px(region.default_width()))
         .min_w(px(region.min_width()))
@@ -199,6 +236,9 @@ fn region_column(region: Region, focus: FocusHandle, theme: &Theme) -> impl Into
 fn overlay_panel(region: Region, focus: FocusHandle, theme: &Theme) -> impl IntoElement {
     div()
         .track_focus(&focus)
+        .focus_visible(|style| {
+            style.shadow([region_focus_ring(theme), box_shadows(theme.shadows.e2)].concat())
+        })
         .absolute()
         .top_0()
         .bottom_0()

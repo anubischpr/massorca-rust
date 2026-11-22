@@ -31,6 +31,8 @@ pub struct RegionToggle {
 pub struct TitleBarModel {
     /// The full page on screen, if any; its Back button and title replace the session.
     pub full_page: Option<Page>,
+    /// Back is a labelled button with the page title: full pages and Bot Teams screens (D-SH-03).
+    pub labelled_back: bool,
     pub title: String,
     /// No session is open, so the title reads in tertiary text.
     pub title_is_placeholder: bool,
@@ -74,6 +76,7 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     let sidebar_on = model.region_visible(Region::Sidebar);
     TitleBarModel {
         full_page,
+        labelled_back: full_page.is_some() || bot_teams,
         title,
         title_is_placeholder,
         can_go_back: navigation.can_go_back(),
@@ -179,5 +182,21 @@ mod tests {
         assert!(bar.sidebar_enabled);
         model.open_team_page(TeamPage::Board(TeamId(1)));
         assert_eq!(title_bar(&model).title, "Board");
+    }
+
+    #[test]
+    fn bot_teams_screens_name_back_and_keep_the_sidebar() {
+        let mut model = shell();
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        let home = title_bar(&model);
+        assert!(home.labelled_back);
+        assert!(home.sidebar_enabled);
+        model.open_team_page(TeamPage::Board(TeamId(1)));
+        let board = title_bar(&model);
+        assert!(board.labelled_back);
+        assert_eq!(board.full_page, None);
+        assert!(board.sidebar_enabled);
+        assert!(!title_bar(&shell()).labelled_back);
     }
 }
