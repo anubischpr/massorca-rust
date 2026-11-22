@@ -1,6 +1,7 @@
 //! The desktop shell: the window frame, its regions, and the command palette (D-SH-01).
 
 mod actions;
+mod add_host;
 mod canvas;
 mod debug_focus;
 mod diff_page;
@@ -113,6 +114,8 @@ pub struct Shell {
     devices_asked: bool,
     /// The revoke confirm on screen, if one is open (D-PR-02).
     revoke: Option<RevokeFlow>,
+    /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
+    add_host: Option<add_host::AddHostFlow>,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -321,6 +324,7 @@ impl Shell {
             _pairing_changes: pairing_changes,
             devices_asked: false,
             revoke: None,
+            add_host: None,
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -696,6 +700,10 @@ impl Render for Shell {
             .revoke
             .as_ref()
             .map(|flow| pairing::revoke_dialog(flow, &shell));
+        let add_host = self
+            .add_host
+            .as_ref()
+            .map(|flow| add_host::add_host_dialog(flow, &shell, cx));
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
@@ -764,6 +772,7 @@ impl Render for Shell {
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))
+            .when_some(add_host, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }

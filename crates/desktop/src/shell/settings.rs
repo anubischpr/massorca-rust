@@ -335,6 +335,7 @@ fn row(
                 frame,
             )),
         ),
+        RowBody::AddHost => (row, Some(add_host_button(id.clone(), frame))),
         RowBody::PairingLink => (
             row,
             Some(page_link(
@@ -349,6 +350,20 @@ fn row(
         Some(control) => row.control(control).into_any_element(),
         None => row.into_any_element(),
     }
+}
+
+/// The "Add host" button of its row: it opens the dialog on this page (D-HO-02).
+fn add_host_button(id: SharedString, frame: &SettingsFrame<'_>) -> AnyElement {
+    let shell = frame.shell.clone();
+    let button = Button::new(id, "Add host")
+        .variant(ButtonVariant::Secondary)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_add_host(cx));
+        });
+    div()
+        .debug_selector(|| "settings-add-host".to_owned())
+        .child(button)
+        .into_any_element()
 }
 
 /// A row that opens a full page (the setup checklist, D-OB-12, or Pairing, D-PR-01) with an "Open" button.

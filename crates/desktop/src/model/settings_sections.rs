@@ -135,6 +135,8 @@ pub enum RowBody {
     SetupChecklist,
     /// A link to the Pairing page: phones and other hosts, and the devices paired with this PC.
     PairingLink,
+    /// Opens the Add host dialog, its SSH path (D-HO-02).
+    AddHost,
     Planned(Planned),
 }
 
@@ -435,8 +437,8 @@ const HOSTS: &[RowSpec] = &[
     },
     RowSpec {
         label: "Add host",
-        helper: "Remote hosts over SSH come later.",
-        body: RowBody::Planned(Planned::Action("Add host")),
+        helper: "Install MassOrca on a Linux host over SSH, and pair with it.",
+        body: RowBody::AddHost,
     },
     RowSpec {
         label: "Paired phones",
