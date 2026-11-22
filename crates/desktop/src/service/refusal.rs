@@ -1,7 +1,8 @@
 //! A service answer that says "no", typed so each kind picks its dialog (decision 0028).
 
 use massorca_client::ClientError;
-use massorca_protocol::codes;
+use massorca_protocol::pairing::OfferError;
+use massorca_protocol::{ErrorBody, codes};
 
 /// Why a create or remove did not happen.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +49,11 @@ impl Refusal {
         }
     }
 
+    /// The text to show for this refusal, as a sentence: its first letter capitalised.
+    pub fn sentence(&self) -> String {
+        sentence(&self.message())
+    }
+
     /// The text to show for this refusal.
     pub fn message(&self) -> String {
         match self {
@@ -65,62 +71,114 @@ impl Refusal {
     }
 }
 
+/// Host codes the CLI reports for a client-side failure (`crates/cli/src/error.rs`); the service has no such codes.
+const HOST_NOT_FOUND: &str = "host.not_found";
+const HOST_EXISTS: &str = "host.exists";
+const HOST_INVALID_NAME: &str = "host.invalid_name";
+const HOST_IDENTITY_MISMATCH: &str = "host.identity_mismatch";
+
 impl From<&ClientError> for Refusal {
     fn from(error: &ClientError) -> Self {
         match error {
-            ClientError::Remote(body) => match body.code.as_str() {
-                codes::WORKSPACE_DIRTY => Self::Dirty,
-                codes::WORKSPACE_IGNORED_FILES => Self::IgnoredFiles,
-                codes::WORKSPACE_ORPHAN => Self::Orphan,
-                codes::WORKSPACE_LOCKED => Self::Locked {
-                    message: body.message.clone(),
-                },
-                codes::WORKSPACE_MAIN_WORKTREE => Self::MainWorktree {
-                    message: body.message.clone(),
-                },
-                codes::WORKSPACE_NAME_TAKEN
-                | codes::WORKSPACE_NAME_INVALID
-                | codes::WORKSPACE_PATH_TAKEN => Self::NameProblem {
-                    message: body.message.clone(),
-                },
-                codes::PATH_NOT_FOUND
-                | codes::PATH_NOT_DIRECTORY
-                | codes::PROJECT_EXISTS
-                | codes::PROJECT_NOT_GIT => Self::PathProblem {
-                    message: body.message.clone(),
-                },
-                codes::GIT_DISCARD_UNTRACKED
-                | codes::GIT_DISCARD_STAGED
-                | codes::GIT_PATH_CONFLICTED
-                | codes::GIT_PATH_IS_DIRECTORY => Self::GitRefused {
-                    code: body.code.clone(),
-                    message: body.message.clone(),
-                    paths: paths_of(body),
-                },
-                code => Self::Failed {
-                    code: code.to_owned(),
-                    message: body.message.clone(),
-                },
+            ClientError::Remote(body) => from_body(body),
+            // Only a handshake the service never answered means it cannot be reached; any other refusal says why.
+            ClientError::Handshake { error: body, .. }
+                if body.code == codes::PROTOCOL_HANDSHAKE =>
+            {
+                unreachable_service()
+            }
+            ClientError::Handshake { error: body, .. } => from_body(body),
+            ClientError::HostUnreachable(detail) => Self::Unavailable {
+                message: sentence(&format!("the host is unreachable: {detail}")),
             },
             ClientError::Disconnected
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)
-            | ClientError::UntrustedEndpoint(_)
-            | ClientError::Handshake { .. }
-            | ClientError::HostUnreachable(_) => Self::Unavailable {
-                message: "The service cannot be reached right now.".to_owned(),
-            },
-            ClientError::Protocol(_)
-            | ClientError::Io(_)
-            | ClientError::ServerIdentityMismatch
-            | ClientError::HostNotFound(_)
-            | ClientError::HostExists(_)
-            | ClientError::InvalidHostName(_) => Self::Failed {
+            | ClientError::UntrustedEndpoint(_) => unreachable_service(),
+            ClientError::ServerIdentityMismatch => host_failure(HOST_IDENTITY_MISMATCH, error),
+            ClientError::HostNotFound(_) => host_failure(HOST_NOT_FOUND, error),
+            ClientError::HostExists(_) => host_failure(HOST_EXISTS, error),
+            ClientError::InvalidHostName(_) => host_failure(HOST_INVALID_NAME, error),
+            ClientError::Protocol(_) | ClientError::Io(_) => Self::Failed {
                 code: "client.failed".to_owned(),
                 message: error.to_string(),
             },
         }
     }
+}
+
+/// A pairing offer that does not decode: its own sentence, under the code the CLI uses for it.
+impl From<&OfferError> for Refusal {
+    fn from(error: &OfferError) -> Self {
+        let code = match error {
+            OfferError::NotAnOffer => "pairing.not_an_offer",
+            OfferError::Damaged => "pairing.damaged",
+        };
+        Self::Failed {
+            code: code.to_owned(),
+            message: sentence(&error.to_string()),
+        }
+    }
+}
+
+/// A service error body, by its code: the files it names, or the service's own sentence.
+fn from_body(body: &ErrorBody) -> Refusal {
+    match body.code.as_str() {
+        codes::WORKSPACE_DIRTY => Refusal::Dirty,
+        codes::WORKSPACE_IGNORED_FILES => Refusal::IgnoredFiles,
+        codes::WORKSPACE_ORPHAN => Refusal::Orphan,
+        codes::WORKSPACE_LOCKED => Refusal::Locked {
+            message: body.message.clone(),
+        },
+        codes::WORKSPACE_MAIN_WORKTREE => Refusal::MainWorktree {
+            message: body.message.clone(),
+        },
+        codes::WORKSPACE_NAME_TAKEN
+        | codes::WORKSPACE_NAME_INVALID
+        | codes::WORKSPACE_PATH_TAKEN => Refusal::NameProblem {
+            message: body.message.clone(),
+        },
+        codes::PATH_NOT_FOUND
+        | codes::PATH_NOT_DIRECTORY
+        | codes::PROJECT_EXISTS
+        | codes::PROJECT_NOT_GIT => Refusal::PathProblem {
+            message: body.message.clone(),
+        },
+        codes::GIT_DISCARD_UNTRACKED
+        | codes::GIT_DISCARD_STAGED
+        | codes::GIT_PATH_CONFLICTED
+        | codes::GIT_PATH_IS_DIRECTORY => Refusal::GitRefused {
+            code: body.code.clone(),
+            message: body.message.clone(),
+            paths: paths_of(body),
+        },
+        code => Refusal::Failed {
+            code: code.to_owned(),
+            message: body.message.clone(),
+        },
+    }
+}
+
+fn unreachable_service() -> Refusal {
+    Refusal::Unavailable {
+        message: "The service cannot be reached right now.".to_owned(),
+    }
+}
+
+fn host_failure(code: &str, error: &ClientError) -> Refusal {
+    Refusal::Failed {
+        code: code.to_owned(),
+        message: sentence(&error.to_string()),
+    }
+}
+
+/// The text with its first letter capitalised, for a sentence that starts a line.
+pub(super) fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// The files a refusal names in `data.paths`; none when it names none.
@@ -207,15 +265,81 @@ mod tests {
     }
 
     #[test]
-    fn an_unreachable_host_is_unavailable_and_a_key_mismatch_is_a_failure() {
-        assert!(matches!(
+    fn an_unreachable_host_is_named_as_the_host_in_a_sentence() {
+        assert_eq!(
             Refusal::from(&ClientError::HostUnreachable("timed out".into())),
-            Refusal::Unavailable { .. }
+            Refusal::Unavailable {
+                message: "The host is unreachable: timed out".into()
+            }
+        );
+    }
+
+    #[test]
+    fn host_refusals_keep_their_codes_and_say_what_happened() {
+        assert_eq!(
+            Refusal::from(&ClientError::HostNotFound("vps".into())),
+            Refusal::Failed {
+                code: "host.not_found".into(),
+                message: "No host named \"vps\"".into()
+            }
+        );
+        assert!(matches!(
+            Refusal::from(&ClientError::HostExists("vps".into())),
+            Refusal::Failed { code, .. } if code == "host.exists"
+        ));
+        assert!(matches!(
+            Refusal::from(&ClientError::InvalidHostName("Vps!".into())),
+            Refusal::Failed { code, .. } if code == "host.invalid_name"
         ));
         assert!(matches!(
             Refusal::from(&ClientError::ServerIdentityMismatch),
-            Refusal::Failed { code, .. } if code == "client.failed"
+            Refusal::Failed { code, .. } if code == "host.identity_mismatch"
         ));
+    }
+
+    #[test]
+    fn a_refused_handshake_keeps_the_service_sentence_and_its_code() {
+        let refused = ClientError::Handshake {
+            error: Box::new(ErrorBody::new(
+                codes::PAIRING_INVALID,
+                "the pairing offer is not valid here; it may have been used already",
+            )),
+            supported: None,
+        };
+        assert_eq!(
+            Refusal::from(&refused),
+            Refusal::Failed {
+                code: codes::PAIRING_INVALID.into(),
+                message: "the pairing offer is not valid here; it may have been used already"
+                    .into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_handshake_that_times_out_is_still_a_service_that_cannot_be_reached() {
+        let timed_out = ClientError::Handshake {
+            error: Box::new(ErrorBody::new(
+                codes::PROTOCOL_HANDSHAKE,
+                "the service did not answer hello in time",
+            )),
+            supported: None,
+        };
+        assert!(matches!(
+            Refusal::from(&timed_out),
+            Refusal::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn an_offer_that_does_not_decode_is_refused_with_its_sentence() {
+        assert_eq!(
+            Refusal::from(&OfferError::NotAnOffer),
+            Refusal::Failed {
+                code: "pairing.not_an_offer".into(),
+                message: "This is not a MassOrca pairing offer".into()
+            }
+        );
     }
 
     #[test]
