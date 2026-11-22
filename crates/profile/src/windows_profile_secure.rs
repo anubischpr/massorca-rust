@@ -19,8 +19,8 @@ pub(crate) fn plan(home: &Path, dir: &Path) -> Result<Vec<FolderPlan>, RootAcces
 
 /// Pins every folder of the plan first, without following links (the home may be a link the user chose), so none
 /// can be renamed or swapped while its access changes, and sets each DACL through its handle, on exactly that folder,
-/// home first. Once they are owner-only nobody else can rename them, so the pins are released and the inherited
-/// entries of everything below are reset by path. A failure part-way leaves the folders already done private and the
+/// home first. Once they are owner-only nobody else can rename them, so the pins are released and each folder is set
+/// again by path, resetting the inherited entries of everything below. A failure part-way leaves the folders already done private and the
 /// rest as they were; running the command again finishes the job.
 pub(crate) fn apply(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
     let trusted = Trusted::current()?;
@@ -41,8 +41,12 @@ pub(crate) fn apply(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
         }
     }
     drop(pinned);
-    for folder in plan.iter().filter(|folder| folder.changes()) {
-        reset_inherited_below(&folder.path, &dacl)?;
+    // Resetting below a folder also clears the protection of `profiles` and the root under it, so every folder of
+    // the plan is set again, home first, once anything changed.
+    if plan.iter().any(FolderPlan::changes) {
+        for folder in &plan {
+            reset_inherited_below(&folder.path, &dacl)?;
+        }
     }
     Ok(())
 }
