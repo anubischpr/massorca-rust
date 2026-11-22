@@ -16,6 +16,7 @@ massorca-core-git.workspace = true
 massorca-core-watch.workspace = true
 massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
+massorca-core-vault.workspace = true
 massorca-core-workspace.workspace = true
 massorca-profile.workspace = true
 massorca-protocol.workspace = true
