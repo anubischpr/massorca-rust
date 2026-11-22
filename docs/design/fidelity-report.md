@@ -84,7 +84,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - B1, C1 New workspace: a 640 px page with Host, Type, Location, Base and Parent row and setup card. Not built (L4).
 - N2 project owner line: needs protocol data.
 - N3 Prototypes page: see Shell.
-- Breakpoints: the shell still draws the sidebar at 1048 px (`regions.rs:32`); the artboard ladder is 928 px. Follow-up PR.
+- Breakpoints: fixed in #114. The ladder is 1408 / 1168 / 928 / 728 px, as artboard `ws-narrow` measures.
 
 ## Dialogs
 
@@ -168,7 +168,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 
 **Cannot match yet**
 - N42 input row: about 28 px in the shell; the artboard says 44 px. Follow-up PR.
-- Width: the shell draws 560 px; the artboard says 600 px. Follow-up PR.
+- Width: fixed in #114. The palette is 600 px with a 44 px input row, as artboard `ws-palette` measures.
 
 ## Components (gallery, 51 stories, both themes)
 
