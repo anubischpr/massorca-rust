@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod package_path;
 pub mod permission;
 pub mod risk;
+pub mod uninstall;
 pub mod update;
 
 pub use error::{Error, Problem, codes};
