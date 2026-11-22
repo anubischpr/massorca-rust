@@ -3,6 +3,7 @@
 mod fakes;
 mod fixture;
 mod install;
+mod remove;
 mod review;
 mod service;
 mod source;

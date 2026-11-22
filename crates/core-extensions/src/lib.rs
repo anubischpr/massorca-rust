@@ -5,9 +5,11 @@
 
 pub mod catalogue;
 mod error;
+pub mod hooks;
 pub mod host;
 pub mod layout;
 pub mod lockfile;
+pub mod removal;
 pub mod review;
 pub mod service;
 pub mod source;

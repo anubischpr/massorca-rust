@@ -13,6 +13,7 @@ use massorca_ext_package::manifest::{self, Manifest};
 use massorca_profile::Profile;
 
 use crate::error::Error;
+use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
 use crate::lockfile::{InstallerRun, LockCli, LockEntry, Lockfile};
@@ -25,6 +26,7 @@ pub struct Extensions {
     pub(crate) resolver: Arc<dyn ProgramResolver>,
     pub(crate) runner: Arc<dyn CommandRunner>,
     pub(crate) os: Option<CliOs>,
+    pub(crate) hooks: Arc<Hooks>,
     changes: Mutex<()>,
 }
 
@@ -33,6 +35,7 @@ impl fmt::Debug for Extensions {
         f.debug_struct("Extensions")
             .field("layout", &self.layout)
             .field("os", &self.os)
+            .field("hooks", &self.hooks)
             .finish_non_exhaustive()
     }
 }
@@ -48,6 +51,7 @@ impl Extensions {
             resolver,
             runner,
             os: current_os(),
+            hooks: Arc::default(),
             changes: Mutex::new(()),
         }
     }
