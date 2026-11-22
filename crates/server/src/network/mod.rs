@@ -19,7 +19,7 @@ use tokio_rustls::TlsAcceptor;
 pub(crate) use admission::Pending;
 pub(crate) use auth::{Authenticated, authenticate};
 pub use listen::{ListenSpec, ListenSpecError, NetworkConfig};
-pub(crate) use live::LiveGuard;
+pub(crate) use live::{LiveGuard, revoked_error};
 pub(crate) use pairing::{DEFAULT_TTL, MAX_TTL};
 pub use state::NetworkState;
 

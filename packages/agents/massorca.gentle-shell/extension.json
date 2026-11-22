@@ -1,0 +1,45 @@
+{
+  "id": "massorca.gentle-shell",
+  "name": "Gentle Shell",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "The Gentle Shell coding agent, run in your workspaces.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["gentle-shell"] }, "reason": "Runs the Gentle Shell CLI." },
+    { "kind": "credentials", "scope": { "agents": ["gentle-shell"] }, "reason": "Keeps your Gentle Shell sign-ins for its sessions." }
+  ],
+  "contributes": {
+    "agentAdapters": [{
+      "id": "gentle-shell",
+      "kind": "agents/gentle-shell.json",
+      "cli": {
+        "binary": "gentle-shell",
+        "verify": ["gentle-shell", "--version"],
+        "source": "https://www.npmjs.com/package/gentle-pi",
+        "install": [
+          { "os": "windows", "command": ["npm", "install", "-g", "gentle-pi"] },
+          { "os": "linux", "command": ["npm", "install", "-g", "gentle-pi"] },
+          { "os": "macos", "command": ["npm", "install", "-g", "gentle-pi"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
+          { "os": "linux", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
+          { "os": "macos", "command": ["npm", "uninstall", "-g", "gentle-pi"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "agents",
+    "developer": { "name": "MassOrca" },
+    "mention": "gentle-shell",
+    "banner": {
+      "examples": [{ "kind": "mention", "text": "@gentle-shell", "caption": "Ask Gentle Shell to explain this module" }]
+    },
+    "connections": [{ "id": "account", "kind": "agent-login", "title": "Gentle Shell account", "multiple": true }]
+  }
+}

@@ -1,7 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::error::GitError;
@@ -160,7 +159,7 @@ impl Git {
             .iter()
             .map(|arg| redact_urls(&arg.to_string_lossy()))
             .collect();
-        let mut command = Command::new(&self.binary);
+        let mut command = massorca_process::command(&self.binary);
         command
             .arg("-c")
             .arg("core.quotepath=off")

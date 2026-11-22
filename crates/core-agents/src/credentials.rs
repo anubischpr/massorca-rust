@@ -1217,7 +1217,7 @@ mod tests {
         std::os::unix::fs::symlink(target, link).unwrap();
         #[cfg(windows)]
         {
-            let made = std::process::Command::new("cmd")
+            let made = massorca_process::command("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(link)
                 .arg(target)
@@ -1492,7 +1492,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
         fs::create_dir_all(fixture.home().parent().unwrap()).unwrap();
-        let made = std::process::Command::new("cmd")
+        let made = massorca_process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(fixture.home())
             .arg(elsewhere.path())

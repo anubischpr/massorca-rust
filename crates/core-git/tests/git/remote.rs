@@ -69,7 +69,7 @@ impl Remotes {
     reason = "a skipped test must name why it skipped"
 )]
 fn has_http_transport() -> bool {
-    let exec_path = std::process::Command::new("git")
+    let exec_path = massorca_process::command("git")
         .arg("--exec-path")
         .output()
         .expect("git --exec-path");
