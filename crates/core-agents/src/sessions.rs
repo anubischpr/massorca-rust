@@ -147,7 +147,9 @@ impl From<std::io::Error> for AgentError {
 impl From<LaunchError> for AgentError {
     fn from(error: LaunchError) -> Self {
         let code = match error {
-            LaunchError::PromptTooLong | LaunchError::PromptHasNul => codes::AGENT_PROMPT_INVALID,
+            LaunchError::PromptTooLong
+            | LaunchError::PromptHasNul
+            | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
         };
         Self::new(code, error.to_string())

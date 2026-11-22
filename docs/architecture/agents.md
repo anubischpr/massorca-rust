@@ -140,9 +140,12 @@ a kind whose `prompt.mode` is `none` waits for the run's first `idle`; see Promp
 
 `agent.prompt` (0054) types text into a live run's terminal as one terminal input: the text,
 then the kind's submit sequence. Plain text is typed as keystrokes, each line break as Enter
-(`\r`), the same as the desktop's paste. Bracketed text sits between the paste markers, with
-any end marker inside the text removed, and keeps its line breaks. The text is at most 8 KiB
-and has no NUL, else `agent.prompt_invalid`; a run that has exited is `agent.not_live`.
+(`\r`), the same as the desktop's paste. Bracketed text sits between the paste markers and keeps
+its line breaks. The text is at most 8 KiB and holds no control character except tab, line feed
+and carriage return (decision 0058): NUL, the escape character, DEL, the other C0 controls and the
+C1 controls (U+0080 to U+009F) are refused with `agent.prompt_invalid`, at launch and in
+`agent.prompt`, in both paste modes. Because the escape character is refused, no paste marker can
+appear inside the text. A run that has exited is `agent.not_live`.
 
 A run takes a prompt when its activity is `idle` or `done`, or when its kind has no status
 mechanism. Absent activity, meaning nothing reported yet, is not ready; `working`, `waiting`

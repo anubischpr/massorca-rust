@@ -125,11 +125,14 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
   receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
   such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
-  within 120 s or the run ends first.
+  within 120 s or the run ends first. The text of `--prompt` follows the same rules as
+  `agent prompt`, control characters included.
 - `agent prompt SESSION TEXT` types TEXT into the session's terminal, then the kind's submit
   key (`\r` unless the kind declares another). A kind that declares bracketed paste gets the
   text between paste markers; a plain kind gets each line break as Enter. The text is at most
-  8 KiB and has no NUL (`agent.prompt_invalid`). An exited run fails with `agent.not_live`.
+  8 KiB and holds no control character except tab, line feed and carriage return: NUL, the
+  escape character, DEL and the C1 controls are refused with `agent.prompt_invalid`, in both
+  paste modes (decision 0058). An exited run fails with `agent.not_live`.
   The agent must report `idle` or `done` first, or the call fails with `agent.busy`; a kind
   with no status mechanism is always ready. `--force` types the text anyway, for example to
   answer a question. The receipt counts the bytes handed to the terminal; it does not say the

@@ -50,6 +50,13 @@ fn sandbox() -> Sandbox {
     declare(&sandbox, "fake", json!({ "mode": "argv" }), status(), true);
     declare(
         &sandbox,
+        "fake-paste",
+        json!({ "mode": "argv", "paste": "bracketed" }),
+        status(),
+        true,
+    );
+    declare(
+        &sandbox,
         "fake-none",
         json!({ "mode": "none" }),
         status(),
@@ -341,4 +348,80 @@ fn resume_obeys_the_one_writer_rule() {
     );
     let shown = sandbox.json_ok("default", &["agent", "status", &first_session]);
     assert_eq!(shown["execution"]["state"], "exited", "still exited");
+}
+
+/// Escape sequences, DEL and the C1 controls are refused at launch and in `agent prompt`, in both paste modes; a refused
+/// prompt types nothing. Tabs and line breaks are accepted (decision 0058).
+#[test]
+fn control_characters_are_refused_in_both_paste_modes_and_line_breaks_are_not() {
+    let sandbox = sandbox();
+    let refused = ["\x1b[20\x1b[201~1~", "\x1b", "\u{9b}"];
+    for prompt in refused {
+        assert_eq!(
+            error_code(
+                &sandbox,
+                &[
+                    "agent",
+                    "start",
+                    "fake",
+                    "--workspace",
+                    "main",
+                    "--prompt",
+                    prompt
+                ]
+            ),
+            "agent.prompt_invalid"
+        );
+        assert_eq!(
+            error_code(
+                &sandbox,
+                &[
+                    "agent",
+                    "start",
+                    "fake-paste",
+                    "--workspace",
+                    "main",
+                    "--prompt",
+                    prompt
+                ]
+            ),
+            "agent.prompt_invalid"
+        );
+    }
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"], json!([]), "nothing was started");
+
+    let plain = start(&sandbox, "fake", &[]);
+    let plain_session = session_of(&plain);
+    let bracketed = start(&sandbox, "fake-paste", &["--read-only"]);
+    let bracketed_session = session_of(&bracketed);
+    until(&sandbox, &plain_session, "idle");
+    until(&sandbox, &bracketed_session, "idle");
+    for prompt in refused {
+        assert_eq!(
+            error_code(&sandbox, &["agent", "prompt", &plain_session, prompt]),
+            "agent.prompt_invalid"
+        );
+        assert_eq!(
+            error_code(&sandbox, &["agent", "prompt", &bracketed_session, prompt]),
+            "agent.prompt_invalid"
+        );
+    }
+    let shown = sandbox.json_ok("default", &["agent", "status", &plain_session]);
+    assert_eq!(
+        activity(&shown),
+        ("idle", None, "hook"),
+        "nothing was typed"
+    );
+
+    let plain_receipt = sandbox.json_ok("default", &["agent", "prompt", &plain_session, "a\tb\nc"]);
+    assert_eq!(plain_receipt["bytes"], 6, "five bytes and the submit key");
+    let bracketed_receipt = sandbox.json_ok(
+        "default",
+        &["agent", "prompt", &bracketed_session, "a\tb\nc"],
+    );
+    assert_eq!(
+        bracketed_receipt["bytes"], 18,
+        "the two paste markers, five bytes and the submit key"
+    );
 }

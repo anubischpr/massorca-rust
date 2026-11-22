@@ -8,18 +8,17 @@ use crate::kind::PasteMode;
 
 /// Starts a bracketed paste (xterm mode 2004).
 pub const PASTE_START: &str = "\x1b[200~";
-/// Ends a bracketed paste. A marker inside the text is removed, so the text cannot end the paste early.
+/// Ends a bracketed paste. The text never holds it: `launch::check_prompt` refuses the escape character (decision 0058).
 pub const PASTE_END: &str = "\x1b[201~";
 
-/// The bytes one prompt types: the text, then the kind's submit sequence.
+/// The bytes one prompt types: the text, then the kind's submit sequence. The text must have passed
+/// `launch::check_prompt`, which refuses the escape character, so bracketed text cannot end its own paste.
 ///
 /// Bracketed text sits between the paste markers and keeps its line breaks, so a multi-line prompt reaches the agent as
 /// one paste. Plain text is typed as keystrokes, each line break as an Enter (`\r`), the same as the desktop's paste.
 pub fn input_bytes(text: &str, paste: PasteMode, submit: &str) -> Vec<u8> {
     let mut bytes = match paste {
-        PasteMode::Bracketed => {
-            format!("{PASTE_START}{}{PASTE_END}", text.replace(PASTE_END, "")).into_bytes()
-        }
+        PasteMode::Bracketed => format!("{PASTE_START}{text}{PASTE_END}").into_bytes(),
         PasteMode::Plain => text.replace("\r\n", "\n").replace('\n', "\r").into_bytes(),
     };
     bytes.extend_from_slice(submit.as_bytes());
@@ -59,14 +58,6 @@ mod tests {
         assert_eq!(
             input_bytes("hi", PasteMode::Bracketed, "\n"),
             b"\x1b[200~hi\x1b[201~\n"
-        );
-    }
-
-    #[test]
-    fn a_marker_inside_bracketed_text_cannot_end_the_paste_early() {
-        assert_eq!(
-            input_bytes("x\x1b[201~y", PasteMode::Bracketed, "\r"),
-            b"\x1b[200~xy\x1b[201~\r"
         );
     }
 
