@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials};
 
+use crate::credentials;
 use crate::kind::{KindDecl, StatusMechanism};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
@@ -156,7 +157,14 @@ fn enabled_package() -> wire::KindPackage {
 }
 
 fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind {
-    let imported = paths::valid_home(profile_dir, &entry.id).is_some_and(|home| home.is_dir());
+    // The 0056 home counts only as a plain directory, checked under the homes gate (decision 0056, 0059).
+    let imported = {
+        let _gate = credentials::lock_homes();
+        credentials::usable_home(profile_dir, &entry.id)
+            .ok()
+            .flatten()
+            .is_some()
+    };
     let Some(decl) = &entry.decl else {
         return AgentKind {
             id: entry.id.clone(),
