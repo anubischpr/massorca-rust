@@ -4,6 +4,8 @@ mod endpoint;
 mod error;
 mod profile;
 mod root_access;
+#[cfg(windows)]
+mod scan_cache;
 #[cfg(unix)]
 mod unix_profile_root;
 #[cfg(unix)]

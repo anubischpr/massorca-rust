@@ -1,5 +1,5 @@
 //! Windows access of the profile root (ADR 0073): created with a protected owner-only DACL, checked and repaired on start.
-//! Descriptors are compared as SDDL text, so SIDs and access masks are spelled the same way on both sides.
+//! Descriptors are read as SDDL and parsed: SIDs are compared as SIDs (`EqualSid`), access masks as numbers.
 //! Every unsafe call states, in its `SAFETY` comment, the invariant it relies on.
 #![allow(unsafe_code)]
 
@@ -30,6 +30,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::root_access::{Findings, RootAccess, RootAccessError, profiles_dir};
+use crate::scan_cache::{ScanCache, stamp};
 use crate::windows_dir_access::Sid;
 use crate::windows_sddl::{Descriptor, verbatim};
 use crate::windows_trust::{Trusted, current_user};
@@ -43,7 +44,7 @@ pub(crate) enum Links {
 
 /// The descriptor reads and DACL writes `secure_root` makes, so tests can report owners and users no unprivileged
 /// test can set, and record a repair instead of applying it.
-trait Disk {
+pub(crate) trait Disk {
     /// The owner and DACL of `path` as SDDL.
     fn read(&self, path: &Path, links: Links) -> io::Result<String>;
     /// Replaces the DACL of `path` with the protected `dacl`.
@@ -51,7 +52,7 @@ trait Disk {
 }
 
 #[derive(Debug)]
-struct RealDisk;
+pub(crate) struct RealDisk;
 
 impl Disk for RealDisk {
     fn read(&self, path: &Path, links: Links) -> io::Result<String> {
@@ -65,7 +66,7 @@ impl Disk for RealDisk {
 
 /// The DACL of a private folder: full access for `user`, inherited by every file and folder below, nothing from above.
 /// The user is written as an `S-1-…` string, never an alias.
-fn owner_only_dir_dacl_sddl(user: &Sid) -> io::Result<String> {
+pub(crate) fn owner_only_dir_dacl_sddl(user: &Sid) -> io::Result<String> {
     Ok(format!("D:P(A;OICI;FA;;;{user})"))
 }
 
@@ -83,6 +84,7 @@ fn secure_root_with(
     if let Some(parent) = home.parent() {
         fs::create_dir_all(parent)?;
     }
+    check_link_home(home, &trusted, disk)?;
     // The home may itself be a link the user chose; `profiles` and the root may not.
     for (ancestor, links) in [
         (home, Links::Follow),
@@ -114,15 +116,49 @@ fn secure_root_with(
     }
     let repaired = !root.is_owner_only(&user);
     if repaired {
+        // Before the scan, so nothing can be planted between the listing and the new access. A refusal by the scan
+        // leaves the root owner-only: that only takes access away and trusts nothing.
         disk.protect(dir, &owner_only_dir_dacl_sddl(&user)?)?;
     }
-    // After the repair, so nothing can be planted between the listing and the new access.
-    scan_entries(dir, &trusted, disk)?.into_result()?;
+    // A root that was already private kept everyone else out since the last clean scan, so unchanged folders are
+    // skipped; a new or repaired root is read in full.
+    let cache = if repaired {
+        ScanCache::default()
+    } else {
+        ScanCache::load(dir)
+    };
+    let (findings, scanned) = scan_entries(dir, &trusted, disk, &cache)?;
+    if let Err(refused) = findings.into_result() {
+        ScanCache::clear(dir);
+        return Err(refused);
+    }
+    // The cache only saves time; a start never fails on it.
+    let _ = scanned.save(dir);
     Ok(if repaired {
         RootAccess::Repaired
     } else {
         RootAccess::Private
     })
+}
+
+/// A home that is itself a link is checked through its target, but the link lives in its parent: whoever can change
+/// that parent can point the home elsewhere later. So the parent must be as safe as an ancestor.
+pub(crate) fn check_link_home(
+    home: &Path,
+    trusted: &Trusted,
+    disk: &dyn Disk,
+) -> Result<(), RootAccessError> {
+    let is_link =
+        fs::symlink_metadata(home).is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let Some(parent) = home.parent().filter(|_| is_link) else {
+        return Ok(());
+    };
+    match check_ancestor(parent, Links::Follow, trusted, disk) {
+        Err(RootAccessError::UnsafeLocation { .. }) => Err(RootAccessError::UnsafeLocation {
+            path: home.to_path_buf(),
+        }),
+        other => other,
+    }
 }
 
 /// A folder between the home and the root must be a real folder (unless `links` follows), owned by a trusted SID,
@@ -151,11 +187,20 @@ fn check_ancestor(
 }
 
 /// Every entry below `root`, links read themselves and never followed: owners must be trusted and readable, and no
-/// entry may let others change it.
-fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<Findings> {
+/// entry may let others change it. Folders `cache` records unchanged are listed but their entries' descriptors are not
+/// read. Returns the findings and the folders this scan found clean.
+fn scan_entries(
+    root: &Path,
+    trusted: &Trusted,
+    disk: &dyn Disk,
+    cache: &ScanCache,
+) -> io::Result<(Findings, ScanCache)> {
     let mut findings = Findings::default();
+    let mut scanned = ScanCache::default();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
+        // Read from the folder itself before it is listed: the copy in its parent's listing is updated lazily.
+        let dir_stamp = stamp(fs::metadata(&dir).and_then(|meta| meta.modified()));
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if dir == root => return Err(error),
@@ -165,9 +210,18 @@ fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<F
                 continue;
             }
         };
+        let unchanged = cache.is_unchanged(root, &dir, dir_stamp);
+        let mut clean = true;
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
+            let is_dir = entry.file_type()?.is_dir();
+            if unchanged {
+                if is_dir {
+                    pending.push(path);
+                }
+                continue;
+            }
             match disk
                 .read(&path, Links::Open)
                 .map(|sddl| Descriptor::parse(&sddl))
@@ -178,21 +232,29 @@ fn scan_entries(root: &Path, trusted: &Trusted, disk: &dyn Disk) -> io::Result<F
                         .as_ref()
                         .is_some_and(|owner| trusted.owns(owner));
                     if !owned {
+                        clean = false;
                         findings.add_foreign(path);
                     } else if descriptor.grants_write_to_others(trusted) {
+                        clean = false;
                         findings.add_writable(path);
-                    } else if entry.file_type()?.is_dir() {
+                    } else if is_dir {
                         pending.push(path);
                     }
                 }
-                Err(_) => findings.add_foreign(path),
+                Err(_) => {
+                    clean = false;
+                    findings.add_foreign(path);
+                }
             }
             if findings.is_full() {
-                return Ok(findings);
+                return Ok((findings, scanned));
             }
         }
+        if clean {
+            scanned.record(root, &dir, dir_stamp);
+        }
     }
-    Ok(findings)
+    Ok((findings, scanned))
 }
 
 /// Creates `dir` with the owner-only descriptor in one call, so it is never reachable by others; false when it existed.
@@ -224,7 +286,7 @@ fn descriptor(sddl: &str) -> io::Result<SecurityDescriptor> {
 }
 
 /// Replaces the DACL of `path` with `dacl`. Windows passes the change on to the inherited entries of everything below.
-fn set_dacl(path: &Path, dacl: &str, protected: bool) -> io::Result<()> {
+pub(crate) fn set_dacl(path: &Path, dacl: &str, protected: bool) -> io::Result<()> {
     let descriptor = descriptor(dacl)?;
     let (acl, _) = descriptor
         .dacl()?

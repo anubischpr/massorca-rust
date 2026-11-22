@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
@@ -465,4 +465,88 @@ fn entries_owned_by_administrators_are_foreign_to_a_token_that_does_not_default_
     let refused = layout.secure_for_token(user(), user(), &disk);
 
     assert_eq!(refused_paths(refused), ("foreign", vec![agents]));
+}
+
+/// Prints how long a start takes on a profile with a large agent home. Run with `-- --ignored --nocapture`.
+#[test]
+#[ignore = "measures the scan; slow"]
+fn scan_cost_of_a_large_agent_home() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let home = layout.root.join("agents").join("homes").join("claude");
+    for outer in 0..30 {
+        for inner in 0..10 {
+            let dir = home.join(format!("pkg{outer}")).join(format!("lib{inner}"));
+            fs::create_dir_all(&dir).expect("folders");
+            for file in 0..100 {
+                fs::write(dir.join(format!("f{file}.js")), b"x").expect("a file");
+            }
+        }
+    }
+    for round in 0..3 {
+        let started = std::time::Instant::now();
+        assert_eq!(layout.secure().expect("checked"), RootAccess::Private);
+        let elapsed = started.elapsed();
+        let _ = writeln!(io::stderr(), "scan round {round}: {elapsed:?}");
+    }
+}
+
+#[test]
+fn an_entry_planted_after_a_clean_scan_is_found_in_its_changed_folder() {
+    let layout = Layout::new();
+    layout.secure().expect("created");
+    let kinds = layout.root.join("agents").join("kinds");
+    fs::create_dir_all(&kinds).expect("a folder");
+    fs::write(kinds.join("tool.json"), b"{}").expect("a file");
+    assert_eq!(layout.secure().expect("scanned"), RootAccess::Private);
+    let planted = kinds.join("planted.json");
+    fs::write(&planted, b"{}").expect("a planted file");
+
+    let refused = layout.secure_as(user(), &foreign(vec![planted.clone()]));
+
+    assert_eq!(refused_paths(refused), ("foreign", vec![planted]));
+}
+
+/// A junction home whose parent folder `parent_dacl` describes.
+fn link_home(parent_dacl: &str) -> (TempDir, PathBuf, PathBuf) {
+    let temp = tempfile::tempdir().expect("a temporary folder");
+    let parent = temp.path().join("parent");
+    crate::root_access::create_home(&parent).expect("a private parent");
+    let real = parent.join("real-home");
+    crate::root_access::create_home(&real).expect("a private home");
+    let home = parent.join("home");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&home)
+        .arg(&real)
+        .output()
+        .expect("mklink runs");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    set_dacl(&parent, parent_dacl, true).expect("the parent's DACL");
+    let root = home.join("profiles").join("default");
+    (temp, home, root)
+}
+
+#[test]
+fn a_junction_home_whose_parent_others_can_change_is_refused() {
+    let (_temp, home, root) = link_home(&format!("D:P(A;OICI;FA;;;{})(A;;FA;;;WD)", user_string()));
+
+    assert_eq!(
+        refused_paths(secure_root(&home, &root)),
+        ("unsafe", vec![home.clone()])
+    );
+}
+
+#[test]
+fn a_junction_home_in_a_private_parent_is_accepted() {
+    let (_temp, home, root) = link_home(&format!("D:P(A;OICI;FA;;;{})", user_string()));
+
+    assert_eq!(
+        secure_root(&home, &root).expect("accepted"),
+        RootAccess::Created
+    );
 }
