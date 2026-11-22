@@ -235,7 +235,6 @@ pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError
     })
 }
 
-/// Gives the folder `path` the protected owner-only DACL, inherited by what is created in it later.
 /// Makes the folder `dir` and everything below it owner-only, while the caller keeps `dir` pinned. The walk lists each
 /// folder through its handle and opens each entry relative to it, never following a link (`windows_handle_walk`): a
 /// reparse point below is refused with `UnsafeLocation`, and an explicit grant to anyone outside the accepted owners
@@ -244,60 +243,78 @@ pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError
 pub(crate) fn make_owner_only_below(dir: &Path) -> Result<(), RootAccessError> {
     use std::os::windows::io::AsRawHandle;
 
+    use crate::windows_handle_walk::{WalkAccess, open_folder, walk_below};
+
     let trusted = Trusted::current()?;
-    let folder = crate::windows_handle_walk::open_folder(dir)?;
-    let entries = crate::windows_handle_walk::walk_below(&folder, dir)?;
+    // First pass: refuse before anything changes.
+    let folder = open_folder(dir, WalkAccess::Read)?;
     let mut exposed = Vec::new();
-    for entry in &entries {
+    walk_below(&folder, dir, WalkAccess::Read, &mut |entry| {
         let descriptor = Descriptor::parse(&sddl_of_handle(entry.file.as_raw_handle())?);
-        if descriptor.grants_explicitly_to_others(&trusted) {
-            exposed.push(entry.path.clone());
+        if descriptor.grants_explicitly_to_others(&trusted)
+            && exposed.len() < crate::root_access::MAX_LISTED_ENTRIES
+        {
+            exposed.push(entry.path.to_path_buf());
         }
-    }
+        Ok(())
+    })?;
     if !exposed.is_empty() {
-        exposed.truncate(crate::root_access::MAX_LISTED_ENTRIES);
         return Err(RootAccessError::ReadableByOthers { paths: exposed });
     }
+    drop(folder);
+    // Second pass: each entry's DACL through its own handle, then the folder's.
     let user = trusted.user();
     let folder_dacl = owner_only_dir_dacl_sddl(user)?;
     let file_dacl = format!("D:P(A;;FA;;;{user})");
-    for entry in &entries {
+    let folder = open_folder(dir, WalkAccess::Change)?;
+    walk_below(&folder, dir, WalkAccess::Change, &mut |entry| {
         set_dacl_through(
-            &entry.file,
+            entry.file,
             if entry.is_dir {
                 &folder_dacl
             } else {
                 &file_dacl
             },
         )?;
-    }
+        Ok(())
+    })?;
     set_dacl_through(&folder, &folder_dacl)?;
     Ok(())
 }
 
 /// Checks everything below `dir` the same way, through handles that never follow a link: a reparse point is refused
-/// with `UnsafeLocation`, and up to `MAX_LISTED_ENTRIES` entries whose DACL gives anyone outside the accepted owners
-/// and Administrators any access are refused with `ReadableByOthers`.
+/// with `UnsafeLocation`, a tree too deep or too large is refused, and up to `MAX_LISTED_ENTRIES` entries whose DACL
+/// gives anyone outside the accepted owners and Administrators any access are refused with `ReadableByOthers`.
 pub(crate) fn check_below(dir: &Path) -> Result<(), RootAccessError> {
     use std::os::windows::io::AsRawHandle;
 
+    use crate::windows_handle_walk::{WalkAccess, open_folder, walk_below};
+
     let trusted = Trusted::current()?;
-    let folder = crate::windows_handle_walk::open_folder(dir)?;
+    let folder = open_folder(dir, WalkAccess::Read)?;
     let mut exposed = Vec::new();
-    for entry in crate::windows_handle_walk::walk_below(&folder, dir)? {
+    walk_below(&folder, dir, WalkAccess::Read, &mut |entry| {
         let descriptor = Descriptor::parse(&sddl_of_handle(entry.file.as_raw_handle())?);
-        if descriptor.grants_any_to_others(&trusted) {
-            exposed.push(entry.path);
-            if exposed.len() >= crate::root_access::MAX_LISTED_ENTRIES {
-                break;
-            }
+        if descriptor.grants_any_to_others(&trusted)
+            && exposed.len() < crate::root_access::MAX_LISTED_ENTRIES
+        {
+            exposed.push(entry.path.to_path_buf());
         }
-    }
+        Ok(())
+    })?;
     if exposed.is_empty() {
         Ok(())
     } else {
         Err(RootAccessError::ReadableByOthers { paths: exposed })
     }
+}
+
+/// Fails, changing nothing, when the folder `dir` holds a reparse point or a tree too deep or too large to walk.
+pub(crate) fn check_walkable(dir: &Path) -> Result<(), RootAccessError> {
+    use crate::windows_handle_walk::{WalkAccess, open_folder, walk_below};
+
+    let folder = open_folder(dir, WalkAccess::Read)?;
+    walk_below(&folder, dir, WalkAccess::Read, &mut |_| Ok(()))
 }
 
 /// Creates a new file at `path` whose descriptor allows only the current user, in the same call that creates it, so it

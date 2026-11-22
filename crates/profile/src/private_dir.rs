@@ -303,6 +303,8 @@ impl PrivateDir {
             if entry_present(&path.join(marker))? {
                 return Ok(false);
             }
+            // Measured before the rename, so a tree that could not be deleted is refused and stays where it is.
+            crate::windows_profile_root::check_walkable(&path)?;
             pin.rename_to(&self.path.join(&tombstone))?;
         }
         #[cfg(unix)]
@@ -312,6 +314,8 @@ impl PrivateDir {
             if crate::unix_dir_fd::entry_present(&folder, marker)? {
                 return Ok(false);
             }
+            // Measured before the rename, so a tree that could not be deleted is refused and stays where it is.
+            crate::unix_dir_fd::check_depth(&self.dir, std::ffi::OsStr::new(name), 0)?;
             crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
                 .map_err(|error| refused_open(&path, error))?;
         }
@@ -333,12 +337,15 @@ impl PrivateDir {
         {
             let pin = crate::windows_dir_access::PinnedDir::open(&path)
                 .map_err(|error| refused_open(&path, error))?;
+            // Measured before the rename, so a tree that could not be deleted is refused and stays where it is.
+            crate::windows_profile_root::check_walkable(&path)?;
             pin.rename_to(&self.path.join(&tombstone))?;
         }
         #[cfg(unix)]
         {
             let folder = crate::unix_dir_fd::open_dir(Some(&self.dir), Path::new(name))
                 .map_err(|error| refused_open(&path, error))?;
+            crate::unix_dir_fd::check_depth(&self.dir, std::ffi::OsStr::new(name), 0)?;
             crate::unix_dir_fd::rename_checked(&self.dir, name, &tombstone, &folder)
                 .map_err(|error| refused_open(&path, error))?;
         }
@@ -894,5 +901,67 @@ mod tests {
         assert!(started.elapsed() >= std::time::Duration::from_millis(300));
         drop(held);
         hosts.lock().expect("free again");
+    }
+
+    #[test]
+    fn a_host_folder_nested_65_levels_deep_is_refused_by_remove_and_stays_in_place() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let parent = open_private_dir(&temp.path().join("hosts")).expect("opened");
+        drop(parent.child("office").expect("a host folder"));
+        let mut deepest = parent.path().join("office");
+        for _ in 0..65 {
+            deepest.push("d");
+        }
+        fs::create_dir_all(&deepest).expect("a deep tree");
+
+        assert!(parent.remove_child_dir("office").is_err());
+
+        assert!(deepest.is_dir(), "the tree stays where it was");
+        assert_eq!(
+            names(parent.path()),
+            vec!["office".to_owned()],
+            "nothing was renamed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_with_more_entries_than_a_walk_takes_is_refused() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = temp.path().join("hosts");
+        drop(open_private_dir(&hosts).expect("created"));
+        let office = hosts.join("office");
+        fs::create_dir(&office).expect("a host folder");
+        for index in 0..crate::windows_handle_walk::MAX_ENTRIES {
+            fs::write(office.join(format!("{index}")), b"").expect("a file");
+        }
+
+        let refused = open_private_dir(&hosts).expect_err("too many entries");
+
+        assert!(refused.to_string().contains("more than"), "{refused}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_whose_data_the_owner_cannot_read_does_not_fail_the_walk() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let hosts = temp.path().join("hosts");
+        let parent = open_private_dir(&hosts).expect("created");
+        parent.write_file("device.key", b"key").expect("a file");
+        drop(parent);
+        let user = crate::windows_trust::current_user().expect("the user");
+        // Attributes, the DACL and SYNCHRONIZE only: no FILE_READ_DATA.
+        crate::windows_profile_root::set_dacl(
+            &hosts.join("device.key"),
+            &format!("D:P(A;;0x120080;;;{user})"),
+            true,
+        )
+        .expect("read data denied");
+        assert!(
+            fs::read(hosts.join("device.key")).is_err(),
+            "its data cannot be read"
+        );
+
+        drop(open_private_dir(&hosts).expect("the walk still passes"));
     }
 }

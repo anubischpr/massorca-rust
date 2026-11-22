@@ -285,7 +285,7 @@ pub(crate) fn remove_entry(parent: &File, name: &std::ffi::OsStr) -> io::Result<
 }
 
 /// Fails when the entry `name` of `parent` holds anything more than `MAX_REMOVE_DEPTH` levels below it; deletes nothing.
-fn check_depth(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::Result<()> {
+pub(crate) fn check_depth(parent: &File, name: &std::ffi::OsStr, depth: usize) -> io::Result<()> {
     if depth > MAX_REMOVE_DEPTH {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
