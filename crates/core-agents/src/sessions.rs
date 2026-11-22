@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
@@ -33,7 +33,7 @@ use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
-use crate::kind::{KindDecl, PasteMode, StatusMechanism};
+use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, Run};
 use crate::paths;
 use crate::prompt;
@@ -42,6 +42,10 @@ use crate::status::{self, HookRules};
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
+/// agent that never reports idle would otherwise hold the text for as long as its run lives.
+pub const FIRST_PROMPT_WAIT: Duration = Duration::from_secs(120);
 
 /// One applied status change, in the order the store applied it.
 #[derive(Debug, Clone, PartialEq)]
@@ -192,6 +196,8 @@ struct LiveRun {
     rules: HookRules,
     /// How a prompt is typed into the run (0054).
     prompt: PromptRules,
+    /// A first prompt given at launch, held until the run's first `idle`.
+    pending: Option<PendingPrompt>,
 }
 
 /// What a prompt needs from its run's kind, copied when the run starts.
@@ -209,6 +215,22 @@ impl PromptRules {
             has_status: decl.status.mechanism != StatusMechanism::None,
             paste: decl.prompt.paste,
             submit: decl.prompt.submit.clone(),
+        }
+    }
+}
+
+/// A first prompt waiting for its run's first `idle` (0054). Its text is never logged, so it has no `Debug`; it is
+/// dropped when the run exits, or when its wait ends.
+struct PendingPrompt {
+    text: String,
+    due: Instant,
+}
+
+impl PendingPrompt {
+    fn new(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            due: Instant::now() + FIRST_PROMPT_WAIT,
         }
     }
 }
@@ -286,6 +308,16 @@ impl Agents {
         let (decl, program) = self.startable_kind(&params.kind)?;
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
+            // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
+            if decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
+                return Err(AgentError::new(
+                    codes::AGENT_PROMPT_INVALID,
+                    format!(
+                        "kind {} takes no prompt at launch and reports no idle state to send it on",
+                        decl.id
+                    ),
+                ));
+            }
         }
         if !params.read_only
             && let Some(holder) = self.live_writer(&workspace.id)?
@@ -317,12 +349,6 @@ impl Agents {
             caller_args: &params.args,
             caller_env: &params.env,
         })?;
-        if plan.pending_prompt.is_some() {
-            return Err(AgentError::new(
-                codes::AGENT_PROMPT_INVALID,
-                format!("kind {} takes no prompt at launch", decl.id),
-            ));
-        }
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
@@ -334,6 +360,7 @@ impl Agents {
                 token,
                 rules: HookRules::of(&decl),
                 prompt: PromptRules::of(&decl),
+                pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
             },
         );
         let started = write_files(&plan.files)
@@ -421,6 +448,7 @@ impl Agents {
         else {
             return Ok(());
         };
+        let first_idle = report.activity.state == "idle";
         let mut row = self.reload(&params.session)?;
         let result = if report.activity.state == "done" {
             report.result
@@ -440,7 +468,23 @@ impl Agents {
             row.agent_ref = learned;
         }
         let session = self.view_with(&mut live, row)?;
+        // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
+        // lock, and is written after the lock is released.
+        let first = if first_idle {
+            live.get_mut(&params.session).and_then(|run| {
+                run.pending
+                    .take()
+                    .map(|pending| (run.prompt.clone(), pending.text))
+            })
+        } else {
+            None
+        };
+        let terminal = session.terminal_id.clone();
         self.notify(Change::Updated(Box::new(session)));
+        drop(live);
+        if let (Some((rules, text)), Some(terminal)) = (first, terminal) {
+            self.deliver_first_prompt(&params.session, &terminal, &rules, &text);
+        }
         Ok(())
     }
 
@@ -494,10 +538,41 @@ impl Agents {
         })
     }
 
+    /// Types a first prompt on a thread of its own. The write can wait for the agent to read, and the agent waits for the
+    /// hook report that carried this `idle` to return, so the report must not wait for the write (0054).
+    fn deliver_first_prompt(&self, session: &str, terminal: &str, rules: &PromptRules, text: &str) {
+        let bytes = prompt::input_bytes(text, rules.paste, &rules.submit);
+        let terminals = self.inner.config.terminals.clone();
+        let terminal = terminal.to_owned();
+        let owner = session.to_owned();
+        let logged = owner.clone();
+        let spawned = thread::Builder::new()
+            .name("agent-first-prompt".to_owned())
+            .spawn(move || {
+                if let Err(error) = terminals.input(&terminal, &bytes) {
+                    let error = AgentError::from(error);
+                    tracing::warn!(
+                        session = %owner,
+                        code = error.code,
+                        "the first prompt could not be typed into the run's terminal"
+                    );
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(session = %logged, %error, "the first prompt has no thread to be typed on");
+        }
+    }
+
     /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
     /// session is checked on its own: one that fails is logged, by its id and error code only, and the sweep goes on.
     pub fn sweep(&self) {
         let mut live = lock(&self.inner.status);
+        for id in expire_first_prompts(&mut live, Instant::now()) {
+            tracing::warn!(
+                session = %id,
+                "the first prompt was dropped: the agent reported no idle state in time"
+            );
+        }
         let ids: Vec<String> = live.keys().cloned().collect();
         for id in ids {
             let checked = match self.store().get_agent_session(&id) {
@@ -781,6 +856,22 @@ fn tokens_match(expected: &str, given: &str) -> bool {
             == 0
 }
 
+/// Drops every first prompt whose wait has ended by `now`; returns the sessions they belonged to (0054).
+fn expire_first_prompts(live: &mut LiveRuns, now: Instant) -> Vec<String> {
+    let mut expired = Vec::new();
+    for (id, run) in live.iter_mut() {
+        if run
+            .pending
+            .as_ref()
+            .is_some_and(|pending| now >= pending.due)
+        {
+            run.pending = None;
+            expired.push(id.clone());
+        }
+    }
+    expired
+}
+
 /// Sweeps every [`SWEEP_INTERVAL`] until the service is gone.
 fn sweep_loop(service: &Weak<Inner>) {
     loop {
@@ -1005,5 +1096,34 @@ mod tests {
         assert_eq!(over.code, codes::AGENT_PROMPT_INVALID);
         let missing = agents.prompt("no-such-session", "fine", false).unwrap_err();
         assert_eq!(missing.code, codes::AGENT_NOT_FOUND);
+    }
+
+    /// A first prompt is dropped once its wait has ended; a run still inside its wait keeps it (0054).
+    #[test]
+    fn a_first_prompt_is_dropped_only_once_its_wait_has_ended() {
+        let now = Instant::now();
+        let run = |due| LiveRun {
+            token: "t".to_owned(),
+            rules: HookRules::default(),
+            prompt: PromptRules {
+                has_status: true,
+                paste: PasteMode::Plain,
+                submit: "\r".to_owned(),
+            },
+            pending: Some(PendingPrompt {
+                text: "later".to_owned(),
+                due,
+            }),
+        };
+        let mut live: LiveRuns = HashMap::new();
+        live.insert("waiting".to_owned(), run(now + FIRST_PROMPT_WAIT));
+        live.insert("late".to_owned(), run(now));
+
+        assert_eq!(
+            expire_first_prompts(&mut live, now),
+            vec!["late".to_owned()]
+        );
+        assert!(live["waiting"].pending.is_some());
+        assert!(live["late"].pending.is_none());
     }
 }

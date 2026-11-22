@@ -133,9 +133,8 @@ prefix shared by several sessions is refused with `selector.ambiguous`. UUID v7
 ids start with their creation time, so sessions started close together need a
 longer prefix.
 
-`agent.forget` of a session whose run is live is refused with `agent.busy`. Until
-`agent.prompt` arrives, a first prompt for a kind whose `prompt.mode` is `none` is
-refused with `agent.prompt_invalid` instead of waiting for `idle`.
+`agent.forget` of a session whose run is live is refused with `agent.busy`. A first prompt for
+a kind whose `prompt.mode` is `none` waits for the run's first `idle`; see Prompts.
 
 ## Prompts
 
@@ -155,6 +154,17 @@ agent's own hook reports need the lock to return.
 The receipt is `{ receipt: "handed_to_terminal", bytes }`, where `bytes` counts every byte
 written to the terminal, the paste markers and the submit sequence included. It never says the
 agent read them; the activity turns `working` only when the agent's hooks report it.
+
+A first prompt for a kind whose `prompt.mode` is `none` waits for the run's first `idle` report
+(0054). The prompt is held in memory on the run from `agent.start`; the report that makes the run
+`idle` types it on a thread of its own, so the report returns at once. Decision 0054 leaves open
+what happens when no `idle` comes, so two bounds apply: the held prompt is dropped when the run
+exits first, and when no `idle` arrives within 120 s of the start (`FIRST_PROMPT_WAIT`). A drop is
+logged with the session id only. The session record does not show a drop: its activity stays as it
+was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
+cannot wait for one, so `agent.start` refuses such a first prompt with `agent.prompt_invalid`
+before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
+held prompt still follows at `idle`.
 
 ## Status store
 

@@ -24,13 +24,13 @@ fn status() -> Value {
     })
 }
 
-/// Declares kind `id`, which runs the fake agent, with an argv prompt and the given status.
-fn declare(sandbox: &Sandbox, id: &str, status: Value) {
+/// Declares kind `id`, which runs the fake agent, with the given prompt table and status.
+fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value) {
     let kind = json!({
         "id": id,
         "name": format!("Fake agent {id}"),
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
-        "prompt": { "mode": "argv" },
+        "prompt": prompt,
         "session_ref": { "assign": ["--session-id", "{ref}"], "learn": "session_id" },
         "resume": ["--resume", "{ref}"],
         "status": status
@@ -40,10 +40,18 @@ fn declare(sandbox: &Sandbox, id: &str, status: Value) {
     std::fs::write(dir.join(format!("{id}.json")), kind.to_string()).expect("write a kind file");
 }
 
-/// A sandbox with kind `fake` and a folder workspace `main`.
+/// A sandbox with these kinds and a folder workspace `main`: `fake` (argv prompt), `fake-none` (prompt `none`) and
+/// `fake-silent` (prompt `none` and no status mechanism, so it can never report `idle`).
 fn sandbox() -> Sandbox {
     let sandbox = Sandbox::new();
-    declare(&sandbox, "fake", status());
+    declare(&sandbox, "fake", json!({ "mode": "argv" }), status());
+    declare(&sandbox, "fake-none", json!({ "mode": "none" }), status());
+    declare(
+        &sandbox,
+        "fake-silent",
+        json!({ "mode": "none" }),
+        json!({ "mechanism": "none" }),
+    );
     let notes = sandbox.home().join("notes");
     std::fs::create_dir_all(&notes).expect("create folder");
     let notes_text = notes.to_string_lossy().into_owned();
@@ -186,4 +194,42 @@ fn a_prompt_over_the_size_limit_is_refused_before_anything_is_typed() {
     );
     let shown = sandbox.json_ok("default", &["agent", "status", &session]);
     assert_eq!(activity(&shown), ("idle", None, "hook"), "still idle");
+}
+
+#[test]
+fn a_first_prompt_for_a_kind_that_takes_none_waits_for_its_first_idle() {
+    let sandbox = sandbox();
+    let started = start(&sandbox, "fake-none", &["--prompt", "hold first"]);
+    let session = session_of(&started);
+    let terminal = terminal_of(&started);
+
+    let working = until(&sandbox, &session, "working");
+    assert_eq!(activity(&working), ("working", None, "hook"));
+    sandbox
+        .run("default", &["terminal", "send", &terminal, "release"])
+        .success();
+    let done = until(&sandbox, &session, "done");
+    assert_eq!(done["result"], "done: hold first");
+}
+
+#[test]
+fn a_first_prompt_for_a_kind_that_reports_no_idle_is_refused_at_launch() {
+    let sandbox = sandbox();
+    assert_eq!(
+        error_code(
+            &sandbox,
+            &[
+                "agent",
+                "start",
+                "fake-silent",
+                "--workspace",
+                "main",
+                "--prompt",
+                "hi"
+            ]
+        ),
+        "agent.prompt_invalid"
+    );
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"], json!([]), "nothing was started");
 }

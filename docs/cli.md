@@ -121,7 +121,10 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   shell in between), with the first prompt as the kind declares. A workspace holds one live
   session that is not `--read-only`; a second writing start fails with
   `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
-  Arguments after `--` go to the agent after its own.
+  Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
+  receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
+  such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
+  within 120 s or the run ends first.
 - `agent prompt SESSION TEXT` types TEXT into the session's terminal, then the kind's submit
   key (`\r` unless the kind declares another). A kind that declares bracketed paste gets the
   text between paste markers; a plain kind gets each line break as Enter. The text is at most
