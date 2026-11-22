@@ -14,11 +14,11 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment};
+use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment, MAX_ATTACHMENTS};
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
-use crate::screen::Screen;
+use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
 
 /// Largest input accepted per call (0033).
@@ -32,8 +32,12 @@ const READ_CHUNK: usize = 64 * 1024;
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 #[cfg(not(windows))]
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
-/// How long a kill waits for the exit after the tree is killed.
-const EXIT_MARGIN: Duration = Duration::from_secs(2);
+/// How long a kill waits for the exit after the tree is killed: the reap plus the drain,
+/// so a kill returns the recorded exit.
+const KILL_EXIT_MARGIN: Duration = Duration::from_secs(2).saturating_add(DRAIN_LIMIT);
+/// The same wait during `shutdown`, short so it fits the service's shutdown budget; an exit
+/// that takes longer is recorded after `shutdown` returns.
+const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_secs(2);
 /// After a failed wait the waiter tries again, first after this long, then doubling up to
 /// `WAIT_RETRY_MAX`; a kill wakes it at once.
 const WAIT_RETRY_FIRST: Duration = Duration::from_millis(250);
@@ -180,6 +184,8 @@ pub enum TerminalError {
     ShellNotFound(String),
     #[error("too many live terminals")]
     LimitReached,
+    #[error("too many clients attached to the terminal")]
+    TooManyAttachments,
     #[error("the input is larger than {MAX_INPUT_BYTES} bytes")]
     InputTooLarge,
     #[error("cannot start the terminal: {0}")]
@@ -244,7 +250,7 @@ impl Inner {
             .ok_or(TerminalError::NotFound)
     }
 
-    /// Called by the waiter once the exit is recorded.
+    /// Called by the waiter once the shell is reaped, just before the exit is recorded.
     fn retire(&self, id: &str) {
         let mut forgotten = Vec::new();
         {
@@ -367,6 +373,7 @@ impl TerminalManager {
                 kill_reason: None,
                 attachments: Vec::new(),
                 query_match: 0,
+                held: VecDeque::new(),
             }),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
@@ -395,7 +402,7 @@ impl TerminalManager {
             })
         });
         if let Err(error) = started {
-            terminal.tree.kill();
+            terminal.tree.kill(None);
             close_off_thread(&terminal.master);
             drop(lock(&self.inner.registry).forget(&id));
             return Err(TerminalError::Spawn(error.to_string()));
@@ -428,6 +435,28 @@ impl TerminalManager {
         if terminal.is_exited() {
             return Err(TerminalError::Exited);
         }
+        let reports = cursor_reports(bytes);
+        let mut kept = None;
+        if !reports.is_empty() {
+            let mut core = lock(&terminal.core);
+            let mut filtered = Vec::with_capacity(bytes.len());
+            let mut from = 0;
+            for report in reports {
+                let Some(query) = core.held.pop_front() else {
+                    break;
+                };
+                if query.answered {
+                    filtered.extend_from_slice(&bytes[from..report.start]);
+                    from = report.end;
+                }
+            }
+            filtered.extend_from_slice(&bytes[from..]);
+            kept = Some(filtered);
+        }
+        let bytes = kept.as_deref().unwrap_or(bytes);
+        if bytes.is_empty() {
+            return Ok(());
+        }
         terminal.master.write_all(bytes).map_err(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe || terminal.is_exited() {
                 TerminalError::Exited
@@ -437,32 +466,34 @@ impl TerminalManager {
         })
     }
 
-    /// Sets the terminal's one size; every attachment hears `Resized`.
+    /// Sets the terminal's one size; every attachment hears `Resized`. The model and the
+    /// attachments change first, then the PTY: output the program draws at the new size is
+    /// parsed at it, and `Resized` is queued ahead of it (0034).
     pub fn resize(&self, id: &str, size: PtySize) -> Result<TerminalInfo> {
         validate_size(size)?;
         let terminal = self.inner.find(id)?;
         let _gate = lock(&terminal.resize_gate);
-        if terminal.is_exited() {
-            return Err(TerminalError::Exited);
-        }
+        let previous = {
+            let mut core = lock(&terminal.core);
+            if matches!(core.status, Status::Exited(_)) {
+                return Err(TerminalError::Exited);
+            }
+            let previous = core.size;
+            core.set_size(size);
+            previous
+        };
         // Outside the terminal lock: a closing pseudoconsole holds the master until the
         // reader, which needs that lock, drains it.
-        terminal.master.resize(size).map_err(|error| {
-            if !terminal.is_exited() {
-                TerminalError::Io(io::Error::other(error.to_string()))
-            } else {
-                TerminalError::Exited
+        if let Err(error) = terminal.master.resize(size) {
+            let mut core = lock(&terminal.core);
+            if matches!(core.status, Status::Exited(_)) {
+                return Err(TerminalError::Exited);
             }
-        })?;
-        let mut core = lock(&terminal.core);
-        core.screen.resize(size.cols, size.rows);
-        core.size = size;
-        for attachment in &core.attachments {
-            attachment.push(AttachItem::Resized {
-                cols: size.cols,
-                rows: size.rows,
-            });
+            // The PTY kept its old size, so the model goes back to it.
+            core.set_size(previous);
+            return Err(TerminalError::Io(io::Error::other(error.to_string())));
         }
+        let core = lock(&terminal.core);
         Ok(terminal.info_locked(&core))
     }
 
@@ -470,13 +501,23 @@ impl TerminalManager {
     /// grace and a short margin have passed.
     pub fn kill(&self, id: &str, force: bool) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        Ok(terminal.kill(force, ExitReason::Killed, self.inner.config.kill_grace))
+        Ok(terminal.kill(
+            force,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        ))
     }
 
     /// Kills the terminal if it is live, then forgets it.
     pub fn close(&self, id: &str) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        let info = terminal.kill(false, ExitReason::Killed, self.inner.config.kill_grace);
+        let info = terminal.kill(
+            false,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        );
         let forgotten = lock(&self.inner.registry).forget(id);
         drop(forgotten);
         Ok(info)
@@ -484,41 +525,64 @@ impl TerminalManager {
 
     /// Starts following the terminal's output: from `since` when the ring still holds it,
     /// else from a snapshot. Works on exited terminals: the snapshot, then `Exited`.
+    /// At most `MAX_ATTACHMENTS` follow a terminal at once.
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
         let shared = Arc::new(AttachShared::default());
-        {
+        let mut replies = Vec::new();
+        // Under the lock: the copy, its offset, and the registration, so no chunk falls between.
+        let frozen = {
             let mut core = lock(&terminal.core);
+            let exited = matches!(core.status, Status::Exited(_));
+            if !exited && core.attachments.len() >= MAX_ATTACHMENTS {
+                return Err(TerminalError::TooManyAttachments);
+            }
             let info = terminal.info_locked(&core);
             let resume = since.and_then(|since| Some((since, core.ring.read_from(since)?)));
             let mut queue = lock(&shared.queue);
-            match resume {
+            let frozen = match resume {
                 Some((offset, bytes)) => {
-                    queue.items.push_back(AttachItem::Attached {
+                    queue.push_back(AttachItem::Attached {
                         info: info.clone(),
                         mode: AttachMode::Resume,
                         offset,
                     });
                     if !bytes.is_empty() {
-                        queue.items.push_back(AttachItem::Output { offset, bytes });
+                        queue.push_back(AttachItem::Output { offset, bytes });
                     }
+                    None
                 }
                 None => {
-                    let (offset, snapshot) = core.snapshot();
-                    queue.items.push_back(AttachItem::Attached {
+                    let frozen = core.freeze_snapshot();
+                    queue.push_back(AttachItem::Attached {
                         info: info.clone(),
                         mode: AttachMode::Snapshot,
-                        offset,
+                        offset: frozen.offset,
                     });
-                    queue.items.push_back(snapshot);
+                    queue.snapshot_at = Some(Instant::now());
+                    Some(frozen)
                 }
-            }
-            if !matches!(core.status, Status::Exited(_)) {
+            };
+            if !exited {
                 core.attachments.push(Arc::clone(&shared));
+                answer_held(&mut core.held, &mut replies);
             } else {
-                queue.items.push_back(AttachItem::Exited { info });
+                queue.push_back(AttachItem::Exited { info });
                 queue.ended = true;
             }
+            frozen
+        };
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = terminal.master.write_all(&replies);
+        }
+        if let Some(frozen) = frozen {
+            // Outside the lock. Output queued meanwhile follows the `Attached` item, so the
+            // snapshot is inserted right after it.
+            #[cfg(test)]
+            note_lock_state(&terminal);
+            let snapshot = frozen.into_item();
+            lock(&shared.queue).insert_snapshot(snapshot);
         }
         Ok(Attachment::new(terminal, shared))
     }
@@ -536,14 +600,24 @@ impl TerminalManager {
         thread::scope(|scope| {
             for terminal in &terminals {
                 let kill = move || {
-                    terminal.kill(false, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        false,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 };
                 if thread::Builder::new()
                     .name("terminal-shutdown".to_owned())
                     .spawn_scoped(scope, kill)
                     .is_err()
                 {
-                    terminal.kill(true, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        true,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 }
             }
         });
@@ -629,19 +703,43 @@ struct Core {
     attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
+    /// Cursor queries that arrived while a client was attached, oldest first. A client's
+    /// reply takes the oldest off. The service answers them itself when a client attaches
+    /// (its snapshot cannot show the query) and when every client that received one has
+    /// detached, so a client that stalls or never answers cannot leave the shell waiting.
+    held: VecDeque<HeldQuery>,
+}
+
+/// A cursor query an attached client may still answer.
+struct HeldQuery {
+    reply: Vec<u8>,
+    /// The service already wrote `reply`; a client's late reply to it is dropped.
+    answered: bool,
+    /// The attachments that received the query, the only clients that can reply to it.
+    witnesses: Vec<usize>,
 }
 
 impl Core {
-    /// The snapshot item and the offset output continues from.
-    fn snapshot(&mut self) -> (u64, AttachItem) {
-        let offset = self.ring.end_offset();
-        let item = AttachItem::Snapshot {
-            offset,
+    /// Sets the model's size and tells every attachment. Never blocks.
+    fn set_size(&mut self, size: PtySize) {
+        self.screen.resize(size.cols, size.rows);
+        self.size = size;
+        for attachment in &self.attachments {
+            attachment.push(AttachItem::Resized {
+                cols: size.cols,
+                rows: size.rows,
+            });
+        }
+    }
+
+    /// Copies what a snapshot needs, under the lock; serialize it after the lock is released.
+    fn freeze_snapshot(&self) -> FrozenSnapshot {
+        FrozenSnapshot {
+            offset: self.ring.end_offset(),
             cols: self.size.cols,
             rows: self.size.rows,
-            bytes: self.screen.snapshot(),
-        };
-        (offset, item)
+            screen: self.screen.freeze(),
+        }
     }
 
     /// Applies one PTY read to the screen, the ring and the attachments. Returns the
@@ -661,11 +759,17 @@ impl Core {
                 // The answer is the cursor as of the query, not as of the end of the read.
                 self.screen.process(&chunk[fed..=index]);
                 fed = index + 1;
+                let (row, col) = self.screen.cursor_position();
+                let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
                 if self.attachments.is_empty() {
-                    let (row, col) = self.screen.cursor_position();
-                    replies.extend_from_slice(
-                        format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
-                    );
+                    replies.extend_from_slice(reply.as_bytes());
+                } else {
+                    let witnesses = self.attachments.iter().map(attachment_key).collect();
+                    self.held.push_back(HeldQuery {
+                        reply: reply.into_bytes(),
+                        answered: false,
+                        witnesses,
+                    });
                 }
             }
         }
@@ -680,6 +784,38 @@ impl Core {
         }
         replies
     }
+}
+
+/// A snapshot's state, copied under the terminal lock and serialized after it is released.
+struct FrozenSnapshot {
+    offset: u64,
+    cols: u16,
+    rows: u16,
+    screen: FrozenScreen,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: whether the terminal lock was free when a snapshot started to serialize.
+    static LOCK_FREE_AT_SERIALIZE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+impl FrozenSnapshot {
+    /// Serializes the copy. The caller must not hold the terminal lock.
+    fn into_item(self) -> AttachItem {
+        AttachItem::Snapshot {
+            offset: self.offset,
+            cols: self.cols,
+            rows: self.rows,
+            bytes: self.screen.serialize(),
+        }
+    }
+}
+
+/// Records whether the terminal lock is free where a snapshot starts to serialize.
+#[cfg(test)]
+fn note_lock_state(terminal: &Terminal) {
+    LOCK_FREE_AT_SERIALIZE.with(|free| free.set(Some(terminal.core.try_lock().is_ok())));
 }
 
 pub(crate) struct Terminal {
@@ -742,23 +878,41 @@ impl Terminal {
 
     /// Graceful: hang up and close the terminal, wait up to `grace`, then kill the tree.
     /// Force: kill the tree at once. Either way, what is left of the tree is killed.
-    fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
-        {
+    /// An exited terminal still gets the tree kill: it only reaches what was recorded.
+    fn kill(
+        &self,
+        force: bool,
+        reason: ExitReason,
+        grace: Duration,
+        margin: Duration,
+    ) -> TerminalInfo {
+        let exited = {
             let mut core = lock(&self.core);
-            if matches!(core.status, Status::Exited(_)) {
-                return self.info_locked(&core);
+            let exited = matches!(core.status, Status::Exited(_));
+            if !exited {
+                core.kill_reason.get_or_insert(reason);
             }
-            core.kill_reason.get_or_insert(reason);
+            exited
+        };
+        if exited {
+            self.tree.kill(self.master.foreground_process_group());
+            return self.info();
         }
         if !force {
-            self.tree.hangup();
+            self.tree.hangup(self.master.foreground_process_group());
             close_off_thread(&self.master);
             self.wait_for_exit(grace);
         }
-        self.tree.kill();
+        self.tree.kill(self.master.foreground_process_group());
         // A waiter retrying a failed wait tries again now.
         self.changed.notify_all();
-        self.wait_for_exit(EXIT_MARGIN)
+        self.wait_for_exit(margin)
+    }
+
+    /// Reaps the shell once it has exited, through the tree (0031).
+    fn reap(&self, child: &mut PtyChild) -> io::Result<ExitInfo> {
+        self.tree
+            .reap_shell(|| self.master.foreground_process_group(), || child.wait())
     }
 
     fn wait_for_exit(&self, timeout: Duration) -> TerminalInfo {
@@ -815,25 +969,89 @@ impl Terminal {
 
     /// The recovery of a lagging attachment: a fresh snapshot, atomically with its queue.
     pub(crate) fn resnapshot(&self, shared: &AttachShared) -> AttachItem {
-        let mut core = lock(&self.core);
-        let (_, snapshot) = core.snapshot();
-        let mut queue = lock(&shared.queue);
-        queue.items.clear();
-        queue.lagging = false;
-        if matches!(core.status, Status::Exited(_)) {
-            queue.items.push_back(AttachItem::Exited {
-                info: self.info_locked(&core),
-            });
-            queue.ended = true;
-        }
-        snapshot
+        let frozen = {
+            let core = lock(&self.core);
+            let frozen = core.freeze_snapshot();
+            let mut queue = lock(&shared.queue);
+            queue.clear();
+            queue.lagging = false;
+            queue.snapshot_at = Some(Instant::now());
+            if matches!(core.status, Status::Exited(_)) {
+                queue.push_back(AttachItem::Exited {
+                    info: self.info_locked(&core),
+                });
+                queue.ended = true;
+            }
+            frozen
+        };
+        #[cfg(test)]
+        note_lock_state(self);
+        // Returned straight to the reader of this attachment, so nothing queues ahead of it.
+        frozen.into_item()
     }
 
     pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
-        lock(&self.core)
-            .attachments
-            .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+        let mut replies = Vec::new();
+        {
+            let mut core = lock(&self.core);
+            core.attachments
+                .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+            let leaving = attachment_key(shared);
+            // A query no attached client received can only be answered by the service, and
+            // once answered, no late reply to it can come.
+            core.held.retain_mut(|query| {
+                query.witnesses.retain(|witness| *witness != leaving);
+                if !query.witnesses.is_empty() {
+                    return true;
+                }
+                if !query.answered {
+                    replies.extend_from_slice(&query.reply);
+                }
+                false
+            });
+        }
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = self.master.write_all(&replies);
+        }
     }
+}
+
+/// Identity of an attachment while it is registered.
+fn attachment_key(attachment: &Arc<AttachShared>) -> usize {
+    Arc::as_ptr(attachment).addr()
+}
+
+/// Writes the reply of every held query not yet answered into `replies`, marking it answered.
+fn answer_held(held: &mut VecDeque<HeldQuery>, replies: &mut Vec<u8>) {
+    for query in held.iter_mut().filter(|query| !query.answered) {
+        replies.extend_from_slice(&query.reply);
+        query.answered = true;
+    }
+}
+
+/// Byte ranges of the cursor position reports (`ESC [ row ; col R`) in a client's input.
+fn cursor_reports(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut reports = Vec::new();
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(2).position(|pair| pair == b"\x1b[") {
+        let start = at + found;
+        let body_start = start + 2;
+        let body = bytes[body_start..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
+            .count();
+        let body_end = body_start + body;
+        let separators = bytes[body_start..body_end]
+            .iter()
+            .filter(|byte| **byte == b';')
+            .count();
+        if bytes.get(body_end) == Some(&b'R') && separators == 1 {
+            reports.push(start..body_end + 1);
+        }
+        at = body_start;
+    }
+    reports
 }
 
 fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<()>) {
@@ -862,7 +1080,7 @@ fn wait_for_exit(
 ) {
     let mut pause = WAIT_RETRY_FIRST;
     let exit = loop {
-        match child.wait() {
+        match terminal.reap(&mut child) {
             Ok(exit) => break exit,
             Err(error) => {
                 terminal.mark_unverifiable(&error);
@@ -875,10 +1093,11 @@ fn wait_for_exit(
     // the reader ends, so every attachment has all the output before `Exited`.
     close_off_thread(&terminal.master);
     let _ = drained.recv_timeout(DRAIN_LIMIT);
-    terminal.record_exit(exit);
+    // Retired first: whoever `record_exit` wakes (a kill) already sees the live count lowered.
     if let Some(manager) = manager.upgrade() {
         manager.retire(&terminal.id);
     }
+    terminal.record_exit(exit);
 }
 
 #[cfg(test)]
@@ -888,6 +1107,15 @@ mod tests {
 
     fn is_send<T: Send>() {}
     fn is_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn finds_only_cursor_position_reports() {
+        use super::cursor_reports;
+        assert_eq!(cursor_reports(b"\x1b[12;40R"), vec![0..8]);
+        assert_eq!(cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), vec![1..7, 8..14]);
+        // Arrow keys, a bare `R` and a report without a column are not answers.
+        assert!(cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R").is_empty());
+    }
 
     #[test]
     fn handles_cross_threads_and_tasks() {
@@ -904,6 +1132,161 @@ mod tests {
         ));
         if let Ok(mut attachment) = manager.attach("missing", None) {
             send_future(&attachment.next());
+        }
+    }
+
+    #[test]
+    fn a_resize_sets_the_screen_model_to_the_new_size() {
+        use std::collections::BTreeMap;
+
+        use super::{CreateSpec, ShellChoice};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let shell = if cfg!(windows) {
+            ShellChoice {
+                program: "cmd.exe".to_owned(),
+                args: vec!["/d".to_owned()],
+            }
+        } else {
+            ShellChoice {
+                program: "sh".to_owned(),
+                args: Vec::new(),
+            }
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(shell),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+        let size = PtySize {
+            cols: 100,
+            rows: 30,
+        };
+
+        manager.resize(&info.id, size).expect("resize");
+
+        let terminal = super::lock(&manager.inner.registry)
+            .terminals
+            .get(&info.id)
+            .cloned()
+            .expect("the terminal is registered");
+        let core = super::lock(&terminal.core);
+        assert_eq!(core.size, size);
+        assert_eq!(core.screen.size(), (100, 30));
+        drop(core);
+        manager.kill(&info.id, true).expect("kill");
+    }
+
+    /// A snapshot is serialized only once the terminal lock is free, so the PTY reader is never
+    /// held up by building it (decision 0034). The seam records the lock state at that point.
+    #[test]
+    fn a_snapshot_is_serialized_after_the_terminal_lock_is_released() {
+        use std::cell::Cell;
+        use std::collections::BTreeMap;
+
+        use super::{CreateSpec, LOCK_FREE_AT_SERIALIZE, ShellChoice};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let shell = if cfg!(windows) {
+            ShellChoice {
+                program: "cmd.exe".to_owned(),
+                args: vec!["/d".to_owned()],
+            }
+        } else {
+            ShellChoice {
+                program: "sh".to_owned(),
+                args: Vec::new(),
+            }
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(shell),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+
+        LOCK_FREE_AT_SERIALIZE.with(|free| free.set(None));
+        let attachment = manager.attach(&info.id, None).expect("attach");
+
+        assert_eq!(LOCK_FREE_AT_SERIALIZE.with(Cell::get), Some(true));
+        drop(attachment);
+        manager.kill(&info.id, true).expect("kill");
+    }
+
+    /// A shell that exits while a background process still holds its terminal: the reader
+    /// and the waiter must end, which releases the terminal's buffers (decision 0034).
+    #[test]
+    fn a_shell_that_exits_releases_its_reader_and_waiter() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use super::{CreateSpec, ShellChoice, TerminalState};
+        use crate::pty::PtySize;
+
+        let manager = TerminalManager::new(super::ManagerConfig::new(
+            crate::shell::EnvSnapshot::current(),
+            "0.0.0-test",
+        ));
+        let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
+            (
+                "cmd.exe",
+                vec!["/d", "/c", "start /b ping -n 120 127.0.0.1 >nul & exit 0"],
+            )
+        } else {
+            ("bash", vec!["-c", "set -m; sleep 120 & exit 0"])
+        };
+        let info = manager
+            .create(CreateSpec {
+                workspace_id: "ws".to_owned(),
+                cwd: std::env::temp_dir(),
+                shell: Some(ShellChoice {
+                    program: program.to_owned(),
+                    args: args.into_iter().map(str::to_owned).collect(),
+                }),
+                env: BTreeMap::new(),
+                size: PtySize { cols: 80, rows: 24 },
+                title: None,
+                request_id: None,
+            })
+            .expect("create the terminal");
+        let terminal = super::lock(&manager.inner.registry)
+            .terminals
+            .get(&info.id)
+            .cloned()
+            .expect("the terminal is registered");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while manager.get(&info.id).expect("listed").state != TerminalState::Exited {
+            assert!(Instant::now() < deadline, "the shell did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Only the registry and this test hold the terminal once the reader and waiter end.
+        while Arc::strong_count(&terminal) != 2 {
+            assert!(
+                Instant::now() < deadline,
+                "the reader or the waiter still holds the terminal"
+            );
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }

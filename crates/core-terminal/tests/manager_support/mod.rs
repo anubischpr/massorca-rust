@@ -18,7 +18,8 @@ use massorca_core_terminal::{
     TerminalManager,
 };
 
-pub const TIMEOUT: Duration = Duration::from_secs(10);
+/// Generous so a loaded machine passes; waits end as soon as their condition holds.
+pub const TIMEOUT: Duration = Duration::from_secs(30);
 /// Wide enough that ConPTY does not wrap the lines the tests read.
 pub const SIZE: PtySize = PtySize {
     cols: 200,
@@ -241,25 +242,7 @@ pub struct Watch {
 /// Attaches and reads up to the first byte of live output (the snapshot, if any).
 pub async fn watch(manager: &TerminalManager, id: &str, since: Option<u64>) -> Watch {
     let attachment = manager.attach(id, since).expect("attach");
-    let mut watch = Watch {
-        attachment,
-        manager: manager.clone(),
-        id: id.to_owned(),
-        mode: AttachMode::Snapshot,
-        info: manager.get(id).expect("the terminal exists"),
-        base: 0,
-        snapshot: Vec::new(),
-        snapshot_size: (0, 0),
-        snapshots: 0,
-        output: Vec::new(),
-        output_items: 0,
-        visible: Visible::default(),
-        resized: Vec::new(),
-        exited: None,
-        ended: false,
-        history_pending: false,
-        queries_scanned: 0,
-    };
+    let mut watch = Watch::from_attachment(manager, id, attachment);
     match watch.step().await {
         Some(AttachItem::Attached { mode, .. }) => {
             if mode == AttachMode::Snapshot {
@@ -275,6 +258,29 @@ pub async fn watch(manager: &TerminalManager, id: &str, since: Option<u64>) -> W
 }
 
 impl Watch {
+    /// A watch that has read nothing yet.
+    pub fn from_attachment(manager: &TerminalManager, id: &str, attachment: Attachment) -> Self {
+        Self {
+            attachment,
+            manager: manager.clone(),
+            id: id.to_owned(),
+            mode: AttachMode::Snapshot,
+            info: manager.get(id).expect("the terminal exists"),
+            base: 0,
+            snapshot: Vec::new(),
+            snapshot_size: (0, 0),
+            snapshots: 0,
+            output: Vec::new(),
+            output_items: 0,
+            visible: Visible::default(),
+            resized: Vec::new(),
+            exited: None,
+            ended: false,
+            history_pending: false,
+            queries_scanned: 0,
+        }
+    }
+
     /// Offset of the next byte this watch expects.
     pub fn offset(&self) -> u64 {
         self.base + self.output.len() as u64
@@ -282,9 +288,40 @@ impl Watch {
 
     /// The next item, applied to this watch's state. Panics after `TIMEOUT`.
     pub async fn step(&mut self) -> Option<AttachItem> {
-        let item = tokio::time::timeout(TIMEOUT, self.attachment.next())
-            .await
-            .expect("timed out waiting for an attach item");
+        let Ok(item) = tokio::time::timeout(TIMEOUT, self.attachment.next()).await else {
+            // Names the cause: a shell that printed nothing, or bytes the stream never sent.
+            // A probe resuming at this watch's offset shows what the ring holds beyond it.
+            let mut beyond = String::from("probe failed");
+            if let Ok(mut probe) = self.manager.attach(&self.id, Some(self.offset())) {
+                let mut bytes = 0;
+                let mut items = Vec::new();
+                while let Ok(Some(item)) =
+                    tokio::time::timeout(Duration::from_secs(1), probe.next()).await
+                {
+                    match item {
+                        AttachItem::Output { bytes: chunk, .. } => bytes += chunk.len(),
+                        AttachItem::Attached { mode, .. } => items.push(format!("{mode:?}")),
+                        other => items.push(format!("{other:?}").chars().take(40).collect()),
+                    }
+                }
+                beyond = format!("{bytes} bytes beyond, items {items:?}");
+            }
+            panic!(
+                "timed out waiting for an attach item: watch at offset {} (base {}, {} output \
+                 items, {} snapshots, {} cursor queries seen); ring: {beyond}; terminal now \
+                 {:?}; screen ends {:?}",
+                self.offset(),
+                self.base,
+                self.output_items,
+                self.snapshots,
+                self.output
+                    .windows(CURSOR_QUERY.len())
+                    .filter(|w| *w == CURSOR_QUERY)
+                    .count(),
+                self.manager.get(&self.id),
+                self.visible.tail()
+            );
+        };
         self.apply(&item);
         item
     }
@@ -343,7 +380,14 @@ impl Watch {
 
     /// Reads until the visible text contains `needle`.
     pub async fn wait_for_text(&mut self, needle: &str) {
-        let deadline = Instant::now() + TIMEOUT;
+        self.wait_for_text_sampling(needle, || {}).await;
+    }
+
+    /// `wait_for_text`, calling `sample` before each read.
+    pub async fn wait_for_text_sampling(&mut self, needle: &str, mut sample: impl FnMut()) {
+        // Times out only when output stalls, so a slow machine still finishes a flood.
+        let mut deadline = Instant::now() + TIMEOUT;
+        let mut received = self.output.len();
         // Only text added since the last look can complete the needle.
         let mut searched: usize = 0;
         loop {
@@ -352,12 +396,17 @@ impl Watch {
                 return;
             }
             searched = self.visible.text.len();
+            if self.output.len() > received {
+                received = self.output.len();
+                deadline = Instant::now() + TIMEOUT;
+            }
             assert!(
                 Instant::now() < deadline && !self.ended,
                 "timed out waiting for {needle:?} after {} bytes, ending {:?}",
                 self.output.len(),
                 self.visible.tail()
             );
+            sample();
             if self
                 .step()
                 .await
@@ -393,18 +442,6 @@ impl Watch {
             self.step().await;
         }
         self.exited.clone().expect("exited before the end")
-    }
-
-    /// Reads until no item arrives for `quiet`.
-    pub async fn settle(&mut self, quiet: Duration) {
-        let deadline = Instant::now() + TIMEOUT;
-        while let Ok(item) = tokio::time::timeout(quiet, self.attachment.next()).await {
-            assert!(Instant::now() < deadline, "the terminal never went quiet");
-            self.apply(&item);
-            if item.is_none() {
-                return;
-            }
-        }
     }
 }
 

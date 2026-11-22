@@ -207,7 +207,9 @@ pub(crate) fn error_of(error: TerminalError) -> ErrorBody {
         TerminalError::CwdNotFound(_) => codes::PATH_NOT_FOUND,
         TerminalError::CwdNotDirectory(_) => codes::PATH_NOT_DIRECTORY,
         TerminalError::ShellNotFound(_) | TerminalError::Spawn(_) => codes::TERMINAL_SPAWN_FAILED,
-        TerminalError::LimitReached => codes::TERMINAL_LIMIT_REACHED,
+        TerminalError::LimitReached | TerminalError::TooManyAttachments => {
+            codes::TERMINAL_LIMIT_REACHED
+        }
         TerminalError::InputTooLarge => codes::TERMINAL_INPUT_TOO_LARGE,
         TerminalError::Io(_) => codes::INTERNAL,
     };
