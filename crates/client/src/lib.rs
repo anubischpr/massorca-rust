@@ -8,6 +8,7 @@ mod git_calls;
 mod handshake;
 mod options;
 mod pump;
+mod secret_calls;
 mod spawn;
 mod subscription;
 mod terminal_attach;

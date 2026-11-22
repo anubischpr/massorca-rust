@@ -33,10 +33,12 @@ const POLL: Duration = Duration::from_millis(100);
 /// Variables a test must not inherit from the developer's shell.
 const CLEARED_ENV: [&str; 3] = ["MASSORCA_PROFILE", "MASSORCA_NO_AUTOSTART", "MASSORCA_LOG"];
 
-/// The `massorca` binary with `home` on its environment and no profile flag.
+/// The `massorca` binary with `home` on its environment and no profile flag. Its services keep vault keys in a file
+/// inside the temporary profile, never in the developer's keyring.
 pub fn massorca_in(home: &Path) -> Command {
     let mut command = Command::new(assert_cmd::cargo::cargo_bin("massorca"));
     command.env("MASSORCA_HOME", home);
+    command.env("MASSORCA_VAULT_PROTECTION", "file");
     for name in CLEARED_ENV {
         command.env_remove(name);
     }
@@ -46,10 +48,19 @@ pub fn massorca_in(home: &Path) -> Command {
 /// Runs `command` to completion with its stdout and stderr in temporary files, and returns its output.
 /// Returns `None` after `timeout`, once the command has been killed.
 pub fn capture(command: &mut Command, timeout: Duration) -> Option<Output> {
+    capture_with_stdin(command, timeout, Stdio::null())
+}
+
+/// [`capture`] with `stdin` as the command's standard input.
+pub fn capture_with_stdin(
+    command: &mut Command,
+    timeout: Duration,
+    stdin: Stdio,
+) -> Option<Output> {
     let mut stdout = tempfile::tempfile().expect("a temporary file for stdout");
     let mut stderr = tempfile::tempfile().expect("a temporary file for stderr");
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(stdout.try_clone().expect("stdout can be duplicated"))
         .stderr(stderr.try_clone().expect("stderr can be duplicated"))
         .spawn()
@@ -128,6 +139,18 @@ impl Sandbox {
 
     pub fn run(&self, profile: &str, args: &[&str]) -> Assert {
         execute(self.command(profile).args(args))
+    }
+
+    /// Runs `args` with `input` as standard input, read from a file so no pipe outlives the command.
+    pub fn run_with_input(&self, profile: &str, args: &[&str], input: &[u8]) -> Assert {
+        let mut file = tempfile::tempfile().expect("a temporary file for stdin");
+        std::io::Write::write_all(&mut file, input).expect("stdin is written");
+        file.seek(SeekFrom::Start(0)).expect("stdin can be rewound");
+        let mut command = self.command(profile);
+        command.args(args);
+        let output = capture_with_stdin(&mut command, COMMAND_TIMEOUT, Stdio::from(file))
+            .unwrap_or_else(|| panic!("the command did not finish in time: {command:?}"));
+        Assert::new(output)
     }
 
     /// Runs `--json <args>`, which must succeed, and returns the document's `result`.

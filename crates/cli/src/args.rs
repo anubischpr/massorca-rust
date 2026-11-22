@@ -85,6 +85,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: crate::git::GitCommand,
     },
+    /// Stores secrets for agents and lists them by name. Values are never printed.
+    Secret {
+        #[command(subcommand)]
+        command: crate::secret::SecretCommand,
+    },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
         /// Anything after `ext`; not interpreted yet.

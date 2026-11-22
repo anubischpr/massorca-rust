@@ -15,6 +15,8 @@ pub mod git;
 pub mod logging;
 pub mod output;
 pub mod project;
+pub mod secret;
+pub mod secret_input;
 pub mod service;
 pub mod terminal;
 pub mod terminal_attach;
