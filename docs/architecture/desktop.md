@@ -116,7 +116,9 @@ in four groups, the commit box and the first page of history. It runs on `git/1`
   mutation refetches the workspace's status (and history after a commit) before it replies, whatever
   the answer.
 - **Watch.** While the tab is on screen, the bridge follows the selected workspace with `git.watch`.
-  Each event refetches the status. Watches survive a reconnect and end with their connection.
+  Each event shows at once and refetches the status beside the stream, so a slow git call never holds back
+  the panel's readiness or a change. Answers are ordered: an older status never replaces a newer one.
+  Watches survive a reconnect and end with their connection.
 - **Store.** `StoreState.git` holds each workspace's status, first history page and degraded-watch
   state. A removed workspace takes them with it.
 - **Models.** `model::source_control` derives the panel from the store; `model::source_control_diff`
