@@ -192,8 +192,10 @@ fn category_name(category: Category) -> &'static str {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CliSpec {
     pub binary: String,
-    pub verify: Vec<String>,
+    /// `None` when the vendor documents no check; the install then needs only the binary to resolve.
+    pub verify: Option<Vec<String>>,
     pub source: String,
+    pub source_checked: Option<String>,
     pub install: Vec<CliStepView>,
     pub uninstall: Vec<CliStepView>,
 }
@@ -219,8 +221,102 @@ impl CliSpec {
             binary: cli.binary.clone(),
             verify: cli.verify.clone(),
             source: cli.source.clone(),
+            source_checked: cli.source_checked.clone(),
             install: steps(&cli.install),
             uninstall: steps(&cli.uninstall),
         }
+    }
+}
+
+/// An agent kind's declaration as the review shows it: what it starts and what it reads or strips, so the person sees
+/// more than the package hash. Read leniently: a declaration that is not JSON is shown as unreadable, and core-agents
+/// refuses it when it loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KindView {
+    pub id: String,
+    pub readable: bool,
+    /// The programs the kind may start, in the order it tries them.
+    pub program: Vec<String>,
+    pub args: Vec<String>,
+    /// Environment variable names the kind sets, reads or strips. Values are not shown.
+    pub env: Vec<String>,
+    /// The variable that points at the credential home, and the files kept there.
+    pub credential_home_env: Option<String>,
+    /// A built-in keeps its own credential home: the review says so and names no variable (0062, V3).
+    pub own_credential_home: bool,
+    pub credential_files: Vec<String>,
+}
+
+impl KindView {
+    /// `builtin` marks a built-in kind, whose internal names the review leaves out.
+    pub fn of(id: &str, declaration: Option<&[u8]>, builtin: bool) -> Self {
+        let value: Option<serde_json::Value> =
+            declaration.and_then(|bytes| serde_json::from_slice(bytes).ok());
+        let Some(value) = value else {
+            return Self {
+                id: id.to_owned(),
+                readable: false,
+                program: Vec::new(),
+                args: Vec::new(),
+                env: Vec::new(),
+                credential_home_env: None,
+                own_credential_home: false,
+                credential_files: Vec::new(),
+            };
+        };
+        let strings = |key: &str| -> Vec<String> {
+            value[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        };
+        let credentials = &value["credentials"];
+        // Only the keys core-agents accepts: `credentials.strip_env` names the variables a run removes.
+        let mut env: Vec<String> = credentials["strip_env"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect();
+        env.sort();
+        let home = credentials["home_env"].as_str().map(str::to_owned);
+        Self {
+            id: id.to_owned(),
+            readable: true,
+            program: strings("program"),
+            args: strings("args"),
+            env: if builtin { Vec::new() } else { env },
+            credential_home_env: if builtin { None } else { home.clone() },
+            own_credential_home: builtin && home.is_some(),
+            credential_files: credentials["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| file.as_str().map(str::to_owned))
+                .collect(),
+        }
+    }
+}
+
+/// An MCP server the package offers to agents, with the command the core starts for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct McpView {
+    pub id: String,
+    pub command: Vec<String>,
+}
+
+impl McpView {
+    pub fn of(manifest: &Manifest) -> Vec<Self> {
+        manifest
+            .contributes
+            .mcp_servers
+            .iter()
+            .map(|server| Self {
+                id: server.id.clone(),
+                command: server.command.clone(),
+            })
+            .collect()
     }
 }
