@@ -15,21 +15,25 @@ use gpui::{
     prelude::*, px,
 };
 use massorca_protocol::methods::tasks::Task;
+use massorca_protocol::methods::teams::TeamCharacter;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::board_column::{BoardCard, BoardColumn};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::scroll_area::{ScrollArea, ScrollAxis};
-use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
+use massorca_ui::tokens::{SPACE_3, SPACE_4, SPACE_5, TYPE_BODY_SM, TYPE_CAPTION, TYPE_TITLE_SM};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use std::future::Future;
 
 /// The keys a picked card reads: Space, the arrows and Escape.
 const PICK_KEYS: [&str; 6] = ["space", "left", "right", "up", "down", "escape"];
 
-/// The Board page of a team: its header, the team pill and the four columns (4.3).
+/// The height of the Board's header row, the rule under it included (bt-board `.head`, 56 px).
+const HEADER_HEIGHT: f32 = 56.0;
+
 /// What a refused move says: the Board only moves cards to Done, and back to Open from Done.
 const MOVE_NOT_AVAILABLE: &str = "This move is not available yet.";
 
+/// The Board page of a team: its header, the team pill and the four columns (4.3).
 pub(in crate::shell) fn board_page(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
@@ -42,50 +46,62 @@ pub(in crate::shell) fn board_page(
     let team = match owner {
         BoardOwner::Team(team) | BoardOwner::Project(team, _) => team,
     };
-    let team_name = state.team(team).map_or("", |team| team.name.as_str());
+    let team_data = state.team(team);
+    let team_name = team_data.map_or("", |team| team.name.as_str());
+    let character = team_data.map_or(TeamCharacter::Unknown, |team| team.character);
+    // One row holds the title, the team pill and the note, with the Filter button at the end and a
+    // rule under them (bt-board `.head`).
     let header = div()
         .flex()
+        .flex_none()
         .items_center()
-        .justify_between()
+        .gap(px(SPACE_3))
+        .h(px(HEADER_HEIGHT))
+        .px(px(SPACE_5))
+        .border_b_1()
+        .border_color(theme.palette.border.subtle)
+        .debug_selector(|| "board-header".to_owned())
         .child(
             div()
-                .text_style(TYPE_HEADING)
+                .text_style(TYPE_TITLE_SM)
                 .text_color(theme.palette.text.primary)
                 .child("Board"),
         )
+        .child(team_pill(team_name, character, &theme))
         .child(
             div()
-                .flex()
-                .items_center()
-                .gap(px(SPACE_2))
-                .child(team_pill(team_name, team, &theme))
-                .child(
-                    Button::new("board-filter", "Filter")
-                        .variant(ButtonVariant::Ghost)
-                        .leading_icon(IconName::ListFilter)
-                        .disabled(true)
-                        .tooltip(NOT_AVAILABLE),
-                ),
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.tertiary)
+                .child("Tasks come from the Conference room"),
+        )
+        .child(div().flex_1())
+        .child(
+            Button::new("board-filter", "Filter")
+                .variant(ButtonVariant::Ghost)
+                .leading_icon(IconName::ListFilter)
+                .disabled(true)
+                .tooltip(NOT_AVAILABLE),
         );
-    // The header keeps the page inset; the columns run to the window edge and scroll there.
+    // The columns start 16 px under the header and run to the window edge, where they scroll.
     div()
         .flex()
         .flex_col()
-        .gap(px(SPACE_4))
         .size_full()
-        .pt(px(SPACE_6))
-        .pb(px(SPACE_6))
+        .child(header)
+        .children(state.notice().map(|notice| {
+            div()
+                .px(px(SPACE_5))
+                .pt(px(SPACE_4))
+                .child(note(notice.to_owned(), &theme))
+        }))
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_4))
-                .px(px(SPACE_6))
-                .child(header)
-                .child(note("Tasks come from the Conference room", &theme))
-                .children(state.notice().map(|notice| note(notice.to_owned(), &theme))),
+                .flex_1()
+                .min_h_0()
+                .mt(px(SPACE_4))
+                .debug_selector(|| "board-columns".to_owned())
+                .child(board_columns(model, shell, owner, SPACE_5, window, cx)),
         )
-        .child(board_columns(model, shell, owner, SPACE_6, window, cx))
         .into_any_element()
 }
 
@@ -103,7 +119,7 @@ pub(in crate::shell) fn board_columns(
     let Some(view) = model.teams().board_view(owner) else {
         return note("This Board is gone.", &theme).into_any_element();
     };
-    let mut columns = div().flex().gap(px(SPACE_2)).h_full().px(px(inset));
+    let mut columns = div().flex().gap(px(SPACE_3)).h_full().px(px(inset));
     for column in view.columns {
         let mut built = BoardColumn::new(
             format!("board-column-{}", column.column.title()),
@@ -278,7 +294,7 @@ mod tests {
     use super::*;
     use crate::data::SampleDataSource;
     use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage};
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{Entity, TestAppContext, VisualTestContext, size};
     use massorca_ui::{Appearance, Theme as UiTheme};
 
     fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -295,6 +311,47 @@ mod tests {
         shell.update(cx, |shell, cx| {
             shell.board_key(BoardOwner::Team(TeamId(1)), TaskId(1), name, cx)
         })
+    }
+
+    #[gpui::test]
+    fn the_board_header_is_one_row_and_the_columns_start_where_bt_board_puts_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx) = shell(cx);
+        cx.simulate_resize(size(px(1440.), px(900.)));
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Board(TeamId(1)));
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let canvas = cx.debug_bounds("canvas").expect("the canvas is drawn");
+        let header = cx
+            .debug_bounds("board-header")
+            .expect("the header is drawn");
+        let columns = cx
+            .debug_bounds("board-columns")
+            .expect("the columns are drawn");
+        // bt-board: the canvas starts under the 36 px title bar, the header is 56 px and the
+        // columns start 16 px below it, so the first column sits at y 108 at 1440 by 900.
+        assert_eq!(header.origin.y, canvas.origin.y);
+        assert_eq!(header.size.height, px(56.));
+        assert_eq!(columns.origin.y, px(108.));
+    }
+
+    #[gpui::test]
+    fn the_team_pill_draws_the_team_character(cx: &mut TestAppContext) {
+        let (shell, cx) = shell(cx);
+        shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell.model.open_team_page(TeamPage::Board(TeamId(1)));
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("team-character").is_some(),
+            "the team pill draws the team's character, not the users icon"
+        );
     }
 
     #[gpui::test]

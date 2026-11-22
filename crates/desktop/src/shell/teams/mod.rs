@@ -10,11 +10,11 @@ mod routines;
 mod sidebar;
 
 use crate::model::settings_sections::NOT_AVAILABLE;
-use crate::model::teams::TeamId;
 use gpui::{ElementId, IntoElement, ParentElement, SharedString, Styled, div, px};
-use massorca_ui::components::avatar::{Avatar, AvatarSize};
+use massorca_protocol::methods::teams::TeamCharacter;
 use massorca_ui::components::icon_button::IconButton;
-use massorca_ui::tokens::{SPACE_1, TYPE_BODY_STRONG};
+use massorca_ui::components::team_character::{TeamCharacterMark, TeamShape};
+use massorca_ui::tokens::{SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_STRONG};
 use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
 pub(super) use board::{board_columns, board_page};
@@ -26,15 +26,19 @@ pub(super) use project::project_page;
 pub(super) use routines::routines_page;
 pub(super) use sidebar::teams_list;
 
-/// The team pill of a team page: the team mark and its name (screens 4, A59).
-fn team_pill(name: &str, team: TeamId, theme: &Theme) -> impl IntoElement {
+/// The team pill of a team page: the team's character, its name and a chevron, as bt-board draws it
+/// (screens 4, A59).
+fn team_pill(name: &str, character: TeamCharacter, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap(px(SPACE_1))
-        .child(
-            Avatar::team(format!("team-pill-{}", team.0), name.to_owned()).size(AvatarSize::Small),
-        )
+        .gap(px(SPACE_1 + SPACE_HALF))
+        .h(px(SIZE_CONTROL_DEFAULT))
+        .px(px(SPACE_2))
+        .child(TeamCharacterMark::new(
+            team_shape(character),
+            name.to_owned(),
+        ))
         .child(
             div()
                 .text_style(TYPE_BODY_STRONG)
@@ -44,8 +48,20 @@ fn team_pill(name: &str, team: TeamId, theme: &Theme) -> impl IntoElement {
         .child(
             Icon::new(IconName::ChevronDown)
                 .size(IconSize::XSmall)
-                .color(theme.palette.text.secondary),
+                .color(theme.palette.text.tertiary),
         )
+}
+
+/// The shape a team's character draws. A character the service does not name draws the triangle.
+fn team_shape(character: TeamCharacter) -> TeamShape {
+    match character {
+        TeamCharacter::Triangle | TeamCharacter::Unknown => TeamShape::Triangle,
+        TeamCharacter::Square => TeamShape::Square,
+        TeamCharacter::Circle => TeamShape::Circle,
+        TeamCharacter::Diamond => TeamShape::Diamond,
+        TeamCharacter::Hexagon => TeamShape::Hexagon,
+        TeamCharacter::Star => TeamShape::Star,
+    }
 }
 
 /// A control whose action waits for a layer that does not exist yet: drawn disabled, and its
@@ -62,9 +78,23 @@ fn waiting_icon(
 
 #[cfg(test)]
 mod tests {
+    use super::team_shape;
     use crate::data::SampleDataSource;
     use crate::model::canvas::Canvas;
     use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
+    use massorca_protocol::methods::teams::TeamCharacter;
+    use massorca_ui::components::team_character::TeamShape;
+
+    #[test]
+    fn every_team_character_draws_its_own_shape_and_an_unknown_one_the_triangle() {
+        assert_eq!(team_shape(TeamCharacter::Triangle), TeamShape::Triangle);
+        assert_eq!(team_shape(TeamCharacter::Square), TeamShape::Square);
+        assert_eq!(team_shape(TeamCharacter::Circle), TeamShape::Circle);
+        assert_eq!(team_shape(TeamCharacter::Diamond), TeamShape::Diamond);
+        assert_eq!(team_shape(TeamCharacter::Hexagon), TeamShape::Hexagon);
+        assert_eq!(team_shape(TeamCharacter::Star), TeamShape::Star);
+        assert_eq!(team_shape(TeamCharacter::Unknown), TeamShape::Triangle);
+    }
     use crate::shell::Shell;
     use gpui::TestAppContext;
     use massorca_ui::{Appearance, Theme};
