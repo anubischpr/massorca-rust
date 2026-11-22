@@ -176,8 +176,10 @@ pub fn bootstrap(
     let binary = std::fs::read(&plan.binary)?;
 
     progress("Checking the remote system");
-    let uname = checked(shell.run("uname -sm", None)?, "checking the remote system")?;
-    let (remote_os, remote_arch) = parse_uname(&uname.stdout)?;
+    let RemoteMachine {
+        os: remote_os,
+        arch: remote_arch,
+    } = probe_machine(shell)?;
     check_elf(&binary, &remote_arch)?;
 
     progress("Uploading the binary");
@@ -231,6 +233,31 @@ pub fn install_over_ssh(
 ) -> Result<BootstrapReport, BootstrapError> {
     let shell = SystemSsh::new(target, ssh_args)?;
     bootstrap(&shell, plan, progress)
+}
+
+/// The machine an SSH host reports for `uname -sm`, once it is one MassOrca runs on (decision 0044).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteMachine {
+    /// The host's system, `Linux`.
+    pub os: String,
+    /// The host's machine, `x86_64` or `aarch64`.
+    pub arch: String,
+}
+
+/// Checks the host with `uname -sm` and names its machine. Installs nothing, so a UI can test a host with it.
+pub fn probe_machine(shell: &dyn RemoteShell) -> Result<RemoteMachine, BootstrapError> {
+    let uname = checked(shell.run("uname -sm", None)?, "checking the remote system")?;
+    let (os, arch) = parse_uname(&uname.stdout)?;
+    Ok(RemoteMachine { os, arch })
+}
+
+/// Probes the SSH host `target` (`[user@]host`) with `ssh_args`, as `probe_machine` does. It blocks while ssh runs.
+pub fn probe_over_ssh(
+    target: &str,
+    ssh_args: Vec<String>,
+) -> Result<RemoteMachine, BootstrapError> {
+    let shell = SystemSsh::new(target, ssh_args)?;
+    probe_machine(&shell)
 }
 
 /// Stops and disables the service, then removes its unit and the install directory (decision 0045).
