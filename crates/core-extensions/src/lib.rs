@@ -3,6 +3,7 @@
 //!
 //! No protocol I/O and no dependency on `core-agents`: program resolution and process running come in as traits.
 
+pub mod catalogue;
 mod error;
 pub mod layout;
 pub mod lockfile;

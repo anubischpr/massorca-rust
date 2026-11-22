@@ -1,0 +1,38 @@
+{
+  "id": "massorca.antigravity",
+  "name": "Antigravity",
+  "version": "1.0.0",
+  "publisher": "massorca",
+  "description": "Google's Antigravity agent, run in your workspaces.",
+  "api": "1.0",
+  "requires": { "massorca": ">=0.1.0" },
+  "surfaces": ["desktop"],
+  "modes": ["workspaces"],
+  "permissions": [
+    { "kind": "process", "scope": { "programs": ["agy"] }, "reason": "Runs the Antigravity CLI." }
+  ],
+  "contributes": {
+    "agentAdapters": [{
+      "id": "antigravity",
+      "kind": "agents/antigravity.json",
+      "cli": {
+        "binary": "agy",
+        "verify": ["agy", "--version"],
+        "source": "https://antigravity.google",
+        "install": [
+          { "os": "windows", "command": ["powershell", "-NoProfile", "-Command", "irm https://antigravity.google/cli/install.ps1 | iex"] },
+          { "os": "linux", "command": ["bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"] },
+          { "os": "macos", "command": ["bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"] }
+        ]
+      }
+    }]
+  },
+  "listing": {
+    "category": "agents",
+    "developer": { "name": "MassOrca" },
+    "mention": "antigravity",
+    "banner": {
+      "examples": [{ "kind": "mention", "text": "@antigravity", "caption": "Ask Antigravity to plan the next change" }]
+    }
+  }
+}
