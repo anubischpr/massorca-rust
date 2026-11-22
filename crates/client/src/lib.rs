@@ -24,7 +24,7 @@ mod windows_handle_inheritance;
 
 pub use client::Client;
 pub use device_name::default_device_name;
-pub use error::ClientError;
+pub use error::{ClientError, profile_refusal};
 pub use handshake::Welcome;
 pub use hosts::{HostRecord, Hosts, validate_host_name};
 pub use options::{Autostart, ConnectOptions};

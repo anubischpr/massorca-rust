@@ -91,6 +91,11 @@ impl From<&ClientError> for Refusal {
             ClientError::HostUnreachable(detail) => Self::Unavailable {
                 message: sentence(&format!("the host is unreachable: {detail}")),
             },
+            // The service the app started refused to (ADR 0073): its own code and message, as the CLI shows them.
+            ClientError::StartRefused(body) | ClientError::ProfileRefused(body) => Self::Failed {
+                code: body.code.clone(),
+                message: body.message.clone(),
+            },
             ClientError::Disconnected
             | ClientError::Unavailable(_)
             | ClientError::StartFailed(_)

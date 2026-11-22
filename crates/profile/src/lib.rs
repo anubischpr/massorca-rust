@@ -3,18 +3,35 @@
 mod endpoint;
 mod error;
 mod profile;
+mod root_access;
+#[cfg(windows)]
+mod scan_cache;
+#[cfg(unix)]
+mod unix_profile_root;
 #[cfg(unix)]
 mod unix_user;
 #[cfg(windows)]
 mod windows_dir_access;
 #[cfg(windows)]
 mod windows_endpoint_access;
+#[cfg(windows)]
+mod windows_profile_root;
+#[cfg(windows)]
+mod windows_profile_secure;
+#[cfg(windows)]
+mod windows_sddl;
+#[cfg(windows)]
+mod windows_trust;
 
 pub use endpoint::local_socket_name;
 #[cfg(unix)]
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use profile::{Profile, ensure_dir};
+pub use root_access::{
+    FolderPlan, MAX_LISTED_ENTRIES, PrivateDir, RootAccess, RootAccessError, apply_secure,
+    create_home, create_private_dir, create_root, open_private_dir, plan_secure, secure_root,
+};
 #[cfg(unix)]
 pub use unix_user::current_uid;
 #[cfg(windows)]
