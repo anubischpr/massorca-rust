@@ -6,8 +6,11 @@ mod harness;
 
 use std::fs;
 use std::path::Path;
+use std::process::Stdio;
 
-use harness::{Sandbox, single_document, stdout_text, with_json};
+use harness::{
+    ChildGuard, Sandbox, eventually, massorca_in, single_document, stdout_text, with_json,
+};
 use serde_json::{Value, json};
 
 const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
@@ -302,6 +305,101 @@ fn show_before_and_after_an_import_then_remove() {
     assert!(!home(&sandbox).exists());
     let again = sandbox.json_ok("default", &["agent", "credentials", "remove", "fake"]);
     assert_eq!(again["removed"], false);
+}
+
+/// Starts the service with a stray key in its environment and the fake agent told to report on it.
+fn spawn_service_with_stray_key(sandbox: &Sandbox) -> ChildGuard {
+    sandbox.track("default");
+    let child = massorca_in(sandbox.home())
+        .args(["--profile", "default", "service", "run"])
+        .env(STRIPPED, "stray-value")
+        .env("FAKE_AGENT_PROBE_ENV", STRIPPED)
+        .env_remove("FAKE_AGENT_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the service starts");
+    let guard = ChildGuard::new(child);
+    sandbox.wait_for_running("default", true);
+    guard
+}
+
+/// Starts a read-only fake agent in workspace `main` and returns its terminal id.
+fn start_fake(sandbox: &Sandbox) -> String {
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            "main",
+            "--read-only",
+        ],
+    );
+    started["terminal_id"]
+        .as_str()
+        .expect("a terminal id")
+        .to_owned()
+}
+
+/// Waits until the terminal's screen shows `line`.
+fn wait_for_line(sandbox: &Sandbox, terminal: &str, line: &str) {
+    eventually(&format!("`{line}` on the agent's screen"), || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        screen["lines"]
+            .as_array()
+            .is_some_and(|lines| {
+                lines
+                    .iter()
+                    .any(|shown| shown.as_str().map(str::trim) == Some(line))
+            })
+            .then_some(())
+    });
+}
+
+#[test]
+fn a_run_uses_the_imported_home_and_empties_the_stripped_keys() {
+    let sandbox = Sandbox::new();
+    declare_kinds(&sandbox, &["token.json"]);
+    let source = fake_source(&sandbox);
+    let _service = spawn_service_with_stray_key(&sandbox);
+    let notes = sandbox.home().join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", path_text(&notes), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+
+    let without = start_fake(&sandbox);
+    wait_for_line(&sandbox, &without, "fake-agent: credentials missing");
+    wait_for_line(
+        &sandbox,
+        &without,
+        &format!("fake-agent: env {STRIPPED} set"),
+    );
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "credentials",
+            "import",
+            "fake",
+            "--from",
+            path_text(&source),
+        ],
+    );
+    let with = start_fake(&sandbox);
+    wait_for_line(&sandbox, &with, "fake-agent: credentials found");
+    // The documented limitation: a stripped variable is emptied, not removed.
+    wait_for_line(
+        &sandbox,
+        &with,
+        &format!("fake-agent: env {STRIPPED} empty"),
+    );
 }
 
 #[cfg(unix)]
