@@ -65,8 +65,13 @@ pub enum Error {
     InstallerConsentRequired,
     #[error("the installer for {agent} failed: {message}")]
     InstallerFailed { agent: String, message: String },
-    #[error("the {agent} CLI did not verify after its installer: {message}")]
-    VerifyFailed { agent: String, message: String },
+    #[error("the {agent} CLI did not verify after its installer: {message}{}", if .installer.is_some() { "; the installer ran, so the CLI it installed may remain" } else { "" })]
+    VerifyFailed {
+        agent: String,
+        message: String,
+        /// The vendor command that ran and succeeded before verify failed, when one did.
+        installer: Option<Vec<String>>,
+    },
     #[error("removal refused by {owner}: {}", .error.message)]
     Refused { owner: String, error: HookError },
     #[error("{0} is not a file the listing names")]
@@ -107,6 +112,24 @@ impl Error {
             Self::InvalidLockfile(_) => codes::INVALID_LOCKFILE,
             Self::Tampered(_) => codes::TAMPERED,
             Self::Io { .. } => codes::IO,
+        }
+    }
+
+    /// Structured detail for the protocol error's `data`: after a vendor installer ran and verify failed, the command
+    /// that ran and that its CLI may remain on the host.
+    pub fn data(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::VerifyFailed {
+                agent,
+                installer: Some(command),
+                ..
+            } => Some(serde_json::json!({
+                "agent": agent,
+                "installer_ran": true,
+                "cli_may_remain": true,
+                "command": command,
+            })),
+            _ => None,
         }
     }
 

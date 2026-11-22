@@ -149,6 +149,13 @@ fn a_failed_verify_leaves_nothing_installed() {
         assert_eq!(error.code(), codes::VERIFY_FAILED);
         assert!(s.lock_json().is_none());
         assert!(!s.exists("pkgs/acme.kit"));
+        let data = error.data().expect("the error says what ran");
+        assert_eq!(data["installer_ran"], true);
+        assert_eq!(data["cli_may_remain"], true);
+        assert_eq!(data["command"], serde_json::json!(["kit-setup", "install"]));
+        let log = std::fs::read_to_string(s.service.layout().install_log("acme.kit"))
+            .expect("the install log");
+        assert!(log.contains("the CLI it installed may remain"), "{log}");
     }
 }
 

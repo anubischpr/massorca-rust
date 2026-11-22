@@ -248,9 +248,13 @@ impl Extensions {
                     if !exit.success() {
                         return Err(failed(describe(exit)));
                     }
-                    let unverified = |message: String| Error::VerifyFailed {
-                        agent: adapter.id.clone(),
-                        message,
+                    let unverified = |message: String| {
+                        note_remaining_cli(&log, command);
+                        Error::VerifyFailed {
+                            agent: adapter.id.clone(),
+                            message,
+                            installer: Some(command.clone()),
+                        }
                     };
                     let verified = self
                         .runner
@@ -305,6 +309,16 @@ fn installed_files(id: &str, dir: &Path, expected: &str) -> Result<Files, Error>
 /// After unpacking, the folder must hash to exactly what was reviewed.
 fn check_unpacked(id: &str, dir: &Path, expected: &str) -> Result<(), Error> {
     installed_files(id, dir, expected).map(|_| ())
+}
+
+/// Records in the install log that the installer ran before verify failed, so its CLI may still be on the host.
+fn note_remaining_cli(log: &Path, command: &[String]) {
+    if let Ok(mut file) = fs::OpenOptions::new().append(true).create(true).open(log) {
+        let _ = writeln!(
+            file,
+            "verify failed after the installer ran; the CLI it installed may remain. It ran: {command:?}"
+        );
+    }
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);

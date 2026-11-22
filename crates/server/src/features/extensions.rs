@@ -196,7 +196,9 @@ where
 
 /// The protocol error of a refusal: its own code, which for a guard is the guard's (`agent.busy`).
 fn error_body(error: Error) -> ErrorBody {
-    ErrorBody::new(error.code(), error.to_string())
+    let mut body = ErrorBody::new(error.code(), error.to_string());
+    body.data = error.data();
+    body
 }
 
 /// A service view in its wire shape.
