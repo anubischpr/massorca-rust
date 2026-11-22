@@ -5,23 +5,26 @@
 use std::path::PathBuf;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, PathPromptOptions, WeakEntity, div, px};
+use gpui::{
+    AnyElement, App, Context, Entity, PathPromptOptions, Subscription, WeakEntity, div, px,
+};
 use massorca_ui::assets::FONT_MONO;
+use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
-use massorca_ui::components::select::SelectView;
-use massorca_ui::components::text_field::TextField;
+use massorca_ui::components::select::{SelectEvent, SelectView};
+use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::tokens::{
-    RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_LABEL,
+    RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_LABEL, TYPE_MONO_SM,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use crate::model::add_host::{
-    Check, HostKind, SshTarget, can_add, key_choice_at, key_labels, list_key_files,
-    no_program_sentence, passed_sentence, program_for,
+    Check, HostKind, Notice, SshTarget, Tone, can_add, key_choice_at, key_labels, list_key_files,
+    program_for, test_notices,
 };
 use crate::model::pairing::name_or_none;
 use crate::service::{SshHost, bundled_program};
@@ -55,6 +58,8 @@ pub(super) struct AddHostFlow {
     pub form_error: Option<String>,
     /// The last add's refusal and the install's log, when it did not finish.
     pub add_failure: Option<(String, Vec<String>)>,
+    /// Keeps the edits of the target in view: an edit drops the result of the check that answered for the old one.
+    _target_changes: Vec<Subscription>,
 }
 
 /// The target the dialog's fields make now, or why they do not.
@@ -87,12 +92,29 @@ impl Shell {
                 .layer(OverlayLayer::Dialog)
                 .selected(Some(0))
         });
+        let address = cx.new(|cx| TextField::new(cx).placeholder("vps.example.ts.net").mono());
+        let port = cx.new(|cx| TextField::new(cx).placeholder("22").mono());
+        let user = cx.new(|cx| TextField::new(cx).placeholder("deploy").mono());
+        let target_changes = vec![
+            cx.subscribe(&address, |shell, _, _: &TextFieldEvent, cx| {
+                shell.add_host_target_changed(cx);
+            }),
+            cx.subscribe(&port, |shell, _, _: &TextFieldEvent, cx| {
+                shell.add_host_target_changed(cx);
+            }),
+            cx.subscribe(&user, |shell, _, _: &TextFieldEvent, cx| {
+                shell.add_host_target_changed(cx);
+            }),
+            cx.subscribe(&key, |shell, _, _: &SelectEvent, cx| {
+                shell.add_host_target_changed(cx);
+            }),
+        ];
         self.add_host = Some(AddHostFlow {
             kind: HostKind::Ssh,
             name: cx.new(|cx| TextField::new(cx).placeholder("The server's name")),
-            address: cx.new(|cx| TextField::new(cx).placeholder("vps.example.ts.net").mono()),
-            port: cx.new(|cx| TextField::new(cx).placeholder("22").mono()),
-            user: cx.new(|cx| TextField::new(cx).placeholder("deploy").mono()),
+            address,
+            port,
+            user,
             key,
             keys,
             advanced_open: false,
@@ -102,6 +124,7 @@ impl Shell {
             adding: false,
             form_error: None,
             add_failure: None,
+            _target_changes: target_changes,
         });
         cx.notify();
     }
@@ -114,6 +137,20 @@ impl Shell {
             .is_some_and(|flow| flow.adding || flow.check == Check::Checking);
         if self.add_host.is_some() && !busy {
             self.add_host = None;
+            cx.notify();
+        }
+    }
+
+    /// An edit to the target: the result of the last check described the old target, so it goes. A check still
+    /// running is kept, and its answer is dropped when it arrives for a target the fields no longer make.
+    fn add_host_target_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(flow) = self.add_host.as_mut() {
+            if flow.check != Check::Checking {
+                flow.check = Check::Idle;
+                flow.checked = None;
+            }
+            flow.form_error = None;
+            flow.add_failure = None;
             cx.notify();
         }
     }
@@ -156,7 +193,7 @@ impl Shell {
         .detach();
     }
 
-    /// "Test connection", or Retry after a failed test: checks the host with `uname -sm`, installing nothing.
+    /// "Test connection", or "Test again" after a result: checks the host with `uname -sm`, installing nothing.
     pub(super) fn test_add_host(&mut self, cx: &mut Context<Self>) {
         let service = self.service.clone();
         let Some(flow) = self.add_host.as_mut() else {
@@ -192,16 +229,21 @@ impl Shell {
             let result = service.probe_ssh_host(target.target, target.ssh_args).await;
             let _ = this.update(cx, |shell, cx| {
                 if let Some(flow) = shell.add_host.as_mut() {
-                    match result {
-                        Ok(machine) => {
-                            flow.check = Check::Passed { arch: machine.arch };
-                            flow.checked = Some(checked);
-                        }
-                        Err(failed) => {
-                            flow.check = Check::Failed {
-                                sentence: failed.refusal.sentence(),
-                                log: failed.log,
-                            };
+                    if typed_target(flow, cx).ok().as_ref() != Some(&checked) {
+                        // The fields moved on while the check ran: its answer is for another target.
+                        flow.check = Check::Idle;
+                    } else {
+                        match result {
+                            Ok(machine) => {
+                                flow.check = Check::Passed { arch: machine.arch };
+                                flow.checked = Some(checked);
+                            }
+                            Err(failed) => {
+                                flow.check = Check::Failed {
+                                    sentence: failed.refusal.sentence(),
+                                    log: failed.log,
+                                };
+                            }
                         }
                     }
                 }
@@ -268,7 +310,7 @@ impl Shell {
     }
 }
 
-/// The Add host dialog (SSH path): the fields, the test, Advanced options, and Add host or Retry.
+/// The Add host dialog (SSH path): the fields, the test in the footer, Advanced options, and Add host.
 pub(super) fn add_host_dialog(flow: &AddHostFlow, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
     let theme = *cx.theme();
     let typed = typed_target(flow, cx).ok();
@@ -285,33 +327,57 @@ pub(super) fn add_host_dialog(flow: &AddHostFlow, shell: &WeakEntity<Shell>, cx:
             program.as_deref(),
             flow.adding,
         );
-    let retry = matches!(flow.check, Check::Failed { .. });
     let busy = flow.adding || flow.check == Check::Checking;
     let body = dialog_body(flow, program.is_some(), shell, &theme);
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
-    Dialog::new("add-host", "Add host")
+    let mut dialog = Dialog::new("add-host", "Add host")
         .variant(DialogVariant::Confirm)
         .width(DialogWidth::Medium)
+        .cancel_variant(ButtonVariant::Ghost)
         .open(true)
         .busy(busy)
         .child(body)
-        .action(if retry { "Retry" } else { "Add host" })
-        .action_disabled(!retry && !ready)
+        .action("Add host")
+        .action_icon(IconName::Server)
+        .action_disabled(!ready)
         .on_action(move |_, cx| {
-            let _ = on_action.update(cx, |shell, cx| {
-                if retry {
-                    shell.test_add_host(cx);
-                } else {
-                    shell.add_add_host(cx);
-                }
-            });
+            let _ = on_action.update(cx, |shell, cx| shell.add_add_host(cx));
         })
         .on_dismiss(move |_, cx| {
             let _ = on_dismiss.update(cx, |shell, cx| shell.close_add_host(cx));
-        })
+        });
+    if flow.kind == HostKind::Ssh {
+        dialog = dialog.leading(test_button(flow, shell));
+    }
+    dialog
 }
 
-/// The dialog's content: the four fields, the test and what it found, the add's refusal, and Advanced options.
+/// The test at the footer's left: "Test connection" before any result, "Test again" after one (sh-host-test-failed).
+fn test_button(flow: &AddHostFlow, shell: &WeakEntity<Shell>) -> AnyElement {
+    let testing = flow.check == Check::Checking;
+    let label = match flow.check {
+        Check::Idle => "Test connection",
+        Check::Checking => "Testing",
+        Check::Passed { .. } | Check::Failed { .. } => "Test again",
+    };
+    let shell_test = shell.clone();
+    div()
+        .debug_selector(|| "add-host-test".to_owned())
+        .child(
+            Button::new("add-host-test", label)
+                .variant(ButtonVariant::Secondary)
+                .leading_icon(IconName::RefreshCw)
+                .loading(testing)
+                .disabled(testing || flow.adding)
+                .on_click(move |_, cx| {
+                    let _ = shell_test.update(cx, |shell, cx| shell.test_add_host(cx));
+                }),
+        )
+        .into_any_element()
+}
+
+/// The dialog's content: the segment, the fields, what the test found, the check's log, the add's refusal, and
+/// Advanced options.
 fn dialog_body(
     flow: &AddHostFlow,
     has_program: bool,
@@ -334,31 +400,30 @@ fn dialog_body(
     if let Some(error) = &flow.form_error {
         body = body.child(note(error, theme.palette.status.danger_fg));
     }
-    let testing = flow.check == Check::Checking;
-    let shell_test = shell.clone();
-    let test = Button::new(
-        "add-host-test",
-        if testing {
-            "Testing"
-        } else {
-            "Test connection"
-        },
-    )
-    .variant(ButtonVariant::Secondary)
-    .disabled(testing || flow.adding)
-    .on_click(move |_, cx| {
-        let _ = shell_test.update(cx, |shell, cx| shell.test_add_host(cx));
-    });
-    body = body.child(
-        div()
-            .debug_selector(|| "add-host-test".to_owned())
-            .child(test),
-    );
-    body = body.child(check_result(flow, has_program, theme));
+    for (index, notice) in test_notices(&flow.check, has_program)
+        .into_iter()
+        .enumerate()
+    {
+        body = body.child(notice_banner(format!("add-host-notice-{index}"), notice));
+    }
+    if let Check::Failed { log, .. } = &flow.check
+        && !log.is_empty()
+    {
+        body = body.child(log_block(log, theme));
+    }
     if let Some((sentence, log)) = &flow.add_failure {
-        body = body
-            .child(note(sentence, theme.palette.status.danger_fg))
-            .child(log_block(log, theme));
+        body = body.child(notice_banner(
+            "add-host-add-failure".to_owned(),
+            Notice {
+                tone: Tone::Danger,
+                lead: None,
+                message: sentence.clone(),
+                busy: false,
+            },
+        ));
+        if !log.is_empty() {
+            body = body.child(log_block(log, theme));
+        }
     }
     body = body.child(advanced(flow, shell, theme));
     body.into_any_element()
@@ -450,32 +515,22 @@ fn field_row(label: &'static str, field: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
-/// The result of the test: checking, passed (with a warning when the app has no program for it), or failed.
-fn check_result(flow: &AddHostFlow, has_program: bool, theme: &Theme) -> AnyElement {
-    match &flow.check {
-        Check::Idle => div().into_any_element(),
-        Check::Checking => note("Checking the host.", theme.palette.text.secondary),
-        Check::Passed { arch } => {
-            let mut result = div().flex().flex_col().gap(px(SPACE_1)).child(note(
-                &passed_sentence(arch),
-                theme.palette.status.success_fg,
-            ));
-            if !has_program {
-                result = result.child(note(
-                    &no_program_sentence(arch),
-                    theme.palette.status.warning_fg,
-                ));
-            }
-            result.into_any_element()
-        }
-        Check::Failed { sentence, log } => div()
-            .flex()
-            .flex_col()
-            .gap(px(SPACE_1))
-            .child(note(sentence, theme.palette.status.danger_fg))
-            .child(log_block(log, theme))
-            .into_any_element(),
+/// One notice under the fields as a banner: its tone's look, its bold lead, and its message.
+fn notice_banner(id: String, notice: Notice) -> AnyElement {
+    let variant = match notice.tone {
+        Tone::Info => BannerVariant::Info,
+        Tone::Success => BannerVariant::Success,
+        Tone::Warning => BannerVariant::Warning,
+        Tone::Danger => BannerVariant::Danger,
+    };
+    let mut banner = Banner::new(id.clone(), variant, notice.message).loading(notice.busy);
+    if let Some(lead) = notice.lead {
+        banner = banner.title(lead);
     }
+    div()
+        .debug_selector(move || id)
+        .child(banner)
+        .into_any_element()
 }
 
 /// Advanced options: the program the developer chose, or the packaged one, and the file dialog to choose one.
@@ -533,17 +588,19 @@ fn note(text: &str, color: impl Into<gpui::Hsla>) -> AnyElement {
         .into_any_element()
 }
 
-/// The connection log of a check or an add, one line each, in mono on a sunken surface.
+/// The connection log of a check or an add, one line each, in mono on a sunken surface (sh-host-test-failed).
 fn log_block(log: &[String], theme: &Theme) -> AnyElement {
     div()
+        .debug_selector(|| "add-host-log".to_owned())
         .flex()
         .flex_col()
-        .px(px(SPACE_2))
-        .py(px(SPACE_1))
+        .px(px(SPACE_3))
+        .py(px(SPACE_2))
         .rounded(px(RADIUS_MD))
+        .border_1()
+        .border_color(theme.palette.border.subtle)
         .bg(theme.palette.surface.sunken)
-        .font_family(FONT_MONO)
-        .text_style(TYPE_BODY_SM)
+        .text_style(TYPE_MONO_SM)
         .text_color(theme.palette.text.secondary)
         .children(log.iter().map(|line| div().child(line.clone())))
         .into_any_element()

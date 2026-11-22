@@ -197,16 +197,78 @@ pub fn can_add(
         && !adding
 }
 
-/// The line under a passed test: the host answered, and it runs Linux on `arch`.
-pub fn passed_sentence(arch: &str) -> String {
-    format!("Connected. The host runs Linux on {arch}.")
-}
-
 /// The line for a machine the app has no program for: plain, and it names the override.
 pub fn no_program_sentence(arch: &str) -> String {
     format!(
         "This app has no MassOrca program for Linux on {arch}. Choose a program file under Advanced options."
     )
+}
+
+/// The tone of a notice under the fields; the shell maps it to a banner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Info,
+    Success,
+    Warning,
+    Danger,
+}
+
+/// A notice under the fields: its tone, an optional bold lead, its message, and whether work is still going on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub tone: Tone,
+    pub lead: Option<String>,
+    pub message: String,
+    pub busy: bool,
+}
+
+/// What the test found, as notices: a pass says the host is connected, a machine without a program adds the
+/// override warning, and a failure says it could not connect and that nothing was added.
+pub fn test_notices(check: &Check, has_program: bool) -> Vec<Notice> {
+    match check {
+        Check::Idle => Vec::new(),
+        Check::Checking => vec![Notice {
+            tone: Tone::Info,
+            lead: None,
+            message: "Checking the host.".to_owned(),
+            busy: true,
+        }],
+        Check::Passed { arch } => {
+            let mut notices = vec![Notice {
+                tone: Tone::Success,
+                lead: Some("Connected.".to_owned()),
+                message: format!("The host runs Linux on {arch}."),
+                busy: false,
+            }];
+            if !has_program {
+                notices.push(Notice {
+                    tone: Tone::Warning,
+                    lead: None,
+                    message: no_program_sentence(arch),
+                    busy: false,
+                });
+            }
+            notices
+        }
+        Check::Failed { sentence, .. } => vec![Notice {
+            tone: Tone::Danger,
+            lead: Some("Could not connect.".to_owned()),
+            message: format!(
+                "{} Nothing was added. Your host list is unchanged.",
+                with_full_stop(sentence)
+            ),
+            busy: false,
+        }],
+    }
+}
+
+/// The sentence ending in a full stop, added only when it has none.
+fn with_full_stop(sentence: &str) -> String {
+    if sentence.ends_with(['.', '!', '?']) {
+        sentence.to_owned()
+    } else {
+        format!("{sentence}.")
+    }
 }
 
 #[cfg(test)]
@@ -333,10 +395,6 @@ mod tests {
             line.ends_with("Choose a program file under Advanced options."),
             "{line}"
         );
-        assert_eq!(
-            passed_sentence("aarch64"),
-            "Connected. The host runs Linux on aarch64."
-        );
     }
 
     #[test]
@@ -454,6 +512,83 @@ mod tests {
             HostKind::from_index(2),
             None,
             "a segment past the two is no kind"
+        );
+    }
+
+    #[test]
+    fn a_test_that_has_not_run_shows_no_notice() {
+        assert!(test_notices(&Check::Idle, true).is_empty());
+    }
+
+    #[test]
+    fn a_check_in_progress_says_so_with_a_busy_notice() {
+        assert_eq!(
+            test_notices(&Check::Checking, true),
+            vec![Notice {
+                tone: Tone::Info,
+                lead: None,
+                message: "Checking the host.".to_owned(),
+                busy: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_passed_check_says_connected_and_names_the_machine() {
+        let passed = Check::Passed {
+            arch: "x86_64".to_owned(),
+        };
+        assert_eq!(
+            test_notices(&passed, true),
+            vec![Notice {
+                tone: Tone::Success,
+                lead: Some("Connected.".to_owned()),
+                message: "The host runs Linux on x86_64.".to_owned(),
+                busy: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_machine_without_a_program_adds_the_warning_that_names_the_override() {
+        let passed = Check::Passed {
+            arch: "aarch64".to_owned(),
+        };
+        let notices = test_notices(&passed, false);
+        assert_eq!(notices.len(), 2);
+        assert_eq!(notices[1].tone, Tone::Warning);
+        assert_eq!(notices[1].message, no_program_sentence("aarch64"));
+    }
+
+    #[test]
+    fn a_failed_check_says_it_could_not_connect_and_that_nothing_was_added() {
+        let failed = Check::Failed {
+            sentence: "The host is unreachable: timed out".to_owned(),
+            log: Vec::new(),
+        };
+        assert_eq!(
+            test_notices(&failed, true),
+            vec![Notice {
+                tone: Tone::Danger,
+                lead: Some("Could not connect.".to_owned()),
+                message: "The host is unreachable: timed out. Nothing was added. Your host list is unchanged."
+                    .to_owned(),
+                busy: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_sentence_that_already_ends_in_a_stop_gets_no_second_one() {
+        let failed = Check::Failed {
+            sentence: "Permission denied.".to_owned(),
+            log: Vec::new(),
+        };
+        let notices = test_notices(&failed, true);
+        assert!(
+            notices[0].message.starts_with("Permission denied. Nothing"),
+            "{}",
+            notices[0].message
         );
     }
 }

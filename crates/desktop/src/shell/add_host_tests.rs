@@ -391,3 +391,145 @@ fn the_server_segment_adds_nothing_even_after_an_ssh_check_passed(cx: &mut TestA
         );
     }
 }
+
+/// Answers the dialog's check with a pass, as the service does for a Linux host.
+fn pass_the_check(rig: &mut Rig, cx: &mut VisualTestContext) {
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::ProbeSshHost { reply, .. }) => break reply,
+            Some(_) => continue,
+            None => panic!("the host was not checked"),
+        }
+    };
+    reply
+        .send(Ok(RemoteMachine {
+            os: "Linux".to_owned(),
+            arch: "x86_64".to_owned(),
+        }))
+        .expect("the dialog listens");
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui::test]
+fn the_test_sits_in_the_footer_level_with_the_actions(cx: &mut TestAppContext) {
+    let (_rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    let test = cx
+        .debug_bounds("add-host-test")
+        .expect("the test button is drawn");
+    let cancel = cx.debug_bounds("dialog-cancel").expect("cancel is drawn");
+    let action = cx
+        .debug_bounds("dialog-action")
+        .expect("the action is drawn");
+    assert!(
+        test.origin.x < cancel.origin.x,
+        "the test is at the footer's left, before cancel"
+    );
+    let (test_y, action_y) = (f32::from(test.center().y), f32::from(action.center().y));
+    assert!(
+        (test_y - action_y).abs() < 0.5,
+        "the test and the action share the footer row: {test_y} vs {action_y}"
+    );
+}
+
+#[gpui::test]
+fn a_passed_check_shows_connected_as_a_success_banner(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    type_address(&rig, cx, "100.64.0.10");
+    click(cx, "add-host-test");
+    pass_the_check(&mut rig, cx);
+    assert!(
+        cx.debug_bounds("add-host-notice-0").is_some(),
+        "the result is a banner under the fields"
+    );
+}
+
+#[gpui::test]
+fn a_failed_check_shows_a_danger_banner_with_the_check_log(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    type_address(&rig, cx, "100.64.0.10");
+    click(cx, "add-host-test");
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::ProbeSshHost { reply, .. }) => break reply,
+            Some(_) => continue,
+            None => panic!("the host was not checked"),
+        }
+    };
+    let refusal = Refusal::Failed {
+        code: "host.unreachable".to_owned(),
+        message: "the host is unreachable: timed out".to_owned(),
+    };
+    reply
+        .send(Err(SshFailed {
+            refusal,
+            log: vec!["could not check 100.64.0.10".to_owned()],
+        }))
+        .expect("the dialog listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        cx.debug_bounds("add-host-notice-0").is_some(),
+        "the failure is a banner under the fields"
+    );
+    assert!(
+        cx.debug_bounds("add-host-log").is_some(),
+        "the check's log shows under the banner"
+    );
+}
+
+#[gpui::test]
+fn editing_the_address_after_a_passed_check_clears_the_result(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    type_address(&rig, cx, "100.64.0.10");
+    click(cx, "add-host-test");
+    pass_the_check(&mut rig, cx);
+    assert!(
+        cx.debug_bounds("add-host-notice-0").is_some(),
+        "the pass is shown first"
+    );
+    type_address(&rig, cx, "100.64.0.11");
+    draw(cx);
+    assert_eq!(
+        check_of(&rig, cx),
+        Check::Idle,
+        "the result described the old address"
+    );
+    assert!(
+        cx.debug_bounds("add-host-notice-0").is_none(),
+        "its banner is gone"
+    );
+}
+
+#[gpui::test]
+fn a_check_that_finishes_after_the_address_changed_is_dropped(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    open_dialog(cx);
+    type_address(&rig, cx, "100.64.0.10");
+    click(cx, "add-host-test");
+    let reply = loop {
+        match rig.script.next() {
+            Some(Command::ProbeSshHost { reply, .. }) => break reply,
+            Some(_) => continue,
+            None => panic!("the host was not checked"),
+        }
+    };
+    type_address(&rig, cx, "100.64.0.11");
+    reply
+        .send(Ok(RemoteMachine {
+            os: "Linux".to_owned(),
+            arch: "x86_64".to_owned(),
+        }))
+        .expect("the dialog listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        check_of(&rig, cx),
+        Check::Idle,
+        "a result for another address is not shown"
+    );
+}
