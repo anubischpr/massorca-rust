@@ -309,8 +309,8 @@ fn pin_refusal(dir: &Path, error: &io::Error) -> AgentError {
             dir.display()
         )),
         io::ErrorKind::PermissionDenied => invalid(format!(
-            "{} is owned by another user ({error}); credential homes are only written into directories this user \
-             owns, so move it away by hand",
+            "{} is owned by another user ({error}); credential homes are only written into directories owned by \
+             this user, its token's default owner or SYSTEM, so move it away by hand",
             dir.display()
         )),
         _ => internal("hold the credential homes directory", error),

@@ -261,9 +261,9 @@ exist. Homes imported before this fix keep their old access until they are impor
 with `--replace`. On Windows import holds `agents`, `homes` and the new home open without
 delete sharing, from before their access changes until the swap is done, so none of them can
 be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. Each pinned directory
-must be owned by the current user, or the import is refused with `agent.credentials_invalid`;
-the directories it creates name the user as owner even from an elevated process, and ones an
-elevated process made earlier (owned by Administrators) are refused and must be moved by hand. With
+must be owned by the service's user, its token's default owner (the Administrators group for an
+elevated administrator) or SYSTEM, compared as binary SIDs; any other owner refuses the import with
+`agent.credentials_invalid`. The directories it creates name the user as owner. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
 swap fails (the error names where it is when that fails too), and deleted after it succeeds.
 Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
