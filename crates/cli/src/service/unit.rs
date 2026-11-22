@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use massorca_core_remote::bootstrap::{UnitSpec, systemd_unit};
+use massorca_core_remote::bootstrap::{DEFAULT_LISTEN, UnitSpec, systemd_unit};
 use massorca_server::ListenSpec;
 use serde::Serialize;
 
@@ -10,8 +10,6 @@ use crate::args::UnitArgs;
 use crate::error::CliError;
 use crate::output::Output;
 
-/// The listen address when none is given: this node's Tailscale address (decision 0043).
-const DEFAULT_LISTEN: &str = "tailscale";
 /// The binary the unit runs, as systemd expands it on the host.
 const DEFAULT_EXE: &str = "%h/.massorca/bin/massorca";
 /// The MASSORCA_HOME the unit gives the service, as systemd expands it on the host.

@@ -52,6 +52,7 @@ pub(super) fn tree_row(
     let item = match row {
         TreeRow::Project { name } => SidebarRow::project(id, IconName::Folder, name.clone()),
         TreeRow::Host { name, reach } => host_row(id, name, *reach),
+        TreeRow::RemoteHost { name, state } => remote_host_row(id, name, state),
         TreeRow::Workspace {
             name,
             branch,
@@ -132,6 +133,27 @@ fn host_row(id: SharedString, name: &str, reach: HostReach) -> SidebarRow {
         }
     };
     row.level(HOST_LEVEL)
+}
+
+/// A paired remote host below the projects (D-HO-01). Only a connected host gets the connected glyph; the
+/// line under it says the state, or how long ago the host was last reached (X-CN-01).
+fn remote_host_row(
+    id: SharedString,
+    name: &str,
+    state: &crate::model::hosts::HostState,
+) -> SidebarRow {
+    use crate::model::hosts::HostTone;
+    let connection = match state.tone {
+        HostTone::Connected => HostConnection::Connected,
+        _ => HostConnection::Unreachable,
+    };
+    let line = match (state.tone, &state.detail) {
+        (HostTone::Unreachable, Some(detail)) => detail.clone(),
+        _ => state.word.to_owned(),
+    };
+    SidebarRow::host(id, name.to_owned(), connection)
+        .secondary(line)
+        .level(HOST_LEVEL)
 }
 
 /// A session: its status glyph, its agent's mark, then its title (A84). A child session sits one

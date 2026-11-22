@@ -21,5 +21,31 @@
     "home_env": "CLAUDE_CONFIG_DIR",
     "files": [".credentials.json", ".claude.json"],
     "strip_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+  },
+  "accounts": {
+    "login": ["auth", "login"],
+    "check": { "args": ["auth", "status"], "signed_in_exit": 0 },
+    "logout": ["auth", "logout"],
+    "strip_env": [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+      "ANTHROPIC_PROFILE",
+      "ANTHROPIC_FEDERATION_RULE_ID",
+      "ANTHROPIC_ORGANIZATION_ID",
+      "ANTHROPIC_WORKSPACE_ID",
+      "ANTHROPIC_IDENTITY_TOKEN_FILE",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "ANTHROPIC_FOUNDRY_API_KEY",
+      "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "ANTHROPIC_AWS_API_KEY",
+      "CLAUDE_CODE_CLIENT_CERT",
+      "CLAUDE_CODE_CLIENT_KEY",
+      "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE"
+    ]
   }
 }

@@ -48,8 +48,16 @@ async fn autostart_through_the_client_starts_the_service_and_connects() {
     assert_eq!(sandbox.status("default")["running"], true);
 }
 
+/// Several rounds, each on a new profile: one start scans the profile while the other writes into it, so a race
+/// shows only sometimes.
 #[tokio::test]
 async fn two_starts_at_once_share_one_service() {
+    for _ in 0..3 {
+        two_first_starts_share_one_service().await;
+    }
+}
+
+async fn two_first_starts_share_one_service() {
     let sandbox = Sandbox::new();
     sandbox.track("default");
     let (profile, exe) = (profile(sandbox.home()), massorca());

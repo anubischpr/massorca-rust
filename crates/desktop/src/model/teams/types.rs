@@ -96,7 +96,8 @@ pub struct Bot {
     pub id: BotId,
     pub name: String,
     pub role: String,
-    pub agent: Agent,
+    /// The agent the bot runs as; `None` when the service does not say which one.
+    pub agent: Option<Agent>,
 }
 
 /// A task on a Board. Its card shows the column's status word, the bot and the time.

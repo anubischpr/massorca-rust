@@ -108,6 +108,26 @@ pub(crate) fn open_private_dir(dir: &Path) -> io::Result<fs::File> {
     Ok(file)
 }
 
+/// The read-only part of a start's location check: nothing is created or repaired, and the content is not scanned.
+pub(crate) fn check_location(home: &Path, dir: &Path) -> Result<(), RootAccessError> {
+    let uid = current_uid();
+    let owner: Owner = &|_, metadata| metadata.uid();
+    check_link_home(home, uid, owner)?;
+    if let Ok(metadata) = fs::metadata(home) {
+        check_ancestor(home, &metadata, uid, owner)?;
+    }
+    let profiles = profiles_dir(home, dir);
+    if let Ok(metadata) = fs::symlink_metadata(profiles) {
+        check_ancestor(profiles, &metadata, uid, owner)?;
+    }
+    if fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(RootAccessError::UnsafeLocation {
+            path: dir.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 /// A home that is itself a symlink is replaceable by whoever can write its parent, so the parent must be as safe as an
 /// ancestor.
 fn check_link_home(home: &Path, uid: u32, owner: Owner) -> Result<(), RootAccessError> {
@@ -218,6 +238,8 @@ fn scan_entries(root: &Path, uid: u32, owner: Owner) -> io::Result<Findings> {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if dir == root => return Err(error),
+            // Removed since its parent was listed, for example by a service starting at the same time: nothing is hidden.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             // A folder that cannot be listed may hide planted content.
             Err(_) => {
                 findings.add_foreign(dir);
@@ -225,9 +247,13 @@ fn scan_entries(root: &Path, uid: u32, owner: Owner) -> io::Result<Findings> {
             }
         };
         for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let path = entry?.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                // Removed since it was listed, as a concurrent start does with the store's journal.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
             if ![uid, ROOT_UID].contains(&owner(&path, &metadata)) {
                 findings.add_foreign(path);
             } else if !metadata.file_type().is_symlink() && metadata.mode() & OTHER_WRITE != 0 {
@@ -404,6 +430,54 @@ mod tests {
             matches!(&refused, Err(RootAccessError::ForeignEntries { paths }) if paths == &vec![root.clone()]),
             "{refused:?}"
         );
+    }
+
+    /// A service starting at the same time creates and removes files in the root, such as the store's journal, while
+    /// this scan lists it. The listing is read before the first entry is checked, so the removal happens in between.
+    #[test]
+    fn entries_removed_while_the_scan_lists_them_are_skipped() {
+        let (_temp, home, root) = layout();
+        secure_root(&home, &root).expect("created");
+        for name in ["a", "b", "c"] {
+            fs::write(root.join(name), b"x").expect("a file");
+        }
+        fs::create_dir(root.join("d")).expect("a folder");
+        let removed = std::cell::Cell::new(false);
+        let root_for_owner = root.clone();
+        let owner = move |path: &Path, metadata: &fs::Metadata| {
+            if path.parent() == Some(root_for_owner.as_path()) && !removed.replace(true) {
+                for name in ["a", "b", "c", "d"] {
+                    let other = root_for_owner.join(name);
+                    if other != path {
+                        let _ = fs::remove_file(&other).or_else(|_| fs::remove_dir(&other));
+                    }
+                }
+            }
+            metadata.uid()
+        };
+
+        let scanned = secure_root_with(&home, &root, current_uid(), &owner);
+
+        assert!(matches!(scanned, Ok(RootAccess::Private)), "{scanned:?}");
+    }
+
+    #[test]
+    fn a_folder_removed_before_the_scan_lists_it_is_skipped_not_refused() {
+        let (_temp, home, root) = layout();
+        secure_root(&home, &root).expect("created");
+        let gone = root.join("gone");
+        fs::create_dir_all(gone.join("inner")).expect("folders");
+        let gone_for_owner = gone.clone();
+        let owner = move |path: &Path, metadata: &fs::Metadata| {
+            if path == gone_for_owner {
+                fs::remove_dir_all(path).expect("removed");
+            }
+            metadata.uid()
+        };
+
+        let scanned = secure_root_with(&home, &root, current_uid(), &owner);
+
+        assert!(matches!(scanned, Ok(RootAccess::Private)), "{scanned:?}");
     }
 
     #[test]

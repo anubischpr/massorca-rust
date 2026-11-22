@@ -11,9 +11,10 @@ use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{
-    Command, ConnectionState, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
+    Command, ConnectionState, HostLink, Refusal, Script, SecretCommand, SecretsUpdate, StoreUpdate,
 };
 use gpui::{AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext};
+use massorca_client::HostRecord;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretStatus};
@@ -48,24 +49,24 @@ const ABANDONED: &str = if cfg!(windows) {
     "/srv/abandoned"
 };
 
-struct Rig {
-    shell: Entity<Shell>,
-    _updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) _updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
-fn setup(cx: &mut TestAppContext) {
+pub(super) fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         Theme::set(Appearance::Dark, cx);
         bind_keys(cx);
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
     let bounds = cx
         .debug_bounds(selector)
@@ -74,7 +75,7 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 }
 
 /// A connected shell on a scripted service with one project, opened on the Settings page.
-fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
+pub(super) fn settings_rig(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
@@ -128,15 +129,18 @@ fn config_value(path: &str, is_default: bool) -> ConfigValue {
 /// Answers the `config.list` the page sends once the service is connected.
 fn answer_config_list(rig: &mut Rig, cx: &mut VisualTestContext, stored: &str) {
     cx.run_until_parked();
-    match rig.script.next() {
-        Some(Command::ListConfig { reply }) => {
-            let values = vec![config_value(stored, stored == DEFAULT)];
-            reply
-                .send(Ok(ConfigList { values }))
-                .expect("the page listens");
+    let reply = loop {
+        match rig.script.next() {
+            // Opening Settings also asks for the paired hosts, sent before the folder read is.
+            Some(Command::RefreshHosts) => {}
+            Some(Command::ListConfig { reply }) => break reply,
+            _ => panic!("a config.list call was expected"),
         }
-        _ => panic!("a config.list call was expected"),
-    }
+    };
+    let values = vec![config_value(stored, stored == DEFAULT)];
+    reply
+        .send(Ok(ConfigList { values }))
+        .expect("the page listens");
     cx.run_until_parked();
     draw(cx);
 }
@@ -599,5 +603,62 @@ fn the_extensions_entry_opens_marketplace_installed(cx: &mut TestAppContext) {
         rig.shell
             .read_with(cx, |shell, _| shell.model().navigation().page),
         Page::Marketplace(MarketplacePage::Installed)
+    );
+}
+
+pub(super) fn paired_host(name: &str) -> HostRecord {
+    HostRecord {
+        name: name.into(),
+        server: "vps-server".into(),
+        addresses: vec!["100.64.0.10:7347".into()],
+        pin: "sha256:test".into(),
+        device_id: "dev-1".into(),
+        device_name: "laptop".into(),
+        scopes: vec!["read".into()],
+        paired_at_ms: 1,
+    }
+}
+
+#[gpui::test]
+fn each_opening_of_settings_asks_the_bridge_for_the_paired_hosts_once(cx: &mut TestAppContext) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_page(Page::Home));
+    draw(cx);
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_page(Page::Settings));
+    draw(cx);
+    draw(cx);
+    let mut asks = 0;
+    while let Some(command) = rig.script.next() {
+        if matches!(command, Command::RefreshHosts) {
+            asks += 1;
+        }
+    }
+    assert_eq!(asks, 1, "one request each time the page is shown");
+}
+
+#[gpui::test]
+fn a_paired_host_is_a_row_in_the_hosts_section(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    let link = HostLink::Connected {
+        server: "vps-server".into(),
+        version: "0.1.0".into(),
+    };
+    rig._updates
+        .send(StoreUpdate::HostsResync(vec![paired_host("vps")]))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::HostLinkChanged {
+            name: "vps".into(),
+            link,
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Hosts");
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-host-vps").is_some(),
+        "the paired host has its row, after This PC"
     );
 }
