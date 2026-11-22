@@ -4,6 +4,8 @@
 mod catalogue;
 mod dialogs;
 mod item;
+#[cfg(test)]
+mod tests;
 
 use super::Shell;
 use crate::model::marketplace::{
