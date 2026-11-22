@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::AgentSession;
+use massorca_protocol::methods::agents::{AgentKind, AgentSession};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
@@ -44,6 +44,8 @@ pub enum StoreUpdate {
     AgentChanged(AgentSession),
     /// An agent session the service forgot.
     AgentGone(String),
+    /// Every agent kind the service declares, after a connect. Replaces what was held.
+    AgentKindsResync(Vec<AgentKind>),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -172,6 +174,8 @@ pub struct StoreState {
     pub terminals: Vec<Terminal>,
     /// Agent sessions of every workspace, oldest first, children included (decision 0055).
     pub agents: Vec<AgentSession>,
+    /// Every agent kind the service declares, built-ins first, as it lists them (`agent.kinds`).
+    pub agent_kinds: Vec<AgentKind>,
     /// True once the first full list arrived, so an empty tree can tell "none" from "not yet".
     pub loaded: bool,
     /// When the link last stopped being connected, while it is not.
@@ -204,6 +208,7 @@ impl Default for StoreState {
             workspaces: Vec::new(),
             terminals: Vec::new(),
             agents: Vec::new(),
+            agent_kinds: Vec::new(),
             loaded: false,
             down_since: None,
             git: BTreeMap::new(),
@@ -277,6 +282,7 @@ impl StoreState {
                 self.agents.sort_by(agent_order);
             }
             StoreUpdate::AgentGone(id) => self.agents.retain(|s| s.id != id),
+            StoreUpdate::AgentKindsResync(kinds) => self.agent_kinds = kinds,
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::TeamBot(bot) => {
@@ -403,7 +409,9 @@ fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use massorca_protocol::methods::agents::Execution;
+    use massorca_protocol::methods::agents::{
+        AgentKind, Execution, KindCredentials, KindPackage, PackageState, StatusMechanism,
+    };
     use massorca_protocol::methods::projects::ProjectKind;
     use massorca_protocol::methods::teams::{Board, Team, TeamAccess, TeamCharacter};
     use massorca_protocol::methods::terminals::TerminalState;
@@ -430,6 +438,31 @@ pub(crate) mod fixtures {
             },
             activity: None,
             result: None,
+        }
+    }
+
+    /// An agent kind the service declares, its package in `state` and its program found, so detected.
+    pub fn agent_kind(id: &str, name: &str, state: PackageState) -> AgentKind {
+        AgentKind {
+            id: id.into(),
+            name: name.into(),
+            icon: id.into(),
+            owner: "core".into(),
+            installed: true,
+            detected: true,
+            program_path: None,
+            package: KindPackage {
+                state,
+                id: None,
+                version: None,
+            },
+            resumable: true,
+            status_mechanism: StatusMechanism::None,
+            credentials: KindCredentials {
+                supported: false,
+                imported: false,
+            },
+            problems: Vec::new(),
         }
     }
 
@@ -482,9 +515,11 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState};
+    use massorca_protocol::methods::agents::{
+        Activity, ActivitySource, ActivityState, PackageState,
+    };
 
-    use super::fixtures::{agent, project, team, workspace};
+    use super::fixtures::{agent, agent_kind, project, team, workspace};
     use super::*;
 
     fn resynced() -> StoreState {
@@ -582,6 +617,35 @@ mod tests {
             state.agents.len(),
             1,
             "a resync drops what the service no longer lists"
+        );
+    }
+
+    #[test]
+    fn agent_kinds_resync_replaces_what_the_service_declared() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        assert!(state.agent_kinds.is_empty(), "no kinds before a connect");
+        state.apply(
+            StoreUpdate::AgentKindsResync(vec![agent_kind(
+                "claude",
+                "Claude",
+                PackageState::Enabled,
+            )]),
+            now,
+        );
+        state.apply(
+            StoreUpdate::AgentKindsResync(vec![agent_kind(
+                "codex",
+                "Codex",
+                PackageState::Available,
+            )]),
+            now,
+        );
+        let ids: Vec<&str> = state.agent_kinds.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["codex"],
+            "a resync drops the kinds it no longer lists"
         );
     }
 
