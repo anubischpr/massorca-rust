@@ -101,6 +101,7 @@ impl Extensions {
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<EnabledOutcome, Error> {
         let _changes = self.lock_changes();
         let mut lockfile = self.read_lockfile()?;
+        self.refuse_if_busy(id)?;
         let entry = lockfile
             .get_mut(id)
             .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
@@ -127,18 +128,40 @@ impl Extensions {
         delete_agent_homes: bool,
         uninstall_cli: bool,
     ) -> Result<Removed, Error> {
-        let _changes = self.lock_changes();
-        let mut lockfile = self.read_lockfile()?;
-        let entry = lockfile
-            .get(id)
-            .cloned()
-            .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
-        // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
-        let manifest = self.installed_manifest(&entry).ok();
-        self.run_guards(id)?;
-        lockfile.packages.retain(|package| package.id != id);
-        lockfile.write(&self.layout.lock_path())?;
+        // The change lock covers the lockfile and the files. The uninstall commands run after it is released, with the
+        // package busy, so other packages can change meanwhile.
+        let (entry, manifest, failures, _busy) = {
+            let _changes = self.lock_changes();
+            self.refuse_if_busy(id)?;
+            let mut lockfile = self.read_lockfile()?;
+            let entry = lockfile
+                .get(id)
+                .cloned()
+                .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
+            // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
+            let manifest = self.installed_manifest(&entry).ok();
+            self.run_guards(id)?;
+            lockfile.packages.retain(|package| package.id != id);
+            lockfile.write(&self.layout.lock_path())?;
+            let failures = self.delete_package(id, delete_agent_homes);
+            let busy = self.mark_busy(id, Vec::new())?;
+            (entry, manifest, failures, busy)
+        };
+        let cli = entry
+            .cli
+            .iter()
+            .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
+            .collect();
+        Ok(Removed {
+            id: id.to_owned(),
+            version: entry.version,
+            failures,
+            cli,
+        })
+    }
 
+    /// Deletes a removed package's folders and, when asked, runs the cleanups. A failure is reported, not rolled back.
+    fn delete_package(&self, id: &str, delete_agent_homes: bool) -> Vec<Failure> {
         let mut failures = Vec::new();
         for dir in [self.layout.package_root(id), self.layout.data_dir(id)] {
             if let Err(error) = remove_tree(&dir) {
@@ -160,17 +183,7 @@ impl Extensions {
                 }
             }
         }
-        let cli = entry
-            .cli
-            .iter()
-            .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
-            .collect();
-        Ok(Removed {
-            id: id.to_owned(),
-            version: entry.version,
-            failures,
-            cli,
-        })
+        failures
     }
 
     fn remove_cli(

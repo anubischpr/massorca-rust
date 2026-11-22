@@ -228,3 +228,5 @@ pub const EXTENSION_IO: &str = "extension.io";
 pub const EXTENSION_TAMPERED: &str = "extension.tampered";
 /// A package from outside the built-in catalogue claims publisher `massorca` or a `massorca.*` id.
 pub const EXTENSION_RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
+/// Another install or removal of the same package is running; try again when it has finished.
+pub const EXTENSION_BUSY: &str = "extension.busy";

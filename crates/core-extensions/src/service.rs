@@ -1,10 +1,11 @@
 //! The extension service of one profile: review, install, enable, disable and remove. Every change is serialised by
 //! one lock, and `lock.json` is committed last, so a failed change leaves nothing registered.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,7 +19,7 @@ use crate::error::Error;
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
-use crate::lockfile::{InstallerRun, LockCli, LockEntry, Lockfile};
+use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile};
 use crate::review::{self, CliPlan, PlanState, Review};
 use crate::source::{self, Files, Source};
 
@@ -30,6 +31,8 @@ pub struct Extensions {
     pub(crate) os: Option<CliOs>,
     pub(crate) hooks: Arc<Hooks>,
     changes: Mutex<()>,
+    /// The packages whose install or removal is running, with the agent kinds an install claims.
+    installing: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
 impl fmt::Debug for Extensions {
@@ -55,6 +58,7 @@ impl Extensions {
             os: current_os(),
             hooks: Arc::default(),
             changes: Mutex::new(()),
+            installing: Arc::default(),
         }
     }
 
@@ -85,6 +89,9 @@ impl Extensions {
 
     /// Installs a package. `consent` is the fingerprint of the accepted review; `run_installer` accepts running a
     /// vendor installer, separately; `sha256` pins the package and is required for an archive.
+    ///
+    /// The change lock is held to check and unpack, and again to commit. The vendor command runs between the two, so
+    /// other packages can be changed meanwhile; this package is busy (extension.busy) for that time.
     pub fn install(
         &self,
         source: &Source,
@@ -92,23 +99,38 @@ impl Extensions {
         run_installer: bool,
         sha256: Option<&str>,
     ) -> Result<LockEntry, Error> {
+        let staged = self.stage(source, consent, run_installer, sha256)?;
+        let ran = self.run_installers(&staged.manifest, &staged.plan);
+        self.commit(staged, ran)
+    }
+
+    /// Checks the install and unpacks it, under the change lock. The returned mark keeps the package busy until the
+    /// install is committed or abandoned.
+    fn stage(
+        &self,
+        source: &Source,
+        consent: Option<&str>,
+        run_installer: bool,
+        sha256: Option<&str>,
+    ) -> Result<Staged, Error> {
         let _changes = self.lock_changes();
         if matches!(source, Source::File(_)) && sha256.is_none() {
             return Err(Error::HashRequired);
         }
         let package = source::load(source, sha256)?;
         let manifest = &package.manifest;
-        let mut lockfile = self.read_lockfile()?;
+        let lockfile = self.read_lockfile()?;
         let builtin = matches!(source, Source::Catalogue(_));
-        // The built-in replaces a first-party entry the catalogue does not vouch for; it never blocks on one.
-        let replaced = lockfile
-            .get(&manifest.id)
-            .filter(|entry| builtin && catalogue::is_unvouched_first_party(entry))
-            .cloned();
-        if lockfile.get(&manifest.id).is_some() && replaced.is_none() {
-            return Err(Error::AlreadyInstalled(manifest.id.clone()));
-        }
+        displaced(&lockfile, &manifest.id, builtin)?;
         self.check_kind_conflicts(&lockfile, manifest, builtin)?;
+        let kinds: Vec<String> = manifest
+            .contributes
+            .agent_adapters
+            .iter()
+            .map(|adapter| adapter.id.clone())
+            .collect();
+        self.refuse_if_busy(&manifest.id)?;
+        self.check_installing_kinds(&manifest.id, &kinds)?;
 
         let plan = review::plan(manifest, &*self.resolver, self.os);
         let expected = review::fingerprint(manifest, &package.sha256, &plan, self.os);
@@ -124,23 +146,61 @@ impl Extensions {
             return Err(Error::InstallerConsentRequired);
         }
 
+        let busy = self.mark_busy(&manifest.id, kinds)?;
         let version = manifest.version.to_string();
         let rel = Layout::package_rel_path(&manifest.id, &version, &package.sha256);
         let dir = self.layout.resolve(&rel);
         let files_sha256 = source::canonical_sha256(&package.files);
         self.unpack(&manifest.id, &package.files, &dir)?;
-        let installed_path = rel.clone();
-        let entry = check_unpacked(&manifest.id, &dir, &files_sha256)
-            .and_then(|()| self.run_installers(manifest, &plan))
-            .map(|cli| LockEntry {
+        if let Err(error) = check_unpacked(&manifest.id, &dir, &files_sha256) {
+            self.remove_unpacked(&manifest.id, &dir);
+            return Err(error);
+        }
+        Ok(Staged {
+            _busy: busy,
+            manifest: package.manifest,
+            plan,
+            version,
+            rel,
+            dir,
+            files_sha256,
+            source: package.source,
+            sha256: package.sha256,
+            consent: expected,
+            builtin,
+        })
+    }
+
+    /// Records the install under the change lock, after its vendor command ran. Whatever fails here removes the
+    /// unpacked folder, so nothing is registered.
+    fn commit(&self, staged: Staged, ran: Result<Vec<LockCli>, Error>) -> Result<LockEntry, Error> {
+        let Staged {
+            _busy,
+            manifest,
+            version,
+            rel,
+            dir,
+            files_sha256,
+            source,
+            sha256,
+            consent,
+            builtin,
+            plan: _,
+        } = staged;
+        let _changes = self.lock_changes();
+        let committed = ran.and_then(|cli| {
+            let mut lockfile = self.read_lockfile()?;
+            let displaced = displaced(&lockfile, &manifest.id, builtin)?;
+            self.check_kind_conflicts(&lockfile, &manifest, builtin)?;
+            let entry = LockEntry {
                 id: manifest.id.clone(),
                 version,
-                source: package.source.clone(),
-                sha256: package.sha256.clone(),
+                source,
+                sha256,
                 files_sha256: Some(files_sha256),
-                path: rel,
+                path: rel.clone(),
                 enabled: true,
-                consent: expected,
+                consent,
                 installed_at_ms: now_ms(),
                 cli,
                 agent_kinds: manifest
@@ -150,27 +210,74 @@ impl Extensions {
                     .map(|adapter| adapter.id.clone())
                     .collect(),
                 extra: Default::default(),
-            })
-            .and_then(|entry| {
-                lockfile
-                    .packages
-                    .retain(|package| package.id != manifest.id);
-                lockfile.packages.push(entry.clone());
-                lockfile.write(&self.layout.lock_path())?;
-                Ok(entry)
-            });
-        match &entry {
-            Ok(_) => {
-                if let Some(old) = &replaced
-                    && old.path != installed_path
+            };
+            lockfile
+                .packages
+                .retain(|package| package.id != manifest.id);
+            lockfile.packages.push(entry.clone());
+            lockfile.write(&self.layout.lock_path())?;
+            Ok((entry, displaced))
+        });
+        match committed {
+            Ok((entry, displaced)) => {
+                if let Some(old) = displaced
+                    && old.path != rel
                 {
-                    // The replaced entry left the lockfile with this install, so its folder is only litter now.
+                    // The displaced entry left the lockfile with this install, so its folder is only litter now.
                     let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
                 }
+                Ok(entry)
             }
-            Err(_) => self.remove_unpacked(&manifest.id, &dir),
+            Err(error) => {
+                self.remove_unpacked(&manifest.id, &dir);
+                Err(error)
+            }
         }
-        entry
+    }
+
+    /// Refuses while an install or a removal of `id` is running.
+    pub(crate) fn refuse_if_busy(&self, id: &str) -> Result<(), Error> {
+        let installing = self
+            .installing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if installing.contains_key(id) {
+            return Err(Error::Busy(id.to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Marks `id` busy until the returned mark drops. Callers hold the change lock.
+    pub(crate) fn mark_busy(&self, id: &str, kinds: Vec<String>) -> Result<Busy, Error> {
+        let mut installing = self
+            .installing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if installing.contains_key(id) {
+            return Err(Error::Busy(id.to_owned()));
+        }
+        installing.insert(id.to_owned(), kinds);
+        Ok(Busy {
+            installing: Arc::clone(&self.installing),
+            id: id.to_owned(),
+        })
+    }
+
+    /// An agent kind that another package is installing right now is taken, as an installed one would be.
+    fn check_installing_kinds(&self, id: &str, kinds: &[String]) -> Result<(), Error> {
+        let installing = self
+            .installing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (other, other_kinds) in installing.iter().filter(|(other, _)| other.as_str() != id) {
+            if let Some(kind) = kinds.iter().find(|kind| other_kinds.contains(kind)) {
+                return Err(Error::KindConflict {
+                    kind: kind.clone(),
+                    installed_by: other.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The manifest of an installed package, read from its unpacked folder.
@@ -320,6 +427,49 @@ impl Extensions {
             out.push(record);
         }
         Ok(out)
+    }
+}
+
+/// An install checked and unpacked, waiting for its vendor command. `_busy` keeps the package marked until it is
+/// committed or abandoned.
+struct Staged {
+    _busy: Busy,
+    manifest: Manifest,
+    plan: Vec<CliPlan>,
+    version: String,
+    rel: String,
+    dir: PathBuf,
+    files_sha256: String,
+    source: LockSource,
+    sha256: String,
+    consent: String,
+    builtin: bool,
+}
+
+/// Marks one package busy while its install or removal runs without the change lock. Dropping it clears the mark.
+pub(crate) struct Busy {
+    installing: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
+    id: String,
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.installing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
+}
+
+/// The lock entry an install of `id` displaces. Only the built-in replaces a first-party entry the catalogue does not
+/// vouch for; any other entry under the id is already installed.
+fn displaced(lockfile: &Lockfile, id: &str, builtin: bool) -> Result<Option<LockEntry>, Error> {
+    match lockfile.get(id) {
+        None => Ok(None),
+        Some(entry) if builtin && catalogue::is_unvouched_first_party(entry) => {
+            Ok(Some(entry.clone()))
+        }
+        Some(_) => Err(Error::AlreadyInstalled(id.to_owned())),
     }
 }
 

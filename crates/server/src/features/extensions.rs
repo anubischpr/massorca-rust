@@ -263,6 +263,7 @@ mod tests {
             ),
             (core_codes::IO, codes::EXTENSION_IO),
             (core_codes::TAMPERED, codes::EXTENSION_TAMPERED),
+            (core_codes::BUSY, codes::EXTENSION_BUSY),
             (
                 core_codes::RESERVED_PUBLISHER,
                 codes::EXTENSION_RESERVED_PUBLISHER,

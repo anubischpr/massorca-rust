@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use massorca_core_extensions::host::{CommandRunner, Exit, ProgramResolver};
@@ -88,5 +89,36 @@ impl CommandRunner for FakeHost {
             code: Some(code),
             timed_out: false,
         })
+    }
+}
+
+/// Holds every `install` run of a program named `slow...` until the test releases it, and reports when each one
+/// starts. Everything else runs on the fake host.
+pub struct Gate {
+    pub host: Arc<FakeHost>,
+    started: Mutex<Sender<()>>,
+    release: Mutex<Receiver<()>>,
+}
+
+impl Gate {
+    pub fn new(host: Arc<FakeHost>) -> (Self, Receiver<()>, Sender<()>) {
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let gate = Self {
+            host,
+            started: Mutex::new(started_tx),
+            release: Mutex::new(release_rx),
+        };
+        (gate, started_rx, release_tx)
+    }
+}
+
+impl CommandRunner for Gate {
+    fn run(&self, argv: &[String], log: &Path, timeout: Duration) -> io::Result<Exit> {
+        if argv.get(1).map(String::as_str) == Some("install") && argv[0].starts_with("slow") {
+            let _ = self.started.lock().expect("started").send(());
+            let _ = self.release.lock().expect("release").recv();
+        }
+        self.host.run(argv, log, timeout)
     }
 }

@@ -23,6 +23,7 @@ pub mod codes {
     pub const IO: &str = "extension.io";
     pub const TAMPERED: &str = "extension.tampered";
     pub const RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
+    pub const BUSY: &str = "extension.busy";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -52,6 +53,8 @@ pub enum Error {
     NotFound(String),
     #[error("extension {0} is not installed")]
     NotInstalled(String),
+    #[error("extension {0} is busy: its install or removal is still running")]
+    Busy(String),
     #[error("extension {0} is already installed")]
     AlreadyInstalled(String),
     #[error("agent kind {kind} is already installed by {installed_by}")]
@@ -104,6 +107,7 @@ impl Error {
             Self::NotFound(_) => codes::NOT_FOUND,
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
+            Self::Busy(_) => codes::BUSY,
             Self::KindConflict { .. } => codes::KIND_CONFLICT,
             Self::HashRequired => codes::HASH_REQUIRED,
             Self::ConsentRequired => codes::CONSENT_REQUIRED,
