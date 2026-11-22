@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use interprocess::local_socket::tokio::Stream;
@@ -91,7 +90,7 @@ fn remote_code(error: &ClientError) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
@@ -248,13 +247,13 @@ async fn attached(attachment: &mut TerminalAttachment) -> (AttachMode, u64) {
 /// Whether a process with `pid` exists. Windows lists the process table; Unix probes the pid with signal 0.
 fn process_alive(pid: u32) -> bool {
     if cfg!(windows) {
-        let output = Command::new("tasklist")
+        let output = massorca_process::command("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output()
             .expect("tasklist runs");
         String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
     } else {
-        Command::new("kill")
+        massorca_process::command("kill")
             .args(["-0", &pid.to_string()])
             .status()
             .is_ok_and(|status| status.success())

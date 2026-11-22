@@ -34,6 +34,7 @@ tracing.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+massorca-process.workspace = true
 massorca-client.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

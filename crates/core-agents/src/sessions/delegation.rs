@@ -656,7 +656,6 @@ then report"
 
     use std::collections::BTreeMap;
     use std::path::Path;
-    use std::process::Command;
 
     use massorca_core_store::{AgentSessionRow, RunExit, RunExitReason, new_id, now_ms};
     use massorca_protocol::codes;
@@ -837,7 +836,7 @@ then report"
 
     /// Runs git in `dir` with a fixed identity; panics on failure.
     fn git(dir: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = massorca_process::command("git")
             .args([
                 "-c",
                 "user.name=t",

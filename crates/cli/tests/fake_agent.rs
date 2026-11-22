@@ -6,14 +6,14 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 /// A name no program has, so every hook call fails to start and is ignored.
 const MISSING_HOOK_PROGRAM: &str = "massorca-no-such-program-for-the-fake-agent";
 
 /// Runs the fake agent in `cwd` with `args` and the extra `env`, feeding `stdin` then closing it.
 fn run_agent(args: &[&str], stdin: &str, cwd: &Path, env: &[(&str, &Path)]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_massorca-fake-agent"));
+    let mut command = massorca_process::command(env!("CARGO_BIN_EXE_massorca-fake-agent"));
     command
         .args(args)
         .current_dir(cwd)
@@ -70,7 +70,7 @@ fn started(texts: &[&str]) -> Vec<String> {
 
 /// Runs git in `dir` and returns its stdout; panics on failure.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args(args)
         .current_dir(dir)
         .env_remove("GIT_DIR")

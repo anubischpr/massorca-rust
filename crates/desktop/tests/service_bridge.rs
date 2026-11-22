@@ -2,7 +2,6 @@
 //! The service runs in this test's runtime; the bridge runs on its own thread, as in the app.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ConnectOptions};
@@ -67,7 +66,7 @@ async fn stop_service(running: RunningService) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",

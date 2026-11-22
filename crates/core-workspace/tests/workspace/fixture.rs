@@ -4,7 +4,6 @@
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use massorca_core_git::Git;
@@ -198,7 +197,7 @@ pub fn expect_code<T: Debug>(result: Result<T, DomainError>, code: &str) {
 
 /// Runs git in `dir` with a fixed identity and returns its stdout; panics on failure.
 pub fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
@@ -236,7 +235,7 @@ pub fn commit_file(dir: &Path, file: &str, contents: &str, message: &str) {
 
 /// Whether the local branch `branch` exists in `repo`.
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
-    Command::new("git")
+    massorca_process::command("git")
         .args([
             "show-ref",
             "--verify",

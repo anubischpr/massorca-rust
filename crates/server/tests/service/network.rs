@@ -295,6 +295,46 @@ async fn revoking_closes_the_device_at_once_and_refuses_it_later() {
     stop(running).await;
 }
 
+/// A stream open when its device is revoked ends with the revocation as its reason, not as a finished stream.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_ends_the_device_streams_with_the_reason() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let offer = offer(home.path(), false, None).await;
+    let (device, record) = pair(&hosts, &offer, "vps").await.unwrap();
+    let mut events = device.subscribe_events().await.expect("a stream");
+
+    let owner = connect(home.path(), "server").await;
+    let _: serde_json::Value = owner
+        .call(
+            devices::REVOKE,
+            &devices::DeviceRevokeParams {
+                device: record.device_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let ended = timeout(Duration::from_secs(5), async {
+        loop {
+            match events.next().await {
+                Some(Ok(_)) => {}
+                other => return other,
+            }
+        }
+    })
+    .await
+    .expect("the stream ends");
+    let error = match ended {
+        Some(Err(error)) => error,
+        other => panic!("expected the revocation, got {other:?}"),
+    };
+    assert_eq!(error.code, codes::AUTH_DEVICE_REVOKED);
+    assert!(!events.connection_lost());
+    stop(running).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_listener_there_is_no_offer() {
     let home = temp_home();
