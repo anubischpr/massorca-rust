@@ -14,6 +14,7 @@ mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
 mod zones;
@@ -22,6 +23,7 @@ use crate::data::DataSource;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -40,6 +42,7 @@ use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use std::collections::BTreeMap;
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
@@ -91,6 +94,8 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
+    terminal_views: BTreeMap<String, work_panel::TerminalView>,
 }
 
 impl Shell {
@@ -142,6 +147,7 @@ impl Shell {
             if store.read(cx).state().connection.is_connected() {
                 shell.settings.folder.forget_read_failure();
             }
+            shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -200,6 +206,7 @@ impl Shell {
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
             team_confirm: None,
+            terminal_views: BTreeMap::new(),
         }
     }
 
@@ -338,6 +345,7 @@ impl Render for Shell {
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
         let connection = self.store.read(cx).state().connection.clone();
+        let connected = connection.is_connected();
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
@@ -359,7 +367,12 @@ impl Render for Shell {
             .map(|page| start_page::StartFrame {
                 page,
                 shell: shell.clone(),
+                connected,
             });
+        let work_panel = self
+            .model
+            .region_visible(Region::WorkPanel)
+            .then(|| self.work_frame(cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -367,6 +380,7 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                work_panel,
             },
             window,
             cx,
