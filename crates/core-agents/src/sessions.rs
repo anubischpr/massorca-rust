@@ -6,7 +6,7 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -39,6 +39,10 @@ use crate::paths;
 use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
+
+mod delegation;
+
+pub use delegation::{MergeResult, RepoOps};
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
@@ -190,6 +194,12 @@ struct Inner {
     listener: OnceLock<Listener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
+    /// Serialises bring-backs, so a child is merged and marked once (0055).
+    bring_back_gate: Mutex<()>,
+    /// The workspaces a bring-back is merging into (0055). While one is listed, a start or resume in it and a prompt
+    /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
+    /// held.
+    merging: Mutex<HashSet<String>>,
 }
 
 /// A run whose exit the service has not seen yet.
@@ -255,6 +265,8 @@ impl Agents {
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
+                bring_back_gate: Mutex::new(()),
+                merging: Mutex::new(HashSet::new()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -293,6 +305,15 @@ impl Agents {
 
     /// Starts a session: its first run in a new terminal in the workspace root (0051).
     pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
+        self.start_session(params, None)
+    }
+
+    /// Starts a session, delegated from `parent_id` when one is given (0055).
+    fn start_session(
+        &self,
+        params: AgentStartParams,
+        parent_id: Option<String>,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
             && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
@@ -304,6 +325,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&params.workspace)?;
+        self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
                 codes::PATH_NOT_FOUND,
@@ -386,7 +408,7 @@ impl Agents {
             id: session_id.clone(),
             kind: decl.id.clone(),
             workspace_id: workspace.id,
-            parent_id: None,
+            parent_id,
             title: params.title,
             read_only: params.read_only,
             agent_ref,
@@ -444,6 +466,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&row.workspace_id)?;
+        self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
                 codes::PATH_NOT_FOUND,
@@ -681,6 +704,9 @@ impl Agents {
             let mut live = lock(&self.inner.status);
             let row = self.reload(&row.id)?;
             let session = self.view_with(&mut live, row)?;
+            // A bring-back merging into the workspace holds it until the merge ends (0055); `force` does not override
+            // this, because a prompt could make the agent write into the worktree while git merges into it.
+            self.refuse_while_merging(&session.workspace_id)?;
             let Some(run) = live.get_mut(&session.id) else {
                 return Err(not_live(&session.id));
             };
@@ -1180,7 +1206,7 @@ mod tests {
     use super::*;
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
-    fn service() -> (Agents, String, tempfile::TempDir) {
+    pub(super) fn service() -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {

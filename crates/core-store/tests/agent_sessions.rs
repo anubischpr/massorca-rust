@@ -349,3 +349,46 @@ fn an_exit_for_another_terminal_changes_nothing() {
         Some(end)
     );
 }
+
+#[test]
+fn children_list_oldest_first_and_only_those_of_their_parent() {
+    let (store, workspace) = store_with_workspace();
+    let parent = session_row(&workspace, 10);
+    let other = session_row(&workspace, 11);
+    store.insert_agent_session(&parent).unwrap();
+    store.insert_agent_session(&other).unwrap();
+    let mut later = session_row(&workspace, 30);
+    later.parent_id = Some(parent.id.clone());
+    let mut earlier = session_row(&workspace, 20);
+    earlier.parent_id = Some(parent.id.clone());
+    let mut elsewhere = session_row(&workspace, 25);
+    elsewhere.parent_id = Some(other.id.clone());
+    for row in [&later, &earlier, &elsewhere] {
+        store.insert_agent_session(row).unwrap();
+    }
+
+    assert!(store.list_agent_children(&later.id).unwrap().is_empty());
+    assert_eq!(
+        store.list_agent_children(&parent.id).unwrap(),
+        vec![earlier, later]
+    );
+}
+
+#[test]
+fn a_bring_back_is_recorded_once() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(store.set_agent_session_brought_back(&row.id, 40).unwrap());
+    assert!(!store.set_agent_session_brought_back(&row.id, 50).unwrap());
+    assert!(!store.set_agent_session_brought_back("missing", 50).unwrap());
+    assert_eq!(
+        store
+            .get_agent_session(&row.id)
+            .unwrap()
+            .unwrap()
+            .brought_back_at,
+        Some(40)
+    );
+}

@@ -1,5 +1,5 @@
 //! Synchronous access to the user's `git` binary: repository and worktree
-//! queries, worktree add and remove, and branch checks.
+//! queries, worktree add and remove, branch checks, and `--no-ff` merges.
 //!
 //! Each command runs without a shell and with a timeout, and uses only commands
 //! and options that exist in Git 2.25 (ADR 0007).
@@ -12,6 +12,7 @@ mod error;
 mod git;
 mod index;
 mod log;
+mod merge;
 mod process;
 mod refs;
 mod remote;
@@ -31,6 +32,7 @@ pub use error::GitError;
 pub use git::{DEFAULT_TIMEOUT, Git, redact_urls};
 pub use index::{DiscardError, DiscardWaivers, PathSet};
 pub use log::LogCursor;
+pub use merge::MergeOutcome;
 pub use remote::{FetchTarget, RemoteError};
 pub use repository::WorktreeChanges;
 pub use version::GitVersion;
