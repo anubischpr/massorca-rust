@@ -4,11 +4,13 @@
 
 use super::*;
 use crate::data::SampleDataSource;
+use crate::model::marketplace::{ItemKind, ServiceMarketplace, installed_agent_links};
 use crate::model::teams::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 use crate::model::workspace_flow::{ProjectChoice, RemoveStage};
-use crate::service::fixtures::{project, workspace};
+use crate::service::fixtures::{agent_kind, project, workspace};
 use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
 use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
+use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::workspaces::WorkspaceRemoved;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -53,7 +55,7 @@ pub(super) fn rig<'a>(
             Some(handle),
             None,
             UnavailableTeams.teams(),
-            Box::new(UnavailableMarketplace),
+            Box::new(ServiceMarketplace::default()),
             window,
             cx,
         )
@@ -156,6 +158,39 @@ fn a_service_that_cannot_be_reached_takes_the_canvas_and_retry_now_reaches_the_b
     });
     rig.shell.update(cx, |shell, _| shell.retry_service_now());
     assert!(matches!(rig.script.next(), Some(Command::RetryNow)));
+}
+
+#[gpui::test]
+fn the_kinds_the_service_lists_are_its_marketplace_agents_and_settings_agents(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Disabled),
+            agent_kind("cursor", "Cursor", PackageState::Available),
+        ]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    rig.shell.read_with(cx, |shell, _| {
+        let marketplace = shell.model().marketplace();
+        let agents: Vec<&str> = marketplace
+            .of_kind(ItemKind::Agent)
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(agents, ["Claude", "Codex", "Cursor"]);
+        let installed: Vec<String> = installed_agent_links(marketplace)
+            .into_iter()
+            .map(|link| link.name)
+            .collect();
+        assert_eq!(
+            installed,
+            ["Claude", "Codex"],
+            "Settings lists installed kinds only"
+        );
+    });
 }
 
 #[gpui::test]

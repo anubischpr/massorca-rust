@@ -48,6 +48,9 @@ pub enum ClientError {
     HostNotFound(String),
     #[error("a host named {0:?} already exists")]
     HostExists(String),
+    /// Whether a host's files are there could not be read, so nothing was changed rather than risk losing a key.
+    #[error("the files of host {name} cannot be read, so nothing was changed: {reason}")]
+    HostUnreadable { name: String, reason: String },
     #[error(
         "{0:?} is not a host name: 1 to 32 of a-z, 0-9, - and _, starting with a letter or digit, and not \"local\""
     )]
@@ -109,6 +112,7 @@ impl ClientError {
             | Self::Io(_)
             | Self::HostNotFound(_)
             | Self::HostExists(_)
+            | Self::HostUnreadable { .. }
             | Self::InvalidHostName(_)
             | Self::StartRefused(_)
             | Self::ProfileRefused(_) => 1,

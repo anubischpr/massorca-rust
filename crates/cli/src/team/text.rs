@@ -40,6 +40,24 @@ pub fn bot_line(bot: &Bot, verb: &str) -> String {
     )
 }
 
+/// One bot per line: name, agent kind, lead, job, id.
+pub fn bot_table(bots: &[Bot]) -> Vec<String> {
+    bots.iter()
+        .map(|bot| {
+            let lead = if bot.lead { "lead" } else { "-" };
+            format!("{}	{}	{lead}	{}	{}", bot.name, bot.kind, bot.job, bot.id)
+        })
+        .collect()
+}
+
+/// One project per line: name, goal, id.
+pub fn project_table(projects: &[TeamProject]) -> Vec<String> {
+    projects
+        .iter()
+        .map(|project| format!("{}	{}	{}", project.name, project.goal, project.id))
+        .collect()
+}
+
 pub fn project_line(project: &TeamProject, verb: &str) -> String {
     format!(
         "{verb} project {} in team {} ({})",
