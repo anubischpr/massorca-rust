@@ -84,6 +84,8 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.hook",
             "agent.kinds",
             "agent.list",
+            "agent.prompt",
+            "agent.resume",
             "agent.start",
             "agent.status",
             "agent.stop",

@@ -272,6 +272,7 @@ async fn read_screen(
             since: None,
             cols: None,
             rows: None,
+            answers_queries: None,
         })
         .await?;
     let snapshot = tokio::time::timeout(SNAPSHOT_WAIT, take_snapshot(&mut attachment))
