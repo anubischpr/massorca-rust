@@ -111,6 +111,8 @@ pub const PROFILE_FOREIGN_ENTRIES: &str = "profile.foreign_entries";
 pub const PROFILE_WRITABLE_BY_OTHERS: &str = "profile.writable_by_others";
 /// CLI only: a folder from the home down to the profile is a link, another user's, or changeable by others; `data.path`.
 pub const PROFILE_UNSAFE_LOCATION: &str = "profile.unsafe_location";
+/// Other users could read a profile folder that holds secrets, such as a device key; `data.paths` lists it.
+pub const PROFILE_READABLE_BY_OTHERS: &str = "profile.readable_by_others";
 /// A network connection without a client certificate or `hello.auth` (decision 0041).
 pub const AUTH_REQUIRED: &str = "auth.required";
 /// The client certificate belongs to no paired device.
@@ -180,6 +182,7 @@ pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
 pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
+pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";

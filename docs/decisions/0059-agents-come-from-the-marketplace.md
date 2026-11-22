@@ -304,3 +304,7 @@ one is active.
   for the live-session check.
 - Login from Settings needs its own decision once the desktop session has
   named the flow it needs.
+
+## Amendment 2026-11-22
+
+Account commands (check, sign-in, sign-out) judge the account's home only: for those commands the vendor's credential environment variables (`accounts.strip_env`) are removed in addition to `credentials.strip_env`. Agent sessions are unchanged; whether they strip them is a recorded follow-up.

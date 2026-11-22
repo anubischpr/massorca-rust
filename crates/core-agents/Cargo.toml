@@ -13,6 +13,7 @@ massorca-core-terminal.workspace = true
 massorca-core-workspace.workspace = true
 massorca-protocol.workspace = true
 serde.workspace = true
+regex = "1"
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -23,6 +24,7 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 massorca-profile.workspace = true
+win32job.workspace = true
 
 [dev-dependencies]
 massorca-core-git.workspace = true
