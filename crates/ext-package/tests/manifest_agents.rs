@@ -196,3 +196,30 @@ fn the_cli_block_is_optional_and_its_uninstall_list_defaults_to_empty() {
     let manifest = load(&bytes(&value)).expect("valid without a CLI block");
     assert!(manifest.contributes.agent_adapters[0].cli.is_none());
 }
+
+#[test]
+fn control_characters_are_refused_in_every_cli_argv() {
+    let cli = "/contributes/agentAdapters/0/cli";
+    let cases: [(&str, Value, &str); 3] = [
+        (
+            "install",
+            json!([{ "os": "linux", "command": ["sh", "-c", "ok\u{1b}[2Kfake"] }]),
+            "/install/0/command",
+        ),
+        (
+            "uninstall",
+            json!([{ "os": "linux", "command": ["sh", "a\nb"] }]),
+            "/uninstall/0/command",
+        ),
+        ("verify", json!(["claude", "--version\r"]), "/verify"),
+    ];
+    for (field, replacement, pointer) in cases {
+        let mut value = agent_package("acme", "acme-agent");
+        value["contributes"]["agentAdapters"][0]["cli"][field] = replacement;
+        let found = problems(&value);
+        assert!(
+            has_problem(&found, &format!("{cli}{pointer}"), "control character"),
+            "{field}: {found:?}"
+        );
+    }
+}

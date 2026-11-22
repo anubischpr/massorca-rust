@@ -149,6 +149,7 @@ fn validate_cli(cli: &AgentCli, base: &str, problems: &mut Problems) {
         }
         Some(_) => {}
     }
+    check_argv(&cli.verify, &at(base, "verify"), problems);
     if !is_https_url(&cli.source) {
         problems.add(
             at(base, "source"),
@@ -173,9 +174,13 @@ fn check_steps(steps: &[CliStep], base: &str, problems: &mut Problems) {
     }
 }
 
+/// A non-empty argv with no control characters, which could hide part of the command in the review.
 fn check_argv(argv: &[String], pointer: &str, problems: &mut Problems) {
     if argv.first().is_none_or(|program| program.trim().is_empty()) {
         problems.add(pointer, "must be a non-empty argv");
+    }
+    if argv.iter().any(|part| part.chars().any(char::is_control)) {
+        problems.add(pointer, "must not contain a control character");
     }
 }
 
