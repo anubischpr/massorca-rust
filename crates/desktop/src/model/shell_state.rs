@@ -111,6 +111,11 @@ impl ShellModel {
         self.teams = teams;
     }
 
+    /// Swaps in the Bot Teams a service read reports, keeping what the user has open in them.
+    pub fn refresh_teams(&mut self, fresh: TeamsState) {
+        self.teams = self.teams.refreshed(fresh);
+    }
+
     /// The Marketplace data the Marketplace pages draw.
     pub fn marketplace(&self) -> &MarketplaceSnapshot {
         &self.marketplace

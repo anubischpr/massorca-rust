@@ -9,21 +9,27 @@ use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{BoardOwner, CardView, Column, PickStep, TaskId};
+use crate::service::{Refusal, ServiceHandle};
 use gpui::{
     AnyElement, App, Context, FocusHandle, ParentElement, Styled, WeakEntity, Window, div,
     prelude::*, px,
 };
+use massorca_protocol::methods::tasks::Task;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::board_column::{BoardCard, BoardColumn};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::scroll_area::{ScrollArea, ScrollAxis};
 use massorca_ui::tokens::{SPACE_2, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use std::future::Future;
 
 /// The keys a picked card reads: Space, the arrows and Escape.
 const PICK_KEYS: [&str; 6] = ["space", "left", "right", "up", "down", "escape"];
 
 /// The Board page of a team: its header, the team pill and the four columns (4.3).
+/// What a refused move says: the Board only moves cards to Done, and back to Open from Done.
+const MOVE_NOT_AVAILABLE: &str = "This move is not available yet.";
+
 pub(in crate::shell) fn board_page(
     model: &ShellModel,
     shell: &WeakEntity<Shell>,
@@ -76,7 +82,8 @@ pub(in crate::shell) fn board_page(
                 .gap(px(SPACE_4))
                 .px(px(SPACE_6))
                 .child(header)
-                .child(note("Tasks come from the Conference room", &theme)),
+                .child(note("Tasks come from the Conference room", &theme))
+                .children(state.notice().map(|notice| note(notice.to_owned(), &theme))),
         )
         .child(board_columns(model, shell, owner, SPACE_6, window, cx))
         .into_any_element()
@@ -168,7 +175,8 @@ fn status_of(column: Column) -> Option<(GlyphState, &'static str)> {
     }
 }
 
-fn note(text: &'static str, theme: &Theme) -> impl IntoElement {
+fn note(text: impl Into<String>, theme: &Theme) -> impl IntoElement {
+    let text: String = text.into();
     div()
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.tertiary)
@@ -176,6 +184,59 @@ fn note(text: &'static str, theme: &Theme) -> impl IntoElement {
 }
 
 impl Shell {
+    /// Drops the picked card on the service. Only a move to Done, or back to Open from Done, has a call; any
+    /// other move says so. The card moves when the read that follows the service's answer lands.
+    fn drop_live_pick(&mut self, service: ServiceHandle, cx: &mut Context<Self>) {
+        let Some(pick) = self.model.teams_mut().take_pick() else {
+            return;
+        };
+        let from = self
+            .model
+            .teams()
+            .tasks(pick.board)
+            .and_then(|tasks| tasks.iter().find(|task| task.id == pick.task))
+            .map(|task| task.column);
+        let key = self
+            .store
+            .read(cx)
+            .state()
+            .team_ids
+            .key(pick.task.0)
+            .map(str::to_owned);
+        match (from, pick.column, key) {
+            (Some(from), to, _) if from == to => {}
+            (_, Column::Done, Some(task)) => {
+                self.answer_drop(cx, async move { service.finish_task(task).await });
+            }
+            (Some(Column::Done), Column::Open, Some(task)) => {
+                self.answer_drop(cx, async move { service.reopen_task(task).await });
+            }
+            _ => self
+                .model
+                .teams_mut()
+                .set_notice(Some(MOVE_NOT_AVAILABLE.to_owned())),
+        }
+        cx.notify();
+    }
+
+    /// Waits for the service's answer to a drop; a refusal shows on the Board until the next pick.
+    fn answer_drop(
+        &mut self,
+        cx: &mut Context<Self>,
+        call: impl Future<Output = Result<Task, Refusal>> + 'static,
+    ) {
+        cx.spawn(async move |this, cx| {
+            if let Err(refusal) = call.await {
+                this.update(cx, |shell, cx| {
+                    shell.model.teams_mut().set_notice(Some(refusal.message()));
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// Handles one key for the Board: it starts, moves, drops or cancels a pick. Returns whether the
     /// key was used, so the others (Escape closing an overlay) keep working when no card is picked.
     pub(super) fn board_key(
@@ -185,6 +246,13 @@ impl Shell {
         key: &str,
         cx: &mut Context<Self>,
     ) -> bool {
+        if key == "space"
+            && let Some(service) = self.service.clone()
+            && self.model.teams().pick().is_some()
+        {
+            self.drop_live_pick(service, cx);
+            return true;
+        }
         let teams = self.model.teams_mut();
         let picked = teams.pick().is_some();
         let handled = match key {

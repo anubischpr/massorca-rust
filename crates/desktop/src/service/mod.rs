@@ -10,6 +10,7 @@ mod hosts;
 mod launch;
 mod refusal;
 mod secrets;
+mod teams;
 mod terminals;
 mod update;
 
@@ -31,6 +32,7 @@ pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+pub use teams::{TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]
 pub(crate) use terminals::{TerminalCommand, TerminalWrite};

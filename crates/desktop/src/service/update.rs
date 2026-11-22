@@ -12,11 +12,13 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
+use massorca_protocol::methods::teams::Bot;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
 use super::refusal::Refusal;
+use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
 /// One change the bridge sends to the UI thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +46,10 @@ pub enum StoreUpdate {
     AgentGone(String),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
+    /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
+    Teams(TeamsRead),
+    /// A bot this desktop added, as the service answered it; its team lists it from now on.
+    TeamBot(Bot),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
     /// What a probe or a call learned about one paired host's connection.
@@ -172,6 +178,14 @@ pub struct StoreState {
     pub down_since: Option<Instant>,
     /// The git state of each workspace the store holds, by workspace id.
     pub git: BTreeMap<String, WorkspaceGit>,
+    /// Every team with its Board, once a read answered; `None` while the service cannot list them.
+    pub teams: Option<Vec<TeamRecord>>,
+    /// The number of the newest Bot Teams read applied.
+    pub team_read: u64,
+    /// The numbers the pages give the ids of the teams, their cards and their bots.
+    pub team_ids: TeamIds,
+    /// The bots this desktop added, as the service answered them.
+    pub team_bots: Vec<Bot>,
     /// The hosts this computer paired with, by name.
     pub hosts: Vec<HostEntry>,
     /// The devices paired with this computer's service, once listed.
@@ -193,6 +207,10 @@ impl Default for StoreState {
             loaded: false,
             down_since: None,
             git: BTreeMap::new(),
+            teams: None,
+            team_read: 0,
+            team_ids: TeamIds::default(),
+            team_bots: Vec::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
@@ -210,6 +228,9 @@ impl StoreState {
                     self.down_since = None;
                 } else if self.connection.is_connected() || self.down_since.is_none() {
                     self.down_since = Some(now);
+                }
+                if !state.is_connected() {
+                    self.teams = None;
                 }
                 self.connection = state;
             }
@@ -257,6 +278,12 @@ impl StoreState {
             }
             StoreUpdate::AgentGone(id) => self.agents.retain(|s| s.id != id),
             StoreUpdate::Git(update) => self.apply_git(update),
+            StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::TeamBot(bot) => {
+                self.team_ids.register_bot(&bot);
+                self.team_bots.retain(|known| known.id != bot.id);
+                self.team_bots.push(bot);
+            }
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
                 if let Some(entry) = self
@@ -278,6 +305,18 @@ impl StoreState {
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
             }
+        }
+    }
+
+    /// Keeps the newest read: an older answer that arrives late changes nothing.
+    fn apply_teams(&mut self, read: TeamsRead) {
+        if read.number <= self.team_read {
+            return;
+        }
+        self.team_read = read.number;
+        self.teams = read.teams.ok();
+        for record in self.teams.iter().flatten() {
+            self.team_ids.register(record);
         }
     }
 
@@ -366,6 +405,7 @@ fn workspace_order(a: &Workspace, b: &Workspace) -> std::cmp::Ordering {
 pub(crate) mod fixtures {
     use massorca_protocol::methods::agents::Execution;
     use massorca_protocol::methods::projects::ProjectKind;
+    use massorca_protocol::methods::teams::{Board, Team, TeamAccess, TeamCharacter};
     use massorca_protocol::methods::terminals::TerminalState;
     use massorca_protocol::methods::workspaces::{WorkspaceKind, WorkspaceState};
 
@@ -419,13 +459,32 @@ pub(crate) mod fixtures {
             created_at_ms: created,
         }
     }
+
+    pub fn team(id: &str, name: &str) -> TeamRecord {
+        TeamRecord {
+            team: Team {
+                id: id.into(),
+                name: name.into(),
+                purpose: String::new(),
+                character: TeamCharacter::Triangle,
+                access: TeamAccess::Full,
+                workspaces: false,
+                created_at_ms: 1,
+            },
+            board: Board {
+                team_id: id.into(),
+                project_id: None,
+                columns: Vec::new(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState};
 
-    use super::fixtures::{agent, project, workspace};
+    use super::fixtures::{agent, project, team, workspace};
     use super::*;
 
     fn resynced() -> StoreState {
@@ -571,6 +630,30 @@ mod tests {
         );
         state.apply(StoreUpdate::Connection(up), later);
         assert_eq!(state.down_since, None);
+    }
+
+    #[test]
+    fn a_stale_teams_read_never_replaces_a_newer_one() {
+        let mut state = StoreState::default();
+        let read = |number, name: &str| TeamsRead {
+            number,
+            teams: Ok(vec![team("t1", name)]),
+        };
+        state.apply(StoreUpdate::Teams(read(2, "newer")), Instant::now());
+        state.apply(StoreUpdate::Teams(read(1, "older")), Instant::now());
+        let names: Vec<&str> = state
+            .teams
+            .iter()
+            .flatten()
+            .map(|record| record.team.name.as_str())
+            .collect();
+        assert_eq!(names, ["newer"]);
+        let refused = TeamsRead {
+            number: 3,
+            teams: Err(Refusal::unavailable("no teams")),
+        };
+        state.apply(StoreUpdate::Teams(refused), Instant::now());
+        assert!(state.teams.is_none());
     }
 
     fn host(name: &str) -> HostRecord {
