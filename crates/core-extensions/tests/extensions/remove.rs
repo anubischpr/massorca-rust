@@ -36,7 +36,7 @@ fn claude_uninstall() -> Vec<String> {
     let argv: &[&str] = match current_os() {
         Some(CliOs::Windows) => &["winget", "uninstall", "Anthropic.ClaudeCode"],
         Some(CliOs::Macos) => &["brew", "uninstall", "--cask", "claude-code"],
-        _ => &["npm", "uninstall", "-g", "-ai/claude-code"],
+        _ => &["npm", "uninstall", "-g", "@anthropic-ai/claude-code"],
     };
     argv.iter().map(|part| (*part).to_owned()).collect()
 }
