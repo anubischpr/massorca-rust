@@ -1,6 +1,6 @@
 //! The discard dialog of the Source control panel, drawn from its flow (decision 0013).
 
-use gpui::{App, WeakEntity};
+use gpui::{App, WeakEntity, Window};
 use massorca_ui::components::dialog::Dialog;
 
 use super::Shell;
@@ -17,11 +17,14 @@ pub(super) fn discard_dialog(flow: &DiscardFlow, shell: &WeakEntity<Shell>, cx: 
         flow.busy(),
         flow.error(),
         cx,
-        move |_, cx| {
-            let _ = on_action.update(cx, |shell, cx| shell.confirm_discard(cx));
-        },
-        move |_, cx| {
-            let _ = on_dismiss.update(cx, |shell, cx| shell.close_discard(cx));
-        },
+        (
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_action.update(cx, |shell, cx| shell.confirm_discard(cx));
+            },
+            move |_: &mut Window, cx: &mut App| {
+                let _ = on_dismiss.update(cx, |shell, cx| shell.close_discard(cx));
+            },
+        ),
+        None,
     )
 }

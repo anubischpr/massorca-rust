@@ -8,19 +8,22 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, SharedString, WeakEntity, Window, div, px};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
 use massorca_ui::tokens::{
-    LAYOUT_CONVERSATION_READING, RADIUS_LG, SPACE_2, SPACE_3, SPACE_4, SPACE_6, SPACE_8,
-    TYPE_HEADING,
+    LAYOUT_CONVERSATION_READING, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, SPACE_8,
+    TYPE_CAPTION, TYPE_HEADING,
 };
-use massorca_ui::{ActiveTheme, IconName, TextStyled};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
-use crate::model::start_page::{GIT_LATER, SESSIONS_LATER, TERMINALS_LATER, WorkspaceStart};
+use crate::model::start_page::{
+    COMPOSER_PLACEHOLDER, GIT_LATER, KEY_HINTS, SESSIONS_LATER, TERMINALS_LATER, WorkspaceStart,
+};
 use crate::model::workspace_flow::ProjectChoice;
 
 /// What the start page draws: the workspace, and the shell to act through.
@@ -88,20 +91,10 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
             .leading_icon(IconName::GitBranch)
             .disabled(true)
             .tooltip(GIT_LATER),
-        )
-        .child(
-            SegmentedControl::new(
-                "start-mode",
-                "start-mode-group",
-                vec![
-                    Segment::icon_text(IconName::MessageSquare, "Chat"),
-                    Segment::icon_text(IconName::SquareTerminal, "Terminal"),
-                ],
-            )
-            .disabled(true),
         );
 
-    let composer = div()
+    // The Chat / Terminal switch sits in the composer's bottom row, never in the placement row (A32).
+    let composer_box = div()
         .w_full()
         .flex()
         .flex_col()
@@ -115,15 +108,39 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
             div()
                 .text_body()
                 .text_color(p.text.tertiary)
-                .child(SESSIONS_LATER),
+                .child(COMPOSER_PLACEHOLDER),
         )
         .child(
-            div().flex().flex_row().justify_end().child(
-                Button::new("start-send", "Send")
-                    .variant(ButtonVariant::Primary)
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    SegmentedControl::new(
+                        "start-mode",
+                        "start-mode-group",
+                        vec![
+                            Segment::icon_text(IconName::MessageSquare, "Chat"),
+                            Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+                        ],
+                    )
                     .disabled(true),
-            ),
+                )
+                .child(
+                    Button::new("start-send", "Send")
+                        .variant(ButtonVariant::Primary)
+                        .disabled(true)
+                        .tooltip(SESSIONS_LATER),
+                ),
         );
+    let composer = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .child(composer_box)
+        .child(key_hints(&theme));
 
     let facts = SettingsSection::new("start-facts", "Workspace")
         .row(fact_row("start-name", "Name", page.name.clone()))
@@ -174,6 +191,27 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .into_any_element()
 }
 
+/// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
+fn key_hints(theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .justify_center()
+        .gap(px(SPACE_4))
+        .children(KEY_HINTS.iter().map(|(key, what)| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(SPACE_1))
+                .text_style(TYPE_CAPTION)
+                .text_color(theme.palette.text.tertiary)
+                .child(Kbd::new(*key))
+                .child(*what)
+        }))
+}
+
 /// One read-only fact of the workspace, as a settings row with its value on the right.
 fn fact_row(id: &'static str, label: &'static str, value: String) -> SettingsRow {
     SettingsRow::new(id, label).control(div().text_body().child(SharedString::from(value)))
@@ -206,7 +244,7 @@ fn actions(frame: &StartFrame) -> AnyElement {
                 })
         })
         .child(
-            Button::new("start-remove", "Remove workspace…")
+            Button::new("start-remove", "Delete workspace…")
                 .variant(ButtonVariant::Ghost)
                 .leading_icon(IconName::Trash2)
                 .on_click(move |_, cx| {

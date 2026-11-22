@@ -200,8 +200,10 @@ impl RenderOnce for EmptyState {
         let mut panel = div()
             .id(self.id.clone())
             .role(Role::Group)
+            .debug_selector(|| "empty-panel".into())
             .flex()
             .flex_col()
+            .items_start()
             .gap(px(SPACE_2))
             .min_w_0()
             .p(px(self.variant.padding()));
@@ -243,7 +245,12 @@ impl RenderOnce for EmptyState {
             panel = panel.child(line);
         }
         if let Some(action) = self.action {
-            panel = panel.child(div().pt(px(SPACE_1)).child(action));
+            panel = panel.child(
+                div()
+                    .debug_selector(|| "empty-action".into())
+                    .pt(px(SPACE_1))
+                    .child(action),
+            );
         }
         if let Some(note) = self.note {
             panel = panel.child(
@@ -327,6 +334,35 @@ mod tests {
                 f32::from(offset).abs() < 0.5,
                 "{name} is off centre by {offset:?}"
             );
+        }
+    }
+
+    #[gpui::test]
+    fn a_section_action_is_only_as_wide_as_its_label(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| SectionHarness);
+        cx.run_until_parked();
+        let panel = cx.debug_bounds("empty-panel").expect("panel is drawn");
+        let action = cx.debug_bounds("empty-action").expect("action is drawn");
+        // The content box: the section padding and the 1 px border on each side.
+        let content = f32::from(panel.size.width) - 2.0 * (SPACE_4 + 1.0);
+        assert!(
+            f32::from(action.size.width) < content,
+            "the action is as wide as the panel's content box"
+        );
+    }
+
+    /// A section-size empty state with one primary action, in a 400 px column.
+    struct SectionHarness;
+
+    impl gpui::Render for SectionHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(400.)).child(
+                EmptyState::new("routines", "No routines yet")
+                    .explanation("Routines run a task on a schedule. Create one to start.")
+                    .action(
+                        Button::new("routines-new", "New routine").variant(ButtonVariant::Primary),
+                    ),
+            )
         }
     }
 

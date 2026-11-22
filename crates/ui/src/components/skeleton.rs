@@ -7,7 +7,8 @@ use crate::tokens::{
     SIZE_CONTROL_DEFAULT, SIZE_SKELETON_LINE, SPACE_1, SPACE_2, SPACE_4,
 };
 use gpui::{
-    App, Div, ElementId, IntoElement, ParentElement, RenderOnce, Styled, Window, div, px, relative,
+    App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Styled,
+    Window, div, px, relative,
 };
 use std::time::Duration;
 
@@ -122,6 +123,7 @@ fn block(shape: Div, fill: Option<Color>) -> Div {
 fn line(width: LineWidth, fill: Option<Color>) -> Div {
     block(
         div()
+            .debug_selector(|| "skeleton-line".into())
             .h(px(SIZE_SKELETON_LINE))
             .w(relative(width.fraction()))
             .rounded(px(SkeletonShape::Line(width).corner_radius())),
@@ -131,6 +133,7 @@ fn line(width: LineWidth, fill: Option<Color>) -> Div {
 
 fn row(fill: Option<Color>) -> Div {
     div()
+        .w_full()
         .h(px(SIZE_CONTROL_DEFAULT))
         .flex()
         .items_center()
@@ -215,5 +218,35 @@ mod a11y_tests {
             reported(Skeleton::new(SkeletonShape::Block).render(window, cx))
         });
         assert!(node.is_none());
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use gpui::{Render, TestAppContext};
+
+    /// Hosts a row skeleton inside an auto-sized flex row, the way a list row places it.
+    struct RowHarness;
+
+    impl Render for RowHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(240.)).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(SIZE_CONTROL_DEFAULT))
+                    .px(px(SPACE_2))
+                    .child(Skeleton::new(SkeletonShape::Row)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_row_skeleton_fills_its_row_so_its_lines_have_width(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| RowHarness);
+        cx.run_until_parked();
+        let line = cx.debug_bounds("skeleton-line").expect("a line is drawn");
+        assert!(f32::from(line.size.width) > 0.0, "the line has no width");
     }
 }

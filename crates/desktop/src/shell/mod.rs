@@ -6,6 +6,7 @@ mod diff_page;
 mod palette;
 mod project_sidebar;
 mod rail;
+mod resize_edges;
 mod service_banner;
 mod settings;
 mod setup;
@@ -353,9 +354,20 @@ impl Render for Shell {
         self.model
             .set_window_width(f32::from(window.viewport_size().width));
         let shell = cx.entity().downgrade();
-        let title_bar = title_bar::title_bar(&self.model, &shell, window.is_maximized(), &theme)
-            .track_focus(self.zones.get(Zone::TitleBar));
+        let show_controls = title_bar::draws_window_controls(
+            window.window_decorations(),
+            cfg!(target_os = "linux"),
+        );
+        let title_bar = title_bar::title_bar(
+            &self.model,
+            &shell,
+            window.is_maximized(),
+            show_controls,
+            &theme,
+        )
+        .track_focus(self.zones.get(Zone::TitleBar));
         let rail = rail::rail(&self.model, &self.rail, cx).track_focus(self.zones.get(Zone::Rail));
+        let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
         self.sync_source_control(window, cx);
@@ -560,6 +572,7 @@ impl Render for Shell {
                     .child(title_bar)
                     .child(body),
             )
+            .when_some(resize_grabs, |el, grabs| el.child(grabs))
             .when_some(palette, |el, palette| el.child(palette))
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))

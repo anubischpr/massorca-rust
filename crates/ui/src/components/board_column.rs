@@ -34,6 +34,8 @@ pub struct BoardCard {
     note: Option<SharedString>,
     unreachable: Option<SharedString>,
     lifted: bool,
+    /// Drawn as the dashed slot the lifted card left behind.
+    slot: bool,
     on_key: Option<CardKeys>,
 }
 
@@ -63,6 +65,7 @@ impl BoardCard {
             note: None,
             unreachable: None,
             lifted: false,
+            slot: false,
             on_key: None,
         }
     }
@@ -121,6 +124,9 @@ impl RenderOnce for BoardCard {
         let theme = *cx.theme();
         let p = &theme.palette;
         let hover = p.fill.hover_raised;
+        if self.slot {
+            return source_slot(self, &theme).into_any_element();
+        }
         let mut card = div()
             .id(self.id.clone())
             .track_focus(&self.focus)
@@ -156,7 +162,8 @@ impl RenderOnce for BoardCard {
                 .line_clamp(2)
                 .child(self.title),
         );
-        if let Some((state, word)) = self.status {
+        // An unreachable card shows only its last known state, never a live status.
+        if let (Some((state, word)), None) = (self.status, &self.unreachable) {
             card = card.child(
                 div()
                     .flex()
@@ -188,8 +195,43 @@ impl RenderOnce for BoardCard {
                     .child(time),
             );
         }
-        card
+        card.into_any_element()
     }
+}
+
+/// The source slot of a lifted card: a dashed `border.strong` outline the card's height, with
+/// its content kept for size and hidden (BoardColumn.md States, selected).
+fn source_slot(card: BoardCard, theme: &Theme) -> impl IntoElement {
+    let p = &theme.palette;
+    let mut content = div()
+        .invisible()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_HALF))
+        .child(
+            div()
+                .text_style(TYPE_BODY_STRONG)
+                .line_clamp(2)
+                .child(card.title),
+        );
+    if let Some((_, word)) = card.status {
+        content = content.child(div().text_style(TYPE_CAPTION).child(word));
+    }
+    for line in [card.bot, card.note].into_iter().flatten() {
+        content = content.child(div().text_style(TYPE_BODY_SM).child(line));
+    }
+    for line in [card.unreachable, card.time].into_iter().flatten() {
+        content = content.child(div().text_style(TYPE_CAPTION).child(line));
+    }
+    div()
+        .id(card.id)
+        .debug_selector(|| "board-source-slot".into())
+        .p(px(SPACE_2))
+        .rounded(px(RADIUS_LG))
+        .border_1()
+        .border_dashed()
+        .border_color(p.border.strong)
+        .child(content)
 }
 
 fn meta(text: SharedString, theme: &Theme) -> impl IntoElement {
@@ -218,6 +260,7 @@ pub struct BoardColumn {
     id: ElementId,
     title: SharedString,
     cards: Vec<BoardCard>,
+    slot: Option<(usize, BoardCard)>,
 }
 
 impl BoardColumn {
@@ -226,6 +269,7 @@ impl BoardColumn {
             id: id.into(),
             title: title.into(),
             cards: Vec::new(),
+            slot: None,
         }
     }
 
@@ -236,6 +280,12 @@ impl BoardColumn {
 
     pub fn cards(mut self, cards: impl IntoIterator<Item = BoardCard>) -> Self {
         self.cards.extend(cards);
+        self
+    }
+
+    /// The slot a lifted card left at `index`, drawn dashed; it is not counted as a task.
+    pub fn source_slot(mut self, index: usize, card: BoardCard) -> Self {
+        self.slot = Some((index, card));
         self
     }
 
@@ -271,18 +321,41 @@ impl RenderOnce for BoardColumn {
                     .text_color(p.text.secondary)
                     .child(count.to_string()),
             );
-        let mut cards = div().flex().flex_col().gap(px(SPACE_2)).child(header);
-        if self.cards.is_empty() {
+        let mut cards = div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_2))
+            .child(header);
+        if self.cards.is_empty() && self.slot.is_none() {
             cards = cards.child(
                 div()
+                    .debug_selector(|| "board-empty".into())
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .py(px(SPACE_2))
                     .text_style(TYPE_BODY_SM)
                     .text_color(p.text.tertiary)
                     .child(EMPTY_COLUMN_TEXT),
             );
         }
-        for card in self.cards {
+        let mut slot = self.slot;
+        for (index, card) in self.cards.into_iter().enumerate() {
+            if let Some((_, ghost)) = slot.take_if(|(at, _)| *at == index) {
+                cards = cards.child(BoardCard {
+                    slot: true,
+                    ..ghost
+                });
+            }
             cards = cards.child(card);
+        }
+        if let Some((_, ghost)) = slot {
+            cards = cards.child(BoardCard {
+                slot: true,
+                ..ghost
+            });
         }
         div()
             .id(self.id.clone())
@@ -313,5 +386,37 @@ mod tests {
         );
         assert_eq!(BoardColumn::accessible_name("Open", 1), "Open, 1 task");
         assert_eq!(BoardColumn::accessible_name("Done", 0), "Done, 0 tasks");
+    }
+
+    /// One column: empty, or holding only the dashed slot a lifted card left.
+    struct Harness {
+        slot: bool,
+    }
+
+    impl gpui::Render for Harness {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            let mut column = BoardColumn::new("open", "Open");
+            if self.slot {
+                let card = BoardCard::new("slot", "Write release notes", cx.focus_handle());
+                column = column.source_slot(0, card);
+            }
+            div().h(gpui::px(400.)).child(column)
+        }
+    }
+
+    #[gpui::test]
+    fn an_empty_column_centres_no_tasks(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Harness { slot: false });
+        cx.run_until_parked();
+        let empty = cx.debug_bounds("board-empty").expect("No tasks is drawn");
+        assert!(empty.size.height > gpui::px(SIZE_CONTROL_COMFORTABLE * 2.));
+    }
+
+    #[gpui::test]
+    fn a_source_slot_replaces_the_empty_text(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| Harness { slot: true });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("board-source-slot").is_some());
+        assert!(cx.debug_bounds("board-empty").is_none());
     }
 }
