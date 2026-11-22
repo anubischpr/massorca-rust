@@ -5,6 +5,7 @@ pub mod hosts;
 pub mod marketplace;
 pub mod morph;
 pub mod navigation;
+pub mod pairing;
 pub mod palette;
 pub mod palette_recent;
 pub mod project_add;
