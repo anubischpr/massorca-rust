@@ -43,7 +43,7 @@ Inventory IDs: D-AG-03 (Conversation composer), D-AG-01 (start page composer), M
 | focus-visible | Container border becomes the focus ring (always shown when the text area has focus) | `border.focus`, 2 px |
 | typing | Send ready; draft saved per session after 300 ms | `accent.default` |
 | selected | Chips: selected chip (focused) shows the ring; text selection uses `selection.bg` | `border.focus`, `selection.bg` |
-| disabled | The session is archived, the agent account needs sign-in, or the host is unreachable and the app cannot queue: area fill and text, with the reason line "Sign in to Claude to continue" and its action | `fill.disabled`, `text.disabled` |
+| disabled | The session is archived or the agent account needs sign-in (an unreachable host is the "disconnected host" state below): area fill and text, with the reason line "Sign in to Claude to continue" and its action | `fill.disabled`, `text.disabled` |
 | loading | Starting a session (start page): Send shows a spinner and the area is read-only for the moment | `agent.running` |
 | empty | As default | `text.tertiary` |
 | error | A send failed: a line above the text "Message not sent: <reason>" with Retry, the draft stays | `status.danger.fg`, octagon-alert glyph |
@@ -53,7 +53,7 @@ Inventory IDs: D-AG-03 (Conversation composer), D-AG-01 (start page composer), M
 
 ## Behaviour (handoff)
 
-- **Send keys.** Enter sends (or queues while the agent is busy or the host is not confirming); Shift+Enter inserts a new line. `Mod+Enter` also sends. A setting "Enter inserts a new line" swaps them so that only `Mod+Enter` sends. While an IME composition is active, Enter never sends.
+- **Send keys.** Enter sends (or queues while the agent is busy; while the host cannot be reached, Send is disabled and the message stays in the composer, never queued); Shift+Enter inserts a new line. `Mod+Enter` also sends. A setting "Enter inserts a new line" swaps them so that only `Mod+Enter` sends. While an IME composition is active, Enter never sends.
 - **Stop.** The Stop button stops the run. With the text area empty and an agent running, Escape shows a hint "Press Escape again to stop" for 3 seconds; a second press stops. This avoids accidental interrupts.
 - **Mentions and commands.** `@` opens the mention menu (X-CH-09): files, apps, teams, bots, projects; a pick becomes a chip. `/` at the start of a line opens the command menu. Menus are Popovers anchored to the caret; Up and Down choose, Enter accepts, Escape closes.
 - **History.** Up in an empty Composer restores the last sent message; Down moves forward.

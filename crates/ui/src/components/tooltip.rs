@@ -4,6 +4,7 @@
 //! once, attached above the trigger. A tooltip never takes focus, and Escape hides it without
 //! reaching the trigger's own action.
 
+use crate::a11y::framed;
 use crate::components::kbd::Kbd;
 use crate::components::popover::{TriggerBounds, overlay_surface};
 use crate::components::switch::ease;
@@ -16,8 +17,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, AnyView, App, AppContext, Context, Div, ElementId,
     FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, anchored,
-    deferred, div, point, px,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
+    Window, anchored, deferred, div, point, px,
 };
 use std::fmt;
 
@@ -61,6 +62,9 @@ impl Tooltip {
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         panel(self, cx.theme())
+            .id("tooltip")
+            .role(Role::Tooltip)
+            .aria_label(self.text.clone())
     }
 }
 
@@ -240,9 +244,10 @@ impl RenderOnce for TooltipTrigger {
                 .anchor(Anchor::BottomCenter)
                 .offset(point(px(0.), px(-ANCHOR_GAP)));
             host = host.child(
-                deferred(layer.child(appear(
+                deferred(layer.child(keyboard_tip(
                     ElementId::from((self.id, "keyboard-tip")),
                     panel,
+                    self.tooltip.text.clone(),
                     cx,
                 )))
                 .priority(Z_TOAST as usize),
@@ -250,6 +255,11 @@ impl RenderOnce for TooltipTrigger {
         }
         host
     }
+}
+
+/// The keyboard tip's frame: it carries the tooltip role and text around the fading panel.
+fn keyboard_tip(id: ElementId, panel: Div, text: SharedString, cx: &App) -> Stateful<Div> {
+    framed(id.clone(), Role::Tooltip, Some(text), appear(id, panel, cx))
 }
 
 /// Fades a tooltip in over `duration.fast`; reduced motion shows it at once.
@@ -359,5 +369,34 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
         assert!(cx.debug_bounds("tooltip-panel").is_none());
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root, view};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn a_tooltip_is_a_tooltip_named_by_its_text(cx: &mut TestAppContext) {
+        let node = view(cx, |_| Tooltip::new("Open settings")).expect("the tooltip is reported");
+        assert_eq!(node.role(), Role::Tooltip);
+        assert_eq!(node.label(), Some("Open settings"));
+    }
+
+    #[gpui::test]
+    fn the_keyboard_tip_is_a_tooltip_named_by_its_text(cx: &mut TestAppContext) {
+        let node = root(cx, |_, cx| {
+            reported(keyboard_tip(
+                ElementId::from("tip"),
+                div(),
+                "Open settings".into(),
+                cx,
+            ))
+        })
+        .expect("the keyboard tip is reported");
+        assert_eq!(node.role(), Role::Tooltip);
+        assert_eq!(node.label(), Some("Open settings"));
     }
 }
