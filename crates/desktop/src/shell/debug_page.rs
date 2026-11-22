@@ -91,7 +91,7 @@ fn plan(page: DebugPage, facts: &Facts) -> Step {
         DebugPage::AddHost => Step::Open(Target::AddHost),
         DebugPage::AddSecret => Step::Open(Target::AddSecret),
         DebugPage::Board => match &facts.team {
-            Some(team) => Step::Open(Target::Board(team.clone())),
+            Some(team) => Step::Open(Target::Board(*team)),
             None => answered(facts.teams_answered, Parent::BotTeams, "no team is listed"),
         },
         DebugPage::ReplaceSecret => match &facts.owned_secret {
@@ -122,7 +122,7 @@ fn plan(page: DebugPage, facts: &Facts) -> Step {
             }
         }
         DebugPage::AddBot => match &facts.team {
-            Some(team) => Step::Open(Target::AddBot(team.clone())),
+            Some(team) => Step::Open(Target::AddBot(*team)),
             None => answered(
                 facts.teams_answered,
                 Parent::BotTeams,
@@ -199,13 +199,7 @@ impl Shell {
                 .next()
                 .map(|row| row.id.clone()),
             team: teams_connected
-                .then(|| {
-                    self.model
-                        .teams()
-                        .teams()
-                        .first()
-                        .map(|team| team.id.clone())
-                })
+                .then(|| self.model.teams().teams().first().map(|team| team.id))
                 .flatten(),
             teams_connected,
             owned_secret: owned_secret(state),
@@ -251,7 +245,7 @@ impl Shell {
             }
             Target::AddBot(team) => {
                 self.go_home(Mode::BotTeams);
-                self.model.open_team_page(TeamPage::Board(team.clone()));
+                self.model.open_team_page(TeamPage::Board(team));
                 self.open_add_bot(team, window, cx);
             }
         }

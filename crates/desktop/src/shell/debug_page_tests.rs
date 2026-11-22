@@ -27,12 +27,7 @@ fn navigation(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Navigation {
 fn sample_team_id(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> TeamId {
     shell
         .read_with(cx, |shell, _| {
-            shell
-                .model()
-                .teams()
-                .teams()
-                .first()
-                .map(|team| team.id.clone())
+            shell.model().teams().teams().first().map(|team| team.id)
         })
         .expect("the sample team is listed")
 }
