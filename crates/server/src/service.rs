@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
+use massorca_core_agents::{Agents, AgentsConfig, Change, Listener as ChangeListener};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -17,7 +18,9 @@ use massorca_profile::owner_only_security_descriptor;
 use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
+use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
 use massorca_protocol::methods::service::ServiceInfo;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
@@ -81,14 +84,32 @@ impl Service {
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
         terminal_config.massorca_profile = Some(profile.name().to_owned());
         let terminals = TerminalManager::new(terminal_config);
+        let agents = Agents::new(AgentsConfig {
+            store: store.clone(),
+            terminals: terminals.clone(),
+            workspaces: Arc::clone(&workspaces),
+            profile_dir: profile.dir().to_path_buf(),
+            massorca_bin: std::env::current_exe()?,
+        });
+        // No run survives the previous service (0051); nothing has started one yet in this service.
+        let marker = agents.clone();
+        tokio::task::spawn_blocking(move || marker.mark_stale_on_startup())
+            .await
+            .map_err(io::Error::other)?
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let events = EventBus::new();
+        let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
+        agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
-            events: EventBus::new(),
+            events,
+            agent_changes,
             shutdown: shutdown.clone(),
             registries,
             workspaces,
             terminals: terminals.clone(),
+            agents,
             network: network_state,
             server: PeerInfo {
                 name: server_name,
@@ -125,6 +146,24 @@ impl Service {
             task: Some(task),
         })
     }
+}
+
+/// Agent changes a watcher may fall behind by before it is given a fresh snapshot.
+const AGENT_CHANGES_CAPACITY: usize = 1024;
+
+/// Announces each agent status change on the event bus (`agent.changed`) and to the watchers, without blocking.
+fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> ChangeListener {
+    Box::new(move |change: Change| {
+        let id = match &change {
+            Change::Updated(session) => session.id.clone(),
+            Change::Forgotten(id) => id.clone(),
+        };
+        events.publish(ChangeEvent {
+            topic: TOPIC_AGENT_CHANGED.to_owned(),
+            id,
+        });
+        let _ = changes.send(change);
+    })
 }
 
 async fn open_store(path: PathBuf) -> Result<Store, ServiceError> {

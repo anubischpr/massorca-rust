@@ -27,6 +27,7 @@ async fn welcome_offers_the_registered_capabilities() {
     assert_eq!(
         welcome.capabilities,
         [
+            capabilities::AGENTS,
             capabilities::BINARY_FRAMES,
             capabilities::CONFIG,
             capabilities::DEVICES,

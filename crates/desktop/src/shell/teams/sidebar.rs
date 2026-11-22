@@ -3,16 +3,20 @@
 
 use super::super::Shell;
 use super::super::change;
-use super::super::sidebar::{projects_header, row_focus};
+use super::super::sidebar::row_focus;
+use super::waiting_icon;
 use crate::model::navigation::Page;
 use crate::model::shell::HostReach;
 use crate::model::teams::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamPage, TeamRow, TeamsSidebar,
 };
 use gpui::{App, Div, FocusHandle, WeakEntity, Window, div, prelude::*, px};
-use massorca_ui::components::sidebar_row::SidebarRow;
-use massorca_ui::tokens::{SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION};
-use massorca_ui::{ActiveTheme, IconName, TextStyled};
+use massorca_ui::components::button::ButtonSize;
+use massorca_ui::components::sidebar_row::{HostConnection, SidebarRow};
+use massorca_ui::tokens::{
+    SPACE_1, SPACE_2, SPACE_HALF, TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
+};
+use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 /// Appends the Bot Teams rows to the Sidebar column, below its search field.
 pub(in crate::shell) fn teams_list(
@@ -35,10 +39,44 @@ pub(in crate::shell) fn teams_list(
     }
     match &sidebar.projects {
         Some(section) => column
-            .child(projects_header(&theme))
+            .child(teams_projects_header(&theme))
             .child(projects_rows(section, shell, window, cx)),
         None => column,
     }
+}
+
+/// The PROJECTS header of the team in view: Filters and New project (4.1). Both wait for layers
+/// that do not exist yet, so they show disabled.
+fn teams_projects_header(theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .pt(px(SPACE_2 + SPACE_HALF))
+        .pb(px(SPACE_1))
+        .px(px(SPACE_2))
+        .child(
+            div()
+                .text_style(TYPE_OVERLINE)
+                .text_color(theme.palette.text.secondary)
+                .child("PROJECTS"),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(SPACE_HALF))
+                .child(
+                    waiting_icon("teams-filters", IconName::ListFilter, "Filters")
+                        .size(ButtonSize::Compact),
+                )
+                .child(
+                    waiting_icon("teams-new-project", IconName::Plus, "New project")
+                        .size(ButtonSize::Compact),
+                ),
+        )
 }
 
 /// "All teams" is the mode's home: the Bot teams page with the team cards (D-AG-13).
@@ -68,11 +106,19 @@ fn team_rows(
 ) -> impl IntoElement {
     let theme = *cx.theme();
     let focus = row_focus(window, cx, format!("team-{index}"));
-    let mut row = SidebarRow::nav(
-        format!("team-row-{index}"),
-        IconName::Users,
-        team.name.clone(),
-    )
+    let mut row = match team.reach {
+        HostReach::Connected => SidebarRow::nav(
+            format!("team-row-{index}"),
+            IconName::Users,
+            team.name.clone(),
+        ),
+        // An unreachable team reads like its host row: the status glyph, dimmed (A10).
+        HostReach::Unreachable { .. } => SidebarRow::host(
+            format!("team-row-{index}"),
+            team.name.clone(),
+            HostConnection::Unreachable,
+        ),
+    }
     .focus_handle(focus)
     .tab_stop(true)
     .selected(team.selected);

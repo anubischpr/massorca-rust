@@ -1,0 +1,913 @@
+//! Agent sessions (decision 0051): the service object that starts runs in terminals, keeps session rows, reads each
+//! session's execution from its terminal, and keeps each session's status (0052, 0053).
+//!
+//! Calls block (store, process spawn), so the service runs them on its blocking pool.
+//!
+//! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
+//! row, and handed to the change listener in that same order.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::thread;
+use std::time::Duration;
+
+use massorca_core_store::{
+    AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
+};
+use massorca_core_terminal::pty::PtySize;
+use massorca_core_terminal::{
+    CreateSpec, ExitReason as CoreExitReason, ExitRecord, ShellChoice, TerminalError,
+    TerminalManager, TerminalState as CoreState,
+};
+use massorca_core_workspace::{DomainError, Workspaces};
+use massorca_protocol::methods::agents::{
+    Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams, Execution,
+    MAX_HOOK_PAYLOAD_BYTES,
+};
+use massorca_protocol::methods::terminals::{
+    DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
+};
+use massorca_protocol::{ErrorBody, codes};
+use serde_json::{Value, json};
+
+use crate::catalog::Catalog;
+use crate::launch::{self, LaunchError, LaunchInput, Run};
+use crate::paths;
+use crate::resolve::{SearchEnv, resolve_first};
+use crate::status::{self, HookRules};
+
+/// How often the terminals of live runs are checked for an exit (0052).
+pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// One applied status change, in the order the store applied it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// The session's full record after the change.
+    Updated(Box<AgentSession>),
+    /// The session was forgotten; its id.
+    Forgotten(String),
+}
+
+/// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
+pub type Listener = Box<dyn Fn(Change) + Send + Sync>;
+
+/// Shortest id prefix a session selector may be.
+pub const MIN_SELECTOR_PREFIX: usize = 8;
+
+/// A refused or failed agent call: a stable protocol code, a message for humans, optional data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentError {
+    pub code: &'static str,
+    pub message: String,
+    pub data: Option<Value>,
+}
+
+impl AgentError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            data: None,
+        }
+    }
+}
+
+impl fmt::Display for AgentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for AgentError {}
+
+impl From<AgentError> for ErrorBody {
+    fn from(error: AgentError) -> Self {
+        Self {
+            code: error.code.to_owned(),
+            message: error.message,
+            data: error.data,
+        }
+    }
+}
+
+impl From<DomainError> for AgentError {
+    fn from(error: DomainError) -> Self {
+        Self::new(error.code(), error.message())
+    }
+}
+
+impl From<StoreError> for AgentError {
+    fn from(error: StoreError) -> Self {
+        let code = match error {
+            StoreError::NewerSchema { .. } => codes::STORE_NEWER_SCHEMA,
+            _ => codes::INTERNAL,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<TerminalError> for AgentError {
+    fn from(error: TerminalError) -> Self {
+        let code = match &error {
+            TerminalError::NotFound => codes::TERMINAL_NOT_FOUND,
+            TerminalError::Exited => codes::TERMINAL_EXITED,
+            TerminalError::InvalidSize => codes::TERMINAL_INVALID_SIZE,
+            TerminalError::CwdNotFound(_) => codes::PATH_NOT_FOUND,
+            TerminalError::CwdNotDirectory(_) => codes::PATH_NOT_DIRECTORY,
+            TerminalError::ShellNotFound(_) | TerminalError::Spawn(_) => {
+                codes::TERMINAL_SPAWN_FAILED
+            }
+            TerminalError::LimitReached | TerminalError::TooManyAttachments => {
+                codes::TERMINAL_LIMIT_REACHED
+            }
+            TerminalError::InputTooLarge => codes::TERMINAL_INPUT_TOO_LARGE,
+            TerminalError::Io(_) => codes::INTERNAL,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<std::io::Error> for AgentError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(
+            codes::INTERNAL,
+            format!("cannot write the run's files: {error}"),
+        )
+    }
+}
+
+impl From<LaunchError> for AgentError {
+    fn from(error: LaunchError) -> Self {
+        let code = match error {
+            LaunchError::PromptTooLong | LaunchError::PromptHasNul => codes::AGENT_PROMPT_INVALID,
+            LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+/// What the agents service is built from.
+#[derive(Debug, Clone)]
+pub struct AgentsConfig {
+    pub store: Store,
+    pub terminals: TerminalManager,
+    pub workspaces: Arc<Workspaces>,
+    /// The profile directory: kinds, credential homes and run files live under it.
+    pub profile_dir: PathBuf,
+    /// The `massorca` executable that runs the service; agents and their hooks call it.
+    pub massorca_bin: PathBuf,
+}
+
+/// The agents service. Cheap to clone; every clone is the same service.
+#[derive(Clone)]
+pub struct Agents {
+    inner: Arc<Inner>,
+}
+
+impl fmt::Debug for Agents {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Agents")
+            .field("profile_dir", &self.inner.config.profile_dir)
+            .finish_non_exhaustive()
+    }
+}
+
+struct Inner {
+    config: AgentsConfig,
+    /// The status store's lock and its live runs: session id to the run's hook token and rules (0053). The token is
+    /// held in memory only.
+    status: Mutex<LiveRuns>,
+    listener: OnceLock<Listener>,
+    /// Serialises starts, so the one-writer check and the request id check see every earlier start.
+    start_gate: Mutex<()>,
+}
+
+/// A run whose exit the service has not seen yet.
+struct LiveRun {
+    token: String,
+    rules: HookRules,
+}
+
+type LiveRuns = HashMap<String, LiveRun>;
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Agents {
+    /// The service, with its exit sweep running every [`SWEEP_INTERVAL`] for as long as the service exists.
+    pub fn new(config: AgentsConfig) -> Self {
+        let agents = Self {
+            inner: Arc::new(Inner {
+                config,
+                status: Mutex::new(HashMap::new()),
+                listener: OnceLock::new(),
+                start_gate: Mutex::new(()),
+            }),
+        };
+        let weak = Arc::downgrade(&agents.inner);
+        let _ = thread::Builder::new()
+            .name("agent-status-sweep".to_owned())
+            .spawn(move || sweep_loop(&weak));
+        agents
+    }
+
+    /// Sets the receiver of every status change. Only the first call takes effect.
+    pub fn set_listener(&self, listener: Listener) {
+        let _ = self.inner.listener.set(listener);
+    }
+
+    fn notify(&self, change: Change) {
+        if let Some(listener) = self.inner.listener.get() {
+            listener(change);
+        }
+    }
+
+    fn store(&self) -> &Store {
+        &self.inner.config.store
+    }
+
+    fn profile_dir(&self) -> &Path {
+        &self.inner.config.profile_dir
+    }
+
+    /// Every declared kind, read again from the profile, with programs resolved on the service's `PATH`.
+    pub fn kinds(&self) -> AgentKinds {
+        let profile_dir = self.profile_dir();
+        AgentKinds {
+            kinds: Catalog::load(profile_dir).views(profile_dir, &SearchEnv::current()),
+        }
+    }
+
+    /// Starts a session: its first run in a new terminal in the workspace root (0051).
+    pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
+        let _gate = lock(&self.inner.start_gate);
+        if let Some(request_id) = &params.request_id
+            && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
+        {
+            return self.view(row);
+        }
+        let workspace = self
+            .inner
+            .config
+            .workspaces
+            .show_workspace(&params.workspace)?;
+        if workspace.missing {
+            return Err(AgentError::new(
+                codes::PATH_NOT_FOUND,
+                format!("the workspace directory is missing: {}", workspace.path),
+            ));
+        }
+        let (decl, program) = self.startable_kind(&params.kind)?;
+        if let Some(prompt) = &params.prompt {
+            launch::check_prompt(prompt)?;
+        }
+        if !params.read_only
+            && let Some(holder) = self.live_writer(&workspace.id)?
+        {
+            let mut error = AgentError::new(
+                codes::AGENT_WORKSPACE_BUSY,
+                format!("session {holder} already writes in this workspace"),
+            );
+            error.data = Some(json!({ "session": holder }));
+            return Err(error);
+        }
+
+        let session_id = new_id();
+        let token = new_token();
+        let new_ref = uuid::Uuid::new_v4().to_string();
+        let home = paths::valid_home(self.profile_dir(), &decl.id).filter(|home| home.is_dir());
+        let plan = launch::plan(&LaunchInput {
+            decl: &decl,
+            program: &program,
+            session_id: &session_id,
+            token: &token,
+            run: Run::First {
+                prompt: params.prompt.as_deref(),
+                new_ref: &new_ref,
+            },
+            profile_dir: self.profile_dir(),
+            massorca_bin: &self.inner.config.massorca_bin,
+            credential_home: home.as_deref(),
+            caller_args: &params.args,
+            caller_env: &params.env,
+        })?;
+        if plan.pending_prompt.is_some() {
+            return Err(AgentError::new(
+                codes::AGENT_PROMPT_INVALID,
+                format!("kind {} takes no prompt at launch", decl.id),
+            ));
+        }
+
+        let run_dir = paths::run_dir(self.profile_dir(), &session_id);
+        // The run is registered before its program starts, and the status lock is held until its row exists, so the
+        // run's first hook report waits for both instead of being refused.
+        let mut live = lock(&self.inner.status);
+        live.insert(
+            session_id.clone(),
+            LiveRun {
+                token,
+                rules: HookRules::of(&decl),
+            },
+        );
+        let started = write_files(&plan.files)
+            .map_err(AgentError::from)
+            .and_then(|()| {
+                let mut env = plan.env;
+                // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).
+                for name in plan.remove_env {
+                    env.entry(name).or_default();
+                }
+                let spec = CreateSpec {
+                    workspace_id: workspace.id.clone(),
+                    cwd: PathBuf::from(&workspace.path),
+                    shell: Some(ShellChoice {
+                        program: plan.program.to_string_lossy().into_owned(),
+                        args: plan.args,
+                    }),
+                    env,
+                    size: PtySize {
+                        cols: params.cols.unwrap_or(DEFAULT_COLS),
+                        rows: params.rows.unwrap_or(DEFAULT_ROWS),
+                    },
+                    title: Some(params.title.clone().unwrap_or_else(|| decl.name.clone())),
+                    request_id: None,
+                };
+                Ok(self.inner.config.terminals.create(spec)?)
+            });
+        let terminal = started.inspect_err(|_| {
+            live.remove(&session_id);
+            remove_dir(&run_dir);
+        })?;
+
+        let row = AgentSessionRow {
+            id: session_id.clone(),
+            kind: decl.id.clone(),
+            workspace_id: workspace.id,
+            parent_id: None,
+            title: params.title,
+            read_only: params.read_only,
+            agent_ref: plan.agent_ref,
+            terminal_id: Some(terminal.id.clone()),
+            request_id: params.request_id,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        };
+        if let Err(error) = self.store().insert_agent_session(&row) {
+            live.remove(&session_id);
+            let _ = self.inner.config.terminals.close(&terminal.id);
+            remove_dir(&run_dir);
+            return Err(error.into());
+        }
+        let session = self.view_with(&mut live, row)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(session)
+    }
+
+    /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
+    /// `agent.hook_refused` and changes nothing; an event the kind does not map, or maps to `ignore`, changes nothing.
+    pub fn hook(&self, params: &AgentHookParams) -> Result<(), AgentError> {
+        if params
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.len() > MAX_HOOK_PAYLOAD_BYTES)
+        {
+            return Err(AgentError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("a hook payload holds at most {MAX_HOOK_PAYLOAD_BYTES} bytes"),
+            ));
+        }
+        let mut live = lock(&self.inner.status);
+        let rules = match live.get(&params.session) {
+            Some(run) if tokens_match(&run.token, &params.token) => run.rules.clone(),
+            _ => {
+                return Err(AgentError::new(
+                    codes::AGENT_HOOK_REFUSED,
+                    "the report does not match a live run of this session",
+                ));
+            }
+        };
+        let Some(report) =
+            status::report(&rules, &params.event, params.payload.as_deref(), now_ms())
+        else {
+            return Ok(());
+        };
+        let mut row = self.reload(&params.session)?;
+        let result = if report.activity.state == "done" {
+            report.result
+        } else {
+            row.result.take()
+        };
+        let learned = report.learned_ref.filter(|_| row.agent_ref.is_none());
+        self.store().set_agent_session_status(
+            &row.id,
+            Some(&report.activity),
+            result.as_deref(),
+            learned.as_deref(),
+        )?;
+        row.activity = Some(report.activity);
+        row.result = result;
+        if row.agent_ref.is_none() {
+            row.agent_ref = learned;
+        }
+        let session = self.view_with(&mut live, row)?;
+        self.notify(Change::Updated(Box::new(session)));
+        Ok(())
+    }
+
+    /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
+    /// session is checked on its own: one that fails is logged, by its id and error code only, and the sweep goes on.
+    pub fn sweep(&self) {
+        let mut live = lock(&self.inner.status);
+        let ids: Vec<String> = live.keys().cloned().collect();
+        for id in ids {
+            let checked = match self.store().get_agent_session(&id) {
+                Ok(Some(row)) => self.view_with(&mut live, row).map(drop),
+                Ok(None) => {
+                    live.remove(&id);
+                    Ok(())
+                }
+                Err(error) => Err(AgentError::from(error)),
+            };
+            if let Err(error) = checked {
+                tracing::warn!(session = %id, code = error.code, "the exit sweep could not check a session");
+            }
+        }
+    }
+
+    /// Sessions newest first, optionally only those of one workspace (a selector).
+    pub fn list(&self, workspace: Option<&str>) -> Result<Vec<AgentSession>, AgentError> {
+        let workspace_id = match workspace {
+            Some(selector) => Some(self.inner.config.workspaces.show_workspace(selector)?.id),
+            None => None,
+        };
+        self.store()
+            .list_agent_sessions(workspace_id.as_deref())?
+            .into_iter()
+            .map(|row| self.view(row))
+            .collect()
+    }
+
+    /// The id of a workspace, by id, name or path.
+    pub fn workspace_id(&self, selector: &str) -> Result<String, AgentError> {
+        Ok(self.inner.config.workspaces.show_workspace(selector)?.id)
+    }
+
+    /// One session, by id or by a unique id prefix of at least [`MIN_SELECTOR_PREFIX`] characters.
+    pub fn show(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let row = self.resolve(selector)?;
+        self.view(row)
+    }
+
+    /// Ends the current run (graceful, or at once with `force`). The record stays, exited with reason `killed`.
+    /// A session whose run already ended is returned as it is.
+    pub fn stop(&self, selector: &str, force: bool) -> Result<AgentSession, AgentError> {
+        let row = self.resolve(selector)?;
+        if row.exit.is_none()
+            && let Some(terminal) = &row.terminal_id
+        {
+            match self.inner.config.terminals.kill(terminal, force) {
+                Ok(info) => {
+                    if let Some(exit) = info.exit {
+                        let mut live = lock(&self.inner.status);
+                        let mut row = self.reload(&row.id)?;
+                        if row.exit.is_none() {
+                            self.record_exit(&mut live, &mut row, run_exit_of(&exit))?;
+                        }
+                    }
+                }
+                Err(TerminalError::NotFound) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let row = self.reload(&row.id)?;
+        self.view(row)
+    }
+
+    /// Deletes the record of a session whose run has ended, with its terminal and generated files.
+    pub fn forget(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let id = self.resolve(selector)?.id;
+        let mut live = lock(&self.inner.status);
+        let row = self.reload(&id)?;
+        let session = self.view_with(&mut live, row)?;
+        if session.execution.state != TerminalState::Exited {
+            return Err(AgentError::new(
+                codes::AGENT_BUSY,
+                format!("session {} is still running; stop it first", session.id),
+            ));
+        }
+        self.store().delete_agent_session(&session.id)?;
+        if let Some(terminal) = &session.terminal_id {
+            let _ = self.inner.config.terminals.close(terminal);
+        }
+        remove_dir(&paths::run_dir(self.profile_dir(), &session.id));
+        live.remove(&session.id);
+        self.notify(Change::Forgotten(session.id.clone()));
+        Ok(session)
+    }
+
+    /// Marks every session whose run was live when the service last stopped as exited with reason `service_stopped`
+    /// (0051). Called once at service start, before any run exists. Returns how many sessions changed.
+    /// A run that was `working` or `waiting` then is `done` with outcome `interrupted` (0052).
+    pub fn mark_stale_on_startup(&self) -> Result<u64, AgentError> {
+        let at = now_ms();
+        for row in self.store().list_agent_sessions(None)? {
+            if row.exit.is_none()
+                && let Some(activity) = status::on_exit(row.activity.as_ref(), at)
+            {
+                self.store().set_agent_session_status(
+                    &row.id,
+                    Some(&activity),
+                    row.result.as_deref(),
+                    None,
+                )?;
+            }
+        }
+        Ok(self.store().mark_agent_runs_service_stopped(at)?)
+    }
+
+    fn startable_kind(&self, id: &str) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        let catalog = Catalog::load(self.profile_dir());
+        let entry = catalog.find(id).ok_or_else(|| {
+            AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
+        })?;
+        let decl = entry.valid().ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!("agent kind {id} is invalid: {}", entry.problems.join("; ")),
+            )
+        })?;
+        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!("agent kind {id} is not installed: none of its programs was found"),
+            )
+        })?;
+        Ok((decl.clone(), program))
+    }
+
+    /// The live writing session of a workspace, if any.
+    fn live_writer(&self, workspace_id: &str) -> Result<Option<String>, AgentError> {
+        for row in self.store().list_agent_sessions(Some(workspace_id))? {
+            if row.read_only {
+                continue;
+            }
+            let session = self.view(row)?;
+            if session.execution.state != TerminalState::Exited {
+                return Ok(Some(session.id));
+            }
+        }
+        Ok(None)
+    }
+
+    fn resolve(&self, selector: &str) -> Result<AgentSessionRow, AgentError> {
+        if let Some(row) = self.store().get_agent_session(selector)? {
+            return Ok(row);
+        }
+        if selector.len() >= MIN_SELECTOR_PREFIX {
+            let mut rows = self.store().find_agent_sessions_by_prefix(selector, 2)?;
+            match rows.len() {
+                1 => return Ok(rows.remove(0)),
+                0 => {}
+                _ => {
+                    return Err(AgentError::new(
+                        codes::SELECTOR_AMBIGUOUS,
+                        format!("{selector} is the start of more than one session id"),
+                    ));
+                }
+            }
+        }
+        Err(AgentError::new(
+            codes::AGENT_NOT_FOUND,
+            format!("no agent session {selector}"),
+        ))
+    }
+
+    fn reload(&self, id: &str) -> Result<AgentSessionRow, AgentError> {
+        self.store().get_agent_session(id)?.ok_or_else(|| {
+            AgentError::new(codes::AGENT_NOT_FOUND, format!("no agent session {id}"))
+        })
+    }
+
+    /// The record of a row read before the status lock: the row is read again under the lock, so a change applied
+    /// in between is neither lost nor overwritten.
+    fn view(&self, row: AgentSessionRow) -> Result<AgentSession, AgentError> {
+        let mut live = lock(&self.inner.status);
+        let row = self.store().get_agent_session(&row.id)?.unwrap_or(row);
+        self.view_with(&mut live, row)
+    }
+
+    /// The record of a row, with execution read from its terminal now. An end the terminal reports, or a terminal
+    /// that is gone without one, is applied as a status change, so it survives the terminal.
+    fn view_with(
+        &self,
+        live: &mut LiveRuns,
+        mut row: AgentSessionRow,
+    ) -> Result<AgentSession, AgentError> {
+        let execution = match (&row.exit, &row.terminal_id) {
+            (Some(exit), _) => {
+                live.remove(&row.id);
+                exited(exit)
+            }
+            (None, None) => Execution {
+                state: TerminalState::Exited,
+                exit: None,
+            },
+            (None, Some(terminal)) => match self.inner.config.terminals.get(terminal) {
+                Ok(info) => match info.state {
+                    CoreState::Live => running(TerminalState::Live),
+                    CoreState::Unverifiable => running(TerminalState::Unverifiable),
+                    CoreState::Exited => {
+                        let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
+                        self.record_exit(live, &mut row, exit)?
+                    }
+                },
+                Err(TerminalError::NotFound) => self.record_exit(live, &mut row, gone())?,
+                Err(error) => return Err(error.into()),
+            },
+        };
+        Ok(record(row, execution))
+    }
+
+    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once.
+    fn record_exit(
+        &self,
+        live: &mut LiveRuns,
+        row: &mut AgentSessionRow,
+        exit: RunExit,
+    ) -> Result<Execution, AgentError> {
+        let changed = self.store().set_agent_session_exit(&row.id, &exit)?;
+        live.remove(&row.id);
+        if changed {
+            // The exit rule reads the activity and result as they are now, under the status lock.
+            if let Some(fresh) = self.store().get_agent_session(&row.id)? {
+                *row = fresh;
+            }
+            if let Some(activity) = status::on_exit(row.activity.as_ref(), exit.at) {
+                self.store().set_agent_session_status(
+                    &row.id,
+                    Some(&activity),
+                    row.result.as_deref(),
+                    None,
+                )?;
+                row.activity = Some(activity);
+            }
+        }
+        let execution = exited(&exit);
+        row.exit = Some(exit);
+        if changed {
+            self.notify(Change::Updated(Box::new(record(
+                row.clone(),
+                execution.clone(),
+            ))));
+        }
+        Ok(execution)
+    }
+}
+
+/// The wire record of a row with its execution.
+fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
+    AgentSession {
+        id: row.id,
+        kind: row.kind,
+        workspace_id: row.workspace_id,
+        title: row.title,
+        read_only: row.read_only,
+        parent_id: row.parent_id,
+        brought_back_at_ms: row.brought_back_at,
+        agent_ref: row.agent_ref,
+        terminal_id: row.terminal_id,
+        created_at_ms: row.created_at,
+        execution,
+        activity: row.activity.as_ref().and_then(activity_of),
+        result: row.result,
+    }
+}
+
+/// Compares two tokens without stopping at the first difference.
+fn tokens_match(expected: &str, given: &str) -> bool {
+    expected.len() == given.len()
+        && expected
+            .bytes()
+            .zip(given.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+/// Sweeps every [`SWEEP_INTERVAL`] until the service is gone.
+fn sweep_loop(service: &Weak<Inner>) {
+    loop {
+        thread::sleep(SWEEP_INTERVAL);
+        let Some(inner) = service.upgrade() else {
+            return;
+        };
+        let agents = Agents { inner };
+        if !lock(&agents.inner.status).is_empty() {
+            agents.sweep();
+        }
+    }
+}
+
+/// A random hook token of 244 bits, as 64 hex digits.
+fn new_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn write_files(files: &[(PathBuf, String)]) -> std::io::Result<()> {
+    for (path, contents) in files {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
+fn remove_dir(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn running(state: TerminalState) -> Execution {
+    Execution { state, exit: None }
+}
+
+/// The end of a run whose terminal is gone without an exit the service saw (closed, or dropped from the list of
+/// exited terminals): `exited`, with no code, at the time it was noticed.
+fn gone() -> RunExit {
+    RunExit {
+        code: None,
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: now_ms(),
+    }
+}
+
+fn run_exit_of(exit: &ExitRecord) -> RunExit {
+    RunExit {
+        code: exit.code,
+        signal: exit.signal.clone(),
+        reason: match exit.reason {
+            CoreExitReason::Exited => RunExitReason::Exited,
+            CoreExitReason::Killed => RunExitReason::Killed,
+            CoreExitReason::ServiceStopped => RunExitReason::ServiceStopped,
+        },
+        at: exit.at_ms,
+    }
+}
+
+fn exited(exit: &RunExit) -> Execution {
+    Execution {
+        state: TerminalState::Exited,
+        exit: Some(TerminalExit {
+            code: exit.code,
+            signal: exit.signal.clone(),
+            reason: match exit.reason {
+                RunExitReason::Exited => ExitReason::Exited,
+                RunExitReason::Killed => ExitReason::Killed,
+                RunExitReason::ServiceStopped => ExitReason::ServiceStopped,
+            },
+            at_ms: exit.at,
+        }),
+    }
+}
+
+/// The stored activity in wire form; values a newer build wrote read as `unknown`.
+fn activity_of(stored: &StoredActivity) -> Option<Activity> {
+    let mut value = json!({
+        "state": stored.state,
+        "source": stored.source,
+        "at_ms": stored.at,
+    });
+    if let Some(outcome) = &stored.outcome {
+        value["outcome"] = json!(outcome);
+    }
+    serde_json::from_value(value).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_core_git::Git;
+    use massorca_core_store::{
+        ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState,
+    };
+    use massorca_core_terminal::ManagerConfig;
+    use massorca_core_terminal::shell::EnvSnapshot;
+
+    use super::*;
+
+    /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
+    fn service() -> (Agents, String, tempfile::TempDir) {
+        let profile = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let project = ProjectRow {
+            id: new_id(),
+            kind: ProjectKind::Folder,
+            path: "/work/app".to_owned(),
+            path_key: "/work/app".to_owned(),
+            name: "app".to_owned(),
+            workspaces_root: "/work/app-workspaces".to_owned(),
+            added_at: now_ms(),
+        };
+        store.insert_project(&project).unwrap();
+        let workspace = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id.clone(),
+            kind: WorkspaceKind::Folder,
+            name: "main".to_owned(),
+            path: "/work/app".to_owned(),
+            path_key: "/work/app".to_owned(),
+            branch: None,
+            base_ref: None,
+            created_branch: false,
+            state: WorkspaceState::Ready,
+            request_id: None,
+            created_at: now_ms(),
+        };
+        store.insert_workspace(&workspace).unwrap();
+        let agents = Agents::new(AgentsConfig {
+            store: store.clone(),
+            terminals: TerminalManager::new(ManagerConfig::new(EnvSnapshot::current(), "test")),
+            workspaces: Arc::new(Workspaces::new(
+                store,
+                Git::with_binary("git"),
+                profile.path().join("workspaces"),
+            )),
+            profile_dir: profile.path().to_path_buf(),
+            massorca_bin: PathBuf::from("massorca"),
+        });
+        (agents, workspace.id, profile)
+    }
+
+    fn activity(state: &str, outcome: Option<&str>) -> StoredActivity {
+        StoredActivity {
+            state: state.to_owned(),
+            outcome: outcome.map(str::to_owned),
+            source: "hook".to_owned(),
+            at: 5,
+        }
+    }
+
+    /// A row read before a `done` report landed must not turn that report into an interrupted turn when the exit is
+    /// applied: the exit rule reads the row as it is under the status lock.
+    #[test]
+    fn an_exit_applied_through_a_stale_row_keeps_the_done_report_and_its_result() {
+        let (agents, workspace_id, _profile) = service();
+        let stale = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            // A terminal the manager does not know: viewing the row applies the run's end.
+            terminal_id: Some(new_id()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: Some(activity("working", None)),
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&stale).unwrap();
+        agents
+            .store()
+            .set_agent_session_status(
+                &stale.id,
+                Some(&activity("done", Some("success"))),
+                Some("the answer"),
+                None,
+            )
+            .unwrap();
+
+        let session = agents.view(stale.clone()).unwrap();
+
+        assert_eq!(session.execution.state, TerminalState::Exited);
+        let shown = session.activity.expect("activity");
+        assert_eq!(
+            shown.state,
+            massorca_protocol::methods::agents::ActivityState::Done
+        );
+        assert_eq!(
+            shown.outcome,
+            Some(massorca_protocol::methods::agents::Outcome::Success)
+        );
+        assert_eq!(session.result.as_deref(), Some("the answer"));
+        let stored = agents
+            .store()
+            .get_agent_session(&stale.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.activity, Some(activity("done", Some("success"))));
+        assert_eq!(stored.result.as_deref(), Some("the answer"));
+    }
+}

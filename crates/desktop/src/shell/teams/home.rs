@@ -2,6 +2,7 @@
 
 use super::super::Shell;
 use super::super::change;
+use super::waiting_icon;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{Team, TeamPage, TeamsState};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, px};
@@ -122,6 +123,7 @@ fn team_card(
                 let _ = shell.update(cx, |shell, cx| shell.open_add_bot(id, window, cx));
             })
     };
+    let more = waiting_icon(format!("team-more-{}", id.0), IconName::Ellipsis, "More");
     let workspaces = if team.workspaces { "on" } else { "off" };
     div().w(px(CARD_WIDTH)).child(
         Card::new(format!("team-card-{}", id.0))
@@ -145,7 +147,8 @@ fn team_card(
                     )),
             )
             .footer_action(open)
-            .footer_action(add_bot),
+            .footer_action(add_bot)
+            .footer_action(more),
     )
 }
 

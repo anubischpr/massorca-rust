@@ -95,6 +95,12 @@ pub const GIT_NO_OPERATION: &str = "git.no_operation";
 pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
 /// The repository's git directory cannot be watched; the stream ends with this code.
 pub const GIT_WATCH_UNAVAILABLE: &str = "git.watch_unavailable";
+/// CLI only: a fast-forward-only pull found local and remote commits on both sides; nothing changed.
+pub const GIT_DIVERGED: &str = "git.diverged";
+/// CLI only: a pull's merge or rebase stopped on conflicts.
+pub const GIT_CONFLICTS: &str = "git.conflicts";
+/// CLI only: the remote refused the push.
+pub const GIT_PUSH_REJECTED: &str = "git.push_rejected";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).
@@ -121,6 +127,28 @@ pub const TERMINAL_SPAWN_FAILED: &str = "terminal.spawn_failed";
 pub const TERMINAL_INPUT_TOO_LARGE: &str = "terminal.input_too_large";
 pub const TERMINAL_INVALID_SIZE: &str = "terminal.invalid_size";
 pub const TERMINAL_LIMIT_REACHED: &str = "terminal.limit_reached";
+
+pub const AGENT_NOT_FOUND: &str = "agent.not_found";
+pub const AGENT_KIND_NOT_FOUND: &str = "agent.kind_not_found";
+/// The kind is declared but none of its program candidates resolves, or its declaration has problems.
+pub const AGENT_NOT_INSTALLED: &str = "agent.not_installed";
+/// The workspace already holds a live writing session; `data.session` names it.
+pub const AGENT_WORKSPACE_BUSY: &str = "agent.workspace_busy";
+pub const AGENT_NOT_LIVE: &str = "agent.not_live";
+pub const AGENT_BUSY: &str = "agent.busy";
+/// A prompt over the size limit or with a NUL.
+pub const AGENT_PROMPT_INVALID: &str = "agent.prompt_invalid";
+pub const AGENT_RESUME_UNAVAILABLE: &str = "agent.resume_unavailable";
+pub const AGENT_HOOK_REFUSED: &str = "agent.hook_refused";
+pub const AGENT_DELEGATE_NEEDS_GIT: &str = "agent.delegate_needs_git";
+pub const AGENT_DEPTH_EXCEEDED: &str = "agent.depth_exceeded";
+pub const AGENT_PARENT_BUSY: &str = "agent.parent_busy";
+pub const AGENT_PARENT_DIRTY: &str = "agent.parent_dirty";
+pub const AGENT_MERGE_CONFLICT: &str = "agent.merge_conflict";
+pub const AGENT_ALREADY_BROUGHT_BACK: &str = "agent.already_brought_back";
+pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
+pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
+pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
