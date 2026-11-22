@@ -9,10 +9,11 @@ use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
-use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
+use crate::service::{Command, ConnectionState, Refusal, Script, SecretsUpdate, StoreUpdate};
 use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -314,6 +315,46 @@ fn this_pc_reads_the_store_connection_in_words() {
             reason: "the link is down".into(),
         }),
         "Unreachable"
+    );
+}
+
+/// An owned name in `scope`, rotated long ago and never used.
+fn owned_secret(scope: &str, name: &str) -> SecretEntry {
+    SecretEntry {
+        scope: scope.into(),
+        name: name.into(),
+        owner_scope: scope.into(),
+        linked: false,
+        linked_scopes: Vec::new(),
+        created_at_ms: 1,
+        rotated_at_ms: 1,
+        used_at_ms: None,
+    }
+}
+
+#[gpui::test]
+fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    let status = SecretStatus {
+        protection: "file".into(),
+        state: "ready".into(),
+        count: 1,
+        name_clashes: Vec::new(),
+    };
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(status))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("project:p1", "OPENAI_API_KEY"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-OPENAI_API_KEY")
+            .is_some(),
+        "the name is drawn under its project"
     );
 }
 

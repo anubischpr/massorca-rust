@@ -462,6 +462,10 @@ impl Render for Shell {
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
             agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
+            vault: {
+                let state = self.store.read(cx).state();
+                crate::model::secret_vault::VaultPage::from_state(&state.secrets, &state.projects)
+            },
         };
         let setup_rows = crate::model::setup::checklist(
             self.store.read(cx).state(),

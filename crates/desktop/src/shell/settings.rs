@@ -24,6 +24,7 @@ use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 use super::Shell;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
+use crate::model::secret_vault::VaultPage;
 use crate::model::settings::{
     FolderSetting, FolderStatus, FolderValue, SettingsModel, folder_reason, folder_refusal_text,
     folder_request,
@@ -39,6 +40,10 @@ use massorca_protocol::methods::config::ConfigSet;
 mod settings_planned;
 use settings_planned::planned_row;
 
+#[path = "settings_vault.rs"]
+mod settings_vault;
+use settings_vault::{secret_scopes, secret_status_row};
+
 /// The navigation column's width (`layout.settings.nav`, 232 px, owner 2026-11-13).
 const NAV_WIDTH: f32 = 232.0;
 
@@ -53,6 +58,8 @@ pub(super) struct SettingsFrame<'a> {
     pub folder_field: &'a Entity<TextField>,
     /// The installed agents, each linking to its Marketplace page (decision 0059).
     pub agents: Vec<AgentLink>,
+    /// The secret vault as the store holds it: its key, and the names by scope (decision 0071).
+    pub vault: VaultPage,
 }
 
 /// The Settings page: navigation, search and the rows of the chosen section.
@@ -189,6 +196,9 @@ fn sections(frame: &SettingsFrame<'_>, hits: &[Hit], cx: &mut App) -> Vec<AnyEle
         if section == SettingsSection::Agents {
             groups.push(installed_agents(frame));
         }
+        if section == SettingsSection::Vault {
+            groups.extend(secret_scopes(frame));
+        }
         return groups;
     }
     if hits.is_empty() {
@@ -301,6 +311,7 @@ fn row(
         }
         RowBody::ThisPc => (row, Some(value_box(host_word(&frame.connection), &theme))),
         RowBody::SetupChecklist => (row, Some(setup_link(id.clone(), frame))),
+        RowBody::SecretVault => secret_status_row(row, frame, &theme),
     };
     match control {
         Some(control) => row.control(control).into_any_element(),
