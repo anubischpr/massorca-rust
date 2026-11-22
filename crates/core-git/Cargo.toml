@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+massorca-process.workspace = true
 dunce.workspace = true
 massorca-protocol.workspace = true
 thiserror.workspace = true

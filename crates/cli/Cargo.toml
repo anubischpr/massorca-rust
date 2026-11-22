@@ -23,6 +23,7 @@ test = false
 doc = false
 
 [dependencies]
+massorca-process.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 massorca-client.workspace = true

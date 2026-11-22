@@ -1,6 +1,8 @@
 //! Single-line text input: the editing model, the element that paints it, the
 //! entity that owns it and its platform input handler (typing and IME).
 
+use std::borrow::Cow;
+use std::fmt;
 use std::ops::Range;
 
 use gpui::accesskit::Role;
@@ -10,12 +12,15 @@ use gpui::{
     ElementInputHandler, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
     InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
-    SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, TextRun, UnderlineStyle,
-    Window, actions, div, fill, point, px, relative, size,
+    SharedString, StatefulInteractiveElement, Style, Styled, Subscription, TextAlign, TextRun,
+    UnderlineStyle, Window, actions, div, fill, point, px, relative, size,
 };
 
 use crate::a11y;
+use crate::components::button::ButtonSize;
+use crate::components::icon_button::IconButton;
 use crate::components::text_editing::input::{self, InputHost, impl_input_handler};
+use crate::components::text_editing::masking::{masked_offset, masked_text, text_offset};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
@@ -80,6 +85,17 @@ impl TextBuffer {
 
     pub fn marked(&self) -> Option<Range<usize>> {
         self.marked.clone()
+    }
+
+    /// Overwrites the text in place before it is released, so a masked value leaves no readable copy behind.
+    pub fn wipe(&mut self) {
+        let len = self.text.len();
+        self.text.clear();
+        self.text.extend((0..len).map(|_| '\0'));
+        self.text.clear();
+        self.selected = 0..0;
+        self.reversed = false;
+        self.marked = None;
     }
 
     /// Replaces the whole text and puts the cursor at its end; `true` when it changed.
@@ -396,7 +412,6 @@ pub enum TextFieldEvent {
 }
 
 /// Single-line text input. It owns its text and focus; forms subscribe to its events.
-#[derive(Debug)]
 pub struct TextField {
     focus_handle: FocusHandle,
     buffer: TextBuffer,
@@ -413,11 +428,62 @@ pub struct TextField {
     read_only: bool,
     /// A search box: its root carries the searchbox role instead of the textbox role.
     search: bool,
+    /// Paints the text as bullets and gives it to no clipboard, platform or accessibility reader.
+    masked: bool,
+    /// Adds a Show button that reveals a masked value while the field has focus.
+    revealable: bool,
+    /// The Show button is pressed, so the masked value paints as text.
+    revealed: bool,
+    /// Hides the value again when focus leaves the field or the window loses activation.
+    _reveal_watch: Vec<Subscription>,
     /// The last paint, for pointer hit tests and IME geometry.
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     scroll_x: Pixels,
     selecting: bool,
+}
+
+impl fmt::Debug for TextField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // A masked field's text stays out of debug output, as it stays out of the accessibility tree.
+        let buffer: &dyn fmt::Debug = if self.masked {
+            &"[masked]"
+        } else {
+            &self.buffer
+        };
+        f.debug_struct("TextField")
+            .field("focus_handle", &self.focus_handle)
+            .field("buffer", buffer)
+            .field("placeholder", &self.placeholder)
+            .field("label", &self.label)
+            .field("helper", &self.helper)
+            .field("error", &self.error)
+            .field("leading_icon", &self.leading_icon)
+            .field("comfortable", &self.comfortable)
+            .field("mono", &self.mono)
+            .field("clearable", &self.clearable)
+            .field("clear_when_filled", &self.clear_when_filled)
+            .field("disabled", &self.disabled)
+            .field("read_only", &self.read_only)
+            .field("search", &self.search)
+            .field("masked", &self.masked)
+            .field("revealable", &self.revealable)
+            .field("revealed", &self.revealed)
+            .field("last_layout", &self.last_layout)
+            .field("last_bounds", &self.last_bounds)
+            .field("scroll_x", &self.scroll_x)
+            .field("selecting", &self.selecting)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for TextField {
+    /// Backstop for owners that clear a masked value on close: whatever is left is overwritten as the field goes.
+    fn drop(&mut self) {
+        if self.masked {
+            self.buffer.wipe();
+        }
+    }
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -445,6 +511,10 @@ impl TextField {
             disabled: false,
             read_only: false,
             search: false,
+            masked: false,
+            revealable: false,
+            revealed: false,
+            _reveal_watch: Vec::new(),
             last_layout: None,
             last_bounds: None,
             scroll_x: px(0.),
@@ -517,6 +587,19 @@ impl TextField {
         self
     }
 
+    /// Hides the text as bullets, one per character, for a secret value (decision 0029).
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
+        self
+    }
+
+    /// Adds a Show button that reveals a masked value while the field has focus. Use it only for a
+    /// value the user types: the field shows whatever it holds.
+    pub fn revealable(mut self) -> Self {
+        self.revealable = true;
+        self
+    }
+
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
@@ -529,6 +612,18 @@ impl TextField {
     /// Replaces the text; emits `Changed` only when it differs.
     pub fn set_text(&mut self, text: impl AsRef<str>, window: &mut Window, cx: &mut Context<Self>) {
         let changed = self.buffer.set_text(text.as_ref());
+        self.after_edit(changed, window, cx);
+    }
+
+    /// Inserts clipboard text at the caret, as Paste does: line breaks become spaces.
+    pub fn insert_pasted(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = single_line(text);
+        self.edit(window, cx, |buffer| buffer.insert(&text));
+    }
+
+    /// Empties the field without moving focus.
+    pub fn clear_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let changed = self.buffer.set_text("");
         self.after_edit(changed, window, cx);
     }
 
@@ -628,22 +723,25 @@ impl TextField {
         self.move_caret(TextBuffer::select_all, window, cx);
     }
 
+    /// A masked field gives nothing to the clipboard, so copy and cut do nothing there.
     fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
         let selected = self.buffer.selected_text();
-        if !selected.is_empty() {
+        if !self.masked && !selected.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(selected.to_owned()));
         }
     }
 
     fn cut_selection(&mut self, _: &CutSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if self.masked {
+            return;
+        }
         self.copy_selection(&CopySelection, window, cx);
         self.edit(window, cx, |buffer| buffer.insert(""));
     }
 
     fn paste_text(&mut self, _: &PasteText, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = single_line(&text);
-            self.edit(window, cx, |buffer| buffer.insert(&text));
+            self.insert_pasted(&text, window, cx);
         }
     }
 
@@ -689,10 +787,43 @@ impl TextField {
         self.selecting = false;
     }
 
+    /// Whether the text paints as bullets: a masked field whose Show button has not revealed it.
+    fn hides_text(&self) -> bool {
+        self.masked && !self.revealed
+    }
+
+    /// The text as the line paints it: one bullet per character while the text is hidden.
+    fn shown_text(&self) -> Cow<'_, str> {
+        if self.hides_text() {
+            Cow::Owned(masked_text(self.buffer.text()))
+        } else {
+            Cow::Borrowed(self.buffer.text())
+        }
+    }
+
+    /// The painted offset of a text offset: a bullet stands for one whole character.
+    fn painted_offset(&self, offset: usize) -> usize {
+        if self.hides_text() {
+            masked_offset(self.buffer.text(), offset)
+        } else {
+            offset
+        }
+    }
+
+    /// The text offset of a painted offset.
+    fn offset_from_painted(&self, painted: usize) -> usize {
+        if self.hides_text() {
+            text_offset(self.buffer.text(), painted)
+        } else {
+            painted
+        }
+    }
+
     /// The last paint, while it still shows the current text.
     fn current_line(&self) -> Option<&ShapedLine> {
         let line = self.last_layout.as_ref()?;
-        (self.buffer.is_empty() || line.text.as_ref() == self.buffer.text()).then_some(line)
+        let shown = self.shown_text();
+        (self.buffer.is_empty() || line.text.as_ref() == shown.as_ref()).then_some(line)
     }
 
     /// The text offset under a window position, snapped to a grapheme boundary.
@@ -701,7 +832,9 @@ impl TextField {
             return self.buffer.cursor();
         };
         let x = position.x - bounds.left() + self.scroll_x;
-        self.buffer.snap_to_grapheme(line.closest_index_for_x(x))
+        let painted = line.closest_index_for_x(x);
+        self.buffer
+            .snap_to_grapheme(self.offset_from_painted(painted))
     }
 
     /// Outline colour and width for the current state; focus draws a 2 px inside border.
@@ -749,6 +882,42 @@ impl TextField {
                     .color(palette.text.secondary),
             )
     }
+
+    /// The Show button, which reveals the value while the field has focus. Its wrapper keeps a click
+    /// from moving the caret, and the field takes focus back so that typing carries on.
+    fn reveal_button(&self, cx: &mut Context<Self>) -> Div {
+        let field = cx.entity();
+        div()
+            .debug_selector(|| SHOW_SELECTOR.to_owned())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(show_button(
+                ElementId::from(format!("text-field-show-{}", cx.entity_id())),
+                self.revealed,
+                move |window, cx| field.update(cx, |field, cx| field.toggle_reveal(window, cx)),
+            ))
+    }
+
+    /// Flips the reveal and returns focus to the field.
+    fn toggle_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.revealed = !self.revealed;
+        self.focus(window, cx);
+        cx.notify();
+    }
+}
+
+/// Where the test window finds a masked field's Show button.
+const SHOW_SELECTOR: &str = "text-field-show";
+
+/// The Show button of a masked field: a toggle named "Show value", pressed while the value shows.
+fn show_button(
+    id: ElementId,
+    revealed: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> IconButton {
+    IconButton::new(id, IconName::Eye, "Show value")
+        .size(ButtonSize::Compact)
+        .toggle(revealed)
+        .on_click(on_click)
 }
 
 impl Render for TextField {
@@ -816,6 +985,20 @@ impl Render for TextField {
         } else {
             palette.text.secondary
         };
+        if self.revealable && self._reveal_watch.is_empty() {
+            let blur = cx.on_focus_out(&self.focus_handle, window, |field, _, _, cx| {
+                field.revealed = false;
+                cx.notify();
+            });
+            let activation = cx.observe_window_activation(window, |field, window, cx| {
+                if !window.is_window_active() {
+                    field.revealed = false;
+                    cx.notify();
+                }
+            });
+            self._reveal_watch = vec![blur, activation];
+        }
+        let reveal = (self.revealable && self.masked && enabled).then(|| self.reveal_button(cx));
         let field = field
             .when_some(self.leading_icon, |field, icon| {
                 field.child(Icon::new(icon).size(IconSize::Small).color(icon_color))
@@ -827,6 +1010,7 @@ impl Render for TextField {
                     .overflow_hidden()
                     .child(TextElement { input: cx.entity() }),
             )
+            .when_some(reveal, |field, button| field.child(button))
             .when(self.clearable && enabled, |field| {
                 field.child(self.clear_button(focused, &palette, cx))
             });
@@ -858,7 +1042,9 @@ impl Render for TextField {
                     .clone()
                     .map(|helper| note_line(helper, palette.text.secondary, None))
             });
-        let role = if self.search {
+        let role = if self.masked {
+            Role::PasswordInput
+        } else if self.search {
             Role::SearchInput
         } else {
             Role::TextInput
@@ -869,12 +1055,13 @@ impl Render for TextField {
         });
         let description = self.error.clone().or_else(|| self.helper.clone());
         let placeholder = self.placeholder.clone();
-        let value = SharedString::from(self.text().to_owned());
+        // A masked field reports no value, so the accessibility tree never holds its text.
+        let value = (!self.masked).then(|| SharedString::from(self.text().to_owned()));
         let (disabled, read_only, invalid) = (self.disabled, self.read_only, self.error.is_some());
         let root = div()
             .id(ElementId::from(format!("text-field-{}", cx.entity_id())))
             .role(role)
-            .aria_value(value)
+            .when_some(value, |root, value| root.aria_value(value))
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
@@ -977,7 +1164,7 @@ impl Element for TextElement {
         let text = if empty {
             field.placeholder.clone()
         } else {
-            SharedString::from(field.buffer.text().to_owned())
+            SharedString::from(field.shown_text().into_owned())
         };
         let selected = field.buffer.selected();
         let cursor = field.buffer.cursor();
@@ -1001,28 +1188,32 @@ impl Element for TextElement {
             strikethrough: None,
         };
         let runs = match marked {
-            Some(range) if !empty => [
-                TextRun {
-                    len: range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: range.end - range.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(color),
-                        thickness: px(1.),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: text.len() - range.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect(),
+            Some(range) if !empty => {
+                let start = field.painted_offset(range.start);
+                let end = field.painted_offset(range.end);
+                [
+                    TextRun {
+                        len: start,
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: end - start,
+                        underline: Some(UnderlineStyle {
+                            color: Some(color),
+                            thickness: px(1.),
+                            wavy: false,
+                        }),
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: text.len() - end,
+                        ..run
+                    },
+                ]
+                .into_iter()
+                .filter(|run| run.len > 0)
+                .collect()
+            }
             _ => vec![run],
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -1030,7 +1221,7 @@ impl Element for TextElement {
             .text_system()
             .shape_line(text, font_size, &runs, None);
 
-        let caret_x = line.x_for_index(cursor);
+        let caret_x = line.x_for_index(field.painted_offset(cursor));
         let content_width = line.x_for_index(line.text.len());
         let scroll = px(visible_scroll(
             f32::from(scroll_x),
@@ -1041,8 +1232,14 @@ impl Element for TextElement {
         let origin = bounds.left() - scroll;
         let (selection, caret) = if !selected.is_empty() {
             let span = Bounds::from_corners(
-                point(origin + line.x_for_index(selected.start), bounds.top()),
-                point(origin + line.x_for_index(selected.end), bounds.bottom()),
+                point(
+                    origin + line.x_for_index(field.painted_offset(selected.start)),
+                    bounds.top(),
+                ),
+                point(
+                    origin + line.x_for_index(field.painted_offset(selected.end)),
+                    bounds.bottom(),
+                ),
             );
             (Some(fill(span, Hsla::from(palette.selection.bg))), None)
         } else if focused && editable {
@@ -1119,6 +1316,10 @@ impl InputHost for TextField {
         self.editable()
     }
 
+    fn input_masked(&self) -> bool {
+        self.masked
+    }
+
     fn input_focus(&self) -> &FocusHandle {
         &self.focus_handle
     }
@@ -1139,15 +1340,22 @@ impl InputHost for TextField {
         let line = self.current_line()?;
         let left = element_bounds.left() - self.scroll_x;
         Some(Bounds::from_corners(
-            point(left + line.x_for_index(range.start), element_bounds.top()),
-            point(left + line.x_for_index(range.end), element_bounds.bottom()),
+            point(
+                left + line.x_for_index(self.painted_offset(range.start)),
+                element_bounds.top(),
+            ),
+            point(
+                left + line.x_for_index(self.painted_offset(range.end)),
+                element_bounds.bottom(),
+            ),
         ))
     }
 
     fn offset_at(&self, position: Point<Pixels>) -> Option<usize> {
         let bounds = self.last_bounds?;
         let line = self.current_line()?;
-        Some(line.closest_index_for_x(position.x - bounds.left() + self.scroll_x))
+        let painted = line.closest_index_for_x(position.x - bounds.left() + self.scroll_x);
+        Some(self.offset_from_painted(painted))
     }
 }
 
@@ -1241,7 +1449,7 @@ fn is_extend(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{EntityInputHandler, TestAppContext, VisualTestContext};
+    use gpui::{EntityInputHandler, Modifiers, TestAppContext, VisualTestContext};
     use std::{cell::RefCell, rc::Rc};
 
     #[test]
@@ -1582,13 +1790,381 @@ mod tests {
         assert_eq!(text_of(&field, cx), "");
         assert!(field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)));
     }
+
+    /// A masked test value: ASCII, a two-byte letter, a three-byte ideograph and a four-byte emoji.
+    const SECRET: &str = "placeholder-ñ漢🙂";
+
+    /// The line the field painted last: its bullets when masked, its text otherwise.
+    fn painted_text(field: &Entity<TextField>, cx: &VisualTestContext) -> String {
+        field.read_with(cx, |field, _| {
+            field
+                .last_layout
+                .as_ref()
+                .map(|line| line.text.to_string())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Redraws the window, so the field paints its latest text.
+    fn redraw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    #[gpui::test]
+    fn a_masked_field_paints_one_bullet_per_character(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        assert!(
+            painted_text(&field, cx) == "•".repeat(SECRET.chars().count()),
+            "the field paints one bullet per character"
+        );
+        assert!(text_of(&field, cx) == SECRET, "the field keeps its text");
+    }
+
+    #[gpui::test]
+    fn a_masked_field_lays_each_character_over_its_own_bullet(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text("a漢🙂b"));
+        focus_and_draw(&field, cx);
+        let element = field.read_with(cx, |field, _| {
+            field.last_bounds.expect("the field was painted")
+        });
+        // UTF-16 units: "a" 0..1, "漢" 1..2, "🙂" 2..4 (a surrogate pair), "b" 4..5.
+        let ranges: [Range<usize>; 4] = [0..1, 1..2, 2..4, 4..5];
+        let spans: Vec<Bounds<Pixels>> = ranges
+            .into_iter()
+            .map(|range| {
+                field
+                    .update_in(cx, |field, window, cx| {
+                        field.bounds_for_range(range, element, window, cx)
+                    })
+                    .expect("each character has a box")
+            })
+            .collect();
+        for pair in spans.windows(2) {
+            assert!(
+                pair[0].right() == pair[1].left(),
+                "the boxes sit side by side"
+            );
+        }
+        let first_width = f32::from(spans[0].size.width);
+        assert!(
+            spans
+                .iter()
+                .all(|span| (f32::from(span.size.width) - first_width).abs() < 0.01),
+            "every bullet has the same width"
+        );
+        let middle = element.center().y;
+        let inside_emoji = point(spans[2].left() + px(1.), middle);
+        let before_b = point(spans[2].right() - px(1.), middle);
+        let (start, end) = field.update_in(cx, |field, window, cx| {
+            (
+                field.character_index_for_point(inside_emoji, window, cx),
+                field.character_index_for_point(before_b, window, cx),
+            )
+        });
+        assert_eq!(
+            start,
+            Some(2),
+            "a point on the emoji's bullet hits its first unit"
+        );
+        assert_eq!(
+            end,
+            Some(4),
+            "a point at its right edge hits the end of the emoji"
+        );
+    }
+
+    #[gpui::test]
+    fn a_selection_in_a_masked_field_covers_whole_bullets(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text("a漢🙂b"));
+        focus_and_draw(&field, cx);
+        cx.simulate_keystrokes("home shift-right shift-right");
+        redraw(cx);
+        assert!(
+            field.read_with(cx, |field, _| field.buffer.selected()) == (0..4),
+            "two characters are selected: 'a' and '漢'"
+        );
+        assert!(
+            painted_text(&field, cx) == "••••",
+            "the four characters paint four bullets"
+        );
+        let element = field.read_with(cx, |field, _| {
+            field.last_bounds.expect("the field was painted")
+        });
+        let selection = field
+            .update_in(cx, |field, window, cx| {
+                field.bounds_for_range(0..2, element, window, cx)
+            })
+            .expect("the selection has a box");
+        let second = field
+            .update_in(cx, |field, window, cx| {
+                field.bounds_for_range(1..2, element, window, cx)
+            })
+            .expect("the second character has a box");
+        assert!(
+            selection.left() == element.left(),
+            "the selection starts at the first bullet"
+        );
+        assert!(
+            selection.right() == second.right(),
+            "the selection ends where the second bullet ends"
+        );
+    }
+
+    #[gpui::test]
+    fn copy_and_cut_put_nothing_on_the_clipboard_and_leave_a_masked_field_alone(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("before".to_owned()));
+        cx.simulate_keystrokes("secondary-a secondary-c secondary-x");
+        let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
+        assert!(
+            clipboard.as_deref() == Some("before"),
+            "copy and cut write nothing to the clipboard"
+        );
+        assert!(
+            text_of(&field, cx) == SECRET,
+            "cut removes nothing from a masked field"
+        );
+    }
+
+    #[gpui::test]
+    fn paste_still_fills_a_masked_field_on_one_line(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked());
+        focus_and_draw(&field, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("ab\ncd".to_owned()));
+        cx.simulate_keystrokes("secondary-v");
+        redraw(cx);
+        assert_eq!(text_of(&field, cx), "ab cd");
+        assert_eq!(painted_text(&field, cx), "•••••");
+    }
+
+    #[gpui::test]
+    fn typing_and_backspace_in_a_masked_field_move_whole_characters(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked());
+        focus_and_draw(&field, cx);
+        cx.simulate_input("ñ漢");
+        redraw(cx);
+        assert_eq!(painted_text(&field, cx), "••");
+        cx.simulate_keystrokes("backspace");
+        redraw(cx);
+        assert!(
+            text_of(&field, cx) == "ñ",
+            "backspace removes one whole character"
+        );
+        assert_eq!(painted_text(&field, cx), "•");
+    }
+
+    #[gpui::test]
+    fn an_unmasked_field_paints_its_text(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm"));
+        focus_and_draw(&field, cx);
+        assert_eq!(painted_text(&field, cx), "oppm");
+    }
+
+    #[gpui::test]
+    fn the_platform_is_given_no_text_from_a_masked_field(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            let mut adjusted = None;
+            assert!(
+                field
+                    .text_for_range(0..3, &mut adjusted, window, cx)
+                    .is_none(),
+                "no text is handed to the platform"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_masked_field_prints_no_text_in_debug_output(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        let printed = field.read_with(cx, |field, _| format!("{field:?}"));
+        assert!(!printed.contains(SECRET), "the debug output shows no text");
+    }
+
+    /// Clicks the Show button where the test window draws it.
+    fn click_show(cx: &mut VisualTestContext) {
+        redraw(cx);
+        let bounds = cx
+            .debug_bounds(SHOW_SELECTOR)
+            .expect("the field draws its Show button");
+        cx.simulate_click(bounds.center(), Modifiers::default());
+    }
+
+    #[gpui::test]
+    fn a_revealed_value_shows_while_the_field_has_focus_and_hides_when_focus_leaves(
+        cx: &mut TestAppContext,
+    ) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let hidden = "•".repeat(SECRET.chars().count());
+        assert!(
+            painted_text(&field, cx) == hidden,
+            "the value starts hidden"
+        );
+
+        click_show(cx);
+        redraw(cx);
+        assert!(
+            field.read_with(cx, |field, _| field.revealed),
+            "Show reveals the value"
+        );
+        assert!(
+            painted_text(&field, cx) == SECRET,
+            "the value shows while the field has focus"
+        );
+
+        cx.update(|window, cx| window.blur(cx));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "leaving the field hides the value again"
+        );
+        assert!(
+            painted_text(&field, cx) == hidden,
+            "the value is bullets again"
+        );
+    }
+
+    #[gpui::test]
+    fn the_show_button_keeps_focus_in_the_field_and_toggles_the_value(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        click_show(cx);
+        assert!(
+            field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)),
+            "the field keeps focus after Show"
+        );
+        click_show(cx);
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "a second click hides the value"
+        );
+        assert!(
+            field.update_in(cx, |field, window, _| field.focus_handle.is_focused(window)),
+            "the field keeps focus after the second click"
+        );
+    }
+
+    #[gpui::test]
+    fn a_revealed_value_hides_when_the_window_loses_activation(cx: &mut TestAppContext) {
+        let (field, cx) =
+            cx.add_window_view(|_, cx| TextField::new(cx).masked().revealable().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        click_show(cx);
+        assert!(
+            field.read_with(cx, |field, _| field.revealed),
+            "Show reveals the value"
+        );
+        cx.deactivate_window();
+        cx.run_until_parked();
+        assert!(
+            !field.read_with(cx, |field, _| field.revealed),
+            "a window in the background shows no revealed value"
+        );
+    }
+
+    #[gpui::test]
+    fn a_masked_field_that_is_not_revealable_draws_no_show_button(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        redraw(cx);
+        assert!(
+            cx.debug_bounds(SHOW_SELECTOR).is_none(),
+            "no Show button unless the field is revealable"
+        );
+    }
+
+    #[gpui::test]
+    fn insert_pasted_puts_the_clipboard_text_at_the_caret_on_one_line(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("ab"));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.insert_pasted("x\ny", window, cx)
+        });
+        assert_eq!(text_of(&field, cx), "abx y");
+    }
+
+    #[gpui::test]
+    fn insert_pasted_into_a_masked_field_paints_one_bullet_per_character(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked());
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| {
+            field.insert_pasted("ab\ncd", window, cx)
+        });
+        redraw(cx);
+        assert_eq!(text_of(&field, cx), "ab cd");
+        assert_eq!(painted_text(&field, cx), "•••••");
+    }
+
+    #[gpui::test]
+    fn clear_text_empties_the_field_and_reports_one_change(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).with_text("oppm"));
+        let events = record_events(&field, cx);
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        assert_eq!(text_of(&field, cx), "");
+        assert_eq!(
+            *events.borrow(),
+            vec![TextFieldEvent::Changed],
+            "only the first clear changes the text"
+        );
+    }
+
+    #[gpui::test]
+    fn clear_text_empties_a_masked_field(cx: &mut TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| TextField::new(cx).masked().with_text(SECRET));
+        focus_and_draw(&field, cx);
+        field.update_in(cx, |field, window, cx| field.clear_text(window, cx));
+        redraw(cx);
+        assert!(text_of(&field, cx).is_empty(), "the masked text is cleared");
+        assert!(painted_text(&field, cx).is_empty(), "nothing is painted");
+    }
 }
 
 #[cfg(test)]
 mod a11y_tests {
     use super::*;
-    use crate::a11y::probe::view;
-    use gpui::{TestAppContext, accesskit::Role};
+    use crate::a11y::probe::{reported, root, view};
+    use gpui::{
+        RenderOnce, TestAppContext,
+        accesskit::{Role, Toggled},
+    };
+
+    #[gpui::test]
+    fn the_show_button_is_a_toggle_named_show_value(cx: &mut TestAppContext) {
+        let hidden = root(cx, |window, cx| {
+            reported(show_button(ElementId::from("show"), false, |_, _| {}).render(window, cx))
+        })
+        .expect("the Show button is reported");
+        assert_eq!(hidden.role(), Role::Button);
+        assert_eq!(hidden.label(), Some("Show value"));
+        assert_eq!(hidden.toggled(), Some(Toggled::False));
+
+        let shown = root(cx, |window, cx| {
+            reported(show_button(ElementId::from("show"), true, |_, _| {}).render(window, cx))
+        })
+        .expect("the Show button is reported");
+        assert_eq!(shown.toggled(), Some(Toggled::True));
+    }
 
     #[gpui::test]
     fn a_text_field_is_a_textbox_named_by_its_label_with_its_value(cx: &mut TestAppContext) {
@@ -1617,6 +2193,21 @@ mod a11y_tests {
     fn a_search_field_is_a_searchbox(cx: &mut TestAppContext) {
         let node = view(cx, |cx| TextField::new(cx).search()).expect("the field is reported");
         assert_eq!(node.role(), Role::SearchInput);
+    }
+
+    #[gpui::test]
+    fn a_masked_field_is_a_password_input_with_no_value(cx: &mut TestAppContext) {
+        const SECRET: &str = "placeholder-ñ漢🙂";
+        let node = view(cx, |cx| {
+            TextField::new(cx).label("Value").masked().with_text(SECRET)
+        })
+        .expect("the field is reported");
+        assert_eq!(node.role(), Role::PasswordInput);
+        assert_eq!(node.label(), Some("Value"));
+        assert!(
+            node.value().is_none(),
+            "the accessibility tree gets no value"
+        );
     }
 }
 
