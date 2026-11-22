@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::model::canvas::Canvas;
+use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{ConnectionState, Script, StoreUpdate};

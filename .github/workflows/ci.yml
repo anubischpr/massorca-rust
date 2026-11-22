@@ -175,3 +175,67 @@ jobs:
           key: ui
           save-if: false
       - run: cargo test -p massorca-desktop --test '*' --locked
+
+  # Linux programs for the desktop bundle (decisions 0075, 0076): build and check only, no secrets, nothing published.
+  # zig pins the glibc version the programs link against, so the floor does not depend on the runner image.
+  linux-programs:
+    name: Linux programs (glibc floor)
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      GLIBC_FLOOR: "2.31"
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+      - name: Install zig 0.17.1 and cargo-zigbuild 0.24.1
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet ziglang==0.17.1
+          "$RUNNER_TEMP/zig/bin/python" -m ziglang version
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.24.1
+      - name: Test the glibc floor check
+        run: scripts/test-check-glibc-floor.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-programs
+      - name: Build massorca for x86_64 and aarch64
+        run: |
+          set -euo pipefail
+          for arch in x86_64 aarch64; do
+            cargo zigbuild --release --locked -p massorca-cli --bin massorca \
+              --target "$arch-unknown-linux-gnu.$GLIBC_FLOOR"
+          done
+      - name: Stage the programs as the desktop bundle carries them
+        run: |
+          set -euo pipefail
+          mkdir -p dist/resources
+          install -m 0755 target/x86_64-unknown-linux-gnu/release/massorca dist/resources/massorca-linux-x86_64
+          install -m 0755 target/aarch64-unknown-linux-gnu/release/massorca dist/resources/massorca-linux-aarch64
+          sha256sum dist/resources/*
+      - name: Check the glibc floor and the ELF machine of each program
+        run: |
+          set -euo pipefail
+          scripts/check-glibc-floor.sh "$GLIBC_FLOOR" dist/resources/massorca-linux-x86_64 dist/resources/massorca-linux-aarch64
+          check_elf() { # check_elf <program> <Machine text readelf prints>
+            local header
+            header="$(readelf -h "$1")"
+            grep -q 'Class: *ELF64' <<< "$header"
+            grep -q "Data: *2's complement, little endian" <<< "$header"
+            grep -q "Machine: *$2" <<< "$header"
+          }
+          check_elf dist/resources/massorca-linux-x86_64 'Advanced Micro Devices X86-64'
+          check_elf dist/resources/massorca-linux-aarch64 'AArch64'
+      - name: Run the x86_64 program
+        run: dist/resources/massorca-linux-x86_64 --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: massorca-linux-resources
+          path: dist/resources
+          if-no-files-found: error

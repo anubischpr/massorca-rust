@@ -15,7 +15,7 @@ use interprocess::os::windows::security_descriptor::{
 use widestring::{U16CStr, U16CString};
 use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, ProgressInvokeNever,
@@ -236,8 +236,85 @@ pub(crate) fn folder_access(path: &Path) -> Result<FolderAccess, RootAccessError
 }
 
 /// Gives the folder `path` the protected owner-only DACL, inherited by what is created in it later.
-pub(crate) fn make_owner_only(path: &Path) -> io::Result<()> {
-    set_dacl(path, &owner_only_dir_dacl_sddl(&current_user()?)?, true)
+/// Makes the folder `dir` and everything below it owner-only, through handles that never follow a link, while the
+/// caller keeps `dir` pinned. It first opens every entry below with `FILE_FLAG_OPEN_REPARSE_POINT` and checks it: a
+/// reparse point (a junction or a link) is refused with `UnsafeLocation`, and an explicit grant to anyone outside the
+/// accepted owners and Administrators with `ReadableByOthers`, before anything changes. Then each entry gets the
+/// protected owner-only DACL through its own handle, and `dir` last. Nothing outside `dir` is opened or changed.
+pub(crate) fn make_owner_only_below(dir: &Path) -> Result<(), RootAccessError> {
+    use std::os::windows::fs::MetadataExt;
+    use std::os::windows::io::AsRawHandle;
+
+    let trusted = Trusted::current()?;
+    let mut opened = Vec::new();
+    let mut exposed = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let path = entry?.path();
+            let file = open_for_access_change(&path)?;
+            let attributes = file.metadata()?.file_attributes();
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(RootAccessError::UnsafeLocation { path });
+            }
+            let descriptor = Descriptor::parse(&sddl_of_handle(file.as_raw_handle())?);
+            if descriptor.grants_explicitly_to_others(&trusted) {
+                exposed.push(path.clone());
+            }
+            let is_dir = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+            if is_dir {
+                pending.push(path);
+            }
+            opened.push((file, is_dir));
+        }
+    }
+    if !exposed.is_empty() {
+        exposed.truncate(crate::root_access::MAX_LISTED_ENTRIES);
+        return Err(RootAccessError::ReadableByOthers { paths: exposed });
+    }
+    let user = trusted.user();
+    let folder_dacl = owner_only_dir_dacl_sddl(user)?;
+    let file_dacl = format!("D:P(A;;FA;;;{user})");
+    for (file, is_dir) in &opened {
+        set_dacl_through(file, if *is_dir { &folder_dacl } else { &file_dacl })?;
+    }
+    set_dacl_through(&open_for_access_change(dir)?, &folder_dacl)?;
+    Ok(())
+}
+
+/// Opens `path` itself, never a link's target, to read and change its DACL. It shares everything, so a pinned folder
+/// can be opened this way while its pin is held.
+fn open_for_access_change(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+/// Up to `MAX_LISTED_ENTRIES` entries below `dir`, links read themselves and never followed, whose DACL gives anyone
+/// outside the accepted owners and Administrators any access.
+pub(crate) fn entries_others_can_reach(dir: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let trusted = Trusted::current()?;
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            let path = entry.path();
+            if Descriptor::parse(&read_sddl(&path, Links::Open)?).grants_any_to_others(&trusted) {
+                found.push(path);
+                if found.len() >= crate::root_access::MAX_LISTED_ENTRIES {
+                    return Ok(found);
+                }
+            } else if entry.file_type()?.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Creates a new file at `path` whose descriptor allows only the current user, in the same call that creates it, so it
@@ -566,6 +643,14 @@ pub(crate) fn read_sddl(path: &Path, links: Links) -> io::Result<String> {
     if handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
+    let text = sddl_of_handle(handle);
+    // SAFETY: the handle came from CreateFileW above and is closed only here, once.
+    unsafe { CloseHandle(handle) };
+    text
+}
+
+/// The owner and DACL of the object `handle` refers to, as SDDL; the handle needs `READ_CONTROL`.
+fn sddl_of_handle(handle: HANDLE) -> io::Result<String> {
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
     // SAFETY: `handle` is open with READ_CONTROL; the owner, group and ACL out-pointers may be null, and `descriptor`
     // receives a LocalAlloc'd copy that is freed below.
@@ -581,8 +666,6 @@ pub(crate) fn read_sddl(path: &Path, links: Links) -> io::Result<String> {
             &mut descriptor,
         )
     };
-    // SAFETY: the handle came from CreateFileW above and is closed only here, once.
-    unsafe { CloseHandle(handle) };
     if status != ERROR_SUCCESS {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
