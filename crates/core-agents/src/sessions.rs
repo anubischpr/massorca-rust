@@ -427,6 +427,13 @@ impl Agents {
             ));
         }
         let row = self.reload(&row.id)?;
+        // A session whose last run has no recorded end (no terminal and no exit) has nothing to resume from (decision 0058).
+        if row.exit.is_none() {
+            return Err(resume_unavailable(
+                &row.id,
+                "its last run has no recorded end",
+            ));
+        }
         let agent_ref = row
             .agent_ref
             .clone()
@@ -1387,5 +1394,32 @@ mod tests {
         assert_eq!(stored.exit, None);
         assert_eq!(stored.terminal_id.as_deref(), Some("t-2"));
         assert!(live.contains_key(&row.id), "the resumed run stays live");
+    }
+
+    /// A session whose last run has no recorded end (no terminal and no exit) has nothing to resume from: it is refused as
+    /// unavailable, not as not found (decision 0058).
+    #[test]
+    fn a_session_with_no_recorded_run_end_cannot_resume() {
+        let (agents, workspace_id, _profile) = service();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "claude".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: Some("ref-1".to_owned()),
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+
+        let error = agents.resume(&row.id).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_RESUME_UNAVAILABLE, "{error}");
     }
 }

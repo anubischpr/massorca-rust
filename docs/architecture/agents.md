@@ -181,7 +181,8 @@ environment of the first start are not kept, so a resumed run gets the kind's ow
 resume arguments only. The run is registered under the status lock before its program starts, as in
 `agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
 `agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
-session's ref is not known yet (a Codex session learns its ref at a turn's end); `agent.not_installed`
+session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has
+no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
 

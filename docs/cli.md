@@ -145,7 +145,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   its conversation. The session keeps its id and its agent ref; its activity is absent until
   the new run reports. The arguments and environment of the first start are not kept. A live
   run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
-  known yet, fails with `agent.resume_unavailable`; another writing session in the workspace
+  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; another
+  writing session in the workspace
   fails with `agent.workspace_busy`.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
