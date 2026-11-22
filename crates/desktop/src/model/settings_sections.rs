@@ -106,10 +106,16 @@ pub enum Planned {
     Swatches,
     /// One checkbox per option, each shown.
     Checkboxes(&'static [&'static str]),
+    /// A switch and a sound dropdown, for one notification source.
+    SwitchSelect,
+    /// A table with these columns, and no rows yet.
+    Table(&'static [&'static str]),
     /// A button.
     Action(&'static str),
     /// A link row that opens a sub-page.
     Link,
+    /// A link row to a page that is not built yet; the text says what is missing.
+    Elsewhere(&'static str),
     /// A row with no control; its status says what is missing.
     Status,
 }
@@ -314,12 +320,35 @@ const INPUT: &[RowSpec] = &[
     RowSpec {
         label: "Tab width",
         helper: "Spaces inserted for a tab in the code editor.",
-        body: RowBody::Planned(Planned::Text(Some("4"))),
+        body: RowBody::Planned(Planned::Number {
+            value: Some("4"),
+            unit: "spaces",
+        }),
+    },
+    RowSpec {
+        label: "Shortcut filter",
+        helper: "Finds an action by its name or its shortcut.",
+        body: RowBody::Planned(Planned::Text(None)),
+    },
+    RowSpec {
+        label: "Shortcuts to show",
+        helper: "Every shortcut, only the conflicts, or the ones extensions add.",
+        body: RowBody::Planned(Planned::Choice(&["All", "Conflicts", "Extensions"])),
+    },
+    RowSpec {
+        label: "Reset all",
+        helper: "Puts every shortcut back to its default.",
+        body: RowBody::Planned(Planned::Action("Reset all")),
     },
     RowSpec {
         label: "Keyboard shortcuts",
         helper: "View and change the shortcut for each action.",
-        body: RowBody::Planned(Planned::Action("Edit shortcuts")),
+        body: RowBody::Planned(Planned::Table(&["Action", "From", "Shortcut"])),
+    },
+    RowSpec {
+        label: "Quick commands",
+        helper: "Saved commands you can run from the palette.",
+        body: RowBody::Planned(Planned::Action("Manage")),
     },
 ];
 
@@ -327,29 +356,71 @@ const TERMINAL: &[RowSpec] = &[
     RowSpec {
         label: "Terminal font",
         helper: "Font used in terminal panes.",
-        body: RowBody::Planned(Planned::Text(Some("Cascadia Mono"))),
+        body: RowBody::Planned(Planned::Select(Some(FONT_MONO))),
+    },
+    RowSpec {
+        label: "Terminal palette",
+        helper: "Colours for terminal panes. Warp and Ghostty themes can be imported.",
+        body: RowBody::Planned(Planned::Select(None)),
     },
     RowSpec {
         label: "Scrollback lines",
         helper: "How many lines a terminal keeps.",
-        body: RowBody::Planned(Planned::Text(Some("10000"))),
+        // The terminal keeps SCROLLBACK_ROWS rows by default (crates/core-terminal).
+        body: RowBody::Planned(Planned::Number {
+            value: Some("1000"),
+            unit: "lines",
+        }),
     },
     RowSpec {
         label: "Shell",
         helper: "The shell a new terminal starts.",
-        body: RowBody::Planned(Planned::Text(Some("PowerShell"))),
+        body: RowBody::Planned(Planned::Select(None)),
+    },
+    RowSpec {
+        label: "Rendering",
+        helper: "How terminal text is drawn.",
+        body: RowBody::Planned(Planned::Select(None)),
     },
     RowSpec {
         label: "Browser home page",
         helper: "The page a new browser tab opens.",
-        body: RowBody::Planned(Planned::Text(Some("about:blank"))),
+        body: RowBody::Planned(Planned::Text(None)),
+    },
+    RowSpec {
+        label: "Search engine",
+        helper: "Used when you search from the browser's address bar.",
+        body: RowBody::Planned(Planned::Select(None)),
+    },
+    RowSpec {
+        label: "Default zoom",
+        helper: "Zoom for a new browser page.",
+        body: RowBody::Planned(Planned::Number {
+            value: Some("100"),
+            unit: "%",
+        }),
+    },
+    RowSpec {
+        label: "Browser profiles",
+        helper: "Separate profiles, each with its own sign-ins.",
+        body: RowBody::Planned(Planned::Link),
+    },
+    RowSpec {
+        label: "Link routing",
+        helper: "Chooses where links open: the browser, the editor or another app.",
+        body: RowBody::Planned(Planned::Select(None)),
     },
 ];
 
 const SOURCES: &[RowSpec] = &[
     RowSpec {
-        label: "Git providers",
-        helper: "Connecting needs your grant on the provider's own page.",
+        label: "GitHub",
+        helper: "Repositories, branches and pull requests.",
+        body: RowBody::Planned(Planned::Action("Connect")),
+    },
+    RowSpec {
+        label: "GitLab",
+        helper: "Repositories, branches and merge requests.",
         body: RowBody::Planned(Planned::Action("Connect")),
     },
     RowSpec {
@@ -358,9 +429,27 @@ const SOURCES: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Action("Connect")),
     },
     RowSpec {
+        label: "Jira",
+        helper: "Lets an agent read and update Jira issues.",
+        body: RowBody::Planned(Planned::Action("Connect")),
+    },
+    RowSpec {
+        label: "Default branch",
+        helper: "The branch a new workspace starts from.",
+        body: RowBody::Planned(Planned::Select(None)),
+    },
+    RowSpec {
         label: "Fetch on focus",
         helper: "Fetches the remote when a workspace gains focus.",
         body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "API budget",
+        helper: "How many provider requests a workspace may make.",
+        body: RowBody::Planned(Planned::Number {
+            value: None,
+            unit: "requests per hour",
+        }),
     },
 ];
 
@@ -386,24 +475,46 @@ const NOTIFICATIONS: &[RowSpec] = &[
     RowSpec {
         label: "Agent finished",
         helper: "Tells you when an agent ends a run you started.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Planned(Planned::SwitchSelect),
     },
     RowSpec {
         label: "Waiting for you",
         helper: "Tells you when an agent needs an answer.",
-        body: RowBody::Planned(Planned::Switch),
+        body: RowBody::Planned(Planned::SwitchSelect),
+    },
+    RowSpec {
+        label: "Routine ran",
+        helper: "Tells you when a scheduled routine runs.",
+        body: RowBody::Planned(Planned::SwitchSelect),
+    },
+    RowSpec {
+        label: "Extension notices",
+        helper: "Tells you about updates and problems from extensions.",
+        body: RowBody::Planned(Planned::SwitchSelect),
     },
     RowSpec {
         label: "Dictation",
         helper: "Turns speech into text in the composer.",
         body: RowBody::Planned(Planned::Switch),
     },
+    RowSpec {
+        label: "Speech model",
+        helper: "The model that turns speech into text.",
+        body: RowBody::Planned(Planned::Action("Download")),
+    },
+    RowSpec {
+        label: "Transcription key",
+        helper: "Stored in the secret vault, never shown in a field.",
+        body: RowBody::Planned(Planned::Action("Add key")),
+    },
 ];
 
 const EXTENSIONS: &[RowSpec] = &[RowSpec {
     label: "Extensions",
     helper: "Managed in Marketplace, under Installed.",
-    body: RowBody::Planned(Planned::Link),
+    body: RowBody::Planned(Planned::Elsewhere(
+        "Marketplace > Installed is not built yet.",
+    )),
 }];
 
 const VAULT: &[RowSpec] = &[RowSpec {
@@ -419,6 +530,11 @@ const PRIVACY: &[RowSpec] = &[
         body: RowBody::Planned(Planned::Switch),
     },
     RowSpec {
+        label: "Telemetry",
+        helper: "Usage statistics. Off unless you turn it on.",
+        body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
         label: "Diagnostic export",
         helper: "Saves logs to a file you choose.",
         body: RowBody::Planned(Planned::Action("Export")),
@@ -426,15 +542,52 @@ const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Network proxy",
         helper: "Address of a proxy server, if this network needs one.",
-        body: RowBody::Planned(Planned::Text(Some("None"))),
+        body: RowBody::Planned(Planned::Text(None)),
+    },
+    RowSpec {
+        label: "Cache timers",
+        helper: "How long cached data is kept on this PC.",
+        body: RowBody::Planned(Planned::Select(None)),
+    },
+    RowSpec {
+        label: "OS permissions",
+        helper: "Folder and disk access that macOS asks for.",
+        body: RowBody::Planned(Planned::Action("Review")),
+    },
+    RowSpec {
+        label: "CLI registration",
+        helper: "Makes the command-line tool available in terminals.",
+        body: RowBody::Planned(Planned::Action("Register")),
+    },
+    RowSpec {
+        label: "Experimental flags",
+        helper: "Features still being built. Off unless you turn them on.",
+        body: RowBody::Planned(Planned::Link),
+    },
+    RowSpec {
+        label: "Advanced",
+        helper: "Shows developer tools. Off by default.",
+        body: RowBody::Planned(Planned::Switch),
+    },
+    RowSpec {
+        label: "Developer tools",
+        helper: "Tools for building and debugging MassOrca.",
+        body: RowBody::Planned(Planned::Link),
     },
 ];
 
-const ROUTING: &[RowSpec] = &[RowSpec {
-    label: "Routing decisions",
-    helper: "Why each Bot Teams request went to the bot it did.",
-    body: RowBody::Planned(Planned::Status),
-}];
+const ROUTING: &[RowSpec] = &[
+    RowSpec {
+        label: "Routing decisions",
+        helper: "Why each Bot Teams request went to the bot it did.",
+        body: RowBody::Planned(Planned::Status),
+    },
+    RowSpec {
+        label: "Routing history",
+        helper: "Removes every routing decision from this list.",
+        body: RowBody::Planned(Planned::Action("Clear history")),
+    },
+];
 
 /// The rows a section lists, in order.
 pub fn rows(section: SettingsSection) -> &'static [RowSpec] {
@@ -601,6 +754,16 @@ mod tests {
     }
 
     #[test]
+    fn the_extensions_row_says_that_marketplace_is_not_built_yet() {
+        assert_eq!(
+            bodies(SettingsSection::Extensions),
+            vec![RowBody::Planned(Planned::Elsewhere(
+                "Marketplace > Installed is not built yet."
+            ))]
+        );
+    }
+
+    #[test]
     fn the_appearance_section_lists_the_spec_control_types() {
         let appearance = bodies(SettingsSection::Appearance);
         assert!(appearance.contains(&RowBody::Planned(Planned::Swatches)));
@@ -628,6 +791,23 @@ mod tests {
             .filter(|row| row.body == RowBody::Planned(Planned::Status))
             .count();
         assert_eq!(statuses, 6);
+    }
+
+    #[test]
+    fn the_keyboard_table_has_its_columns() {
+        assert!(
+            bodies(SettingsSection::Input).contains(&RowBody::Planned(Planned::Table(&[
+                "Action", "From", "Shortcut",
+            ])))
+        );
+    }
+
+    #[test]
+    fn the_routing_section_offers_clear_history() {
+        assert!(
+            bodies(SettingsSection::Routing)
+                .contains(&RowBody::Planned(Planned::Action("Clear history")))
+        );
     }
 
     #[test]

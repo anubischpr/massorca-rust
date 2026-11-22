@@ -9,13 +9,15 @@ use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{self, RowStatus, SettingsRow};
 use massorca_ui::components::switch::Switch;
-use massorca_ui::tokens::{SPACE_2, TYPE_CAPTION};
+use massorca_ui::tokens::{SPACE_2, SPACE_3, TYPE_CAPTION};
 use massorca_ui::{IconName, TextStyled, Theme};
 
 use crate::model::settings_sections::{NOT_AVAILABLE, Planned};
 
 /// The six accent presets: lavender (the default), blue, teal, rose, orange and graphite.
 const ACCENT_PRESETS: usize = 6;
+/// The width of a sound dropdown beside a notification switch.
+const SOUND_SELECT_WIDTH: f32 = 120.0;
 
 /// Adds the status of a planned setting to its row and returns its control. A `Status` row has
 /// no control, only the status.
@@ -26,10 +28,13 @@ pub(super) fn planned_row(
     label: &'static str,
     theme: &Theme,
 ) -> (SettingsRow, Option<AnyElement>) {
-    let status = NOT_AVAILABLE;
+    let status = match planned {
+        Planned::Elsewhere(text) => text,
+        _ => NOT_AVAILABLE,
+    };
     let row = row.status(RowStatus::Unavailable(status.into()));
     let row = match planned {
-        Planned::Checkboxes(_) => row.stacked(true),
+        Planned::Checkboxes(_) | Planned::Table(_) => row.stacked(true),
         _ => row,
     };
     let control = match planned {
@@ -72,10 +77,12 @@ pub(super) fn planned_row(
         )),
         Planned::Swatches => Some(swatches(id, theme)),
         Planned::Checkboxes(options) => Some(checkboxes(id, options)),
+        Planned::SwitchSelect => Some(switch_select(id, label, theme)),
+        Planned::Table(columns) => Some(settings_row::unavailable_table_header(theme, columns)),
         Planned::Action(text) => {
             Some(action_button(id, text, ButtonVariant::Secondary).into_any_element())
         }
-        Planned::Link => Some(link_button(id.clone()).into_any_element()),
+        Planned::Link | Planned::Elsewhere(_) => Some(link_button(id.clone()).into_any_element()),
     };
     (row, control)
 }
@@ -160,6 +167,25 @@ fn checkboxes(id: &SharedString, options: &'static [&'static str]) -> AnyElement
                 .label(*option)
                 .disabled(true)
         }))
+        .into_any_element()
+}
+
+/// A notification source: its switch, and the sound it plays beside it.
+fn switch_select(id: &SharedString, label: &'static str, theme: &Theme) -> AnyElement {
+    let sound = settings_row::unavailable_select(
+        SharedString::from(format!("{id}-sound")),
+        SharedString::from(format!("Sound for {label}")),
+        theme,
+        None,
+    );
+    div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(px(SPACE_3))
+        .w_full()
+        .child(Switch::new(id.clone(), false).label(label).disabled(true))
+        .child(div().w(px(SOUND_SELECT_WIDTH)).child(sound))
         .into_any_element()
 }
 
