@@ -88,3 +88,28 @@ fn the_fingerprint_covers_the_verify_and_uninstall_commands() {
     assert_ne!(consent, fingerprint_of(&other_verify), "verify");
     assert_ne!(consent, fingerprint_of(&other_uninstall), "uninstall");
 }
+
+#[test]
+fn the_review_shows_what_each_agent_kind_starts_and_reads_and_each_mcp_command() {
+    let mut files = package_files(&agent_package("acme", "kit", "kit"));
+    files.insert(
+        "agents/kit.json".to_owned(),
+        br#"{"id":"kit","program":["kit"],"args":["--fast"],"env":{"KIT_LOG":"1"},
+            "credentials":{"home_env":"KIT_HOME","files":["auth.json"],"strip_env":["KIT_TOKEN"]}}"#
+            .to_vec(),
+    );
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_dir(dir.path(), &files);
+    let package = load(&Source::Dir(dir.path().to_path_buf()), None).expect("loads");
+
+    let review = review(&package, &FakeHost::new(), current_os());
+
+    let kind = &review.kinds[0];
+    assert!(kind.readable);
+    assert_eq!(kind.program, ["kit"]);
+    assert_eq!(kind.args, ["--fast"]);
+    assert_eq!(kind.env, ["KIT_HOME", "KIT_LOG", "KIT_TOKEN"]);
+    assert_eq!(kind.credential_home_env.as_deref(), Some("KIT_HOME"));
+    assert_eq!(kind.credential_files, ["auth.json"]);
+    assert!(review.mcp_servers.is_empty());
+}

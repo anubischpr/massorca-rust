@@ -365,12 +365,43 @@ pub struct ExtensionReview {
     pub permissions: Vec<Permission>,
     pub risk: Risk,
     pub listing: Listing,
+    /// Each agent kind's declaration: what it starts, its arguments, env names and credential files.
+    #[serde(default)]
+    pub kinds: Vec<KindView>,
+    /// Each MCP server's command.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerView>,
     #[serde(default)]
     pub cli: Vec<CliPlan>,
     /// Accepting the review also needs `run_installer`.
     pub runs_installer: bool,
     /// The fingerprint to send back as `consent`.
     pub consent: String,
+}
+
+/// An agent kind's declaration as the install review shows it (0062, second review).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindView {
+    pub id: String,
+    pub readable: bool,
+    #[serde(default)]
+    pub program: Vec<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variable names only; values are never shown.
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub credential_home_env: Option<String>,
+    #[serde(default)]
+    pub credential_files: Vec<String>,
+}
+
+/// An MCP server of the package and the command started for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerView {
+    pub id: String,
+    pub command: Vec<String>,
 }
 
 /// What the install does about one agent adapter's CLI on the host.
@@ -387,7 +418,11 @@ pub struct CliPlan {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CliPlanState {
     /// The program already resolves: the install only registers it.
-    Detected { path: String },
+    /// The path is sent only to a host administrator; anyone else sees the program is detected.
+    Detected {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// The vendor's command for the host OS runs, exactly this argv.
     WillRun { command: Vec<String> },
     /// No command fits: the package registers, and the CLI stays missing.

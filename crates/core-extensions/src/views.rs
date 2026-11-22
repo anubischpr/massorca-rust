@@ -227,3 +227,97 @@ impl CliSpec {
         }
     }
 }
+
+/// An agent kind's declaration as the review shows it: what it starts and what it reads or strips, so the person sees
+/// more than the package hash. Read leniently: a declaration that is not JSON is shown as unreadable, and core-agents
+/// refuses it when it loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KindView {
+    pub id: String,
+    pub readable: bool,
+    /// The programs the kind may start, in the order it tries them.
+    pub program: Vec<String>,
+    pub args: Vec<String>,
+    /// Environment variable names the kind sets, reads or strips. Values are not shown.
+    pub env: Vec<String>,
+    /// The variable that points at the credential home, and the files kept there.
+    pub credential_home_env: Option<String>,
+    pub credential_files: Vec<String>,
+}
+
+impl KindView {
+    pub fn of(id: &str, declaration: Option<&[u8]>) -> Self {
+        let value: Option<serde_json::Value> =
+            declaration.and_then(|bytes| serde_json::from_slice(bytes).ok());
+        let Some(value) = value else {
+            return Self {
+                id: id.to_owned(),
+                readable: false,
+                program: Vec::new(),
+                args: Vec::new(),
+                env: Vec::new(),
+                credential_home_env: None,
+                credential_files: Vec::new(),
+            };
+        };
+        let strings = |key: &str| -> Vec<String> {
+            value[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        };
+        let credentials = &value["credentials"];
+        let mut env: Vec<String> = value["env"]
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.keys().cloned())
+            .collect();
+        env.extend(
+            credentials["strip_env"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.as_str().map(str::to_owned)),
+        );
+        env.extend(credentials["home_env"].as_str().map(str::to_owned));
+        env.sort();
+        env.dedup();
+        Self {
+            id: id.to_owned(),
+            readable: true,
+            program: strings("program"),
+            args: strings("args"),
+            env,
+            credential_home_env: credentials["home_env"].as_str().map(str::to_owned),
+            credential_files: credentials["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| file.as_str().map(str::to_owned))
+                .collect(),
+        }
+    }
+}
+
+/// An MCP server the package offers to agents, with the command the core starts for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct McpView {
+    pub id: String,
+    pub command: Vec<String>,
+}
+
+impl McpView {
+    pub fn of(manifest: &Manifest) -> Vec<Self> {
+        manifest
+            .contributes
+            .mcp_servers
+            .iter()
+            .map(|server| Self {
+                id: server.id.clone(),
+                command: server.command.clone(),
+            })
+            .collect()
+    }
+}

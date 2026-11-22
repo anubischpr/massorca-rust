@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::host::ProgramResolver;
 use crate::lockfile::LockSource;
 use crate::source::{LoadedPackage, sha256_hex};
-use crate::views::{ListingView, PermissionView, RiskView};
+use crate::views::{KindView, ListingView, McpView, PermissionView, RiskView};
 
 /// Everything the person reviews before an install. Nothing was changed to build it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -27,6 +27,10 @@ pub struct Review {
     pub permissions: Vec<PermissionView>,
     pub risk: RiskView,
     pub listing: ListingView,
+    /// Each agent kind's declaration, shown so the person sees what it starts and reads (0062, second review).
+    pub kinds: Vec<KindView>,
+    /// Each MCP server's command.
+    pub mcp_servers: Vec<McpView>,
     pub cli: Vec<CliPlan>,
     /// True when accepting the review also needs `run_installer`.
     pub runs_installer: bool,
@@ -167,6 +171,18 @@ pub fn review(
             .collect(),
         risk: RiskView::of(&risk::assess(manifest)),
         listing: ListingView::of(manifest),
+        kinds: manifest
+            .contributes
+            .agent_adapters
+            .iter()
+            .map(|adapter| {
+                KindView::of(
+                    &adapter.id,
+                    package.files.get(&adapter.kind).map(Vec::as_slice),
+                )
+            })
+            .collect(),
+        mcp_servers: McpView::of(manifest),
         runs_installer: cli
             .iter()
             .any(|entry| matches!(entry.state, PlanState::WillRun { .. })),

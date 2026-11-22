@@ -2,8 +2,8 @@
 
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, CliRecord, CliRemoval, CliRemovalAction, ExtensionInstalled,
-    ExtensionItem, ExtensionRemoved, ExtensionReview, ExtensionState, ItemProblem, Permission,
-    Risk, RiskLevel, SourceKind,
+    ExtensionItem, ExtensionRemoved, ExtensionReview, ExtensionState, ItemProblem, KindView,
+    McpServerView, Permission, Risk, RiskLevel, SourceKind,
 };
 
 use crate::workspace_text;
@@ -122,6 +122,8 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
                 .map(|permission| format!("  {}", permission_line(permission))),
         );
     }
+    lines.extend(review.kinds.iter().map(kind_line));
+    lines.extend(review.mcp_servers.iter().map(mcp_line));
     lines.extend(review.cli.iter().map(plan_line));
     lines.push(format!("consent: {}", review.consent));
     lines
@@ -204,8 +206,10 @@ fn plan_line(plan: &CliPlan) -> String {
     let binary = plan.binary.as_deref().unwrap_or("-");
     match &plan.state {
         CliPlanState::Detected { path } => format!(
-            "cli {} ({binary}): found at {path}, nothing runs",
-            plan.agent
+            "cli {} ({binary}): found{}, nothing runs",
+            plan.agent,
+            path.as_ref()
+                .map_or_else(String::new, |path| format!(" at {path}"))
         ),
         CliPlanState::WillRun { command } => format!(
             "cli {} ({binary}): not found; installing runs this vendor command: {}",
@@ -279,4 +283,48 @@ pub fn command_text(command: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// What an agent kind of the package starts and reads, so the review shows it beyond the package hash (0062).
+fn kind_line(kind: &KindView) -> String {
+    if !kind.readable {
+        return format!(
+            "agent kind {}: its declaration is not readable JSON",
+            kind.id
+        );
+    }
+    let mut parts = vec![format!(
+        "agent kind {}: starts {}",
+        kind.id,
+        if kind.program.is_empty() {
+            "no program".to_owned()
+        } else {
+            command_text(&kind.program)
+        }
+    )];
+    if !kind.args.is_empty() {
+        parts.push(format!("args {}", command_text(&kind.args)));
+    }
+    if !kind.env.is_empty() {
+        parts.push(format!("env {}", kind.env.join(", ")));
+    }
+    if let Some(home) = &kind.credential_home_env {
+        parts.push(format!("credential home in {home}"));
+    }
+    if !kind.credential_files.is_empty() {
+        parts.push(format!(
+            "credential files {}",
+            kind.credential_files.join(", ")
+        ));
+    }
+    parts.join("; ")
+}
+
+/// An MCP server the package starts for agents, with its command.
+fn mcp_line(server: &McpServerView) -> String {
+    format!(
+        "mcp server {}: starts {}",
+        server.id,
+        command_text(&server.command)
+    )
 }
