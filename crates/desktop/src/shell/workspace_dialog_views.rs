@@ -2,8 +2,8 @@
 
 use super::Shell;
 use super::workspace_dialogs::{AddProjectDialog, CreateDialog};
-use crate::model::workspace_flow::{DialogKind, ProjectChoice, RemoveFlow};
-use gpui::{App, Focusable, WeakEntity, div, prelude::*, px};
+use crate::model::workspace_flow::{DialogCopy, DialogKind, ProjectChoice, RemoveFlow};
+use gpui::{App, Focusable, WeakEntity, Window, div, prelude::*, px};
 use massorca_protocol::methods::projects::Project;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::checkbox::Checkbox;
@@ -123,15 +123,40 @@ pub(super) fn add_project_dialog(
 
 /// The remove dialog for the flow's current stage: confirm, one waiver, or a plain refusal.
 pub(super) fn remove_dialog(flow: &RemoveFlow, shell: &WeakEntity<Shell>, cx: &App) -> Dialog {
+    let (on_action, on_dismiss) = (shell.clone(), shell.clone());
+    flow_dialog(
+        "remove-workspace",
+        flow.copy(),
+        flow.busy(),
+        flow.error(),
+        cx,
+        move |_, cx| {
+            let _ = on_action.update(cx, |shell, cx| shell.confirm_remove(cx));
+        },
+        move |_, cx| {
+            let _ = on_dismiss.update(cx, |shell, cx| shell.close_remove(cx));
+        },
+    )
+}
+
+/// A flow's dialog: its kind picks the style, its copy names what would be lost and gives the action's
+/// words, and its error, when it has one, shows under the body.
+pub(super) fn flow_dialog(
+    id: &'static str,
+    copy: DialogCopy,
+    busy: bool,
+    error: Option<&str>,
+    cx: &App,
+    on_action: impl Fn(&mut Window, &mut App) + 'static,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> Dialog {
     let theme = *cx.theme();
-    let copy = flow.copy();
     let variant = match copy.kind {
         DialogKind::Destructive => DialogVariant::Destructive,
         DialogKind::Confirm => DialogVariant::Confirm,
         DialogKind::Error => DialogVariant::Error,
     };
-    let (on_action, on_dismiss) = (shell.clone(), shell.clone());
-    let mut dialog = Dialog::new("remove-workspace", copy.title)
+    let mut dialog = Dialog::new(id, copy.title)
         .open(true)
         .variant(variant)
         .child(
@@ -141,14 +166,10 @@ pub(super) fn remove_dialog(flow: &RemoveFlow, shell: &WeakEntity<Shell>, cx: &A
         )
         .loss(copy.loss)
         .action(copy.action)
-        .busy(flow.busy())
-        .on_action(move |_, cx| {
-            let _ = on_action.update(cx, |shell, cx| shell.confirm_remove(cx));
-        })
-        .on_dismiss(move |_, cx| {
-            let _ = on_dismiss.update(cx, |shell, cx| shell.close_remove(cx));
-        });
-    if let Some(error) = flow.error() {
+        .busy(busy)
+        .on_action(on_action)
+        .on_dismiss(on_dismiss);
+    if let Some(error) = error {
         dialog = dialog.error(error.to_owned());
     }
     dialog

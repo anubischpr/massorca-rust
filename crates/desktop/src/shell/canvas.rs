@@ -34,6 +34,8 @@ pub(super) struct PageFrames<'a> {
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
     /// The body of the Project sidebar, when it is on screen.
     pub project: Option<AnyElement>,
+    /// The diff of the file open from Source control, which takes the Canvas over the start page.
+    pub diff: Option<AnyElement>,
 }
 
 pub(super) fn canvas(
@@ -116,6 +118,9 @@ fn conversation(
     }
     // The start page is laid out from the top, so it is not centred in a box either.
     if let Canvas::Workspace(_) = model.canvas() {
+        if let Some(diff) = pages.diff {
+            return diff;
+        }
         return match pages.start {
             Some(frame) => start_page::start_page(frame, cx),
             None => placeholder(

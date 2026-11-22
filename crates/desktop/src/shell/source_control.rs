@@ -3,13 +3,19 @@
 //! unstage and commit calls. The panel reads the service's answers from the store; these flows only
 //! hold what the panel asked for and what the service refused.
 
+use std::rc::Rc;
+
 use gpui::{Context, Entity, Subscription, Window};
+use massorca_protocol::methods::git::ChangeKind;
+use massorca_protocol::methods::git::diff::{DiffTarget, GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::GitPathsParams;
+use massorca_ui::components::diff_view::{DiffModel, DiffStatus};
 use massorca_ui::components::text_field::TextField;
 
 use super::Shell;
 use crate::model::regions::Region;
-use crate::model::source_control_flow::CommitForm;
+use crate::model::source_control_diff::{diff_status, file_status, parse_patch};
+use crate::model::source_control_flow::{CommitForm, DiscardFlow, DiscardStage};
 use crate::service::Refusal;
 
 /// The Project sidebar's tabs in their fixed order (ProjectSidebarTabs.md).
@@ -50,6 +56,27 @@ impl ProjectTab {
     }
 }
 
+/// A file the Canvas shows the diff of: its path, the side of the change, and the kind of change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OpenFile {
+    pub path: String,
+    pub target: DiffTarget,
+    pub original_path: Option<String>,
+    pub kind: ChangeKind,
+}
+
+/// The diff of the open file, as the Canvas draws it.
+#[derive(Debug)]
+pub(super) enum DiffLoad {
+    Loading,
+    Failed(String),
+    Ready {
+        model: Rc<DiffModel>,
+        status: DiffStatus,
+        truncated: bool,
+    },
+}
+
 /// The panel's own state. The store holds the service's answers; this holds what the panel asked
 /// for and what it waits on.
 #[derive(Debug)]
@@ -68,6 +95,13 @@ pub(super) struct SourceControl {
     pub busy: bool,
     /// What the last stage or unstage refused, under the panel's header.
     pub error: Option<String>,
+    /// The file whose diff the Canvas shows, and the diff it is showing.
+    pub open: Option<OpenFile>,
+    pub diff: Option<DiffLoad>,
+    /// Counts diff requests, so an answer for a file that is no longer open is dropped.
+    diff_request: u64,
+    /// The discard dialog's flow, while the dialog is open.
+    pub discard: Option<DiscardFlow>,
     _field_changes: Subscription,
 }
 
@@ -82,6 +116,10 @@ impl SourceControl {
             clear_field: false,
             busy: false,
             error: None,
+            open: None,
+            diff: None,
+            diff_request: 0,
+            discard: None,
             _field_changes: field_changes,
         }
     }
@@ -109,6 +147,10 @@ impl Shell {
         if self.source_control.workspace != selected {
             self.source_control.workspace = selected.clone();
             self.source_control.error = None;
+            self.source_control.open = None;
+            self.source_control.diff = None;
+            self.source_control.discard = None;
+            self.source_control.diff_request += 1;
         }
         if self.source_control.clear_field {
             self.source_control.clear_field = false;
@@ -213,6 +255,129 @@ impl Shell {
             }
             Err(refusal) => self.source_control.commit.refused(&refusal),
         }
+        cx.notify();
+    }
+
+    /// Shows the diff of `file` in the Canvas. An answer counts only while this file is the open one.
+    pub(super) fn open_file(&mut self, file: OpenFile, cx: &mut Context<Self>) {
+        let (Some(workspace), Some(handle)) =
+            (self.source_control.workspace.clone(), self.service.clone())
+        else {
+            return;
+        };
+        self.source_control.diff_request += 1;
+        let request = self.source_control.diff_request;
+        self.source_control.diff = Some(DiffLoad::Loading);
+        let params = GitDiffFileParams {
+            workspace,
+            target: file.target.clone(),
+            path: file.path.clone(),
+            original_path: file.original_path.clone(),
+            max_bytes: None,
+        };
+        self.source_control.open = Some(file.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = handle.git_diff_file(params).await;
+            this.update(cx, |shell, cx| shell.finish_diff(request, file, result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn finish_diff(
+        &mut self,
+        request: u64,
+        file: OpenFile,
+        result: Result<GitDiffFile, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        if request != self.source_control.diff_request {
+            return;
+        }
+        self.source_control.diff = Some(match result {
+            Ok(diff) => {
+                let patch = diff.patch.as_deref().unwrap_or_default();
+                let model = DiffModel::new(parse_patch(&file.path, file_status(file.kind), patch));
+                DiffLoad::Ready {
+                    model: Rc::new(model),
+                    status: diff_status(&diff),
+                    truncated: diff.truncated,
+                }
+            }
+            Err(refusal) => DiffLoad::Failed(refusal.message()),
+        });
+        cx.notify();
+    }
+
+    /// Closes the file's diff and drops an answer that is still on its way.
+    pub(super) fn close_file(&mut self, cx: &mut Context<Self>) {
+        self.source_control.open = None;
+        self.source_control.diff = None;
+        self.source_control.diff_request += 1;
+        cx.notify();
+    }
+
+    /// Opens the discard dialog for `paths`. Nothing is discarded until the dialog is confirmed.
+    pub(super) fn open_discard(&mut self, paths: Vec<String>, cx: &mut Context<Self>) {
+        let Some(workspace) = self.source_control.workspace.clone() else {
+            return;
+        };
+        if self.service.is_none() || self.source_control.discard.is_some() {
+            return;
+        }
+        self.source_control.discard = Some(DiscardFlow::new(workspace, paths));
+        cx.notify();
+    }
+
+    /// The dialog's action: gives the waiver its stage asks for and discards with it.
+    pub(super) fn confirm_discard(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.service.clone() else {
+            return;
+        };
+        let Some(flow) = self.source_control.discard.as_mut() else {
+            return;
+        };
+        if !flow.confirm() {
+            let plain = matches!(flow.stage(), DiscardStage::Refused { .. });
+            if plain {
+                self.close_discard(cx);
+            }
+            return;
+        }
+        let params = flow.params();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = handle.git_discard(params).await.map(|_| ());
+            this.update(cx, |shell, cx| shell.finish_discard(result, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn finish_discard(&mut self, result: Result<(), Refusal>, cx: &mut Context<Self>) {
+        let Some(flow) = self.source_control.discard.as_mut() else {
+            return;
+        };
+        if !flow.answered(result) {
+            cx.notify();
+            return;
+        }
+        let discarded = self
+            .source_control
+            .open
+            .as_ref()
+            .is_some_and(|open| flow.paths().contains(&open.path));
+        self.source_control.discard = None;
+        if discarded {
+            self.close_file(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn close_discard(&mut self, cx: &mut Context<Self>) {
+        self.source_control.discard = None;
         cx.notify();
     }
 

@@ -2,6 +2,7 @@
 
 mod actions;
 mod canvas;
+mod diff_page;
 mod palette;
 mod project_sidebar;
 mod rail;
@@ -11,6 +12,7 @@ mod setup;
 mod sidebar;
 mod sidebar_rows;
 mod source_control;
+mod source_control_dialogs;
 mod start_page;
 mod status_bar;
 mod teams;
@@ -378,6 +380,11 @@ impl Render for Shell {
                 page,
                 shell: shell.clone(),
             });
+        let diff = self
+            .source_control
+            .open
+            .is_some()
+            .then(|| diff_page::diff_page(self, &shell, cx));
         let project = self
             .model
             .region_visible(Region::ProjectSidebar)
@@ -390,6 +397,7 @@ impl Render for Shell {
                 start,
                 setup_rows,
                 project,
+                diff,
             },
             window,
             cx,
@@ -487,6 +495,11 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let discard = self
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| source_control_dialogs::discard_dialog(flow, &shell, cx));
         let team_dialog = self
             .team_dialog
             .as_ref()
@@ -549,6 +562,7 @@ impl Render for Shell {
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))

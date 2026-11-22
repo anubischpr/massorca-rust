@@ -95,6 +95,8 @@ pub struct ChangeRow {
     pub directory: String,
     /// The path before a rename.
     pub original_path: Option<String>,
+    /// What changed, for the file's diff header.
+    pub kind: ChangeKind,
     pub letter: &'static str,
     pub word: &'static str,
     /// Added and removed lines on this side; `None` where git counts none.
@@ -150,13 +152,16 @@ fn panel(status: &GitStatus, git: &WorkspaceGit) -> Panel {
     };
     for entry in &status.entries {
         if entry.conflict.is_some() {
-            panel.conflicted.push(row(entry, CONFLICTED, None, false));
+            panel
+                .conflicted
+                .push(row(entry, ChangeKind::Modified, CONFLICTED, None, false));
             continue;
         }
         if let Some(kind) = entry.staged {
             let counts = entry.staged_lines;
             panel.staged.push(row(
                 entry,
+                kind,
                 change_label(kind),
                 counts.map(|c| (c.added, c.removed)),
                 counts.is_some_and(|c| c.binary),
@@ -166,13 +171,16 @@ fn panel(status: &GitStatus, git: &WorkspaceGit) -> Panel {
             let counts = entry.unstaged_lines;
             panel.changes.push(row(
                 entry,
+                kind,
                 change_label(kind),
                 counts.map(|c| (c.added, c.removed)),
                 counts.is_some_and(|c| c.binary),
             ));
         }
         if entry.untracked {
-            panel.untracked.push(row(entry, UNTRACKED, None, false));
+            panel
+                .untracked
+                .push(row(entry, ChangeKind::Added, UNTRACKED, None, false));
         }
     }
     panel
@@ -191,7 +199,13 @@ pub fn change_label(kind: ChangeKind) -> Label {
     }
 }
 
-fn row(entry: &StatusEntry, label: Label, lines: Option<(u64, u64)>, binary: bool) -> ChangeRow {
+fn row(
+    entry: &StatusEntry,
+    kind: ChangeKind,
+    label: Label,
+    lines: Option<(u64, u64)>,
+    binary: bool,
+) -> ChangeRow {
     let (directory, name) = match entry.path.rsplit_once('/') {
         Some((directory, name)) => (directory.to_owned(), name.to_owned()),
         None => (String::new(), entry.path.clone()),
@@ -201,6 +215,7 @@ fn row(entry: &StatusEntry, label: Label, lines: Option<(u64, u64)>, binary: boo
         name,
         directory,
         original_path: entry.original_path.clone(),
+        kind,
         letter: label.0,
         word: label.1,
         lines,

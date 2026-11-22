@@ -2,6 +2,7 @@
 //! is the panel of the selected workspace's changes, commit box and history (screen D-DF-02).
 
 use gpui::{AnyElement, App, Div, IntoElement, SharedString, WeakEntity, div, prelude::*, px};
+use massorca_protocol::methods::git::diff::DiffTarget;
 use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
@@ -18,7 +19,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
-use super::source_control::ProjectTab;
+use super::source_control::{OpenFile, ProjectTab};
 use crate::model::source_control::{ChangeRow, CommitRow, History, Panel, PanelView, panel_view};
 
 /// The Project sidebar's body under its header: the tab strip, then the open tab.
@@ -99,6 +100,14 @@ fn retry(handle: &WeakEntity<Shell>) -> impl Fn(&mut gpui::Window, &mut App) + '
     }
 }
 
+/// What the panel's rows need from the shell: who to ask, whether a call is out, which file is open.
+struct Rows<'a> {
+    handle: &'a WeakEntity<Shell>,
+    busy: bool,
+    open: Option<&'a str>,
+    theme: &'a Theme,
+}
+
 /// The panel of a workspace that has its status: the branch, notices, the commit box, the changes
 /// in their groups and the history.
 fn panel_body(
@@ -152,43 +161,39 @@ fn panel_body(
     if panel.is_clean() {
         column = column.child(note("Nothing to commit.", "", theme));
     }
+    let rows = Rows {
+        handle,
+        busy,
+        open: shell
+            .source_control
+            .open
+            .as_ref()
+            .map(|open| open.path.as_str()),
+        theme,
+    };
     let groups = [
         group(
             "Conflicted",
             &panel.conflicted,
             Group::Conflicted,
             None,
-            handle,
-            busy,
-            theme,
+            &rows,
         ),
         group(
             "Staged changes",
             &panel.staged,
             Group::Staged,
-            Some(bulk_button(handle, busy, "Unstage all", true)),
-            handle,
-            busy,
-            theme,
+            Some(bulk_button(&rows, "Unstage all", true)),
+            &rows,
         ),
         group(
             "Changes",
             &panel.changes,
             Group::Changed,
-            Some(bulk_button(handle, busy, "Stage all", false)),
-            handle,
-            busy,
-            theme,
+            Some(bulk_button(&rows, "Stage all", false)),
+            &rows,
         ),
-        group(
-            "Untracked",
-            &panel.untracked,
-            Group::Untracked,
-            None,
-            handle,
-            busy,
-            theme,
-        ),
+        group("Untracked", &panel.untracked, Group::Untracked, None, &rows),
     ];
     column
         .children(groups.into_iter().flatten())
@@ -279,7 +284,7 @@ fn commit_box(
         .into_any_element()
 }
 
-/// The groups the changes are listed in. Each has its own actions (stage, unstage, or none).
+/// The groups the changes are listed in. Each has its own actions (stage, unstage, discard, or none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Group {
     Conflicted,
@@ -294,9 +299,7 @@ fn group(
     rows: &[ChangeRow],
     kind: Group,
     action: Option<AnyElement>,
-    handle: &WeakEntity<Shell>,
-    busy: bool,
-    theme: &Theme,
+    ctx: &Rows,
 ) -> Option<AnyElement> {
     if rows.is_empty() {
         return None;
@@ -308,55 +311,68 @@ fn group(
         .child(
             div()
                 .text_style(TYPE_OVERLINE)
-                .text_color(theme.palette.text.tertiary)
+                .text_color(ctx.theme.palette.text.tertiary)
                 .child(format!("{title} · {}", rows.len())),
         )
         .children(action);
-    let rows: Vec<AnyElement> = rows
-        .iter()
-        .map(|row| change_row(row, kind, handle, busy, theme))
-        .collect();
+    let items: Vec<AnyElement> = rows.iter().map(|row| change_row(row, kind, ctx)).collect();
     Some(
         div()
             .flex()
             .flex_col()
             .gap(px(SPACE_1))
             .child(heading)
-            .children(rows)
+            .children(items)
             .into_any_element(),
     )
 }
 
-/// One changed file: its name and folder, its line counts and status letter, and its stage action.
-fn change_row(
-    row: &ChangeRow,
-    kind: Group,
-    handle: &WeakEntity<Shell>,
-    busy: bool,
-    theme: &Theme,
-) -> AnyElement {
+/// One changed file: its name and folder, a click that opens its diff, its line counts and status
+/// letter, and its actions.
+fn change_row(row: &ChangeRow, kind: Group, ctx: &Rows) -> AnyElement {
     let key = format!("source-control-{kind:?}-{}", row.path);
-    let mut item = ListRow::new(SharedString::from(key.clone()), row.name.clone())
+    let mut item = ListRow::new(SharedString::from(key), row.name.clone())
         .leading(RowLeading::Icon(IconName::FileText))
-        .tooltip(row.path.clone());
+        .tooltip(row.path.clone())
+        .selected(ctx.open == Some(row.path.as_str()));
     if !row.directory.is_empty() {
         item = item.secondary(row.directory.clone());
     }
-    let mut trailing = div()
+    if let Some(file) = open_file_of(row, kind) {
+        let handle = ctx.handle.clone();
+        item = item.on_click(move |_, _, cx| {
+            let _ = handle.update(cx, |shell, cx| shell.open_file(file.clone(), cx));
+        });
+    }
+    let trailing = div()
         .flex()
         .items_center()
         .gap(px(SPACE_1))
-        .children(counts(row, theme))
+        .children(counts(row, ctx.theme))
         .child(
             div()
                 .text_style(TYPE_MONO_SM)
-                .text_color(theme.palette.text.secondary)
+                .text_color(ctx.theme.palette.text.secondary)
                 .child(row.letter),
-        );
-    if let Some(action) = row_action(row, kind, handle, busy) {
-        trailing = trailing.child(action);
-    }
+        )
+        .children(row_actions(row, kind, ctx));
     item.trailing(trailing).into_any_element()
+}
+
+/// The diff a row opens: the staged side for the staged group, the working tree otherwise. A conflict
+/// opens nothing; it is resolved in the editor.
+fn open_file_of(row: &ChangeRow, kind: Group) -> Option<OpenFile> {
+    let target = match kind {
+        Group::Staged => DiffTarget::Staged,
+        Group::Changed | Group::Untracked => DiffTarget::Worktree,
+        Group::Conflicted => return None,
+    };
+    Some(OpenFile {
+        path: row.path.clone(),
+        target,
+        original_path: row.original_path.clone(),
+        kind: row.kind,
+    })
 }
 
 /// "+3 -1" for a text change, "binary" for a binary one, nothing where git counts no lines.
@@ -388,48 +404,63 @@ fn counts(row: &ChangeRow, theme: &Theme) -> Option<Div> {
     )
 }
 
-/// The row's own action: unstage in the staged group, stage in the others, none for a conflict.
-fn row_action(
-    row: &ChangeRow,
-    kind: Group,
-    handle: &WeakEntity<Shell>,
-    busy: bool,
-) -> Option<AnyElement> {
-    let (icon, name, staged) = match kind {
-        Group::Staged => (IconName::Minus, format!("Unstage {}", row.name), true),
-        Group::Changed | Group::Untracked => (IconName::Plus, format!("Stage {}", row.name), false),
-        Group::Conflicted => return None,
+/// The row's own buttons: unstage in the staged group; stage and discard in the changed and untracked
+/// groups; none for a conflict.
+fn row_actions(row: &ChangeRow, kind: Group, ctx: &Rows) -> Vec<AnyElement> {
+    match kind {
+        Group::Conflicted => Vec::new(),
+        Group::Staged => vec![stage_button(row, true, ctx)],
+        Group::Changed | Group::Untracked => {
+            vec![stage_button(row, false, ctx), discard_button(row, ctx)]
+        }
+    }
+}
+
+fn stage_button(row: &ChangeRow, staged: bool, ctx: &Rows) -> AnyElement {
+    let (icon, name) = if staged {
+        (IconName::Minus, format!("Unstage {}", row.name))
+    } else {
+        (IconName::Plus, format!("Stage {}", row.name))
     };
     let path = row.path.clone();
-    let handle = handle.clone();
-    Some(
-        IconButton::new(
-            SharedString::from(format!("source-control-action-{}", row.path)),
-            icon,
-            name,
-        )
-        .disabled(busy)
-        .on_click(move |_, cx| {
-            let _ = handle.update(cx, |shell, cx| {
-                shell.set_staged(Some(path.clone()), staged, cx);
-            });
-        })
-        .into_any_element(),
+    let handle = ctx.handle.clone();
+    IconButton::new(
+        SharedString::from(format!("source-control-stage-{}", row.path)),
+        icon,
+        name,
     )
+    .disabled(ctx.busy)
+    .on_click(move |_, cx| {
+        let _ = handle.update(cx, |shell, cx| {
+            shell.set_staged(Some(path.clone()), staged, cx);
+        });
+    })
+    .into_any_element()
+}
+
+/// Asks before discarding one file's changes (decision 0013).
+fn discard_button(row: &ChangeRow, ctx: &Rows) -> AnyElement {
+    let path = row.path.clone();
+    let handle = ctx.handle.clone();
+    IconButton::new(
+        SharedString::from(format!("source-control-discard-{}", row.path)),
+        IconName::RotateCcw,
+        format!("Discard changes in {}", row.name),
+    )
+    .disabled(ctx.busy)
+    .on_click(move |_, cx| {
+        let _ = handle.update(cx, |shell, cx| shell.open_discard(vec![path.clone()], cx));
+    })
+    .into_any_element()
 }
 
 /// "Stage all" or "Unstage all" for a whole group.
-fn bulk_button(
-    handle: &WeakEntity<Shell>,
-    busy: bool,
-    label: &'static str,
-    staged: bool,
-) -> AnyElement {
-    let handle = handle.clone();
+fn bulk_button(ctx: &Rows, label: &'static str, staged: bool) -> AnyElement {
+    let handle = ctx.handle.clone();
     Button::new(label, label)
         .variant(ButtonVariant::Ghost)
         .size(ButtonSize::Compact)
-        .disabled(busy)
+        .disabled(ctx.busy)
         .on_click(move |_, cx| {
             let _ = handle.update(cx, |shell, cx| shell.set_staged(None, staged, cx));
         })
@@ -447,12 +478,7 @@ fn history(history: &History, theme: &Theme) -> AnyElement {
     match history {
         History::Loading => column = column.child(caption("Reading the history", theme)),
         History::Failed { message } => {
-            column = column.child(
-                div()
-                    .text_style(TYPE_CAPTION)
-                    .text_color(theme.palette.text.tertiary)
-                    .child(message.clone()),
-            );
+            column = column.child(caption(message.clone(), theme));
         }
         History::Loaded { commits, more } => {
             if commits.is_empty() {
