@@ -3689,6 +3689,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "massorca-client",
+ "massorca-core-remote",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
