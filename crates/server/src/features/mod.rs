@@ -19,6 +19,7 @@ mod workspaces;
 
 pub(crate) use config::default_workspace_root;
 pub(crate) use service::info_of;
+pub(crate) use teams::follow_task_outcomes;
 
 use serde::Deserialize;
 

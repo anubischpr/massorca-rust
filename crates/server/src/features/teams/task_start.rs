@@ -26,6 +26,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::task::view_of;
+use super::task_outcome::latch_at_link;
 use super::task_state;
 use super::{blocking, selectors, store_error};
 
@@ -155,7 +156,7 @@ fn link(
     let linked = store
         .link_task_session(&row.id, session, now_ms())
         .map_err(store_error)?;
-    let current = selectors::task(store, &row.id)?;
+    let mut current = selectors::task(store, &row.id)?;
     if !linked && current.session_id.as_deref() != Some(session) {
         return Err(ErrorBody::new(
             codes::TASK_STARTED,
@@ -163,7 +164,12 @@ fn link(
         ));
     }
     changes.task = Some(row.id.clone());
-    Ok(view_of(&current, &task_state::load(agents, &current)?))
+    let shown = task_state::load(agents, &current)?;
+    // The agent may have finished before the link, when the listener could not find the task yet.
+    if linked && latch_at_link(store, &current.id, &shown).map_err(store_error)? {
+        current = selectors::task(store, &row.id)?;
+    }
+    Ok(view_of(&current, &shown))
 }
 
 /// A bot works on one task at a time: another of its tasks whose session still runs (or cannot be verified) makes it busy.

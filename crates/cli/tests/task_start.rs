@@ -241,3 +241,93 @@ fn a_task_without_a_bot_is_refused_and_stays_unchanged() {
     let unknown = error_of(&sandbox, &["task", "start", "no-such-task"]);
     assert_eq!(unknown["code"], "task.not_found");
 }
+
+/// Answers the question the fake agent asks, then waits until its turn is done. Every task prompt asks: its "Task:" line
+/// contains the fake agent's "ask:" trigger.
+fn answer_and_wait_for_done(sandbox: &Sandbox, session: &str) {
+    let asking = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session,
+            "--until",
+            "waiting",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+    let terminal = asking["terminal_id"].as_str().expect("terminal id");
+    sandbox
+        .run("default", &["terminal", "send", terminal, "yes"])
+        .success();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session,
+            "--until",
+            "done",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+}
+
+#[test]
+fn a_finished_agent_latches_success_into_its_task_and_the_task_keeps_it_once_forgotten() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    // No "hold" and no lower-case "fail" in the prompt: the fake agent reports done with success.
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Write the parser, then stop."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+
+    answer_and_wait_for_done(&sandbox, &session);
+    let latched = eventually("the task to latch success", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["outcome"] == "success").then_some(shown)
+    });
+    assert_eq!(latched["column"], "done");
+
+    // The session is forgotten, and the Board still shows the task's own outcome.
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+    sandbox.json_ok("default", &["agent", "forget", session.as_str()]);
+    let kept = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(kept["outcome"], "success");
+    assert_eq!(kept["column"], "done");
+}
+
+#[test]
+fn a_finished_agent_that_reports_failure_latches_failure_into_its_task() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    // The lower-case "fail" in the body makes the fake agent report done with failure.
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Write the parser, then fail."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+
+    answer_and_wait_for_done(&sandbox, &session);
+    let latched = eventually("the task to latch failure", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["outcome"] == "failure").then_some(shown)
+    });
+    assert_eq!(latched["column"], "waiting");
+
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+}

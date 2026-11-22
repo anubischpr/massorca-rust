@@ -121,8 +121,9 @@ The capability is `teams/1`.
 - **Events:**
   - `team.changed`, with the team id, for a team, bot or project change;
   - `task.changed`, with the task id, when a task is created, updated, started,
-    finished, done, reopened or removed. The service also publishes it when a
-    linked session's `agent.changed` changes the task's column.
+    finished, done, reopened or removed. The service also publishes it on every
+    `agent.changed` of a linked session, which can change the task's state or
+    column.
 
 ### CLI
 
@@ -202,3 +203,4 @@ The workspace domain lets one agent write in a workspace at a time
   clears it, and so does `task.reopen`.
 - The bot's model and effort are not passed yet, because `agent.start` has no
   field for them.
+- **Done latch:** a task whose session reports Done with an outcome keeps that outcome in `outcome` once the host can see the run; an unverifiable run latches nothing, so the Board keeps Done after the session is forgotten. Every change of a linked session publishes `task.changed`, and a session that finished before `task.start` linked it latches at the link.
