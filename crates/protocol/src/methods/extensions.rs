@@ -129,6 +129,16 @@ pub struct ExtensionItem {
     pub settings: Vec<SettingItem>,
     /// The Danger Zone.
     pub uninstall: UninstallEffects,
+    /// Set when the package's files cannot be trusted: the item then carries only what the lockfile records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<ItemProblem>,
+}
+
+/// Why an installed package's files cannot be trusted: a stable code and the message to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemProblem {
+    pub code: String,
+    pub message: String,
 }
 
 /// What the lockfile records about an installed package.

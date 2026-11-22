@@ -164,6 +164,8 @@ file as read; its install still needs the pin.
     `agent_kinds` ids the lockfile records at install, so one changed package
     never hides the others. The kind-conflict check on install uses the same
     recorded ids. Only an unreadable lockfile fails the whole call.
+- `extensions.list` and `extensions.get` follow the same rule: a package whose files no longer match the lockfile
+  comes back with `problem` (`extension.tampered`) and only its lockfile record, instead of failing the call.
 - `catalogue_agent_kinds() -> Vec<CatalogueAgentKind>` returns, for every
   catalogue entry, the declaration bytes and its `cli` block. Each
   declaration's content is checked by `core-agents`, not here.

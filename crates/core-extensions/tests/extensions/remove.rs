@@ -194,8 +194,11 @@ fn a_changed_installed_manifest_is_never_trusted_or_run() {
         kinds[0].error.as_ref().map(|error| error.code.as_str()),
         Some(codes::TAMPERED)
     );
-    let item = s.service.get("acme.kit").expect_err("not trusted");
-    assert_eq!(item.code(), codes::TAMPERED);
+    let item = s.service.get("acme.kit").expect("still an item");
+    assert_eq!(
+        item.problem.map(|problem| problem.code).as_deref(),
+        Some(codes::TAMPERED)
+    );
 
     let removed = s
         .service

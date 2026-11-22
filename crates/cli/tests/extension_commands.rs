@@ -4,6 +4,8 @@
 mod extension_support;
 mod harness;
 
+use std::fs;
+
 use extension_support::{FAKE_VENDOR, Host, KIT, Package};
 use harness::stdout_text;
 use predicates::str::contains;
@@ -237,6 +239,48 @@ fn remove_deletes_the_package_and_its_data() {
     host.run(&["extension", "remove", "acme.kit"])
         .success()
         .stdout(contains("removed acme.kit 1.2.0"));
+}
+
+const OTHER: Package = Package::new("acme.other", "otheragent", "otherbin");
+
+#[test]
+fn a_tampered_package_is_listed_with_its_problem_and_never_fails_the_list() {
+    let host = Host::new();
+    host.put_cli("acmecli");
+    host.put_cli("otherbin");
+    let kit = host.write_dir(KIT, &["fail"]);
+    host.json(&["extension", "install", &kit, "--yes"]);
+    let other = host.write_dir(OTHER, &["fail"]);
+    host.json(&["extension", "install", &other, "--yes"]);
+    let lock: Value = serde_json::from_slice(
+        &fs::read(host.extensions_dir().join("lock.json")).expect("the lockfile"),
+    )
+    .expect("json");
+    let rel = lock["packages"][0]["path"].as_str().expect("a path");
+    let manifest = host.extensions_dir().join(rel).join("extension.json");
+    let mut bytes = fs::read(&manifest).expect("the installed manifest");
+    bytes.push(b'\n');
+    fs::write(&manifest, bytes).expect("the file is changed after install");
+
+    let list = host.json(&["extension", "list"]);
+
+    assert_eq!(ids_of(&list), ["acme.kit", "acme.other"]);
+    assert_eq!(
+        list["extensions"][0]["problem"]["code"],
+        "extension.tampered"
+    );
+    assert!(list["extensions"][1]["problem"].is_null());
+    host.run(&["extension", "list"])
+        .success()
+        .stdout(contains("acme.other"))
+        .stdout(contains("differ from what was reviewed"));
+    let shown = host.json(&["extension", "show", "acme.kit"]);
+    assert_eq!(shown["problem"]["code"], "extension.tampered");
+    host.run(&["extension", "show", "acme.kit"])
+        .success()
+        .stdout(contains("problem: the installed files of acme.kit differ"));
+    host.json(&["extension", "remove", "acme.kit"]);
+    assert_eq!(host.installed_ids(), ["acme.other"]);
 }
 
 #[test]

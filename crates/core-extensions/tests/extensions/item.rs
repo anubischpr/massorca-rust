@@ -85,3 +85,51 @@ fn an_oversized_asset_is_refused() {
         .expect_err("too large");
     assert_eq!(error.code(), codes::ASSET_TOO_LARGE);
 }
+
+#[test]
+fn a_tampered_package_is_listed_with_its_problem_beside_the_others() {
+    let s = setup(FakeHost::new());
+    let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
+    s.install(&kit, true).expect("kit installs");
+    let other = s.package_dir("other", &agent_package("other", "other", "other"));
+    s.install(&other, true).expect("other installs");
+    let rel = s.lock_json().expect("lock")["packages"][0]["path"]
+        .as_str()
+        .expect("path")
+        .to_owned();
+    let manifest = s.service.layout().resolve(&format!("{rel}/extension.json"));
+    let mut bytes = std::fs::read(&manifest).expect("manifest");
+    bytes.push(b'\n');
+    std::fs::write(&manifest, bytes).expect("tamper");
+
+    let listed = s
+        .service
+        .list()
+        .expect("one tampered package never fails the list");
+    let ids: Vec<_> = listed.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids, ["acme.kit", "other.kit"]);
+    let problem = listed[0]
+        .problem
+        .as_ref()
+        .expect("the tampered package has a problem");
+    assert_eq!(problem.code, codes::TAMPERED);
+    assert_eq!(listed[0].state, ItemState::Enabled);
+    assert!(listed[0].installed.is_some());
+    assert!(listed[0].agents.is_empty() && listed[0].permissions.is_empty());
+    assert!(listed[1].problem.is_none());
+
+    let item = s
+        .service
+        .get("acme.kit")
+        .expect("a tampered package is still an item");
+    assert_eq!(
+        item.problem.map(|problem| problem.code).as_deref(),
+        Some(codes::TAMPERED)
+    );
+    assert!(s.service.get("other.kit").expect("item").problem.is_none());
+    let error = s
+        .service
+        .asset("acme.kit", "media/logo.svg")
+        .expect_err("files that cannot be trusted are never served");
+    assert_eq!(error.code(), codes::TAMPERED);
+}

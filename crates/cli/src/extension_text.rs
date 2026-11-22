@@ -2,8 +2,8 @@
 
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, CliRecord, CliRemoval, CliRemovalAction, ExtensionInstalled,
-    ExtensionItem, ExtensionRemoved, ExtensionReview, ExtensionState, Permission, Risk, RiskLevel,
-    SourceKind,
+    ExtensionItem, ExtensionRemoved, ExtensionReview, ExtensionState, ItemProblem, Permission,
+    Risk, RiskLevel, SourceKind,
 };
 
 use crate::workspace_text;
@@ -25,7 +25,13 @@ pub fn item_rows(items: &[ExtensionItem], none: &str) -> Vec<String> {
             ]
         })
         .collect();
-    workspace_text::table(&["ID", "VERSION", "STATE", "RISK", "NAME"], rows)
+    let mut lines = workspace_text::table(&["ID", "VERSION", "STATE", "RISK", "NAME"], rows);
+    lines.extend(items.iter().filter_map(|item| {
+        item.problem
+            .as_ref()
+            .map(|problem| format!("{}: {}", item.id, problem_text(problem)))
+    }));
+    lines
 }
 
 /// One item in detail.
@@ -33,9 +39,12 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
     let mut lines = vec![
         format!("{} ({}) {}", item.name, item.id, item.version),
         format!("state: {}", state_text(item.state)),
+    ];
+    lines.extend(item.problem.as_ref().map(problem_text));
+    lines.extend([
         format!("publisher: {}", item.publisher),
         item.description.clone(),
-    ];
+    ]);
     if let Some(developer) = &item.listing.developer {
         lines.push(format!("developer: {}", developer.name));
     }
@@ -145,6 +154,11 @@ pub fn state_text(state: ExtensionState) -> &'static str {
         ExtensionState::Disabled => "disabled",
         ExtensionState::Unknown => "unknown",
     }
+}
+
+/// An installed package whose files cannot be trusted: the message and its stable code.
+fn problem_text(problem: &ItemProblem) -> String {
+    format!("problem: {} ({})", problem.message, problem.code)
 }
 
 fn risk_text(level: RiskLevel) -> &'static str {
