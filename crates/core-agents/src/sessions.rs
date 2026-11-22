@@ -6,12 +6,12 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use massorca_core_store::{
     AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
@@ -24,7 +24,7 @@ use massorca_core_terminal::{
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
     Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams, Execution,
-    MAX_HOOK_PAYLOAD_BYTES,
+    MAX_HOOK_PAYLOAD_BYTES, PromptReceipt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -33,13 +33,19 @@ use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
-use crate::launch::{self, LaunchError, LaunchInput, Run};
+use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
+use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::paths;
+use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long a first prompt waits for its run's first `idle` before it is dropped (0054). The bound exists because an
+/// agent that never reports idle would otherwise hold the text for as long as its run lives.
+pub const FIRST_PROMPT_WAIT: Duration = Duration::from_secs(120);
 
 /// One applied status change, in the order the store applied it.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +147,9 @@ impl From<std::io::Error> for AgentError {
 impl From<LaunchError> for AgentError {
     fn from(error: LaunchError) -> Self {
         let code = match error {
-            LaunchError::PromptTooLong | LaunchError::PromptHasNul => codes::AGENT_PROMPT_INVALID,
+            LaunchError::PromptTooLong
+            | LaunchError::PromptHasNul
+            | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
         };
         Self::new(code, error.to_string())
@@ -188,6 +196,48 @@ struct Inner {
 struct LiveRun {
     token: String,
     rules: HookRules,
+    /// How a prompt is typed into the run (0054).
+    prompt: PromptRules,
+    /// A first prompt given at launch, held until the run's first `idle`.
+    pending: Option<PendingPrompt>,
+    /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
+    /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
+    typed_since_report: bool,
+}
+
+/// What a prompt needs from its run's kind, copied when the run starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptRules {
+    /// The kind reports activity, so a prompt waits for `idle` or `done`; without a mechanism every prompt is ready.
+    has_status: bool,
+    paste: PasteMode,
+    submit: String,
+}
+
+impl PromptRules {
+    fn of(decl: &KindDecl) -> Self {
+        Self {
+            has_status: decl.status.mechanism != StatusMechanism::None,
+            paste: decl.prompt.paste,
+            submit: decl.prompt.submit.clone(),
+        }
+    }
+}
+
+/// A first prompt waiting for its run's first `idle` (0054). Its text is never logged, so it has no `Debug`; it is
+/// dropped when the run exits, or when its wait ends.
+struct PendingPrompt {
+    text: String,
+    due: Instant,
+}
+
+impl PendingPrompt {
+    fn new(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            due: Instant::now() + FIRST_PROMPT_WAIT,
+        }
+    }
 }
 
 type LiveRuns = HashMap<String, LiveRun>;
@@ -263,6 +313,16 @@ impl Agents {
         let (decl, program) = self.startable_kind(&params.kind)?;
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
+            // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
+            if decl.prompt.mode == PromptMode::None && !decl.reports_idle() {
+                return Err(AgentError::new(
+                    codes::AGENT_PROMPT_INVALID,
+                    format!(
+                        "kind {} takes no prompt at launch and reports no idle state to send it on",
+                        decl.id
+                    ),
+                ));
+            }
         }
         if !params.read_only
             && let Some(holder) = self.live_writer(&workspace.id)?
@@ -294,12 +354,6 @@ impl Agents {
             caller_args: &params.args,
             caller_env: &params.env,
         })?;
-        if plan.pending_prompt.is_some() {
-            return Err(AgentError::new(
-                codes::AGENT_PROMPT_INVALID,
-                format!("kind {} takes no prompt at launch", decl.id),
-            ));
-        }
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
@@ -310,37 +364,23 @@ impl Agents {
             LiveRun {
                 token,
                 rules: HookRules::of(&decl),
+                prompt: PromptRules::of(&decl),
+                pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
+                typed_since_report: false,
             },
         );
-        let started = write_files(&plan.files)
-            .map_err(AgentError::from)
-            .and_then(|()| {
-                let mut env = plan.env;
-                // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).
-                for name in plan.remove_env {
-                    env.entry(name).or_default();
-                }
-                let spec = CreateSpec {
-                    workspace_id: workspace.id.clone(),
-                    cwd: PathBuf::from(&workspace.path),
-                    shell: Some(ShellChoice {
-                        program: plan.program.to_string_lossy().into_owned(),
-                        args: plan.args,
-                    }),
-                    env,
-                    size: PtySize {
-                        cols: params.cols.unwrap_or(DEFAULT_COLS),
-                        rows: params.rows.unwrap_or(DEFAULT_ROWS),
-                    },
-                    title: Some(params.title.clone().unwrap_or_else(|| decl.name.clone())),
-                    request_id: None,
-                };
-                Ok(self.inner.config.terminals.create(spec)?)
-            });
-        let terminal = started.inspect_err(|_| {
-            live.remove(&session_id);
-            remove_dir(&run_dir);
-        })?;
+        let agent_ref = plan.agent_ref.clone();
+        let size = PtySize {
+            cols: params.cols.unwrap_or(DEFAULT_COLS),
+            rows: params.rows.unwrap_or(DEFAULT_ROWS),
+        };
+        let title = params.title.clone().unwrap_or_else(|| decl.name.clone());
+        let terminal_id = self
+            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+            .inspect_err(|_| {
+                live.remove(&session_id);
+                remove_dir(&run_dir);
+            })?;
 
         let row = AgentSessionRow {
             id: session_id.clone(),
@@ -349,8 +389,8 @@ impl Agents {
             parent_id: None,
             title: params.title,
             read_only: params.read_only,
-            agent_ref: plan.agent_ref,
-            terminal_id: Some(terminal.id.clone()),
+            agent_ref,
+            terminal_id: Some(terminal_id.clone()),
             request_id: params.request_id,
             created_at: now_ms(),
             exit: None,
@@ -360,13 +400,189 @@ impl Agents {
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
-            let _ = self.inner.config.terminals.close(&terminal.id);
+            // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+            drop(live);
+            let _ = self.inner.config.terminals.close(&terminal_id);
             remove_dir(&run_dir);
             return Err(error.into());
         }
         let session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         Ok(session)
+    }
+
+    /// Starts a new run of an exited session, in the same session (0054): the kind's resume arguments, with the agent's
+    /// ref in place of `{ref}`, in a new terminal in the workspace root. The session keeps its id and its ref; its exit
+    /// and activity are cleared, so the activity starts absent until the agent reports. Refused with `agent.busy` while
+    /// its run is live; `agent.resume_unavailable` when the kind is no longer declared, has no resume form, or the
+    /// agent's ref is not known; `agent.not_installed` when no program of the kind resolves; `agent.workspace_busy` when
+    /// another session writes in the workspace.
+    pub fn resume(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let _gate = lock(&self.inner.start_gate);
+        let row = self.resolve(selector)?;
+        if self.view(row.clone())?.execution.state != TerminalState::Exited {
+            return Err(AgentError::new(
+                codes::AGENT_BUSY,
+                format!("session {} is still running; stop it first", row.id),
+            ));
+        }
+        let row = self.reload(&row.id)?;
+        // A session whose last run has no recorded end (no terminal and no exit) has nothing to resume from (decision 0058).
+        if row.exit.is_none() {
+            return Err(resume_unavailable(
+                &row.id,
+                "its last run has no recorded end",
+            ));
+        }
+        let agent_ref = row
+            .agent_ref
+            .clone()
+            .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
+        let (decl, program) = self.resumable_kind(&row)?;
+        let workspace = self
+            .inner
+            .config
+            .workspaces
+            .show_workspace(&row.workspace_id)?;
+        if workspace.missing {
+            return Err(AgentError::new(
+                codes::PATH_NOT_FOUND,
+                format!("the workspace directory is missing: {}", workspace.path),
+            ));
+        }
+        if !row.read_only
+            && let Some(holder) = self.live_writer(&workspace.id)?
+        {
+            let mut error = AgentError::new(
+                codes::AGENT_WORKSPACE_BUSY,
+                format!("session {holder} already writes in this workspace"),
+            );
+            error.data = Some(json!({ "session": holder }));
+            return Err(error);
+        }
+
+        let token = new_token();
+        let home = paths::valid_home(self.profile_dir(), &decl.id).filter(|home| home.is_dir());
+        // A resumed run takes the kind's resume arguments only: the caller's arguments and environment of the first start
+        // are not kept with the session (docs/architecture/agents.md).
+        let no_env = BTreeMap::new();
+        let plan = launch::plan(&LaunchInput {
+            decl: &decl,
+            program: &program,
+            session_id: &row.id,
+            token: &token,
+            run: Run::Resume {
+                agent_ref: &agent_ref,
+            },
+            profile_dir: self.profile_dir(),
+            massorca_bin: &self.inner.config.massorca_bin,
+            credential_home: home.as_deref(),
+            caller_args: &[],
+            caller_env: &no_env,
+        })?;
+        let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
+        // the row names the new terminal, so the run's first report waits instead of being refused.
+        let mut live = lock(&self.inner.status);
+        live.insert(
+            row.id.clone(),
+            LiveRun {
+                token,
+                rules: HookRules::of(&decl),
+                prompt: PromptRules::of(&decl),
+                pending: None,
+                typed_since_report: false,
+            },
+        );
+        let title = row.title.clone().unwrap_or_else(|| decl.name.clone());
+        let size = PtySize {
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+        };
+        let terminal_id = self
+            .spawn_run(plan, &workspace.id, &workspace.path, title, size)
+            .inspect_err(|_| {
+                live.remove(&row.id);
+                remove_dir(&run_dir);
+            })?;
+        let restarted = self.store().restart_agent_session(&row.id, &terminal_id);
+        if !matches!(restarted, Ok(true)) {
+            live.remove(&row.id);
+            // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+            drop(live);
+            let _ = self.inner.config.terminals.close(&terminal_id);
+            remove_dir(&run_dir);
+            restarted?;
+            return Err(AgentError::new(
+                codes::AGENT_NOT_FOUND,
+                format!("no agent session {}", row.id),
+            ));
+        }
+        let fresh = self.reload(&row.id)?;
+        let session = self.view_with(&mut live, fresh)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(session)
+    }
+
+    /// Writes a run's files, then creates its terminal in the workspace root with the launch plan's program, arguments
+    /// and environment (0051). Returns the terminal's id.
+    fn spawn_run(
+        &self,
+        plan: LaunchPlan,
+        workspace_id: &str,
+        cwd: &str,
+        title: String,
+        size: PtySize,
+    ) -> Result<String, AgentError> {
+        if !plan.files.is_empty() {
+            crate::credentials::create_agents_dir(self.profile_dir())?;
+        }
+        write_files(&plan.files)?;
+        let mut env = plan.env;
+        // The terminal can only add variables, so a stripped one is set to empty instead (docs/architecture/agents.md).
+        for name in plan.remove_env {
+            env.entry(name).or_default();
+        }
+        let spec = CreateSpec {
+            workspace_id: workspace_id.to_owned(),
+            cwd: PathBuf::from(cwd),
+            shell: Some(ShellChoice {
+                program: plan.program.to_string_lossy().into_owned(),
+                args: plan.args,
+            }),
+            env,
+            size,
+            title: Some(title),
+            request_id: None,
+        };
+        Ok(self.inner.config.terminals.create(spec)?.id)
+    }
+
+    /// The declaration and program a resume starts with: declared, valid, with a resume form, and installed (0054).
+    fn resumable_kind(&self, row: &AgentSessionRow) -> Result<(KindDecl, PathBuf), AgentError> {
+        let catalog = Catalog::load(self.profile_dir());
+        let entry = catalog.find(&row.kind).ok_or_else(|| {
+            resume_unavailable(&row.id, &format!("kind {} is no longer declared", row.kind))
+        })?;
+        let decl = entry
+            .valid()
+            .ok_or_else(|| resume_unavailable(&row.id, &format!("kind {} is invalid", row.kind)))?;
+        if !decl.resumable() {
+            return Err(resume_unavailable(
+                &row.id,
+                &format!("kind {} declares no resume form", row.kind),
+            ));
+        }
+        let program = resolve_first(&decl.program, &SearchEnv::current()).ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!(
+                    "agent kind {} is not installed: none of its programs was found",
+                    row.kind
+                ),
+            )
+        })?;
+        Ok((decl.clone(), program))
     }
 
     /// Applies one hook report (0053). An unknown session, a run that has ended, or a wrong token is refused with
@@ -397,6 +613,7 @@ impl Agents {
         else {
             return Ok(());
         };
+        let first_idle = report.activity.state == "idle";
         let mut row = self.reload(&params.session)?;
         let result = if report.activity.state == "done" {
             report.result
@@ -415,15 +632,121 @@ impl Agents {
         if row.agent_ref.is_none() {
             row.agent_ref = learned;
         }
+        // The report answers whatever was typed before it, so the run's typed-since-report flag clears (decision 0058).
+        if let Some(run) = live.get_mut(&params.session) {
+            run.typed_since_report = false;
+        }
         let session = self.view_with(&mut live, row)?;
+        // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
+        // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
+        let first = if first_idle {
+            live.get_mut(&params.session).and_then(|run| {
+                let pending = run.pending.take()?;
+                run.typed_since_report = true;
+                Some((run.prompt.clone(), pending.text))
+            })
+        } else {
+            None
+        };
+        let terminal = session.terminal_id.clone();
         self.notify(Change::Updated(Box::new(session)));
+        drop(live);
+        if let (Some((rules, text)), Some(terminal)) = (first, terminal) {
+            self.deliver_first_prompt(&params.session, &terminal, &rules, &text);
+        }
         Ok(())
+    }
+
+    /// Types a prompt into a live run's terminal (0054): the text, then the kind's submit sequence. The text is refused
+    /// over the size limit or with a NUL. Unless `force` is set, the run must be ready (see [`prompt::ready`]). The
+    /// receipt counts the bytes written; it never says the agent read them.
+    pub fn prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+    ) -> Result<PromptReceipt, AgentError> {
+        launch::check_prompt(text)?;
+        let row = self.resolve(selector)?;
+        // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
+        // wait for the agent to read, and the agent's own hook reports need the lock to return.
+        let (session_id, terminal, bytes) = {
+            let mut live = lock(&self.inner.status);
+            let row = self.reload(&row.id)?;
+            let session = self.view_with(&mut live, row)?;
+            let Some(run) = live.get_mut(&session.id) else {
+                return Err(not_live(&session.id));
+            };
+            let state = session.activity.as_ref().map(|activity| activity.state);
+            // A run that has taken a prompt since its last report is not ready either: its agent may not have read that
+            // prompt yet, so a second one would land on the same idle (decision 0058).
+            if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
+                return Err(AgentError::new(
+                    codes::AGENT_BUSY,
+                    format!(
+                        "session {} is not ready for a prompt: wait for its agent to report, or use force",
+                        session.id
+                    ),
+                ));
+            }
+            let bytes = prompt::input_bytes(text, run.prompt.paste, &run.prompt.submit);
+            let Some(terminal) = session.terminal_id.clone() else {
+                return Err(not_live(&session.id));
+            };
+            // Accepted under the lock, so a second prompt on the same idle sees the flag. A kind with no status mechanism
+            // never hears back, so it never sets the flag: it stays always ready (0054).
+            run.typed_since_report = run.prompt.has_status;
+            (session.id.clone(), terminal, bytes)
+        };
+        self.inner
+            .config
+            .terminals
+            .input(&terminal, &bytes)
+            .map_err(|error| match error {
+                TerminalError::Exited | TerminalError::NotFound => not_live(&session_id),
+                other => AgentError::from(other),
+            })?;
+        Ok(PromptReceipt {
+            receipt: ReceiptKind::HandedToTerminal,
+            bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        })
+    }
+
+    /// Types a first prompt on a thread of its own. The write can wait for the agent to read, and the agent waits for the
+    /// hook report that carried this `idle` to return, so the report must not wait for the write (0054).
+    fn deliver_first_prompt(&self, session: &str, terminal: &str, rules: &PromptRules, text: &str) {
+        let bytes = prompt::input_bytes(text, rules.paste, &rules.submit);
+        let terminals = self.inner.config.terminals.clone();
+        let terminal = terminal.to_owned();
+        let owner = session.to_owned();
+        let logged = owner.clone();
+        let spawned = thread::Builder::new()
+            .name("agent-first-prompt".to_owned())
+            .spawn(move || {
+                if let Err(error) = terminals.input(&terminal, &bytes) {
+                    let error = AgentError::from(error);
+                    tracing::warn!(
+                        session = %owner,
+                        code = error.code,
+                        "the first prompt could not be typed into the run's terminal"
+                    );
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(session = %logged, %error, "the first prompt has no thread to be typed on");
+        }
     }
 
     /// Checks the terminal of every live run once and applies the exits it finds, in order with hook reports. Each
     /// session is checked on its own: one that fails is logged, by its id and error code only, and the sweep goes on.
     pub fn sweep(&self) {
         let mut live = lock(&self.inner.status);
+        for id in expire_first_prompts(&mut live, Instant::now()) {
+            tracing::warn!(
+                session = %id,
+                "the first prompt was dropped: the agent reported no idle state in time"
+            );
+        }
         let ids: Vec<String> = live.keys().cloned().collect();
         for id in ids {
             let checked = match self.store().get_agent_session(&id) {
@@ -477,7 +800,7 @@ impl Agents {
                         let mut live = lock(&self.inner.status);
                         let mut row = self.reload(&row.id)?;
                         if row.exit.is_none() {
-                            self.record_exit(&mut live, &mut row, run_exit_of(&exit))?;
+                            self.record_exit(&mut live, &mut row, terminal, run_exit_of(&exit))?;
                         }
                     }
                 }
@@ -502,12 +825,14 @@ impl Agents {
             ));
         }
         self.store().delete_agent_session(&session.id)?;
+        live.remove(&session.id);
+        self.notify(Change::Forgotten(session.id.clone()));
+        // Closed once the status lock is released: a close can wait for the terminal's kill grace.
+        drop(live);
         if let Some(terminal) = &session.terminal_id {
             let _ = self.inner.config.terminals.close(terminal);
         }
         remove_dir(&paths::run_dir(self.profile_dir(), &session.id));
-        live.remove(&session.id);
-        self.notify(Change::Forgotten(session.id.clone()));
         Ok(session)
     }
 
@@ -618,32 +943,42 @@ impl Agents {
                 state: TerminalState::Exited,
                 exit: None,
             },
-            (None, Some(terminal)) => match self.inner.config.terminals.get(terminal) {
-                Ok(info) => match info.state {
-                    CoreState::Live => running(TerminalState::Live),
-                    CoreState::Unverifiable => running(TerminalState::Unverifiable),
-                    CoreState::Exited => {
-                        let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
-                        self.record_exit(live, &mut row, exit)?
+            (None, Some(terminal)) => {
+                let terminal = terminal.clone();
+                match self.inner.config.terminals.get(&terminal) {
+                    Ok(info) => match info.state {
+                        CoreState::Live => running(TerminalState::Live),
+                        CoreState::Unverifiable => running(TerminalState::Unverifiable),
+                        CoreState::Exited => {
+                            let exit = info.exit.as_ref().map_or_else(gone, run_exit_of);
+                            self.record_exit(live, &mut row, &terminal, exit)?
+                        }
+                    },
+                    Err(TerminalError::NotFound) => {
+                        self.record_exit(live, &mut row, &terminal, gone())?
                     }
-                },
-                Err(TerminalError::NotFound) => self.record_exit(live, &mut row, gone())?,
-                Err(error) => return Err(error.into()),
-            },
+                    Err(error) => return Err(error.into()),
+                }
+            }
         };
         Ok(record(row, execution))
     }
 
-    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once.
+    /// Applies a run's end: the exit, and the interrupted rule (0052), written to the row and announced once. The end is
+    /// recorded only while the row still names `terminal`, the terminal the run ran in (decision 0058): a resumed session
+    /// has a new terminal, and an earlier run's end must neither land on it nor end its live run.
     fn record_exit(
         &self,
         live: &mut LiveRuns,
         row: &mut AgentSessionRow,
+        terminal: &str,
         exit: RunExit,
     ) -> Result<Execution, AgentError> {
-        let changed = self.store().set_agent_session_exit(&row.id, &exit)?;
-        live.remove(&row.id);
+        let changed = self
+            .store()
+            .set_agent_session_exit(&row.id, terminal, &exit)?;
         if changed {
+            live.remove(&row.id);
             // The exit rule reads the activity and result as they are now, under the status lock.
             if let Some(fresh) = self.store().get_agent_session(&row.id)? {
                 *row = fresh;
@@ -689,6 +1024,22 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
     }
 }
 
+/// The refusal for a resume the session cannot make (0054).
+fn resume_unavailable(session: &str, reason: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_RESUME_UNAVAILABLE,
+        format!("session {session} cannot resume: {reason}"),
+    )
+}
+
+/// The refusal for a prompt to a run that has ended. The session's id only, never the prompt.
+fn not_live(session: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_NOT_LIVE,
+        format!("the run of session {session} has exited"),
+    )
+}
+
 /// Compares two tokens without stopping at the first difference.
 fn tokens_match(expected: &str, given: &str) -> bool {
     expected.len() == given.len()
@@ -697,6 +1048,22 @@ fn tokens_match(expected: &str, given: &str) -> bool {
             .zip(given.bytes())
             .fold(0u8, |diff, (a, b)| diff | (a ^ b))
             == 0
+}
+
+/// Drops every first prompt whose wait has ended by `now`; returns the sessions they belonged to (0054).
+fn expire_first_prompts(live: &mut LiveRuns, now: Instant) -> Vec<String> {
+    let mut expired = Vec::new();
+    for (id, run) in live.iter_mut() {
+        if run
+            .pending
+            .as_ref()
+            .is_some_and(|pending| now >= pending.due)
+        {
+            run.pending = None;
+            expired.push(id.clone());
+        }
+    }
+    expired
 }
 
 /// Sweeps every [`SWEEP_INTERVAL`] until the service is gone.
@@ -801,6 +1168,7 @@ mod tests {
     };
     use massorca_core_terminal::ManagerConfig;
     use massorca_core_terminal::shell::EnvSnapshot;
+    use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 
     use super::*;
 
@@ -909,5 +1277,152 @@ mod tests {
             .unwrap();
         assert_eq!(stored.activity, Some(activity("done", Some("success"))));
         assert_eq!(stored.result.as_deref(), Some("the answer"));
+    }
+
+    /// A prompt with a NUL or over the size limit is refused before its session is looked up (0054).
+    #[test]
+    fn a_prompt_is_checked_before_its_session_is_looked_up() {
+        let (agents, _workspace_id, _profile) = service();
+        let nul = agents.prompt("no-such-session", "a\0b", false).unwrap_err();
+        assert_eq!(nul.code, codes::AGENT_PROMPT_INVALID);
+        let long = "a".repeat(MAX_PROMPT_BYTES + 1);
+        let over = agents.prompt("no-such-session", &long, false).unwrap_err();
+        assert_eq!(over.code, codes::AGENT_PROMPT_INVALID);
+        let missing = agents.prompt("no-such-session", "fine", false).unwrap_err();
+        assert_eq!(missing.code, codes::AGENT_NOT_FOUND);
+    }
+
+    /// A first prompt is dropped once its wait has ended; a run still inside its wait keeps it (0054).
+    #[test]
+    fn a_first_prompt_is_dropped_only_once_its_wait_has_ended() {
+        let now = Instant::now();
+        let run = |due| LiveRun {
+            token: "t".to_owned(),
+            rules: HookRules::default(),
+            prompt: PromptRules {
+                has_status: true,
+                paste: PasteMode::Plain,
+                submit: "\r".to_owned(),
+            },
+            pending: Some(PendingPrompt {
+                text: "later".to_owned(),
+                due,
+            }),
+            typed_since_report: false,
+        };
+        let mut live: LiveRuns = HashMap::new();
+        live.insert("waiting".to_owned(), run(now + FIRST_PROMPT_WAIT));
+        live.insert("late".to_owned(), run(now));
+
+        assert_eq!(
+            expire_first_prompts(&mut live, now),
+            vec!["late".to_owned()]
+        );
+        assert!(live["waiting"].pending.is_some());
+        assert!(live["late"].pending.is_none());
+    }
+
+    /// A resume of a session that does not exist is refused as not found (0054).
+    #[test]
+    fn a_resume_of_an_unknown_session_is_not_found() {
+        let (agents, _workspace_id, _profile) = service();
+        let error = agents.resume("no-such-session").unwrap_err();
+        assert_eq!(error.code, codes::AGENT_NOT_FOUND);
+    }
+
+    /// An end recorded for an earlier run's terminal changes nothing once the session runs on another terminal: the
+    /// resumed run stays live and unrecorded (decision 0058).
+    #[test]
+    fn an_end_of_an_earlier_terminal_does_not_end_the_resumed_run() {
+        let (agents, workspace_id, _profile) = service();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: Some("t-1".to_owned()),
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+        let end = RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: 5,
+        };
+        // The first run ends on t-1; the resume then moves the session onto t-2, where its new run is live.
+        assert!(
+            agents
+                .store()
+                .set_agent_session_exit(&row.id, "t-1", &end)
+                .unwrap()
+        );
+        assert!(
+            agents
+                .store()
+                .restart_agent_session(&row.id, "t-2")
+                .unwrap()
+        );
+        let mut live: LiveRuns = HashMap::new();
+        live.insert(
+            row.id.clone(),
+            LiveRun {
+                token: "t".to_owned(),
+                rules: HookRules::default(),
+                prompt: PromptRules {
+                    has_status: true,
+                    paste: PasteMode::Plain,
+                    submit: "\r".to_owned(),
+                },
+                pending: None,
+                typed_since_report: false,
+            },
+        );
+
+        // A late record of the first run's end, as a stop that outlived the resume would apply it.
+        let mut current = agents.store().get_agent_session(&row.id).unwrap().unwrap();
+        agents
+            .record_exit(&mut live, &mut current, "t-1", end)
+            .unwrap();
+
+        let stored = agents.store().get_agent_session(&row.id).unwrap().unwrap();
+        assert_eq!(stored.exit, None);
+        assert_eq!(stored.terminal_id.as_deref(), Some("t-2"));
+        assert!(live.contains_key(&row.id), "the resumed run stays live");
+    }
+
+    /// A session whose last run has no recorded end (no terminal and no exit) has nothing to resume from: it is refused as
+    /// unavailable, not as not found (decision 0058).
+    #[test]
+    fn a_session_with_no_recorded_run_end_cannot_resume() {
+        let (agents, workspace_id, _profile) = service();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "claude".to_owned(),
+            workspace_id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: Some("ref-1".to_owned()),
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+
+        let error = agents.resume(&row.id).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_RESUME_UNAVAILABLE, "{error}");
     }
 }

@@ -22,7 +22,8 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 
 use super::Shell;
-use crate::model::navigation::Page;
+use crate::model::marketplace::AgentLink;
+use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::settings::{
     FolderSetting, FolderStatus, FolderValue, SettingsModel, folder_reason, folder_refusal_text,
     folder_request,
@@ -50,6 +51,8 @@ pub(super) struct SettingsFrame<'a> {
     pub shell: WeakEntity<Shell>,
     pub folder: &'a FolderSetting,
     pub folder_field: &'a Entity<TextField>,
+    /// The installed agents, each linking to its Marketplace page (decision 0059).
+    pub agents: Vec<AgentLink>,
 }
 
 /// The Settings page: navigation, search and the rows of the chosen section.
@@ -141,8 +144,12 @@ fn nav_item(
         .debug_selector(move || format!("settings-nav-{section:?}"))
         .child(item.on_click(move |_, _, cx| {
             let _ = shell.update(cx, |shell, cx| {
-                shell.settings.section = section;
-                cx.notify();
+                if section.opens_elsewhere() {
+                    shell.open_marketplace(MarketplacePage::Installed, cx);
+                } else {
+                    shell.settings.section = section;
+                    cx.notify();
+                }
             });
         }))
 }
@@ -178,7 +185,11 @@ fn sections(frame: &SettingsFrame<'_>, hits: &[Hit], cx: &mut App) -> Vec<AnyEle
     if frame.model.query.trim().is_empty() {
         let section = frame.model.section;
         let listed: Vec<(usize, &'static RowSpec)> = rows(section).iter().enumerate().collect();
-        return vec![group(section, &listed, frame, cx)];
+        let mut groups = vec![group(section, &listed, frame, cx)];
+        if section == SettingsSection::Agents {
+            groups.push(installed_agents(frame));
+        }
+        return groups;
     }
     if hits.is_empty() {
         return vec![
@@ -221,6 +232,47 @@ fn group(
     }
     for (index, spec) in listed {
         group = group.row(row(section, *index, spec, frame, cx));
+    }
+    group.into_any_element()
+}
+
+/// The installed agents, each with a button to its Marketplace page. Settings lists what is
+/// installed and never installs anything (decision 0059).
+fn installed_agents(frame: &SettingsFrame<'_>) -> AnyElement {
+    let mut group = SettingsGroup::new(
+        SharedString::from("settings-installed-agents"),
+        "Installed agents",
+    )
+    .description(
+        "Installed from the Marketplace. Sign-in, accounts and settings are on each agent's page.",
+    );
+    if frame.agents.is_empty() {
+        group = group.row(
+            SettingsRow::new("settings-agents-none", "No agents installed")
+                .helper("Install an agent from the Marketplace. Settings never installs anything."),
+        );
+    }
+    for agent in &frame.agents {
+        let item = agent.item;
+        let shell = frame.shell.clone();
+        let open = Button::new(
+            SharedString::from(format!("settings-agent-open-{}", item.0)),
+            "Open",
+        )
+        .variant(ButtonVariant::Ghost)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_marketplace(MarketplacePage::Item(item), cx);
+            });
+        });
+        group = group.row(
+            SettingsRow::new(
+                SharedString::from(format!("settings-agent-{}", item.0)),
+                agent.name.clone(),
+            )
+            .helper(agent.state)
+            .control(open),
+        );
     }
     group.into_any_element()
 }

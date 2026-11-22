@@ -12,7 +12,7 @@ use manager_support::{
 use massorca_core_terminal::attach::{MAX_ATTACHMENTS, QUEUE_BYTES, RESNAPSHOT_INTERVAL};
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::ring::RING_CAPACITY;
-use massorca_core_terminal::{AttachItem, AttachMode, TerminalError, TerminalState};
+use massorca_core_terminal::{AttachItem, AttachMode, QueryAnswers, TerminalError, TerminalState};
 
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("a temporary directory")
@@ -150,7 +150,9 @@ async fn a_client_that_never_reads_gets_a_snapshot_and_never_blocks_the_shell() 
     let mut reader = watch(&manager, &info.id, None).await;
     reader.wait_for_output().await;
     let attached_at = Instant::now();
-    let stalled = manager.attach(&info.id, None).expect("attach");
+    let stalled = manager
+        .attach(&info.id, None, QueryAnswers::Client)
+        .expect("attach");
     let mut stalled = Watch::from_attachment(&manager, &info.id, stalled);
     let start = reader.offset();
     let file = big_file(dir.path(), QUEUE_BYTES * 2);
@@ -201,17 +203,23 @@ async fn an_attach_beyond_the_limit_is_refused_until_one_detaches() {
     let manager = Managed::new();
     let info = manager.create(spec("ws", dir.path())).expect("create");
     let mut attachments: Vec<_> = (0..MAX_ATTACHMENTS)
-        .map(|_| manager.attach(&info.id, None).expect("attach"))
+        .map(|_| {
+            manager
+                .attach(&info.id, None, QueryAnswers::Service)
+                .expect("attach")
+        })
         .collect();
 
-    let refused = manager.attach(&info.id, None);
+    let refused = manager.attach(&info.id, None, QueryAnswers::Service);
 
     assert!(
         matches!(refused, Err(TerminalError::TooManyAttachments)),
         "{refused:?}"
     );
     attachments.pop();
-    manager.attach(&info.id, None).expect("a freed slot");
+    manager
+        .attach(&info.id, None, QueryAnswers::Service)
+        .expect("a freed slot");
 }
 
 #[tokio::test]
@@ -232,7 +240,9 @@ async fn attaching_to_an_exited_terminal_shows_its_last_screen() {
             .is_ok_and(|info| info.state == TerminalState::Exited)
     });
 
-    let mut attachment = manager.attach(&info.id, None).expect("attach");
+    let mut attachment = manager
+        .attach(&info.id, None, QueryAnswers::Service)
+        .expect("attach");
     let mut next = async || {
         tokio::time::timeout(TIMEOUT, attachment.next())
             .await

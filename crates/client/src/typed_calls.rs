@@ -1,8 +1,10 @@
 //! Typed helpers over the methods of the core features.
 
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
+    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchParams,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -53,6 +55,11 @@ impl Client {
     /// `config.list`: every declared setting with its value.
     pub async fn config_list(&self) -> Result<ConfigList, ClientError> {
         self.call(config::LIST, &()).await
+    }
+
+    /// `config.reset`: removes the stored value, so the default applies again.
+    pub async fn config_reset(&self, params: &ConfigKey) -> Result<ConfigValue, ClientError> {
+        self.call(config::RESET, params).await
     }
 
     /// `project.add`: registers a repository or a folder.
@@ -216,6 +223,19 @@ impl Client {
         self.call(agents::FORGET, &session_ref(session)).await
     }
 
+    /// `agent.prompt`: types a prompt into a session's terminal once it is ready; `force` types it at once.
+    pub async fn agent_prompt(
+        &self,
+        params: &AgentPromptParams,
+    ) -> Result<PromptReceipt, ClientError> {
+        self.call(agents::PROMPT, params).await
+    }
+
+    /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
+    pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::RESUME, &session_ref(session)).await
+    }
+
     /// `agent.hook`: one status report from a run's hook, with the run's token.
     pub async fn agent_hook(&self, params: &AgentHookParams) -> Result<(), ClientError> {
         let _: serde_json::Value = self.call(agents::HOOK, params).await?;
@@ -229,6 +249,37 @@ impl Client {
         params: &AgentWatchParams,
     ) -> Result<Subscription, ClientError> {
         self.subscribe(agents::WATCH, params).await
+    }
+
+    /// `agent.credentials.import`: copies the kind's declared files from `params.from` into the profile's home for
+    /// it. The result names the files and their sizes only.
+    pub async fn agent_credentials_import(
+        &self,
+        params: &CredentialsImportParams,
+    ) -> Result<CredentialsImported, ClientError> {
+        self.call(agents::CREDENTIALS_IMPORT, params).await
+    }
+
+    /// `agent.credentials.show`: whether the kind's home exists and which declared files are in it.
+    pub async fn agent_credentials_show(
+        &self,
+        kind: &str,
+    ) -> Result<CredentialsShown, ClientError> {
+        self.call(agents::CREDENTIALS_SHOW, &kind_ref(kind)).await
+    }
+
+    /// `agent.credentials.remove`: deletes the kind's home.
+    pub async fn agent_credentials_remove(
+        &self,
+        kind: &str,
+    ) -> Result<CredentialsRemoved, ClientError> {
+        self.call(agents::CREDENTIALS_REMOVE, &kind_ref(kind)).await
+    }
+}
+
+fn kind_ref(kind: &str) -> CredentialsKindRef {
+    CredentialsKindRef {
+        kind: kind.to_owned(),
     }
 }
 

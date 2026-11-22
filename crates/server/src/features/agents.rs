@@ -2,11 +2,16 @@
 //! handlers run its blocking calls on the blocking pool. `core-agents` announces every status change; the service
 //! turns each into `agent.changed` on the event bus and an item for `agent.watch` (0052).
 
-use massorca_core_agents::{AgentError, Agents, Change};
+use std::path::{Path, PathBuf};
+
+use massorca_core_agents::{AgentError, Agents, Change, credentials};
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent, AgentWatchParams,
+    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
+    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent,
+    AgentWatchParams, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
+use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
@@ -60,6 +65,20 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         methods.register(
             Owner::Core,
+            agents::PROMPT,
+            agents_cap,
+            Permission::Workspace,
+            prompt,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::RESUME,
+            agents_cap,
+            Permission::Workspace,
+            resume,
+        )?,
+        methods.register(
+            Owner::Core,
             agents::FORGET,
             agents_cap,
             Permission::Workspace,
@@ -78,6 +97,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Read,
             watch,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_IMPORT,
+            agents_cap,
+            Permission::Workspace,
+            credentials_import,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_SHOW,
+            agents_cap,
+            Permission::Read,
+            credentials_show,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::CREDENTIALS_REMOVE,
+            agents_cap,
+            Permission::Workspace,
+            credentials_remove,
         )?,
     ])
 }
@@ -112,6 +152,19 @@ async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, 
 
 async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     on_agents(&ctx, move |agents| agents.forget(&params.session)).await
+}
+
+/// Starts a new run of an exited session, which keeps its id (0054).
+async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+    on_agents(&ctx, move |agents| agents.resume(&params.session)).await
+}
+
+/// Types a prompt into a run's terminal (0054). The text is never logged.
+async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.prompt(&params.session, &params.text, params.force)
+    })
+    .await
 }
 
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.
@@ -204,6 +257,87 @@ async fn watch(ctx: RequestCtx, params: AgentWatchParams) -> Result<StreamSource
         }
     });
     Ok(source)
+}
+
+/// Copies a kind's declared credential files into the profile's home for it (0056). Only names and sizes come back;
+/// nothing about the files is logged beyond that.
+async fn credentials_import(
+    ctx: RequestCtx,
+    params: CredentialsImportParams,
+) -> Result<CredentialsImported, ErrorBody> {
+    on_profile(&ctx, move |agents, profile_dir| {
+        if params.replace {
+            refuse_live_runs(agents, &params.kind)?;
+        }
+        credentials::import(
+            profile_dir,
+            &params.kind,
+            Path::new(&params.from),
+            params.replace,
+        )
+    })
+    .await
+}
+
+async fn credentials_show(
+    ctx: RequestCtx,
+    params: CredentialsKindRef,
+) -> Result<CredentialsShown, ErrorBody> {
+    on_profile(&ctx, move |_agents, profile_dir| {
+        credentials::show(profile_dir, &params.kind)
+    })
+    .await
+}
+
+async fn credentials_remove(
+    ctx: RequestCtx,
+    params: CredentialsKindRef,
+) -> Result<CredentialsRemoved, ErrorBody> {
+    on_profile(&ctx, move |agents, profile_dir| {
+        refuse_live_runs(agents, &params.kind)?;
+        credentials::remove(profile_dir, &params.kind)
+    })
+    .await
+}
+
+/// Refuses with `agent.busy` while any session of `kind` has a run that has not exited: replacing or removing its home
+/// would pull its login away under it.
+fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
+    let live: Vec<String> = agents
+        .list(None)?
+        .into_iter()
+        .filter(|session| session.kind == kind && session.execution.state != TerminalState::Exited)
+        .map(|session| session.id)
+        .collect();
+    if live.is_empty() {
+        return Ok(());
+    }
+    let mut error = AgentError::new(
+        codes::AGENT_BUSY,
+        format!(
+            "a run of agent kind {kind} is still live (session {}); stop it before replacing or removing its credentials",
+            live.join(", ")
+        ),
+    );
+    error.data = Some(serde_json::json!({ "sessions": live }));
+    Err(error)
+}
+
+/// Runs one call on the profile directory on the blocking pool and maps its refusal to the protocol error.
+async fn on_profile<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: FnOnce(&Agents, &Path) -> Result<T, AgentError> + Send + 'static,
+{
+    let profile_dir: PathBuf = ctx.state.profile.dir().to_path_buf();
+    let agents = ctx.state.agents.clone();
+    match tokio::task::spawn_blocking(move || call(&agents, &profile_dir)).await {
+        Ok(result) => result.map_err(ErrorBody::from),
+        Err(error) => Err(ErrorBody::new(
+            codes::INTERNAL,
+            format!("the credentials task failed: {error}"),
+        )),
+    }
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.

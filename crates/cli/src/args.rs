@@ -7,6 +7,8 @@ use clap::builder::FalseyValueParser;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
+use crate::task::TaskCommand;
+use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
@@ -59,8 +61,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
-    /// Reads and changes settings.
-    Config {
+    /// Reads, changes and resets settings. `config` is an older name for it.
+    #[command(alias = "config")]
+    Settings {
         #[command(subcommand)]
         command: ConfigCommand,
     },
@@ -114,6 +117,16 @@ pub enum Commands {
     Secret {
         #[command(subcommand)]
         command: crate::secret::SecretCommand,
+    },
+    /// Creates, lists, shows and removes Bot Teams: teams, their bots and projects, and their Boards.
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
+    },
+    /// Creates, lists, shows, finishes and removes the tasks on a team's Board.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
     /// Extensions. Not available yet: every form exits 1.
     Ext {
@@ -175,6 +188,8 @@ pub enum ConfigCommand {
     Set(ConfigSetArgs),
     /// Lists every setting.
     List,
+    /// Removes the stored value, so the setting's default applies again.
+    Reset(ConfigGetArgs),
 }
 
 #[derive(Debug, Subcommand)]

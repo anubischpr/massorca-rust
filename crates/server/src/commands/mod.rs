@@ -3,13 +3,14 @@
 mod core_table;
 mod git_table;
 mod secret_table;
+mod team_table;
 
 use serde_json::Value;
 
 use crate::owner::Owner;
 use crate::registry::{RegistrationError, RegistrationHandle, Registry};
 
-/// One command. Its id is the CLI command path; `method` is the request it issues first.
+/// One command. Its id is the CLI command path, or a palette-only id for a method no CLI command runs; `method` is the request it issues first.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandDescriptor {
     pub id: String,
@@ -18,11 +19,12 @@ pub struct CommandDescriptor {
     pub args_schema: Value,
 }
 
-/// Every core command: the Phase 1 table, the git commands, then the secret commands.
+/// Every core command: the Phase 1 table, then the git, secret and Bot Teams commands.
 pub fn core_commands() -> Vec<CommandDescriptor> {
     let mut commands = core_table::core_commands();
     commands.extend(git_table::git_commands());
     commands.extend(secret_table::secret_commands());
+    commands.extend(team_table::team_commands());
     commands
 }
 

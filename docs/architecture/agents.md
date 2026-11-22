@@ -65,7 +65,9 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `status.mechanism`: `claude-settings` | `codex-notify` | `env-command` |
   `none`. `events` values: `working`, `waiting`, `idle`, `done` (outcome
   `success`), `done:<outcome>`, `ignore`.
-- `credentials`: optional. `files` empty means import is unsupported.
+- `credentials`: optional. `files` empty means import is unsupported. `files` are plain
+  names (no separator, `..`, drive or absolute path). Every declared file is required by
+  import: the declaration has no optional flag.
 
 ## Session record (`AgentSession`)
 
@@ -133,9 +135,58 @@ prefix shared by several sessions is refused with `selector.ambiguous`. UUID v7
 ids start with their creation time, so sessions started close together need a
 longer prefix.
 
-`agent.forget` of a session whose run is live is refused with `agent.busy`. Until
-`agent.prompt` arrives, a first prompt for a kind whose `prompt.mode` is `none` is
-refused with `agent.prompt_invalid` instead of waiting for `idle`.
+`agent.forget` of a session whose run is live is refused with `agent.busy`. A first prompt for
+a kind whose `prompt.mode` is `none` waits for the run's first `idle`; see Prompts.
+
+## Prompts
+
+`agent.prompt` (0054) types text into a live run's terminal as one terminal input: the text,
+then the kind's submit sequence. Plain text is typed as keystrokes, each line break as Enter
+(`\r`), the same as the desktop's paste. Bracketed text sits between the paste markers and keeps
+its line breaks. The text is at most 8 KiB and holds no control character except tab, line feed
+and carriage return (decision 0058): NUL, the escape character, DEL, the other C0 controls and the
+C1 controls (U+0080 to U+009F) are refused with `agent.prompt_invalid`, at launch and in
+`agent.prompt`, in both paste modes. Because the escape character is refused, no paste marker can
+appear inside the text. A run that has exited is `agent.not_live`.
+
+A run takes a prompt when its activity is `idle` or `done`, or when its kind has no status
+mechanism. Absent activity, meaning nothing reported yet, is not ready; `working`, `waiting`
+and unknown states are not either. A run that has taken a prompt since its last hook report is not
+ready either (decision 0058): the flag is set when a prompt is accepted or a held first prompt is
+taken, and the next accepted hook report clears it, so two prompts never land on the same idle. A
+kind with no status mechanism never sets it, since nothing reports back, so it stays always ready.
+Otherwise the call is `agent.busy`, unless `force` is set.
+The readiness check and the copy of the kind's input rules happen under the status lock. The
+write happens after the lock is released: a write can wait for the agent to read, and the
+agent's own hook reports need the lock to return.
+
+The receipt is `{ receipt: "handed_to_terminal", bytes }`, where `bytes` counts every byte
+written to the terminal, the paste markers and the submit sequence included. It never says the
+agent read them; the activity turns `working` only when the agent's hooks report it.
+
+A first prompt for a kind whose `prompt.mode` is `none` waits for the run's first `idle` report
+(0054). The prompt is held in memory on the run from `agent.start`; the report that makes the run
+`idle` types it on a thread of its own, so the report returns at once. Decision 0054 leaves open
+what happens when no `idle` comes, so two bounds apply: the held prompt is dropped when the run
+exits first, and when no `idle` arrives within 120 s of the start (`FIRST_PROMPT_WAIT`). A drop is
+logged with the session id only. The session record does not show a drop: its activity stays as it
+was, normally `no status`. A kind with no status mechanism, or one that maps no event to `idle`,
+cannot wait for one, so `agent.start` refuses such a first prompt with `agent.prompt_invalid`
+before anything runs. A forced `agent.prompt` is typed at once even while a first prompt waits; the
+held prompt still follows at `idle`.
+
+`agent.resume` (0054) starts a new run of an exited session, in the same session: the kind's resume
+arguments, with the agent's ref in place of `{ref}`, in a new terminal in the workspace root. The
+one-writer rule (0051) applies. The session keeps its id, its ref, its title and its last result; its
+exit is cleared, and its activity is absent until the new run reports. The caller's arguments and
+environment of the first start are not kept, so a resumed run gets the kind's own arguments and the
+resume arguments only. The run is registered under the status lock before its program starts, as in
+`agent.start`, so its first hook report is accepted. Refusals: `agent.busy` while the run is live;
+`agent.resume_unavailable` when the kind is no longer declared, declares no resume form, or the
+session's ref is not known yet (a Codex session learns its ref at a turn's end), or its last run has
+no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
+when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
+workspace.
 
 ## Status store
 
@@ -159,7 +210,12 @@ logs one that fails, by session id and error code, without stopping.
 - Exits: a sweep checks the terminals of live runs every 200 ms; `agent.stop` applies
   the exit it gets back from the terminal at once. A run that exits while `working` or
   `waiting` becomes `done` / `interrupted` with source `process`, also for runs found
-  still live in the store when the service starts.
+  still live in the store when the service starts. An exit is recorded only while the row still
+  names the terminal the run ran in (decision 0058): an end that arrives after a resume moved the
+  session onto a new terminal changes nothing, and does not end the resumed run.
+- A terminal is closed after the status lock is released: when a start or a resume fails after its
+  run was registered, and in `agent.forget`. A close can wait for the terminal's kill grace, and
+  the status of the other sessions must not wait with it.
 - `agent.watch` subscribes before it reads the snapshot. A watcher that falls more than
   1024 changes behind gets a fresh `snapshot`; one whose connection reads too slowly
   ends with `stream.overflow` on the client, like any stream. A forgotten session sends
@@ -190,6 +246,40 @@ massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
 ```
+
+## Credential import
+
+`core-agents::credentials` (0056). Import reads every declared file before writing
+anything: each must be a regular file, checked with `symlink_metadata` and opened without
+following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, where
+every reparse point counts as a link), and at most 1 MiB as read from the open handle. The
+new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`, files
+`0600` and created new on Unix; on Windows created with a protected DACL for the owner and
+SYSTEM, which the files inherit) and renamed into place after its DACL is checked again.
+On Windows `agents` and `homes` are created the same way, and restricted when they already
+exist. Homes imported before this fix keep their old access until they are imported again
+with `--replace`. On Windows import holds `agents`, `homes` and the new home open without
+delete sharing, from before their access changes until the swap is done, so none of them can
+be renamed or replaced by a junction meanwhile; the new home is moved through its own handle. Each pinned directory
+must be owned by the service's user, its token's default owner (the Administrators group for an
+elevated administrator) or SYSTEM, compared as binary SIDs; any other owner refuses the import with
+`agent.credentials_invalid`. The directories it creates or restricts (`agents`, run files included)
+are owned by the user, elevated or not, with a DACL for the user and SYSTEM, so elevated and
+non-elevated runs read each other's. An `agents` or `homes` owned by Administrators, left by an
+older elevated run, is refused by a non-elevated run with that reason: run MassOrca elevated once,
+which makes it the user's, or take ownership of it. With
+`replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
+swap fails (the error names where it is when that fails too), and deleted after it succeeds.
+Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
+that kind; an `.old-` leftover may be the only copy of a login, so it is never deleted: the
+next import of the kind is refused with `agent.credentials_invalid` naming it
+(`data.leftover`) until the owner moves it. `agents`, `homes` and the home itself must not
+be links; show and remove check all three and refuse a link instead of following it.
+Imports and removals in one service run one at a time (`credentials::lock_homes`). The
+service refuses `import --replace` and `remove` with `agent.busy` while any session of the
+kind has a run that has not exited. Declared file names must also not be Windows device
+names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
+in a dot or a space.
 
 ## Security
 

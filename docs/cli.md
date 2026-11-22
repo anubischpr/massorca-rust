@@ -73,9 +73,14 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
+| `agent resume <SESSION>` | Starts a new run of an exited session with the kind's resume arguments, in a new terminal. The session keeps its id and agent ref. |
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
+| `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
+| `agent credentials show <KIND>` | Shows whether the profile has a home for the kind, and which declared files are in it, with sizes. |
+| `agent credentials remove <KIND>` | Deletes the profile's home for the kind; its runs use the agent's usual home again. |
 | `ext ...` | Reserved for extensions. Every form exits 1 with `extension.not_implemented`. |
 
 `--owner` is `core` (the default) or `ext:<id>`. Example key: `workspaces.default_root`,
@@ -139,7 +144,32 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   shell in between), with the first prompt as the kind declares. A workspace holds one live
   session that is not `--read-only`; a second writing start fails with
   `agent.workspace_busy`. A kind that is not installed fails with `agent.not_installed`.
-  Arguments after `--` go to the agent after its own.
+  Arguments after `--` go to the agent after its own. A kind whose `prompt.mode` is `none`
+  receives `--prompt` at its first `idle` report, and a kind that reports no `idle` refuses
+  such a prompt with `agent.prompt_invalid`; the held prompt is dropped if no `idle` comes
+  within 120 s or the run ends first. The text of `--prompt` follows the same rules as
+  `agent prompt`, control characters included.
+- `agent prompt SESSION TEXT` types TEXT into the session's terminal, then the kind's submit
+  key (`\r` unless the kind declares another). A kind that declares bracketed paste gets the
+  text between paste markers; a plain kind gets each line break as Enter. The text is at most
+  8 KiB and holds no control character except tab, line feed and carriage return: NUL, the
+  escape character, DEL and the C1 controls are refused with `agent.prompt_invalid`, in both
+  paste modes (decision 0058). An exited run fails with `agent.not_live`.
+  The agent must report `idle` or `done` first, or the call fails with `agent.busy`; a kind
+  with no status mechanism is always ready. `--force` types the text anyway, for example to
+  answer a question. After a prompt is accepted, the next one is refused with `agent.busy` until
+  the agent reports something (or `--force`), so two prompts never land on the same idle; a kind
+  with no status mechanism is not affected, since nothing reports back for it. The receipt counts
+  the bytes handed to the terminal; it does not say the agent read them, and the activity turns
+  `working` only when the agent's hooks report it.
+- `agent resume SESSION` starts a new run of an exited session in a new terminal of its
+  workspace, with the kind's resume arguments and the agent's own ref, so the agent continues
+  its conversation. The session keeps its id and its agent ref; its activity is absent until
+  the new run reports. The arguments and environment of the first start are not kept. A live
+  run fails with `agent.busy`; a kind with no resume form, or a session whose agent ref is not
+  known yet, or whose last run has no recorded end, fails with `agent.resume_unavailable`; another
+  writing session in the workspace
+  fails with `agent.workspace_busy`.
 - `SESSION` is the session id or a unique prefix of at least 8 characters, resolved by the
   service; a prefix shared by several sessions fails with `selector.ambiguous`.
 - Execution is `live`, `unverifiable` or `exited` with how the run ended; activity is what
@@ -162,6 +192,23 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
+- `agent credentials import KIND --from DIR` copies only the files the kind declares
+  (`credentials.files`) into `<profile>/agents/homes/<KIND>/`; from then on every run of the
+  kind in the profile gets the kind's home variable pointing there (decision 0056). Every
+  declared file is required and must be a regular file of at most 1 MiB: a missing name, a
+  link, a directory or a larger file fails the import with `agent.credentials_invalid`, lists
+  each name with its reason (`--json`: `error.data.files`), and copies nothing. A relative
+  `DIR` is taken from the current directory. An existing home is replaced only with
+  `--replace` (`agent.credentials_exist` otherwise); a failed import leaves it as it was. A
+  kind that declares no files is refused with `agent.credentials_unsupported`. The copy does
+  not move the login: refresh tokens are single use, so stop using the source login after
+  importing. File contents are never printed or logged.
+- `agent credentials show KIND` and `remove KIND` never follow a link: a home that is a link
+  is refused with `agent.credentials_invalid` and must be removed by hand.
+- `agent credentials import KIND --replace` and `remove KIND` are refused with `agent.busy`
+  while a run of the kind is live; stop it first. An old home left aside by a replace that
+  could not finish (`homes/.KIND.old-...`) refuses the next import with
+  `agent.credentials_invalid` naming it, so the only copy of a login is never deleted.
 
 `service run` prints one line in text mode, `service running for profile <name> (pid <n>)`.
 With `--json` it prints the start document on stdout, and the service log goes to the

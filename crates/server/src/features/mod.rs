@@ -2,6 +2,7 @@
 
 mod agents;
 mod config;
+mod config_keys;
 mod devices;
 mod events;
 mod git;
@@ -10,6 +11,7 @@ mod secret_params;
 mod secret_refusals;
 mod secrets;
 mod service;
+mod teams;
 mod terminal_attach;
 mod terminals;
 mod workspace_domain;
@@ -43,6 +45,7 @@ pub(crate) fn register_core(
     handles.extend(agents::register(registries)?);
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
+    handles.extend(teams::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

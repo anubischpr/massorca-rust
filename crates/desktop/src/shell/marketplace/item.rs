@@ -1,0 +1,471 @@
+//! One item's page: its nine parts in the owner's order (teams-extensions-settings.md 7.2, decision
+//! 0059). Parts 1 to 3 are the header; the rest follow it in the order the model gives.
+
+use super::MarketplaceFrame;
+use super::catalogue::kind_icon;
+use crate::model::marketplace::{
+    AccountState, AccountView, MarketplaceItem, MarketplaceItemId, Part, account_views,
+    advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
+};
+use crate::model::settings_sections::NOT_AVAILABLE;
+use crate::shell::Shell;
+use gpui::{
+    AnyElement, App, ClipboardItem, Context, ElementId, IntoElement, ParentElement, Role,
+    SharedString, Styled, WeakEntity, div, prelude::*, px,
+};
+use massorca_ui::components::account_connection_list::{
+    AccountConnectionList, AccountRow, AccountStatus,
+};
+use massorca_ui::components::badge::{Badge, BadgeTone};
+use massorca_ui::components::button::{Button, ButtonVariant};
+use massorca_ui::components::danger_zone::DangerZone;
+use massorca_ui::components::empty_state::EmptyState;
+use massorca_ui::components::invocation_banner::InvocationBanner;
+use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
+use massorca_ui::tokens::{
+    RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
+    TYPE_BODY_STRONG, TYPE_TITLE_SM,
+};
+use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
+
+/// The page of one item, or a note when the catalogue has no item with that id.
+pub(super) fn item_page(
+    frame: &MarketplaceFrame,
+    id: MarketplaceItemId,
+    cx: &mut App,
+) -> AnyElement {
+    let Some(item) = frame.snapshot.item(id) else {
+        return EmptyState::new("marketplace-missing", "This item is not in the catalogue.")
+            .explanation("It may have been removed from your sources.")
+            .into_any_element();
+    };
+    let mut page = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_6))
+        .max_w(px(880.0))
+        .min_w_0()
+        .child(header(frame, item, cx));
+    for part in parts(item) {
+        let section = match part {
+            Part::Logo | Part::Name | Part::Host => continue,
+            Part::Banner => banner(item),
+            Part::Connection => connection(frame, item, cx),
+            Part::Information => information_section(item, cx),
+            Part::Settings => settings_section(item, cx),
+            Part::AdvancedOptions => advanced_section(frame, item, cx),
+            Part::DangerZone => danger_section(frame, item),
+        };
+        page = page.child(section);
+    }
+    page.into_any_element()
+}
+
+/// A button whose press runs one action on the shell.
+fn shell_button(
+    shell: &WeakEntity<Shell>,
+    id: impl Into<ElementId>,
+    label: &'static str,
+    variant: ButtonVariant,
+    action: impl Fn(&mut Shell, &mut Context<Shell>) + 'static,
+) -> Button {
+    let shell = shell.clone();
+    Button::new(id, label)
+        .variant(variant)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| action(shell, cx));
+        })
+}
+
+/// Parts 1 to 3: the plate and name with the state chip and Copy link, the meta line, the host
+/// and the install action, which is not available yet.
+fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let url = item.source_url.clone();
+    let copy = Button::new("marketplace-copy-link", "Copy link")
+        .variant(ButtonVariant::Ghost)
+        .on_click(move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(url.clone())));
+    let mut header = MarketplaceItemHeader::new(
+        SharedString::from(format!("marketplace-name-{}", item.id.0)),
+        item.name.clone(),
+        kind_icon(item.kind),
+    )
+    .state(state_chip(item, &frame.snapshot))
+    .meta(format!(
+        "{} · Marketplace · {}",
+        item.publisher, item.version
+    ))
+    .copy_link(copy)
+    .host(host_selector(frame, item, cx));
+    if !item.state.is_installed() {
+        header = header.action(
+            Button::new("marketplace-install", "Review and install")
+                .disabled(true)
+                .tooltip(NOT_AVAILABLE),
+        );
+    }
+    div()
+        .debug_selector(|| "marketplace-part-logo".to_owned())
+        .child(header)
+        .into_any_element()
+}
+
+/// The host the item runs on, drawn as a selector. Choosing another host needs the service, so
+/// the selector shows the host and its state without opening.
+fn host_selector(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let label = frame.snapshot.host(item.host).map_or_else(
+        || "No host".to_owned(),
+        |host| format!("{}, {}", host.name, host.state.word()),
+    );
+    div()
+        .debug_selector(|| "marketplace-host".to_owned())
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(SPACE_2))
+        .px(px(SPACE_3))
+        .py(px(SPACE_2))
+        .rounded(px(RADIUS_MD))
+        .border_1()
+        .border_color(p.border.default)
+        .bg(p.surface.raised)
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.primary)
+                .child(label),
+        )
+        .child(
+            Icon::new(IconName::ChevronDown)
+                .size(IconSize::Small)
+                .color(p.text.tertiary),
+        )
+        .into_any_element()
+}
+
+/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat.
+fn banner(item: &MarketplaceItem) -> AnyElement {
+    let mut banner = InvocationBanner::new(
+        SharedString::from(format!("marketplace-banner-{}", item.id.0)),
+        format!("@{}", item.name),
+    );
+    for example in &item.examples {
+        banner = banner.example(example.clone());
+    }
+    div()
+        .debug_selector(|| "marketplace-part-banner".to_owned())
+        .child(banner)
+        .into_any_element()
+}
+
+/// Part 5: the agent's accounts, with Add account and where the sign-in token lives.
+fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let kind = item.agent_kind.clone().unwrap_or_default();
+    let add = shell_button(
+        &frame.shell,
+        "marketplace-add-account",
+        "Add account",
+        ButtonVariant::Secondary,
+        move |shell, cx| shell.add_marketplace_account(&kind, cx),
+    );
+    let mut list = AccountConnectionList::new(SharedString::from(format!(
+        "marketplace-connection-{}",
+        item.id.0
+    )))
+    .empty("No accounts yet. Add one to use this agent.")
+    .add_account(add);
+    let agent = item.agent_kind.clone().unwrap_or_default();
+    for view in account_views(&frame.snapshot, &agent) {
+        list = list.account(account_row(frame, view));
+    }
+    let mut body = div().flex().flex_col().gap(px(SPACE_3)).min_w_0();
+    if let Some((None, message)) = &frame.error {
+        body = body.child(alert(message, cx));
+    }
+    part_section(
+        "marketplace-part-connection",
+        "Connection",
+        body.child(list),
+        cx,
+    )
+}
+
+/// One account row, with the actions its state allows: Make active only while it is not active.
+fn account_row(frame: &MarketplaceFrame, view: AccountView) -> AccountRow {
+    let account = view.id;
+    let shell = &frame.shell;
+    let mut row = AccountRow::new(
+        SharedString::from(format!("marketplace-account-{}", account.0)),
+        view.label,
+        account_status(view.state),
+    )
+    .identity(view.signed_in)
+    .active(view.active)
+    .used_by(view.used_by)
+    .check(shell_button(
+        shell,
+        SharedString::from(format!("marketplace-check-{}", account.0)),
+        "Check now",
+        ButtonVariant::Ghost,
+        move |shell, cx| shell.check_marketplace_account(account, cx),
+    ))
+    .remove(shell_button(
+        shell,
+        SharedString::from(format!("marketplace-remove-{}", account.0)),
+        "Remove",
+        ButtonVariant::Ghost,
+        move |shell, cx| shell.remove_marketplace_account(account, cx),
+    ));
+    if !view.active {
+        row = row.make_active(shell_button(
+            shell,
+            SharedString::from(format!("marketplace-make-active-{}", account.0)),
+            "Make active",
+            ButtonVariant::Secondary,
+            move |shell, cx| shell.make_marketplace_account_active(account, cx),
+        ));
+    }
+    if let Some((Some(refused), message)) = &frame.error
+        && *refused == account
+    {
+        row = row.error(message.clone());
+    }
+    row
+}
+
+/// The word-for-word state of an account, as the connection list draws it.
+fn account_status(state: AccountState) -> AccountStatus {
+    match state {
+        AccountState::SignedIn => AccountStatus::SignedIn,
+        AccountState::Expired => AccountStatus::Expired,
+        AccountState::NeedsSignIn => AccountStatus::NeedsSignIn,
+        AccountState::NotSetUp => AccountStatus::NotSetUp,
+        AccountState::Migrated => AccountStatus::Migrated,
+        AccountState::Conflict => AccountStatus::Conflict,
+        AccountState::Unknown => AccountStatus::Unknown,
+    }
+}
+
+/// A refusal that is not about one row, announced as an alert.
+fn alert(message: &str, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    div()
+        .id("marketplace-connection-alert")
+        .role(Role::Alert)
+        .aria_label(message.to_owned())
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.status.danger_fg)
+        .child(message.to_owned())
+        .into_any_element()
+}
+
+/// Part 6: the description, then the rows: Developer, Category, and what else applies.
+fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let mut rows = div().flex().flex_col().gap(px(SPACE_2));
+    for (label, value) in information(item) {
+        rows = rows.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SPACE_4))
+                .child(
+                    div()
+                        .w(px(160.0))
+                        .flex_none()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(p.text.tertiary)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(p.text.primary)
+                        .child(value),
+                ),
+        );
+    }
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(
+            div()
+                .text_style(TYPE_BODY)
+                .text_color(p.text.primary)
+                .child(item.description.clone()),
+        )
+        .child(rows);
+    part_section("marketplace-part-information", "Information", body, cx)
+}
+
+/// Part 7: the item's settings, or the reason there are none yet. The default agent is not
+/// available yet, so its control shows that instead of a value.
+fn settings_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let rows = settings_rows(item);
+    let mut body = div().flex().flex_col().gap(px(SPACE_2));
+    if rows.is_empty() {
+        let text = if item.state.is_installed() {
+            "This item has no settings."
+        } else {
+            "Settings appear here after the item is installed."
+        };
+        body = body.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.secondary)
+                .child(text),
+        );
+    }
+    for (label, helper) in rows {
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(SPACE_4))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SPACE_1))
+                        .child(
+                            div()
+                                .text_style(TYPE_BODY_STRONG)
+                                .text_color(p.text.primary)
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .text_style(TYPE_BODY_SM)
+                                .text_color(p.text.secondary)
+                                .child(helper),
+                        ),
+                )
+                .child(Badge::text(NOT_AVAILABLE).tone(BadgeTone::Neutral)),
+        );
+    }
+    part_section("marketplace-part-settings", "Settings", body, cx)
+}
+
+/// Part 8: the versions, the source and who can use the item, collapsed until it is opened.
+fn advanced_section(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let open = frame.advanced_open;
+    let toggle = shell_button(
+        &frame.shell,
+        "marketplace-advanced-toggle",
+        "Advanced Options",
+        ButtonVariant::Ghost,
+        |shell, cx| shell.toggle_marketplace_advanced(cx),
+    )
+    .trailing_icon(if open {
+        IconName::ChevronDown
+    } else {
+        IconName::ChevronRight
+    });
+    let mut section = div()
+        .debug_selector(|| "marketplace-part-advanced".to_owned())
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .child(
+            div()
+                .debug_selector(|| "marketplace-advanced-toggle-row".to_owned())
+                .child(toggle),
+        );
+    if open {
+        let mut rows = div().flex().flex_col().gap(px(SPACE_2));
+        for (label, value) in advanced_rows(item) {
+            rows = rows.child(
+                div()
+                    .flex()
+                    .gap(px(SPACE_4))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .flex_none()
+                            .text_style(TYPE_BODY_SM)
+                            .text_color(p.text.tertiary)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_style(TYPE_BODY_SM)
+                            .text_color(p.text.primary)
+                            .child(value),
+                    ),
+            );
+        }
+        section = section.child(rows);
+    }
+    section.into_any_element()
+}
+
+/// Part 9: uninstall, behind a confirm. An item that is not installed has nothing to remove.
+fn danger_section(frame: &MarketplaceFrame, item: &MarketplaceItem) -> AnyElement {
+    let id = item.id;
+    let mut zone = DangerZone::new(SharedString::from(format!(
+        "marketplace-danger-{}",
+        item.id.0
+    )));
+    if item.state.is_installed() {
+        zone = zone.description(uninstall_body(item)).action(shell_button(
+            &frame.shell,
+            "marketplace-uninstall",
+            "Uninstall",
+            ButtonVariant::Danger,
+            move |shell, cx| shell.ask_marketplace_uninstall(id, cx),
+        ));
+    } else {
+        zone =
+            zone.description("Not installed on this computer, so there is nothing to uninstall.");
+    }
+    div()
+        .debug_selector(|| "marketplace-part-danger".to_owned())
+        .child(zone)
+        .into_any_element()
+}
+
+/// A part with its heading, on the raised surface of the page (teams-extensions-settings.md 7.2).
+fn part_section(
+    selector: &'static str,
+    title: &'static str,
+    body: impl IntoElement,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    div()
+        .debug_selector(move || selector.to_owned())
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_3))
+        .p(px(SPACE_4))
+        .min_w_0()
+        .rounded(px(RADIUS_LG))
+        .border_1()
+        .border_color(p.border.subtle)
+        .bg(p.surface.raised)
+        .child(
+            div()
+                .text_style(TYPE_TITLE_SM)
+                .text_color(p.text.primary)
+                .child(title),
+        )
+        .child(body)
+        .into_any_element()
+}

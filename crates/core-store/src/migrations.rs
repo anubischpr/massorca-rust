@@ -99,6 +99,73 @@ CREATE TABLE devices (
 "#,
         foreign_keys_off: false,
     },
+    // Bot Teams core (decision 0072): teams and their bots. A team's removal removes its bots; at most one bot is the lead.
+    Migration {
+        sql: r#"
+CREATE TABLE teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    character TEXT NOT NULL,
+    access TEXT NOT NULL,
+    workspaces INTEGER NOT NULL CHECK(workspaces IN (0,1)),
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE bots (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    job TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    model TEXT,
+    effort TEXT,
+    lead INTEGER NOT NULL CHECK(lead IN (0,1)),
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+CREATE UNIQUE INDEX bots_one_lead ON bots(team_id) WHERE lead = 1;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team projects (decision 0072): each has its own Board and Brief; a team's removal removes them.
+    Migration {
+        sql: r#"
+CREATE TABLE team_projects (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    brief TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(team_id, name)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Tasks (decision 0072). A task keeps its own lifecycle; the agent session it names is read from the agents domain.
+    // A removed bot or project leaves its tasks without that link; a removed team takes its tasks with it.
+    Migration {
+        sql: r#"
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES team_projects(id) ON DELETE SET NULL,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('room','cli')),
+    session_id TEXT,
+    outcome TEXT CHECK(outcome IN ('success','failure','cancelled','interrupted')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX tasks_by_team ON tasks(team_id, created_at);
+CREATE INDEX tasks_by_bot ON tasks(bot_id);
+CREATE INDEX tasks_by_project ON tasks(project_id);
+"#,
+        foreign_keys_off: false,
+    },
     // Secret vault (decision 0071): ciphertext only; names and scopes in clear.
     Migration {
         sql: r#"

@@ -204,11 +204,29 @@ impl Store {
         )
     }
 
-    /// Records how the last run ended, unless an end is already recorded. Returns whether the row changed.
-    pub fn set_agent_session_exit(&self, id: &str, exit: &RunExit) -> Result<bool, StoreError> {
+    /// Records how a run ended, unless an end is already recorded, and only while the row still names `terminal_id`, the
+    /// terminal the run ran in (decision 0058): a resumed session has a new terminal, and an earlier run's end must not
+    /// land on it. Returns whether the row changed.
+    pub fn set_agent_session_exit(
+        &self,
+        id: &str,
+        terminal_id: &str,
+        exit: &RunExit,
+    ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET exit_code = ?2, exit_signal = ?3, exit_reason = ?4, exited_at = ?5 WHERE id = ?1 AND exit_reason IS NULL",
-            params![id, exit.code, exit.signal, exit.reason, exit.at],
+            "UPDATE agent_sessions SET exit_code = ?3, exit_signal = ?4, exit_reason = ?5, exited_at = ?6 WHERE id = ?1 AND terminal_id = ?2 AND exit_reason IS NULL",
+            params![id, terminal_id, exit.code, exit.signal, exit.reason, exit.at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Starts a new run of an exited session (0054): the row names the new run's terminal, and its exit and activity are
+    /// cleared, so the activity starts absent until the agent reports. The result and the agent ref stay. One statement,
+    /// so a reader never sees the exit cleared with the old terminal. Returns whether an exited row changed.
+    pub fn restart_agent_session(&self, id: &str, terminal_id: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET terminal_id = ?2, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            params![id, terminal_id],
         )?;
         Ok(changed > 0)
     }

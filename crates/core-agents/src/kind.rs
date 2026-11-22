@@ -167,6 +167,17 @@ impl KindDecl {
             })
     }
 
+    /// Whether the kind can report `idle`, the state a first prompt waits for (0054): it has a status mechanism and maps
+    /// an event to `idle`.
+    pub fn reports_idle(&self) -> bool {
+        self.status.mechanism != StatusMechanism::None
+            && self
+                .status
+                .events
+                .values()
+                .any(|target| *target == EventTarget::Idle)
+    }
+
     /// Whether `agent.credentials.import` works for the kind.
     pub fn credentials_supported(&self) -> bool {
         self.credentials
@@ -315,7 +326,26 @@ fn valid_env_name(name: &str) -> bool {
 }
 
 fn valid_file_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', ':'])
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', '\0', ':'])
+        && !name.ends_with(['.', ' '])
+        && !windows_device_name(name)
+}
+
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9` and `LPT1`-`LPT9`, in any case, with or without an extension: Windows
+/// opens the device instead of a file of that name.
+fn windows_device_name(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 /// Braces in an argument that are not the `{ref}` placeholder.
@@ -485,6 +515,21 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_reports_idle_only_through_a_mechanism_that_maps_idle() {
+        assert!(!parse(minimal()).reports_idle(), "no mechanism, no idle");
+        let mut mapped = minimal();
+        mapped["status"] =
+            serde_json::json!({ "mechanism": "env-command", "events": { "start": "idle" } });
+        assert!(parse(mapped.clone()).reports_idle());
+        mapped["status"] =
+            serde_json::json!({ "mechanism": "env-command", "events": { "stop": "done" } });
+        assert!(
+            !parse(mapped).reports_idle(),
+            "a mechanism that never maps idle"
+        );
+    }
+
+    #[test]
     fn credential_names_are_checked() {
         let problems = problems_of(|value| {
             value["credentials"] = serde_json::json!({
@@ -492,6 +537,45 @@ mod tests {
             });
         });
         assert_eq!(problems.len(), 3, "{problems:?}");
+        for name in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            "C:\\token",
+            "C:token",
+            "\\\\host\\share",
+            "nul\0",
+            "CON",
+            "nul.txt",
+            "Com1.json",
+            "LPT9",
+            "aux",
+            "prn.json",
+            "token.",
+            "token ",
+        ] {
+            let problems = problems_of(|value| {
+                value["credentials"] =
+                    serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": [name] });
+            });
+            assert_eq!(problems.len(), 1, "{name:?}: {problems:?}");
+        }
+        for name in [
+            "console.json",
+            "com10",
+            "lpt",
+            ".credentials.json",
+            "con-fig",
+        ] {
+            let problems = problems_of(|value| {
+                value["credentials"] =
+                    serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": [name] });
+            });
+            assert!(problems.is_empty(), "{name:?}: {problems:?}");
+        }
         let fine = problems_of(|value| {
             value["credentials"] =
                 serde_json::json!({ "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] });

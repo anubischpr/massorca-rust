@@ -18,3 +18,5 @@ pub const AGENTS: &str = "agents/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
+/// Bot Teams methods (`team.*`, `task.*`) and the `team.changed` and `task.changed` topics (decision 0072).
+pub const TEAMS: &str = "teams/1";

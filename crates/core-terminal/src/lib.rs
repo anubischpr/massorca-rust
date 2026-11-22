@@ -10,7 +10,7 @@ pub mod ring;
 pub mod screen;
 pub mod shell;
 
-pub use attach::{AttachItem, AttachMode, Attachment};
+pub use attach::{AttachItem, AttachMode, Attachment, QueryAnswers};
 pub use manager::{
     CreateSpec, ExitReason, ExitRecord, ManagerConfig, ShellChoice, TerminalError, TerminalInfo,
     TerminalManager, TerminalState,

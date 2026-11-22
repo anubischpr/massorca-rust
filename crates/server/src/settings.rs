@@ -1,12 +1,11 @@
 //! Setting declarations: each setting's owner, type and default. Values are stored by `core-store`, validated against these.
 
-use std::path::Path;
-
 use serde_json::Value;
 
 use crate::names;
 use crate::owner::Owner;
 use crate::registry::{RegistrationError, RegistrationHandle, Registry};
+use crate::setting_values;
 
 /// The type a setting holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,15 +15,49 @@ pub enum SettingKind {
     Integer,
     /// An absolute path, written as a string.
     Path,
+    /// One of a fixed list of strings.
+    Choice(&'static [&'static str]),
+    /// A whole number from `min` to `max`, both inclusive.
+    Range {
+        min: i64,
+        max: i64,
+    },
+    /// A list of distinct strings drawn from a fixed list.
+    Set(&'static [&'static str]),
+    /// A preset name from the list, or `#rrggbb`.
+    Colour(&'static [&'static str]),
+    /// An object from action id to a shortcut string, or to `null` for unbound.
+    Keybindings,
 }
 
 impl SettingKind {
-    fn expectation(self) -> &'static str {
+    /// The kind's name on the wire.
+    pub fn wire_name(self) -> &'static str {
         match self {
-            Self::String => "expects a string",
-            Self::Bool => "expects true or false",
-            Self::Integer => "expects a whole number",
-            Self::Path => "expects an absolute path",
+            Self::String => "string",
+            Self::Bool => "bool",
+            Self::Integer | Self::Range { .. } => "integer",
+            Self::Path => "path",
+            Self::Choice(_) => "choice",
+            Self::Set(_) => "set",
+            Self::Colour(_) => "colour",
+            Self::Keybindings => "keybindings",
+        }
+    }
+
+    /// The fixed list a choice, set or colour draws from.
+    pub fn choices(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Choice(list) | Self::Set(list) | Self::Colour(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    /// The inclusive bounds of a ranged integer.
+    pub fn range(self) -> Option<(i64, i64)> {
+        match self {
+            Self::Range { min, max } => Some((min, max)),
+            _ => None,
         }
     }
 }
@@ -41,16 +74,8 @@ pub struct SettingDecl {
 
 impl SettingDecl {
     /// Why `value` is not acceptable for this setting, or `None` when it is.
-    pub fn check(&self, value: &Value) -> Option<&'static str> {
-        let acceptable = match self.kind {
-            SettingKind::String => value.is_string(),
-            SettingKind::Bool => value.is_boolean(),
-            SettingKind::Integer => value.is_i64(),
-            SettingKind::Path => value
-                .as_str()
-                .is_some_and(|path| Path::new(path).is_absolute()),
-        };
-        (!acceptable).then_some(self.kind.expectation())
+    pub fn check(&self, value: &Value) -> Option<String> {
+        setting_values::check(self.kind, value).err()
     }
 }
 

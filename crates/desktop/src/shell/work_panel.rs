@@ -7,7 +7,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, AsyncApp, Context, Entity, Task, WeakEntity, Window, div, px};
 use massorca_client::AttachUpdate;
-use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams};
+use massorca_protocol::methods::terminals::Terminal;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
@@ -28,7 +28,7 @@ use crate::model::work_panel::{
     TerminalStrip, close_step, detached_text, status_banner, terminal_strip, terminal_unavailable,
 };
 use crate::service::{
-    ConnectionState, Refusal, ServiceHandle, StoreState, StreamEnd, TerminalStream,
+    AttachRole, ConnectionState, Refusal, ServiceHandle, StoreState, StreamEnd, TerminalStream,
     TerminalStreamItem, feed_events,
 };
 
@@ -385,12 +385,9 @@ async fn follow_terminal(
         if !wait_until_connected(&mut link).await {
             return;
         }
-        let params = TerminalAttachParams {
-            terminal: terminal.clone(),
-            since: None,
-            cols: None,
-            rows: None,
-        };
+        // The pane forwards the replies its emulator owes the program, so it declares that it
+        // answers the queries; the service then leaves them to it (decision 0036).
+        let params = AttachRole::AnswersQueries.attach_params(&terminal, None);
         let mut stream = match service.attach_terminal(params).await {
             Ok(stream) => stream,
             // The call met a link that was not up. Ask again only after the link changes, so a

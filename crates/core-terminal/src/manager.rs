@@ -14,7 +14,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::attach::{AttachItem, AttachMode, AttachShared, Attachment, MAX_ATTACHMENTS};
+use crate::attach::{
+    AttachItem, AttachMode, AttachShared, Attachment, MAX_ATTACHMENTS, QueryAnswers,
+};
 use crate::process_tree::ProcessTree;
 use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySize, SpawnSpec};
 use crate::ring::{ByteRing, RING_CAPACITY};
@@ -525,10 +527,16 @@ impl TerminalManager {
 
     /// Starts following the terminal's output: from `since` when the ring still holds it,
     /// else from a snapshot. Works on exited terminals: the snapshot, then `Exited`.
-    /// At most `MAX_ATTACHMENTS` follow a terminal at once.
-    pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
+    /// At most `MAX_ATTACHMENTS` follow a terminal at once. `answers` says whether the client
+    /// answers the cursor queries itself; only a client that does can hold one (0036).
+    pub fn attach(
+        &self,
+        id: &str,
+        since: Option<u64>,
+        answers: QueryAnswers,
+    ) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
-        let shared = Arc::new(AttachShared::default());
+        let shared = Arc::new(AttachShared::new(answers));
         let mut replies = Vec::new();
         // Under the lock: the copy, its offset, and the registration, so no chunk falls between.
         let frozen = {
@@ -703,10 +711,11 @@ struct Core {
     attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
-    /// Cursor queries that arrived while a client was attached, oldest first. A client's
+    /// Cursor queries that arrived while an emulator was attached, oldest first. A client's
     /// reply takes the oldest off. The service answers them itself when a client attaches
-    /// (its snapshot cannot show the query) and when every client that received one has
-    /// detached, so a client that stalls or never answers cannot leave the shell waiting.
+    /// (its snapshot cannot show the query) and when every emulator that received one has
+    /// detached, so a stalled emulator cannot hold the shell past either. A query no attached
+    /// emulator can answer is answered at once (0036).
     held: VecDeque<HeldQuery>,
 }
 
@@ -715,7 +724,7 @@ struct HeldQuery {
     reply: Vec<u8>,
     /// The service already wrote `reply`; a client's late reply to it is dropped.
     answered: bool,
-    /// The attachments that received the query, the only clients that can reply to it.
+    /// The emulators attached when the query arrived: the only clients that can reply to it.
     witnesses: Vec<usize>,
 }
 
@@ -743,8 +752,8 @@ impl Core {
     }
 
     /// Applies one PTY read to the screen, the ring and the attachments. Returns the
-    /// replies to cursor queries nobody attached can answer; they are written after the
-    /// lock is released.
+    /// replies to cursor queries no attached emulator can answer; they are written after
+    /// the lock is released.
     fn ingest(&mut self, chunk: &[u8]) -> Vec<u8> {
         let mut replies = Vec::new();
         let mut fed = 0;
@@ -761,10 +770,16 @@ impl Core {
                 fed = index + 1;
                 let (row, col) = self.screen.cursor_position();
                 let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
-                if self.attachments.is_empty() {
+                // Only an emulator attached now can reply, so only it is a witness (0036).
+                let witnesses: Vec<usize> = self
+                    .attachments
+                    .iter()
+                    .filter(|attachment| attachment.answers == QueryAnswers::Client)
+                    .map(attachment_key)
+                    .collect();
+                if witnesses.is_empty() {
                     replies.extend_from_slice(reply.as_bytes());
                 } else {
-                    let witnesses = self.attachments.iter().map(attachment_key).collect();
                     self.held.push_back(HeldQuery {
                         reply: reply.into_bytes(),
                         answered: false,
@@ -1130,7 +1145,7 @@ mod tests {
             crate::shell::EnvSnapshot::default(),
             "0.0.0-test",
         ));
-        if let Ok(mut attachment) = manager.attach("missing", None) {
+        if let Ok(mut attachment) = manager.attach("missing", None, super::QueryAnswers::Service) {
             send_future(&attachment.next());
         }
     }
@@ -1225,7 +1240,9 @@ mod tests {
             .expect("create the terminal");
 
         LOCK_FREE_AT_SERIALIZE.with(|free| free.set(None));
-        let attachment = manager.attach(&info.id, None).expect("attach");
+        let attachment = manager
+            .attach(&info.id, None, super::QueryAnswers::Service)
+            .expect("attach");
 
         assert_eq!(LOCK_FREE_AT_SERIALIZE.with(Cell::get), Some(true));
         drop(attachment);

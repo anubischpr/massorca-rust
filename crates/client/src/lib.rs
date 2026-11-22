@@ -13,6 +13,7 @@ mod remote;
 mod secret_calls;
 mod spawn;
 mod subscription;
+mod team_calls;
 mod terminal_attach;
 mod transport;
 mod typed_calls;

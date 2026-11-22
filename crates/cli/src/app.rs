@@ -91,7 +91,7 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
     let autostart = globals.autostart;
     match command {
         Commands::Service { command } => service_command(&globals, command, output),
-        Commands::Config { command } => {
+        Commands::Settings { command } => {
             let target = globals.target()?;
             block_on(config::execute(&target, autostart, command, output))
         }
@@ -148,6 +148,14 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Secret { command } => {
             let target = globals.target()?;
             block_on(crate::secret::execute(&target, autostart, command, output))
+        }
+        Commands::Team { command } => {
+            let target = globals.target()?;
+            block_on(crate::team::execute(&target, autostart, command, output))
+        }
+        Commands::Task { command } => {
+            let target = globals.target()?;
+            block_on(crate::task::execute(&target, autostart, command, output))
         }
         Commands::Ext { .. } => Err(ext::unavailable()),
     }

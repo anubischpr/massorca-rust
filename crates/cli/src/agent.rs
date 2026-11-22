@@ -7,11 +7,12 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentSession, AgentSessionList, AgentStartParams, AgentWatchEvent,
-    AgentWatchParams,
+    ActivityState, AgentPromptParams, AgentSession, AgentSessionList, AgentStartParams,
+    AgentWatchEvent, AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
+use crate::agent_credentials::{self, CredentialsCommand};
 use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
@@ -37,6 +38,13 @@ pub enum AgentCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Types a prompt into a session's terminal once its agent is idle or done, then submits it.
+    Prompt(AgentPromptArgs),
+    /// Starts a new run of an exited session with the agent's resume arguments; the session keeps its id.
+    Resume {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Forgets a session whose run has ended.
     Forget {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -49,6 +57,11 @@ pub enum AgentCommand {
     },
     /// Reports an agent run's status to the service; agents' hooks call it. Always exits 0 within 5 s.
     Hook(AgentHookArgs),
+    /// Copies a kind's login files into this profile, shows them or removes them. Prints names and sizes only.
+    Credentials {
+        #[command(subcommand)]
+        command: CredentialsCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -133,6 +146,18 @@ pub struct AgentStartArgs {
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentPromptArgs {
+    /// Session id, or a unique prefix of at least 8 characters.
+    pub session: String,
+    /// The text to type, at most 8 KiB; the agent's submit key follows it.
+    #[arg(allow_hyphen_values = true)]
+    pub text: String,
+    /// Type the text even while the agent works or waits, for example to answer its question.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -221,12 +246,30 @@ pub async fn execute(
             let stopped = client.agent_stop(&session, force).await?;
             output.success(&stopped, &agent_text::session_details(&stopped));
         }
+        AgentCommand::Prompt(args) => {
+            let receipt = client
+                .agent_prompt(&AgentPromptParams {
+                    session: args.session,
+                    text: args.text,
+                    force: args.force,
+                })
+                .await?;
+            let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
+            output.success(&receipt, &lines);
+        }
+        AgentCommand::Resume { session } => {
+            let resumed = client.agent_resume(&session).await?;
+            output.success(&resumed, &agent_text::session_details(&resumed));
+        }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;
             output.success(
                 &forgotten,
                 &[format!("forgot agent session {}", forgotten.id)],
             );
+        }
+        AgentCommand::Credentials { command } => {
+            agent_credentials::execute(&client, command, output).await?;
         }
         AgentCommand::Attach { .. } => unreachable!("attach returned above"),
         AgentCommand::Hook(_) => unreachable!("hook runs without a connection, from app"),
