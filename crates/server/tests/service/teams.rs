@@ -1,4 +1,4 @@
-//! Teams and bots over the wire: their CRUD, their name and lead rules, their refusals and their events.
+//! Teams, bots and team projects over the wire: their CRUD, name and lead rules, refusals and events.
 
 use std::time::Duration;
 
@@ -7,7 +7,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TEAM_CHANGED};
 use massorca_protocol::methods::teams::{
     self, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess, TeamCharacter,
-    TeamCreateParams, TeamList, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
+    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use serde_json::Value;
 use tokio::time::timeout;
@@ -391,6 +392,145 @@ async fn a_team_has_one_lead_and_the_lead_moves_only_by_clearing_it_first() {
 }
 
 #[tokio::test]
+async fn team_projects_are_added_updated_and_removed_within_their_team() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+
+    let parser: TeamProject = client
+        .call(
+            teams::PROJECT_ADD,
+            &TeamProjectAddParams {
+                team: "alpha".to_owned(),
+                name: "parser".to_owned(),
+                goal: Some("Parse the config".to_owned()),
+                brief: None,
+            },
+        )
+        .await
+        .expect("team.project_add");
+    assert_eq!(parser.goal, "Parse the config");
+    assert_eq!(parser.brief, "");
+
+    let taken = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_ADD,
+            &TeamProjectAddParams {
+                team: "alpha".to_owned(),
+                name: "parser".to_owned(),
+                goal: None,
+                brief: None,
+            },
+        )
+        .await
+        .expect_err("a name taken in the team");
+    assert_eq!(remote_code(&taken), codes::TEAM_PROJECT_NAME_IN_USE);
+
+    let updated: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &TeamProjectUpdateParams {
+                team: "alpha".to_owned(),
+                project: parser.id.clone(),
+                name: None,
+                goal: None,
+                brief: Some("Keep it small.".to_owned()),
+            },
+        )
+        .await
+        .expect("team.project_update");
+    assert_eq!(updated.brief, "Keep it small.");
+    assert_eq!(updated.name, "parser");
+
+    let removed: TeamProject = client
+        .call(
+            teams::PROJECT_REMOVE,
+            &TeamProjectRemoveParams {
+                team: "alpha".to_owned(),
+                project: "parser".to_owned(),
+            },
+        )
+        .await
+        .expect("team.project_rm");
+    assert_eq!(removed.id, parser.id);
+    let gone = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_REMOVE,
+            &TeamProjectRemoveParams {
+                team: "alpha".to_owned(),
+                project: parser.id.clone(),
+            },
+        )
+        .await
+        .expect_err("a removed project is gone");
+    assert_eq!(remote_code(&gone), codes::TEAM_PROJECT_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn unknown_teams_bots_and_projects_are_refused_with_typed_codes() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("beta"))
+        .await
+        .expect("beta");
+    let beta_bot: Bot = client
+        .call(teams::BOT_ADD, &bot_params("beta", "bruno", false))
+        .await
+        .expect("bruno in beta");
+
+    let no_team = client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("nothing", "mara", false))
+        .await
+        .expect_err("an unknown team");
+    assert_eq!(remote_code(&no_team), codes::TEAM_NOT_FOUND);
+
+    let other_teams_bot = client
+        .call::<_, Bot>(
+            teams::BOT_UPDATE,
+            &BotUpdateParams {
+                team: "alpha".to_owned(),
+                bot: beta_bot.id.clone(),
+                name: None,
+                job: Some("Edits".to_owned()),
+                kind: None,
+                model: None,
+                effort: None,
+                lead: None,
+            },
+        )
+        .await
+        .expect_err("a bot of another team is not in this team");
+    assert_eq!(remote_code(&other_teams_bot), codes::BOT_NOT_FOUND);
+
+    let no_project = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_UPDATE,
+            &TeamProjectUpdateParams {
+                team: "alpha".to_owned(),
+                project: "missing".to_owned(),
+                name: Some("renamed".to_owned()),
+                goal: None,
+                brief: None,
+            },
+        )
+        .await
+        .expect_err("an unknown project");
+    assert_eq!(remote_code(&no_project), codes::TEAM_PROJECT_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn team_changes_publish_team_changed_with_the_team_id() {
     let home = temp_home();
     let running = start(home.path(), "default").await;
@@ -408,6 +548,26 @@ async fn team_changes_publish_team_changed_with_the_team_id() {
             id: alpha.id.clone()
         }
     );
+
+    client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect("team.bot_add");
+    assert_eq!(next_event(&mut events).await.id, alpha.id);
+
+    client
+        .call::<_, TeamProject>(
+            teams::PROJECT_ADD,
+            &TeamProjectAddParams {
+                team: "alpha".to_owned(),
+                name: "parser".to_owned(),
+                goal: None,
+                brief: None,
+            },
+        )
+        .await
+        .expect("team.project_add");
+    assert_eq!(next_event(&mut events).await.id, alpha.id);
 
     client
         .call::<_, Team>(
