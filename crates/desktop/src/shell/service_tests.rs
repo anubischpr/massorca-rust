@@ -132,7 +132,7 @@ fn the_service_fills_the_sidebar_and_the_hosts_item_counts_its_hosts(cx: &mut Te
 }
 
 #[gpui::test]
-fn a_service_that_cannot_be_reached_shows_the_banner_and_retry_now_reaches_the_bridge(
+fn a_service_that_cannot_be_reached_takes_the_canvas_and_retry_now_reaches_the_bridge(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
@@ -143,7 +143,11 @@ fn a_service_that_cannot_be_reached_shows_the_banner_and_retry_now_reaches_the_b
         .expect("the store listens");
     cx.run_until_parked();
     draw(cx);
-    assert!(cx.debug_bounds("service-banner").is_some());
+    assert!(
+        cx.debug_bounds("service-banner").is_none(),
+        "the page replaces the banner"
+    );
+    assert!(cx.debug_bounds("service-down").is_some());
     rig.shell.read_with(cx, |shell, _| {
         let notice = shell.model().snapshot().service_notice.clone();
         assert!(notice.is_some_and(|notice| notice.retry));
