@@ -132,21 +132,9 @@ fn key_file_is_owner_only() {
 /// Asserts the DACL is protected and holds a single allow entry, for the current user.
 #[cfg(windows)]
 fn assert_owner_only(path: &std::path::Path) {
-    let expected = massorca_profile::owner_only_sddl().expect("the owner-only SDDL");
-    let sid = expected
-        .rsplit(';')
-        .next()
-        .expect("the SID")
-        .trim_end_matches(')');
-    let dacl = massorca_profile::dacl_sddl(path).expect("the DACL");
-    assert!(dacl.starts_with("D:P("), "{}: {dacl}", path.display());
-    assert_eq!(dacl.matches('(').count(), 1, "{}: {dacl}", path.display());
-    assert!(dacl.starts_with("D:P(A;;"), "{}: {dacl}", path.display());
-    assert!(
-        dacl.ends_with(&format!(";;;{sid})")),
-        "{}: {dacl}",
-        path.display()
-    );
+    let owner_only = massorca_profile::is_owner_only(path).expect("read the DACL");
+    let dacl = massorca_profile::dacl_sddl(path).unwrap_or_default();
+    assert!(owner_only, "{}: {dacl}", path.display());
 }
 
 #[cfg(windows)]

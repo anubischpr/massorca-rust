@@ -8,16 +8,21 @@ use std::ptr;
 
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, GetFileSecurityW, GetTokenInformation, OBJECT_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SetFileSecurityW, TOKEN_QUERY,
-    TOKEN_USER, TokenUser, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+    DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetFileSecurityW,
+    GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+    OBJECT_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SE_DACL_PROTECTED, SetFileSecurityW, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -83,10 +88,101 @@ pub fn set_dacl_sddl(path: &Path, sddl: &str) -> io::Result<()> {
     result
 }
 
-/// The DACL of a file or directory as SDDL, for example `D:P(A;;FA;;;S-1-5-21-...)`.
-pub fn dacl_sddl(path: &Path) -> io::Result<String> {
+/// Whether `path` has a protected DACL whose one entry gives full access to the current user. SIDs are compared, never
+/// SDDL text, which writes well-known accounts such as the built-in Administrator as aliases (`LA`, `BA`, `SY`).
+pub fn is_owner_only(path: &Path) -> io::Result<bool> {
+    is_owner_only_for(path, &current_user_sid()?)
+}
+
+/// [`is_owner_only`] for the user `user_sid` (a SID string or an SDDL alias).
+fn is_owner_only_for(path: &Path, user_sid: &str) -> io::Result<bool> {
+    let user = OwnedSid::parse(user_sid)?;
+    let mut buffer = file_security(path, DACL_SECURITY_INFORMATION)?;
+    let descriptor: PSECURITY_DESCRIPTOR = buffer.as_mut_ptr().cast();
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+    // SAFETY: `descriptor` is the descriptor read above, and both out-pointers are valid for writes.
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if control & SE_DACL_PROTECTED == 0 {
+        return Ok(false);
+    }
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl: *mut ACL = ptr::null_mut();
+    // SAFETY: `descriptor` outlives the call; `acl` points into it afterwards, and every out-pointer is valid.
+    if unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // A missing or null DACL grants everyone access.
+    if present == 0 || acl.is_null() {
+        return Ok(false);
+    }
+    let mut info = ACL_SIZE_INFORMATION::default();
+    let info_size = u32::try_from(size_of::<ACL_SIZE_INFORMATION>()).map_err(io::Error::other)?;
+    // SAFETY: `acl` is the DACL read above, and `info` has the size the call is told.
+    if unsafe {
+        GetAclInformation(
+            acl,
+            ptr::from_mut(&mut info).cast(),
+            info_size,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if info.AceCount != 1 {
+        return Ok(false);
+    }
+    let mut ace = ptr::null_mut();
+    // SAFETY: the DACL has one ACE, so index 0 exists, and `ace` is a valid out-pointer.
+    if unsafe { GetAce(acl, 0, &mut ace) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: every ACE starts with its header.
+    let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+    if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+        return Ok(false);
+    }
+    // SAFETY: the header says this is an ACCESS_ALLOWED_ACE, whose SID starts at SidStart inside the ACE.
+    let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+    if allowed.Mask != FILE_ALL_ACCESS && allowed.Mask != GENERIC_ALL {
+        return Ok(false);
+    }
+    let ace_sid: PSID = ptr::from_ref(&allowed.SidStart).cast_mut().cast();
+    // SAFETY: both SIDs are valid: one inside the ACE, which `buffer` keeps alive, and one owned by `user`.
+    Ok(unsafe { EqualSid(ace_sid, user.0) } != 0)
+}
+
+/// A SID allocated by ConvertStringSidToSidW, freed on drop.
+struct OwnedSid(PSID);
+
+impl OwnedSid {
+    fn parse(text: &str) -> io::Result<Self> {
+        let wide = U16CString::from_str(text)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let mut sid: PSID = ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated and outlives the call, and `sid` is a valid out-pointer.
+        if unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(sid))
+    }
+}
+
+impl Drop for OwnedSid {
+    fn drop(&mut self) {
+        // SAFETY: ConvertStringSidToSidW allocated the SID with LocalAlloc, and it is freed only here, once.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
+/// The security descriptor of a file or directory, in a buffer aligned for its fields.
+fn file_security(path: &Path, information: OBJECT_SECURITY_INFORMATION) -> io::Result<Vec<usize>> {
     let wide_path = wide_path(path)?;
-    let information: OBJECT_SECURITY_INFORMATION = DACL_SECURITY_INFORMATION;
     let mut needed = 0_u32;
     // SAFETY: a null buffer of length 0 only asks for the size, which the call writes to `needed`.
     unsafe {
@@ -102,15 +198,13 @@ pub fn dacl_sddl(path: &Path) -> io::Result<String> {
         return Err(io::Error::last_os_error());
     }
     let bytes = usize::try_from(needed).map_err(io::Error::other)?;
-    // A usize buffer keeps the descriptor aligned for its fields.
     let mut buffer = vec![0_usize; bytes.div_ceil(size_of::<usize>())];
-    let descriptor: PSECURITY_DESCRIPTOR = buffer.as_mut_ptr().cast();
     // SAFETY: the buffer holds at least `needed` bytes, is aligned, and outlives the call.
     if unsafe {
         GetFileSecurityW(
             wide_path.as_ptr(),
             information,
-            descriptor,
+            buffer.as_mut_ptr().cast(),
             needed,
             &mut needed,
         )
@@ -118,6 +212,15 @@ pub fn dacl_sddl(path: &Path) -> io::Result<String> {
     {
         return Err(io::Error::last_os_error());
     }
+    Ok(buffer)
+}
+
+/// The DACL of a file or directory as SDDL, for example `D:P(A;;FA;;;S-1-5-21-...)`. For display and for tests that
+/// widen a DACL; decide ownership with [`is_owner_only`], because SDDL writes some accounts as aliases.
+pub fn dacl_sddl(path: &Path) -> io::Result<String> {
+    let information: OBJECT_SECURITY_INFORMATION = DACL_SECURITY_INFORMATION;
+    let mut buffer = file_security(path, information)?;
+    let descriptor: PSECURITY_DESCRIPTOR = buffer.as_mut_ptr().cast();
     let mut text: *mut u16 = ptr::null_mut();
     // SAFETY: `descriptor` was filled above; `text` receives a LocalAlloc'd string and the length out-pointer may be null.
     if unsafe {
@@ -242,9 +345,9 @@ mod tests {
     use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
     use super::{
-        SecurityDescriptor, current_user_sid, dacl_sddl, owner_only_sddl,
-        owner_only_security_descriptor, process_belongs_to_current_user, restrict_to_owner,
-        set_dacl_sddl, wide_to_string,
+        OwnedSid, SecurityDescriptor, current_user_sid, dacl_sddl, is_owner_only,
+        is_owner_only_for, owner_only_sddl, owner_only_security_descriptor,
+        process_belongs_to_current_user, restrict_to_owner, set_dacl_sddl, wide_to_string,
     };
 
     #[test]
@@ -258,13 +361,48 @@ mod tests {
             "the file inherits the wide entry before the fix"
         );
 
+        assert!(!is_owner_only(&file).expect("read the DACL"));
+
         restrict_to_owner(&file).expect("restrict");
 
-        let sid = current_user_sid().expect("the current user's SID");
-        assert_eq!(
-            dacl_sddl(&file).expect("the file DACL"),
-            format!("D:P(A;;FA;;;{sid})")
+        assert!(is_owner_only(&file).expect("read the DACL"));
+    }
+
+    #[test]
+    fn an_aliased_account_is_matched_by_its_sid_not_its_sddl_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("secret");
+        std::fs::write(&file, b"x").expect("write");
+        // SDDL prints the built-in Administrator as `LA`; its SID string is `S-1-5-21-...-500`.
+        let administrator = OwnedSid::parse("LA").expect("the built-in Administrator");
+        let administrator = sid_text(administrator.0);
+        assert!(administrator.starts_with("S-1-5-21-"), "{administrator}");
+        set_dacl_sddl(&file, "D:P(A;;FA;;;LA)").expect("restrict to the Administrator");
+        assert!(dacl_sddl(&file).expect("the DACL").contains(";;;LA)"));
+
+        assert!(is_owner_only_for(&file, &administrator).expect("read the DACL"));
+        assert!(
+            !is_owner_only_for(&file, "S-1-5-18").expect("read the DACL"),
+            "another account is not the owner"
         );
+    }
+
+    #[test]
+    fn wider_or_unprotected_dacls_are_not_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("secret");
+        std::fs::write(&file, b"x").expect("write");
+        let sid = current_user_sid().expect("the current user's SID");
+        for sddl in [
+            format!("D:(A;;FA;;;{sid})"),
+            format!("D:P(A;;FA;;;{sid})(A;;FR;;;WD)"),
+            format!("D:P(A;;FR;;;{sid})"),
+        ] {
+            set_dacl_sddl(&file, &sddl).expect("set the DACL");
+            assert!(!is_owner_only(&file).expect("read the DACL"), "{sddl}");
+        }
+        set_dacl_sddl(&file, &format!("D:P(A;;FA;;;{sid})")).expect("set the DACL");
+        assert!(is_owner_only(&file).expect("read the DACL"));
     }
 
     #[test]
