@@ -10,6 +10,7 @@ mod hosts;
 mod options;
 mod pump;
 mod remote;
+mod secret_calls;
 mod spawn;
 mod subscription;
 mod team_calls;

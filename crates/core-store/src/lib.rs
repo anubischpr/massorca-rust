@@ -1,5 +1,5 @@
-//! SQLite persistence for MassOrca's durable state (ADR 0005): projects, workspaces, settings, agent sessions and paired
-//! devices, with versioned migrations and a backup taken before each migration.
+//! SQLite persistence for MassOrca's durable state (ADR 0005): projects, workspaces, settings, agent sessions, paired
+//! devices and vault rows, with versioned migrations and a backup taken before each migration.
 
 mod agent_sessions;
 mod backup;
@@ -8,6 +8,8 @@ mod devices;
 mod error;
 mod migrations;
 mod projects;
+mod secret_key_check;
+mod secrets;
 mod settings;
 mod store;
 mod tasks;
@@ -23,6 +25,8 @@ pub use devices::DeviceRow;
 pub use error::StoreError;
 pub use migrations::{MIGRATIONS, Migration};
 pub use projects::{ProjectKind, ProjectRow};
+pub use secret_key_check::SecretKeyCheck;
+pub use secrets::{SecretLinkRow, SecretMeta, SecretRequestRow, SecretRow};
 pub use store::Store;
 pub use tasks::{TaskOrigin, TaskOutcome, TaskRow};
 pub use team_projects::TeamProjectRow;

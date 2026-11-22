@@ -166,6 +166,55 @@ CREATE INDEX tasks_by_project ON tasks(project_id);
 "#,
         foreign_keys_off: false,
     },
+    // Secret vault (decision 0071): ciphertext only; names and scopes in clear.
+    Migration {
+        sql: r#"
+CREATE TABLE secrets (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    rotated_at INTEGER NOT NULL,
+    used_at INTEGER,
+    UNIQUE(scope, name)
+);
+CREATE TABLE secret_links (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+    linked_at INTEGER NOT NULL,
+    PRIMARY KEY(scope, name)
+);
+CREATE INDEX secret_links_by_secret ON secret_links(secret_id);
+CREATE TABLE secret_requests (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    session TEXT,
+    state TEXT NOT NULL CHECK(state IN ('pending','stored','linked','declined','failed')),
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // The vault key check, so a planted key is refused, and who asked for each request, for its limits (0071).
+    Migration {
+        sql: r#"
+CREATE TABLE secret_key_check (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    nonce BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+);
+ALTER TABLE secret_requests ADD COLUMN requester TEXT;
+CREATE INDEX secret_requests_by_requester ON secret_requests(requester, created_at);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
