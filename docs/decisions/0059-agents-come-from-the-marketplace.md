@@ -30,31 +30,48 @@ and what the agent states mean. The two sessions agreed the format below.
   `extension.json` contributes its kinds:
 
   ```json
-  "contributes": { "agentAdapters": [ { "kind": "agents/claude.json" } ] }
+  "contributes": { "agentAdapters": [
+    { "id": "claude", "kind": "agents/claude.json", "cli": { "...": "see below" } }
+  ] }
   ```
 
-  Each `kind` file is exactly a 0050 kind declaration. `core-agents`
-  validates it with its own loader, with owner `ext:<package-id>`. The
-  extension crate only checks that the path exists inside the package, and
-  never parses kind fields.
+  The path is always `agents/<id>.json`. That file is exactly a 0050 kind
+  declaration, and its own `id` must equal the entry's `id`. `core-agents`
+  validates its content with its own loader, with owner `ext:<package-id>`.
+  The extension crate checks only that the file exists inside the package,
+  the id rule and the id match. It never reads kind fields, so `core-agents`
+  checks that the `process` permission's `programs` equal the declaration's
+  `program` candidates.
 - A kind id is unique among installed packages. A second package that
   declares an installed id is refused at install. The ids `claude`, `codex`,
   `antigravity` and `gentle-shell` are reserved to publisher `massorca`.
-- **Permissions**, required by the core and shown in the review, are always
-  High risk:
-  - `{ "kind": "process", "scope": { "programs": [...] } }`. The list must
-    equal the kind's `program` candidates; the validator checks this.
+- **Permissions.** An `agentAdapters` entry is always computed High risk;
+  the manifest cannot lower it. The review copy is "runs a program on this
+  computer with your rights".
+  - `{ "kind": "process", "scope": { "programs": [...] } }`, listing the
+    declaration's `program` candidates.
   - `{ "kind": "credentials", "scope": { "agents": ["<id>"] } }` when the
-    kind declares a `credentials` block. The review also shows the home
-    variable and the stripped variables.
-  - Vault secrets (0071) reach a run only as the names granted, as
-    environment variables at launch.
-- **Setup text.** A package may carry `setup` entries per kind
-  (`{ "os": "windows|linux|macos|any", "text": "...", "command": [...] }`).
-  They are display-only. Installing a package never installs the vendor's
-  CLI, and MassOrca never runs a `setup` command in this phase. The
-  Marketplace entry shows the text and lets the person copy the command.
-  Running it would need its own decision.
+    declaration has a `credentials` block. The review shows its home
+    variable and stripped variables, which `core-agents` supplies.
+  - `{ "kind": "secrets", "scope": { "names": [...] } }` only for vault
+    secrets (0071) injected at launch, and only those names.
+- **The CLI comes with the install (owner direction, decision 0061).**
+  Installing an agent must end with a usable CLI. Each entry may carry a
+  `cli` block: `binary`, a `verify` command (for example
+  `["claude", "--version"]`), the vendor's `source` page, and `install` and
+  optional `uninstall` commands per OS. Packages bundle no binaries.
+  - If the program is already `detected`, the package registers at once.
+  - Otherwise the install review shows the exact official command. It runs
+    only after the person confirms it as a High-risk step, and is never
+    elevated unless the vendor's installer asks. On a headless host,
+    `--yes-run-installer` gives that consent. The verify command must then
+    succeed.
+  - On remove, the CLI is offered for removal only if the lockfile says
+    this package installed it.
+  - The extension runtime runs the installer and the verify command. In
+    M3 nothing runs them yet: the Marketplace entry shows the command for
+    the person to copy until `core-extensions` lands. There is no separate
+    `setup` field.
 
 ### What the states mean
 
@@ -73,9 +90,11 @@ and what the agent states mean. The two sessions agreed the format below.
 - **Only kinds that are installed and enabled can be started.** Any other
   kind gets `agent.not_installed`. A kind that is installed but not detected
   is refused with `agent.not_installed` as today, with the reason "program
-  not found" and its setup text.
+  not found" and its `cli` install command.
 - **Removing a package** that has a live session of one of its kinds is
-  refused with `agent.busy`. Ended sessions keep their history, and their
+  refused with `agent.busy`. `core-extensions` calls the removal guards
+  that features register (`register_remove_guard(owner, fn(package_id))`)
+  before deleting a package, and the agents guard performs this check. Ended sessions keep their history, and their
   kind shows as unavailable. The kind's credential home
   (`<profile>/agents/homes/<id>/`) is deleted only when the person confirms
   it in the remove dialog; otherwise it is kept.
@@ -97,7 +116,7 @@ and what the agent states mean. The two sessions agreed the format below.
   read `package.state` and `detected`; the CLI shows them as separate
   columns. In this decision "installed" always means the package state.
 - **For the Marketplace:** `agent.kinds` supplies the "found on this PC"
-  badge (`detected`) and the setup text. Install and remove are the
+  badge (`detected`) and the `cli` install command. Install and remove are the
   extension runtime's `extensions.install` and `extensions.remove`; the
   agents chain adds the live-session check and the credential-home choice.
 - **For Settings:** installed kinds only, each with:
@@ -119,10 +138,13 @@ and what the agent states mean. The two sessions agreed the format below.
    in the repository (`packages/agents/massorca.<id>/` with `extension.json`
    and `agents/<id>.json`), listed in the built-in catalogue as `available`.
    Installing one copies it from the host and downloads nothing. The
-   compiled-in copies are removed from `core-agents` in the same change,
-   and `core-agents` reads installed kinds through one call into the
-   extension crate: the enabled packages' kind files, with package id,
-   version and path.
+   The extension runtime embeds them in its catalogue, and the
+   compiled-in copies are removed from `core-agents` in the same change.
+   `core-agents` reads installed kinds through
+   `massorca_core_extensions::installed_agent_kinds(&Profile)`, which
+   returns the enabled packages' kinds with `package_id`,
+   `package_version`, `kind_id` and the absolute `path` of each
+   declaration.
 3. **Profile files** under `<profile>/agents/kinds/*.json` (owner `user`)
    stay as the local and development path until the extension runtime's
    dev-folder install exists. Then they fold into it.
