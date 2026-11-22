@@ -6,6 +6,7 @@
 //! the first and last enabled segment. Enter and Space select the focused segment
 //! through the click they produce.
 
+use crate::a11y;
 use crate::components::agent_icon::NameTooltip;
 use crate::components::button::StatePreview;
 use crate::icon::{Icon, IconName, IconSize};
@@ -441,9 +442,9 @@ impl RenderOnce for SegmentedControl {
                     .tooltip_show_delay(DURATION_TOOLTIP_DELAY)
                     .tooltip(move |_, cx| cx.new(|_| NameTooltip(name.clone())).into());
             }
-            track = track.child(element);
+            track = track.child(a11y::disabled(element, !is_enabled));
         }
-        track
+        a11y::disabled(track, self.disabled)
     }
 }
 
@@ -599,5 +600,42 @@ mod tests {
             vec![2, 2],
             "left went back to the first segment"
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::a11y::probe::{reported, root};
+    use gpui::{TestAppContext, accesskit::Role};
+
+    #[gpui::test]
+    fn the_control_is_a_radio_group_named_by_what_it_chooses(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                SegmentedControl::new(
+                    "search-in",
+                    "Search in",
+                    vec![Segment::text("Files"), Segment::text("Sessions")],
+                )
+                .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert_eq!(node.role(), Role::RadioGroup);
+        assert_eq!(node.label(), Some("Search in"));
+    }
+
+    #[gpui::test]
+    fn a_disabled_control_is_disabled(cx: &mut TestAppContext) {
+        let node = root(cx, |window, cx| {
+            reported(
+                SegmentedControl::new("search-in", "Search in", vec![Segment::text("Files")])
+                    .disabled(true)
+                    .render(window, cx),
+            )
+        })
+        .expect("reported");
+        assert!(node.is_disabled());
     }
 }

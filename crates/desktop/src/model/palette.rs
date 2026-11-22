@@ -8,6 +8,8 @@ use std::ops::Range;
 /// Result groups, in the order the palette shows them (A13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PaletteGroup {
+    /// The last commands and workspaces run, shown while the query is empty.
+    Recent,
     Workspaces,
     Sessions,
     Tabs,
@@ -17,12 +19,21 @@ pub enum PaletteGroup {
 impl PaletteGroup {
     pub fn header(self) -> &'static str {
         match self {
+            PaletteGroup::Recent => "Recent",
             PaletteGroup::Workspaces => "Workspaces",
             PaletteGroup::Sessions => "Sessions",
             PaletteGroup::Tabs => "Tabs",
             PaletteGroup::Commands => "Commands",
         }
     }
+}
+
+/// What the palette searches: the commands and rows (Mod+K), or files (Mod+P, "Go to file").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaletteMode {
+    #[default]
+    Commands,
+    GoToFile,
 }
 
 /// What running an item does; the shell interprets it.
@@ -75,6 +86,7 @@ pub struct PaletteModel {
     query: String,
     matches: Vec<PaletteMatch>,
     active: usize,
+    mode: PaletteMode,
 }
 
 impl PaletteModel {
@@ -85,6 +97,16 @@ impl PaletteModel {
         };
         model.set_query("");
         model
+    }
+
+    /// The mode the palette opened in; it sets the label and the shortcut the view shows.
+    pub fn with_mode(mut self, mode: PaletteMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mode(&self) -> PaletteMode {
+        self.mode
     }
 
     pub fn items(&self) -> &[PaletteItem] {
@@ -111,10 +133,12 @@ impl PaletteModel {
     /// keep their fixed order. The active row returns to the first enabled row.
     pub fn set_query(&mut self, query: &str) {
         self.query = query.to_owned();
+        let browsing = self.browsing();
         let mut matches: Vec<PaletteMatch> = self
             .items
             .iter()
             .enumerate()
+            .filter(|(_, item)| (item.group == PaletteGroup::Recent) == browsing)
             .filter_map(|(i, item)| {
                 let (score, positions) = fuzzy(query, &item.title)?;
                 Some(PaletteMatch {
@@ -163,10 +187,20 @@ impl PaletteModel {
         item.disabled_reason.is_none().then_some(&item.action)
     }
 
-    /// The "No matches for" line when filtering hides everything.
+    /// The "No matches for" line when a query hides everything.
     pub fn no_match_text(&self) -> Option<String> {
-        (self.matches.is_empty() && !self.query.is_empty())
+        (self.matches.is_empty() && !self.browsing())
             .then(|| format!("No matches for \u{201c}{}\u{201d}", self.query))
+    }
+
+    /// "Type to search" when the empty palette has no recent rows to show (CommandPalette spec).
+    pub fn empty_text(&self) -> Option<String> {
+        (self.matches.is_empty() && self.browsing()).then(|| "Type to search".to_owned())
+    }
+
+    /// With no query the palette shows its Recent rows; a query shows the other groups instead.
+    fn browsing(&self) -> bool {
+        self.query.trim().is_empty()
     }
 }
 
@@ -359,6 +393,7 @@ mod tests {
     #[test]
     fn a_click_activates_an_enabled_row_only() {
         let mut m = model();
+        m.set_query("t");
         m.select(2);
         assert_eq!(m.active_index(), 2);
         m.select(3);
@@ -369,7 +404,8 @@ mod tests {
 
     #[test]
     fn groups_run_workspaces_sessions_tabs_commands() {
-        let m = model();
+        let mut m = model();
+        m.set_query("t");
         let groups: Vec<_> = m
             .matches()
             .iter()
@@ -402,6 +438,7 @@ mod tests {
     #[test]
     fn arrows_skip_disabled_rows_and_wrap() {
         let mut m = model();
+        m.set_query("t");
         assert_eq!(m.active_index(), 0);
         m.move_active(1);
         m.move_active(1);
@@ -425,6 +462,56 @@ mod tests {
         assert_eq!(
             m.confirm(),
             Some(&PaletteAction::Command(Command::ToggleTheme))
+        );
+    }
+
+    fn recent(title: &str) -> PaletteItem {
+        PaletteItem {
+            group: PaletteGroup::Recent,
+            ..item(PaletteGroup::Commands, title, false)
+        }
+    }
+
+    fn groups_of(m: &PaletteModel) -> Vec<PaletteGroup> {
+        m.matches()
+            .iter()
+            .map(|found| m.items()[found.item].group)
+            .collect()
+    }
+
+    #[test]
+    fn recent_rows_show_only_while_the_query_is_empty() {
+        let mut m = PaletteModel::new(vec![
+            recent("Toggle theme"),
+            item(PaletteGroup::Sessions, "Feed endpoints", false),
+        ]);
+        assert_eq!(groups_of(&m), vec![PaletteGroup::Recent]);
+        m.set_query("feed");
+        assert_eq!(groups_of(&m), vec![PaletteGroup::Sessions]);
+        m.set_query("  ");
+        assert_eq!(groups_of(&m), vec![PaletteGroup::Recent]);
+    }
+
+    #[test]
+    fn an_empty_query_with_nothing_recent_asks_for_a_search() {
+        let mut m = PaletteModel::new(vec![item(PaletteGroup::Commands, "Close tab", false)]);
+        assert!(m.matches().is_empty());
+        assert_eq!(m.empty_text().as_deref(), Some("Type to search"));
+        assert_eq!(m.no_match_text(), None);
+        m.set_query("zzz");
+        assert_eq!(m.empty_text(), None);
+        assert!(m.no_match_text().is_some());
+    }
+
+    #[test]
+    fn go_to_file_has_no_rows_until_files_are_listed() {
+        let mut m = PaletteModel::new(Vec::new()).with_mode(PaletteMode::GoToFile);
+        assert_eq!(m.mode(), PaletteMode::GoToFile);
+        assert_eq!(m.empty_text().as_deref(), Some("Type to search"));
+        m.set_query("main.rs");
+        assert_eq!(
+            m.no_match_text().as_deref(),
+            Some("No matches for \u{201c}main.rs\u{201d}")
         );
     }
 }

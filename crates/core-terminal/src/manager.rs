@@ -32,8 +32,12 @@ const READ_CHUNK: usize = 64 * 1024;
 const DRAIN_LIMIT: Duration = Duration::from_secs(5);
 #[cfg(not(windows))]
 const DRAIN_LIMIT: Duration = Duration::from_millis(500);
-/// How long a kill waits for the exit after the tree is killed.
-const EXIT_MARGIN: Duration = Duration::from_secs(2);
+/// How long a kill waits for the exit after the tree is killed: the reap plus the drain,
+/// so a kill returns the recorded exit.
+const KILL_EXIT_MARGIN: Duration = Duration::from_secs(2).saturating_add(DRAIN_LIMIT);
+/// The same wait during `shutdown`, short so it fits the service's shutdown budget; an exit
+/// that takes longer is recorded after `shutdown` returns.
+const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_secs(2);
 /// After a failed wait the waiter tries again, first after this long, then doubling up to
 /// `WAIT_RETRY_MAX`; a kill wakes it at once.
 const WAIT_RETRY_FIRST: Duration = Duration::from_millis(250);
@@ -369,6 +373,7 @@ impl TerminalManager {
                 kill_reason: None,
                 attachments: Vec::new(),
                 query_match: 0,
+                held: VecDeque::new(),
             }),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
@@ -430,6 +435,28 @@ impl TerminalManager {
         if terminal.is_exited() {
             return Err(TerminalError::Exited);
         }
+        let reports = cursor_reports(bytes);
+        let mut kept = None;
+        if !reports.is_empty() {
+            let mut core = lock(&terminal.core);
+            let mut filtered = Vec::with_capacity(bytes.len());
+            let mut from = 0;
+            for report in reports {
+                let Some(query) = core.held.pop_front() else {
+                    break;
+                };
+                if query.answered {
+                    filtered.extend_from_slice(&bytes[from..report.start]);
+                    from = report.end;
+                }
+            }
+            filtered.extend_from_slice(&bytes[from..]);
+            kept = Some(filtered);
+        }
+        let bytes = kept.as_deref().unwrap_or(bytes);
+        if bytes.is_empty() {
+            return Ok(());
+        }
         terminal.master.write_all(bytes).map_err(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe || terminal.is_exited() {
                 TerminalError::Exited
@@ -474,13 +501,23 @@ impl TerminalManager {
     /// grace and a short margin have passed.
     pub fn kill(&self, id: &str, force: bool) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        Ok(terminal.kill(force, ExitReason::Killed, self.inner.config.kill_grace))
+        Ok(terminal.kill(
+            force,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        ))
     }
 
     /// Kills the terminal if it is live, then forgets it.
     pub fn close(&self, id: &str) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
-        let info = terminal.kill(false, ExitReason::Killed, self.inner.config.kill_grace);
+        let info = terminal.kill(
+            false,
+            ExitReason::Killed,
+            self.inner.config.kill_grace,
+            KILL_EXIT_MARGIN,
+        );
         let forgotten = lock(&self.inner.registry).forget(id);
         drop(forgotten);
         Ok(info)
@@ -492,6 +529,7 @@ impl TerminalManager {
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
         let shared = Arc::new(AttachShared::default());
+        let mut replies = Vec::new();
         // Under the lock: the copy, its offset, and the registration, so no chunk falls between.
         let frozen = {
             let mut core = lock(&terminal.core);
@@ -527,12 +565,17 @@ impl TerminalManager {
             };
             if !exited {
                 core.attachments.push(Arc::clone(&shared));
+                answer_held(&mut core.held, &mut replies);
             } else {
                 queue.push_back(AttachItem::Exited { info });
                 queue.ended = true;
             }
             frozen
         };
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = terminal.master.write_all(&replies);
+        }
         if let Some(frozen) = frozen {
             // Outside the lock. Output queued meanwhile follows the `Attached` item, so the
             // snapshot is inserted right after it.
@@ -557,14 +600,24 @@ impl TerminalManager {
         thread::scope(|scope| {
             for terminal in &terminals {
                 let kill = move || {
-                    terminal.kill(false, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        false,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 };
                 if thread::Builder::new()
                     .name("terminal-shutdown".to_owned())
                     .spawn_scoped(scope, kill)
                     .is_err()
                 {
-                    terminal.kill(true, ExitReason::ServiceStopped, grace);
+                    terminal.kill(
+                        true,
+                        ExitReason::ServiceStopped,
+                        grace,
+                        SHUTDOWN_EXIT_MARGIN,
+                    );
                 }
             }
         });
@@ -650,6 +703,20 @@ struct Core {
     attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
+    /// Cursor queries that arrived while a client was attached, oldest first. A client's
+    /// reply takes the oldest off. The service answers them itself when a client attaches
+    /// (its snapshot cannot show the query) and when every client that received one has
+    /// detached, so a client that stalls or never answers cannot leave the shell waiting.
+    held: VecDeque<HeldQuery>,
+}
+
+/// A cursor query an attached client may still answer.
+struct HeldQuery {
+    reply: Vec<u8>,
+    /// The service already wrote `reply`; a client's late reply to it is dropped.
+    answered: bool,
+    /// The attachments that received the query, the only clients that can reply to it.
+    witnesses: Vec<usize>,
 }
 
 impl Core {
@@ -692,11 +759,17 @@ impl Core {
                 // The answer is the cursor as of the query, not as of the end of the read.
                 self.screen.process(&chunk[fed..=index]);
                 fed = index + 1;
+                let (row, col) = self.screen.cursor_position();
+                let reply = format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1);
                 if self.attachments.is_empty() {
-                    let (row, col) = self.screen.cursor_position();
-                    replies.extend_from_slice(
-                        format!("\x1b[{};{}R", u32::from(row) + 1, u32::from(col) + 1).as_bytes(),
-                    );
+                    replies.extend_from_slice(reply.as_bytes());
+                } else {
+                    let witnesses = self.attachments.iter().map(attachment_key).collect();
+                    self.held.push_back(HeldQuery {
+                        reply: reply.into_bytes(),
+                        answered: false,
+                        witnesses,
+                    });
                 }
             }
         }
@@ -806,7 +879,13 @@ impl Terminal {
     /// Graceful: hang up and close the terminal, wait up to `grace`, then kill the tree.
     /// Force: kill the tree at once. Either way, what is left of the tree is killed.
     /// An exited terminal still gets the tree kill: it only reaches what was recorded.
-    fn kill(&self, force: bool, reason: ExitReason, grace: Duration) -> TerminalInfo {
+    fn kill(
+        &self,
+        force: bool,
+        reason: ExitReason,
+        grace: Duration,
+        margin: Duration,
+    ) -> TerminalInfo {
         let exited = {
             let mut core = lock(&self.core);
             let exited = matches!(core.status, Status::Exited(_));
@@ -827,7 +906,7 @@ impl Terminal {
         self.tree.kill(self.master.foreground_process_group());
         // A waiter retrying a failed wait tries again now.
         self.changed.notify_all();
-        self.wait_for_exit(EXIT_MARGIN)
+        self.wait_for_exit(margin)
     }
 
     /// Reaps the shell once it has exited, through the tree (0031).
@@ -912,10 +991,67 @@ impl Terminal {
     }
 
     pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
-        lock(&self.core)
-            .attachments
-            .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+        let mut replies = Vec::new();
+        {
+            let mut core = lock(&self.core);
+            core.attachments
+                .retain(|attachment| !Arc::ptr_eq(attachment, shared));
+            let leaving = attachment_key(shared);
+            // A query no attached client received can only be answered by the service, and
+            // once answered, no late reply to it can come.
+            core.held.retain_mut(|query| {
+                query.witnesses.retain(|witness| *witness != leaving);
+                if !query.witnesses.is_empty() {
+                    return true;
+                }
+                if !query.answered {
+                    replies.extend_from_slice(&query.reply);
+                }
+                false
+            });
+        }
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = self.master.write_all(&replies);
+        }
     }
+}
+
+/// Identity of an attachment while it is registered.
+fn attachment_key(attachment: &Arc<AttachShared>) -> usize {
+    Arc::as_ptr(attachment).addr()
+}
+
+/// Writes the reply of every held query not yet answered into `replies`, marking it answered.
+fn answer_held(held: &mut VecDeque<HeldQuery>, replies: &mut Vec<u8>) {
+    for query in held.iter_mut().filter(|query| !query.answered) {
+        replies.extend_from_slice(&query.reply);
+        query.answered = true;
+    }
+}
+
+/// Byte ranges of the cursor position reports (`ESC [ row ; col R`) in a client's input.
+fn cursor_reports(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut reports = Vec::new();
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(2).position(|pair| pair == b"\x1b[") {
+        let start = at + found;
+        let body_start = start + 2;
+        let body = bytes[body_start..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
+            .count();
+        let body_end = body_start + body;
+        let separators = bytes[body_start..body_end]
+            .iter()
+            .filter(|byte| **byte == b';')
+            .count();
+        if bytes.get(body_end) == Some(&b'R') && separators == 1 {
+            reports.push(start..body_end + 1);
+        }
+        at = body_start;
+    }
+    reports
 }
 
 fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<()>) {
@@ -971,6 +1107,15 @@ mod tests {
 
     fn is_send<T: Send>() {}
     fn is_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn finds_only_cursor_position_reports() {
+        use super::cursor_reports;
+        assert_eq!(cursor_reports(b"\x1b[12;40R"), vec![0..8]);
+        assert_eq!(cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), vec![1..7, 8..14]);
+        // Arrow keys, a bare `R` and a report without a column are not answers.
+        assert!(cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R").is_empty());
+    }
 
     #[test]
     fn handles_cross_threads_and_tasks() {
