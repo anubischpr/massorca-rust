@@ -9,6 +9,7 @@ use massorca_protocol::methods::tasks::{Column, TaskCreateParams, TaskListParams
 use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
+use massorca_protocol::methods::tasks::TaskUpdateParams;
 
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
@@ -21,6 +22,8 @@ pub enum TaskCommand {
         /// Task id.
         task: String,
     },
+    /// Changes a task: its title, body, bot or project. An empty bot or project clears it.
+    Update(TaskUpdateArgs),
     /// Marks a task done by hand, for work that finished outside an agent.
     Done {
         /// Task id.
@@ -85,6 +88,24 @@ impl From<ColumnArg> for Column {
     }
 }
 
+#[derive(Debug, Args)]
+pub struct TaskUpdateArgs {
+    /// Task id.
+    pub task: String,
+    /// New title of the task.
+    #[arg(long, value_name = "TEXT")]
+    pub title: Option<String>,
+    /// New body of the task. An empty value clears it.
+    #[arg(long, value_name = "TEXT")]
+    pub body: Option<String>,
+    /// Bot of the team that owns the task: id or name. An empty value clears it.
+    #[arg(long, value_name = "BOT")]
+    pub bot: Option<String>,
+    /// Project of the team the task belongs to: id or name. An empty value clears it.
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
+}
+
 /// Runs one `task` subcommand against the service of `profile`.
 pub async fn execute(
     target: &Target,
@@ -126,6 +147,18 @@ pub async fn execute(
         TaskCommand::Show { task } => {
             let shown = client.task_show(&TaskRef { task }).await?;
             output.success(&shown, &text::task_details(&shown));
+        }
+        TaskCommand::Update(args) => {
+            let task = client
+                .task_update(&TaskUpdateParams {
+                    task: args.task,
+                    title: args.title,
+                    body: args.body,
+                    bot: args.bot,
+                    project: args.project,
+                })
+                .await?;
+            output.success(&task, &[text::task_line(&task, "updated")]);
         }
         TaskCommand::Done { task } => {
             let done = client.task_done(&TaskRef { task }).await?;

@@ -139,11 +139,15 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "terminal.show",
             "team.board",
             "team.bot.add",
+            "team.bot.update",
             "team.bot.rm",
             "team.create",
             "team.list",
             "team.project.add",
+            "team.project.rm",
+            "team.project.update",
             "team.rm",
+            "team.update",
             "team.show",
             "task.create",
             "task.done",
@@ -151,6 +155,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "task.reopen",
             "task.rm",
             "task.show",
+            "task.update",
         ])
     );
     for path in &checked {

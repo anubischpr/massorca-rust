@@ -230,3 +230,180 @@ fn task_refusals_exit_with_code_one_and_name_their_code() {
         .code(1);
     assert!(stderr_text(&missing).contains("task.not_found"));
 }
+
+#[test]
+fn a_team_is_updated_and_only_the_fields_given_change() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run(
+            "default",
+            &["team", "create", "alpha", "--purpose", "old purpose"],
+        )
+        .success();
+
+    let updated = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "update",
+            "alpha",
+            "--name",
+            "beta",
+            "--character",
+            "star",
+            "--workspaces",
+            "true",
+        ],
+    );
+    assert_eq!(updated["name"], "beta");
+    assert_eq!(updated["character"], "star");
+    assert_eq!(updated["workspaces"], true);
+    assert_eq!(updated["purpose"], "old purpose");
+
+    let cleared = sandbox.json_ok("default", &["team", "update", "beta", "--purpose", ""]);
+    assert_eq!(cleared["purpose"], "");
+
+    let text = sandbox
+        .run(
+            "default",
+            &["team", "update", "beta", "--workspaces", "false"],
+        )
+        .success();
+    assert!(stdout_text(&text).starts_with("updated team beta"));
+}
+
+#[test]
+fn a_bot_moves_its_lead_only_by_clearing_it_and_a_project_is_updated_and_removed() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team", "bot", "add", "alpha", "mara", "--agent", "claude", "--job", "Writes",
+                "--lead",
+            ],
+        )
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team", "bot", "add", "alpha", "bruno", "--agent", "claude", "--job", "Reviews",
+            ],
+        )
+        .success();
+
+    let refused = sandbox
+        .run(
+            "default",
+            &["team", "bot", "update", "alpha", "bruno", "--lead", "true"],
+        )
+        .failure()
+        .code(1);
+    assert!(stderr_text(&refused).contains("bot.lead_taken"));
+
+    let stepped_down = sandbox.json_ok(
+        "default",
+        &[
+            "team", "bot", "update", "alpha", "mara", "--lead", "false", "--model", "opus",
+            "--effort", "high",
+        ],
+    );
+    assert_eq!(stepped_down["lead"], false);
+    assert_eq!(stepped_down["model"], "opus");
+    let promoted = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "bot",
+            "update",
+            "alpha",
+            "bruno",
+            "--lead",
+            "true",
+            "--job",
+            "Reviews the parser",
+        ],
+    );
+    assert_eq!(promoted["lead"], true);
+    assert_eq!(promoted["job"], "Reviews the parser");
+    let cleared = sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "mara", "--model", ""],
+    );
+    assert!(cleared["model"].is_null());
+
+    sandbox.json_ok("default", &["team", "project", "add", "alpha", "parser"]);
+    let project = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "project",
+            "update",
+            "alpha",
+            "parser",
+            "--goal",
+            "Parse the config",
+            "--brief",
+            "Keep it small.",
+        ],
+    );
+    assert_eq!(project["goal"], "Parse the config");
+    assert_eq!(project["brief"], "Keep it small.");
+    let removed = sandbox.json_ok("default", &["team", "project", "rm", "alpha", "parser"]);
+    assert_eq!(removed["name"], "parser");
+    let gone = sandbox
+        .run("default", &["team", "project", "rm", "alpha", "parser"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&gone).contains("team.project_not_found"));
+}
+
+#[test]
+fn a_task_is_updated_and_an_empty_bot_clears_it() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team", "bot", "add", "alpha", "mara", "--agent", "claude", "--job", "Writes",
+            ],
+        )
+        .success();
+    let task = sandbox.json_ok(
+        "default",
+        &["task", "create", "alpha", "parse", "--bot", "mara"],
+    );
+    let id = task["id"].as_str().expect("the task id").to_owned();
+    assert!(!task["bot_id"].is_null());
+
+    let updated = sandbox.json_ok(
+        "default",
+        &[
+            "task",
+            "update",
+            id.as_str(),
+            "--title",
+            "parse the body",
+            "--body",
+            "Magic bytes first.",
+            "--bot",
+            "",
+        ],
+    );
+    assert_eq!(updated["title"], "parse the body");
+    assert_eq!(updated["body"], "Magic bytes first.");
+    assert!(updated["bot_id"].is_null());
+
+    let missing = sandbox
+        .run("default", &["task", "update", "missing", "--title", "x"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&missing).contains("task.not_found"));
+}

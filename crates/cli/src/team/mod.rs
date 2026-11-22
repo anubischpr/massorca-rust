@@ -13,6 +13,9 @@ use massorca_protocol::methods::teams::{
 use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
+use massorca_protocol::methods::teams::{
+    BotUpdateParams, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamUpdateParams,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum TeamCommand {
@@ -33,6 +36,8 @@ pub enum TeamCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Changes a team: its name, purpose, shape or workspaces flag. Only the options given change.
+    Update(TeamUpdateArgs),
     /// Adds and removes a team's bots.
     Bot {
         #[command(subcommand)]
@@ -91,6 +96,8 @@ impl From<CharacterArg> for TeamCharacter {
 
 #[derive(Debug, Subcommand)]
 pub enum BotCommand {
+    /// Changes a bot. Only the options given change; an empty model or effort clears it.
+    Update(BotUpdateArgs),
     /// Adds a bot to a team. Its agent kind and job are required.
     Add(BotAddArgs),
     /// Removes a bot. Refused while it owns open tasks, unless --unassign is given.
@@ -124,6 +131,15 @@ pub struct BotAddArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TeamProjectCommand {
+    /// Changes a team's project. Only the options given change.
+    Update(TeamProjectUpdateArgs),
+    /// Removes a project. Its tasks stay on the Board without it.
+    Rm {
+        /// Team id or name.
+        team: String,
+        /// Project id or name within the team.
+        project: String,
+    },
     /// Adds a project to a team. Its name is unique within the team.
     Add(TeamProjectAddArgs),
 }
@@ -137,6 +153,67 @@ pub struct TeamProjectAddArgs {
     /// What the project is for.
     #[arg(long, value_name = "TEXT")]
     pub goal: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct TeamUpdateArgs {
+    /// Team id or name.
+    pub team: String,
+    /// New name of the team.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// New purpose. An empty value clears it.
+    #[arg(long, value_name = "TEXT")]
+    pub purpose: Option<String>,
+    /// New shape of the team.
+    #[arg(long, value_enum, value_name = "SHAPE")]
+    pub character: Option<CharacterArg>,
+    /// Whether the team has a folder for Workspaces: true or false.
+    #[arg(long, value_name = "BOOL", value_parser = clap::value_parser!(bool))]
+    pub workspaces: Option<bool>,
+}
+
+#[derive(Debug, Args)]
+pub struct BotUpdateArgs {
+    /// Team id or name.
+    pub team: String,
+    /// Bot id or name within the team.
+    pub bot: String,
+    /// New name of the bot.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// New job of the bot.
+    #[arg(long, value_name = "TEXT")]
+    pub job: Option<String>,
+    /// The agent kind the bot runs as, such as claude.
+    #[arg(long, value_name = "KIND")]
+    pub agent: Option<String>,
+    /// The model the bot runs with. An empty value clears it.
+    #[arg(long, value_name = "MODEL")]
+    pub model: Option<String>,
+    /// The effort the bot runs with. An empty value clears it.
+    #[arg(long, value_name = "EFFORT")]
+    pub effort: Option<String>,
+    /// Make the bot the lead (true), or clear its lead (false). Refused while another bot leads.
+    #[arg(long, value_name = "BOOL", value_parser = clap::value_parser!(bool))]
+    pub lead: Option<bool>,
+}
+
+#[derive(Debug, Args)]
+pub struct TeamProjectUpdateArgs {
+    /// Team id or name.
+    pub team: String,
+    /// Project id or name within the team.
+    pub project: String,
+    /// New name of the project.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// New goal of the project.
+    #[arg(long, value_name = "TEXT")]
+    pub goal: Option<String>,
+    /// New Brief of the project. An empty value clears it.
+    #[arg(long, value_name = "TEXT")]
+    pub brief: Option<String>,
 }
 
 /// Runs one `team` subcommand against the service of `profile`.
@@ -171,6 +248,19 @@ pub async fn execute(
                 .await?;
             output.success(&removed, &[text::team_line(&removed, "removed")]);
         }
+        TeamCommand::Update(args) => {
+            let team = client
+                .team_update(&TeamUpdateParams {
+                    team: args.team,
+                    name: args.name,
+                    purpose: args.purpose,
+                    character: args.character.map(TeamCharacter::from),
+                    access: None,
+                    workspaces: args.workspaces,
+                })
+                .await?;
+            output.success(&team, &[text::team_line(&team, "updated")]);
+        }
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
         TeamCommand::Board { team, project } => {
@@ -197,6 +287,21 @@ async fn run_bot(client: &Client, command: BotCommand, output: Output) -> Result
                 .await?;
             output.success(&bot, &[text::bot_line(&bot, "added")]);
         }
+        BotCommand::Update(args) => {
+            let bot = client
+                .team_bot_update(&BotUpdateParams {
+                    team: args.team,
+                    bot: args.bot,
+                    name: args.name,
+                    job: args.job,
+                    kind: args.agent,
+                    model: args.model,
+                    effort: args.effort,
+                    lead: args.lead,
+                })
+                .await?;
+            output.success(&bot, &[text::bot_line(&bot, "updated")]);
+        }
         BotCommand::Rm {
             team,
             bot,
@@ -221,6 +326,24 @@ async fn run_project(
     output: Output,
 ) -> Result<(), CliError> {
     match command {
+        TeamProjectCommand::Update(args) => {
+            let project = client
+                .team_project_update(&TeamProjectUpdateParams {
+                    team: args.team,
+                    project: args.project,
+                    name: args.name,
+                    goal: args.goal,
+                    brief: args.brief,
+                })
+                .await?;
+            output.success(&project, &[text::project_line(&project, "updated")]);
+        }
+        TeamProjectCommand::Rm { team, project } => {
+            let removed = client
+                .team_project_remove(&TeamProjectRemoveParams { team, project })
+                .await?;
+            output.success(&removed, &[text::project_line(&removed, "removed")]);
+        }
         TeamProjectCommand::Add(args) => {
             let project = client
                 .team_project_add(&TeamProjectAddParams {
