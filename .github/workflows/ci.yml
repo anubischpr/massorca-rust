@@ -21,7 +21,8 @@ env:
 # group it belongs to. The desktop depends on every core crate (client,
 # protocol, server and what it runs), so a core-only change also runs the
 # desktop's real-service integration tests (`desktop-integration`), without
-# the ui unit suite.
+# the ui unit suite. `release` is core, ui or scripts/ together: it gates the
+# Linux programs and the desktop bundles, which need both halves.
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -29,6 +30,7 @@ jobs:
       core: ${{ steps.groups.outputs.core }}
       ui: ${{ steps.groups.outputs.ui }}
       desktop_deps: ${{ steps.groups.outputs.desktop_deps }}
+      release: ${{ steps.groups.outputs.release }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,23 +39,27 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; echo "release=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
           echo "$files"
-          all=false; core=false; ui=false; deps=false
+          all=false; core=false; ui=false; deps=false; scripts=false
           while IFS= read -r f; do
             case "$f" in
               Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|.github/workflows/*) all=true ;;
+              scripts/*) scripts=true ;;
               crates/ui/*|crates/desktop/*) ui=true ;;
               crates/protocol/*|crates/client/*|crates/server/*|crates/core-*/*|crates/profile/*|crates/cli/*) core=true; deps=true ;;
               crates/*) core=true ;;
             esac
           done <<< "$files"
           if [ "$all" = true ]; then core=true; ui=true; fi
+          release=false
+          if [ "$core" = true ] || [ "$ui" = true ] || [ "$scripts" = true ]; then release=true; fi
           echo "core=$core" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
           echo "desktop_deps=$deps" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
 
   fmt:
     runs-on: ubuntu-latest
@@ -181,7 +187,7 @@ jobs:
   linux-programs:
     name: Linux programs (glibc floor)
     needs: changes
-    if: needs.changes.outputs.core == 'true'
+    if: needs.changes.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
