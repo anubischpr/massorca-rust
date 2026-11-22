@@ -18,6 +18,7 @@ massorca-core-git = { path = "crates/core-git" }
 massorca-core-terminal = { path = "crates/core-terminal" }
 massorca-core-watch = { path = "crates/core-watch" }
 massorca-core-workspace = { path = "crates/core-workspace" }
+massorca-core-agents = { path = "crates/core-agents" }
 massorca-server = { path = "crates/server" }
 massorca-client = { path = "crates/client" }
 massorca-net = { path = "crates/net" }
@@ -57,7 +58,7 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-uuid = { version = "1.29.3", features = ["v7"] }
+uuid = { version = "1.29.3", features = ["v4", "v7"] }
 vt100 = "0.18.1"
 widestring = "1.2.1"
 x509-parser = "0.18.1"

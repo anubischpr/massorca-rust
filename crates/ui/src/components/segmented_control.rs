@@ -13,8 +13,8 @@ use crate::icon::{Icon, IconName, IconSize};
 use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::{
     Color, DURATION_TOOLTIP_DELAY, Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM,
-    SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2,
-    SPACE_HALF, TYPE_BODY, TYPE_LABEL, TextStyleToken,
+    SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ICON_SM, SPACE_1,
+    SPACE_2, SPACE_HALF, TYPE_BODY, TYPE_LABEL, TextStyleToken,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -26,7 +26,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// The narrowest a segment gets before its label truncates (a literal in Segmented.md).
+/// The narrowest a segment gets (a literal in SegmentedControl.md); a longer label widens its segment.
 const SEGMENT_MIN_WIDTH: f32 = 64.0;
 
 /// Transparent: a segment at rest shows its track.
@@ -388,7 +388,22 @@ impl RenderOnce for SegmentedControl {
                 );
             }
             if let Some(label) = segment.label.clone() {
-                content.push(div().min_w_0().truncate().child(label).into_any_element());
+                // The label keeps its width down to the segment floor, so a segment grows to fit it and
+                // a short label never truncates (SegmentedControl.md; the floor is measured inside the label).
+                let icon_width = if segment.icon.is_some() {
+                    SIZE_ICON_SM + SPACE_1
+                } else {
+                    0.0
+                };
+                let floor = SEGMENT_MIN_WIDTH - 2.0 * SPACE_2 - icon_width;
+                content.push(
+                    div()
+                        .debug_selector(move || format!("segment-label-{index}"))
+                        .min_w(px(floor))
+                        .truncate()
+                        .child(label)
+                        .into_any_element(),
+                );
             }
             let mut element = div()
                 .id(segment_id(&self.id, index))
@@ -397,7 +412,6 @@ impl RenderOnce for SegmentedControl {
                 .aria_label(segment.name.clone())
                 .aria_toggled(Toggled::from(is_selected))
                 .flex_1()
-                .min_w(px(SEGMENT_MIN_WIDTH))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -410,6 +424,9 @@ impl RenderOnce for SegmentedControl {
                 .text_style(label_style)
                 .text_color(ink.label)
                 .children(content);
+            if segment.label.is_none() {
+                element = element.min_w(px(SEGMENT_MIN_WIDTH));
+            }
             if is_enabled {
                 element = element
                     .track_focus(&handles[index])
@@ -544,6 +561,54 @@ mod tests {
         assert_eq!(SegmentedSize::Comfortable.track(), 32.0);
         assert_eq!(SegmentedSize::default(), SegmentedSize::Default);
         assert_eq!(SegmentedStyle::default(), SegmentedStyle::Outlined);
+    }
+
+    /// Hosts a sunken two-segment control, each segment with an icon and a label, in a track of `width`.
+    struct WidthHarness {
+        width: f32,
+    }
+
+    impl Render for WidthHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().w(px(self.width)).child(
+                SegmentedControl::new(
+                    "mode",
+                    "Mode",
+                    vec![
+                        Segment::icon_text(IconName::MessageSquare, "Chat"),
+                        Segment::icon_text(IconName::SquareTerminal, "Terminal"),
+                    ],
+                )
+                .style(SegmentedStyle::Sunken),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_label_keeps_its_width_in_a_narrow_track(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| WidthHarness { width: 400. });
+        cx.run_until_parked();
+        let wide = f32::from(
+            cx.debug_bounds("segment-label-1")
+                .expect("label is drawn")
+                .size
+                .width,
+        );
+        view.update(cx, |harness, cx| {
+            harness.width = 120.;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let narrow = f32::from(
+            cx.debug_bounds("segment-label-1")
+                .expect("label is drawn")
+                .size
+                .width,
+        );
+        assert!(
+            (wide - narrow).abs() < 0.5,
+            "the label was cut from {wide} to {narrow} px"
+        );
     }
 
     /// Hosts a control of three options, the middle one disabled, that logs each index it asks for.

@@ -567,8 +567,6 @@ Each decision below was taken without the owner. Ordered by impact.
 
 - `layout.settings.nav`: 232 px (proposed; was 216, widened for the item icons, owner 2026-11-13).
 - `layout.routine.form.width`: 640 px (proposed).
-- `layout.dialog.width`: 440 px and 560 px (named in SecretModal and PermissionReview; a token is needed).
-- `layout.board.column.width`: 280 px (BoardColumn, proposed).
 - `layout.calendar.column.min`: 96 px and `layout.calendar.hour`: 48 px (CalendarViews, proposed).
 - `layout.log.line`: 18 px (proposed, for G-5).
 - `layout.slider.width`: 200 px (proposed, for G-3).

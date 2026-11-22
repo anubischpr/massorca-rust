@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, KeyBinding, SharedString,
-    Subscription, Task, Window, actions,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, KeyBinding,
+    SharedString, Subscription, Task, Window, actions,
 };
 
 use crate::components::menu::MenuView;
@@ -32,6 +32,9 @@ actions!(composer, [OpenModelPicker]);
 const KEY_CONTEXT: &str = "Composer";
 const PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 const HINT_DURATION: Duration = Duration::from_secs(3);
+
+/// Builds the control shown first in the bottom row, on each render.
+pub type LeadingControl = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// Binds the composer's keys and those of the parts it holds; apps call this once at startup.
 pub fn bind_keys(cx: &mut App) {
@@ -79,6 +82,8 @@ pub enum ComposerEvent {
     RemoveAttachment(u64),
     /// The user asked to send the failed message again.
     RetrySend,
+    /// The user pressed "Sign in" on a signed-out composer.
+    SignIn,
     /// Files dropped on the composer.
     DroppedFiles(Vec<PathBuf>),
 }
@@ -99,8 +104,16 @@ pub struct Composer {
     agent_busy: bool,
     host_confirmed: bool,
     disabled_reason: Option<SharedString>,
+    /// The disabled composer offers "Sign in" beside its reason.
+    sign_in: bool,
     error: Option<SharedString>,
     enter_inserts_newline: bool,
+    /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
+    leading: Option<LeadingControl>,
+    /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
+    send_unavailable: Option<SharedString>,
+    /// Why voice input is not possible yet: the microphone stays disabled with this reason.
+    voice_unavailable: Option<SharedString>,
     hint_shown: bool,
     /// Keeps the escape hint's timer alive; clearing the hint drops it and cancels the timer.
     _hint_timer: Option<Task<()>>,
@@ -154,8 +167,12 @@ impl Composer {
             agent_busy: false,
             host_confirmed: true,
             disabled_reason: None,
+            sign_in: false,
             error: None,
             enter_inserts_newline: false,
+            leading: None,
+            send_unavailable: None,
+            voice_unavailable: None,
             hint_shown: false,
             _hint_timer: None,
             history: SentHistory::default(),
@@ -206,10 +223,21 @@ impl Composer {
     pub fn set_disabled_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
         let disabled = reason.is_some();
         self.disabled_reason = reason;
+        self.sign_in = false;
         self.text
             .update(cx, |area, cx| area.set_disabled(disabled, cx));
         cx.notify();
     }
+    /// The agent account needs sign-in: the composer is disabled with "Sign in to <agent> to
+    /// continue" and a "Sign in" action (Composer.md States, disabled).
+    pub fn set_signed_out(&mut self, signed_out: bool, cx: &mut Context<Self>) {
+        let reason =
+            signed_out.then(|| format!("Sign in to {} to continue", self.agent_name).into());
+        self.set_disabled_reason(reason, cx);
+        self.sign_in = signed_out;
+        cx.notify();
+    }
+
     pub fn set_enter_inserts_newline(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.enter_inserts_newline = enabled;
         cx.notify();
@@ -220,7 +248,7 @@ impl Composer {
         Situation {
             agent_busy: self.agent_busy,
             host_confirmed: self.host_confirmed,
-            disabled: self.disabled_reason.is_some(),
+            disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
             text_empty: area.text().is_empty(),
             composing: area.is_composing(),
         }
@@ -387,6 +415,36 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_signed_out_composer_offers_sign_in(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        composer.update(cx, |composer, cx| composer.set_signed_out(true, cx));
+        cx.run_until_parked();
+        let reason = composer.read_with(cx, |composer, _| composer.disabled_reason.clone());
+        assert_eq!(reason.as_deref(), Some("Sign in to Claude to continue"));
+        let button = cx
+            .debug_bounds("composer-sign-in")
+            .expect("Sign in is drawn")
+            .center();
+        cx.simulate_click(button, gpui::Modifiers::none());
+        assert_eq!(*events.borrow(), vec![ComposerEvent::SignIn]);
+    }
+
+    #[gpui::test]
+    fn the_send_failed_line_sits_above_the_text(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_error(Some("offline".into()), cx)
+        });
+        cx.run_until_parked();
+        let error = cx
+            .debug_bounds("composer-error")
+            .expect("the line is drawn");
+        // Above the text, the line starts within the text area's own minimum height.
+        assert!(error.top() < gpui::px(SIZE_COMPOSER_MIN_HEIGHT));
+    }
+
+    #[gpui::test]
     fn typing_then_enter_sends_the_text_and_clears_the_draft(cx: &mut TestAppContext) {
         let (composer, cx) = composer_in(cx);
         let events = record(&composer, cx);
@@ -406,6 +464,21 @@ mod tests {
         cx.simulate_input("later");
         cx.simulate_keystrokes("enter");
         assert_eq!(*events.borrow(), vec![ComposerEvent::Queue("later".into())]);
+    }
+
+    #[gpui::test]
+    fn enter_keeps_the_draft_when_sending_is_unavailable(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) = cx.add_window_view(|_, cx| {
+            Composer::new(picker_state(), access(), cx)
+                .send_unavailable("Agent sessions come later.")
+        });
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hi");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(draft_of(&composer, cx), "hi");
+        assert!(events.borrow().is_empty());
     }
 
     #[gpui::test]

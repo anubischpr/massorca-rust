@@ -10,6 +10,8 @@ pub const TOPIC_WORKSPACE_REMOVING: &str = "workspace.removing";
 pub const TOPIC_WORKSPACE_REMOVED: &str = "workspace.removed";
 pub const TOPIC_PROJECT_ADDED: &str = "project.added";
 pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
+/// An agent session was started, changed, stopped or forgotten; the id is the session id.
+pub const TOPIC_AGENT_CHANGED: &str = "agent.changed";
 
 /// Result of `events.subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
