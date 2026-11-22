@@ -8,6 +8,8 @@ use clap::Parser;
 use massorca_profile::Profile;
 use tokio::runtime::Builder;
 
+use crate::agent;
+use crate::agent_hook;
 use crate::args::{Cli, Commands, ServiceCommand};
 use crate::config;
 use crate::error::CliError;
@@ -77,6 +79,17 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             block_on(terminal::execute(
                 &profile, autostart, command, output, json,
             ))
+        }
+        Commands::Agent {
+            command: agent::AgentCommand::Hook(args),
+        } => {
+            // Fails open: never an error, never a service start (0053).
+            agent_hook::run(home, profile, args.event, args.payload);
+            Ok(())
+        }
+        Commands::Agent { command } => {
+            let profile = Profile::resolve(home, profile)?;
+            block_on(agent::execute(&profile, autostart, command, output, json))
         }
         Commands::Git { command } => {
             let profile = Profile::resolve(home, profile)?;

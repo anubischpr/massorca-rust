@@ -7,11 +7,12 @@ pub mod codes;
 pub mod frame;
 pub mod message;
 pub mod methods;
+pub mod pairing;
 pub mod version;
 
 pub use frame::{
-    Frame, FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, encode_frame, encode_stream_bytes,
-    fits_frame, fits_stream_bytes,
+    Frame, FrameError, FrameKind, MAX_FRAME_LEN_LOCAL, MAX_FRAME_LEN_NETWORK, decode_frame_body,
+    encode_frame, encode_frame_body, encode_stream_bytes, fits, fits_frame, fits_stream_bytes,
 };
 #[cfg(feature = "tokio")]
 pub use frame::{read_frame, read_message, write_frame, write_message};

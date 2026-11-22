@@ -24,13 +24,13 @@ impl Region {
         Region::WorkPanel,
     ];
 
-    /// Window width below which this region stops being inline (X1).
+    /// Window width below which this region stops being inline (X1; artboard ws-narrow steps).
     pub fn threshold(self) -> f32 {
         match self {
-            Region::SessionSummary => 1528.0,
-            Region::ProjectSidebar => 1288.0,
-            Region::Sidebar => 1048.0,
-            Region::WorkPanel => 848.0,
+            Region::SessionSummary => 1408.0,
+            Region::ProjectSidebar => 1168.0,
+            Region::Sidebar => 928.0,
+            Region::WorkPanel => 728.0,
         }
     }
 
@@ -129,6 +129,16 @@ impl RegionState {
         }
     }
 
+    /// Makes a region visible: inline when it fits, else as the overlay (handoff 2.5). A region
+    /// that is already open stays as it is.
+    pub fn show(&mut self, region: Region, window_width: f32) {
+        match self.placement(region, window_width) {
+            Placement::Inline => {}
+            Placement::Collapsed => self.overlay = Some(region),
+            Placement::Closed => self.toggle(region, window_width),
+        }
+    }
+
     pub fn placement(&self, region: Region, window_width: f32) -> Placement {
         if !self.is_open(region) {
             Placement::Closed
@@ -169,6 +179,23 @@ mod tests {
     }
 
     #[test]
+    fn showing_a_region_opens_it_once_inline_or_as_the_overlay_when_narrow() {
+        let mut s = RegionState::default();
+        s.show(Region::WorkPanel, 1200.0);
+        s.show(Region::WorkPanel, 1200.0);
+        assert_eq!(s.placement(Region::WorkPanel, 1200.0), Placement::Inline);
+        assert_eq!(s.overlay(), None);
+
+        let mut narrow = RegionState::default();
+        narrow.show(Region::WorkPanel, 700.0);
+        assert_eq!(
+            narrow.placement(Region::WorkPanel, 700.0),
+            Placement::Collapsed
+        );
+        assert_eq!(narrow.overlay(), Some(Region::WorkPanel));
+    }
+
+    #[test]
     fn region_names_follow_the_glossary() {
         assert_eq!(Region::SessionSummary.name(), "Session summary");
         assert_eq!(Region::WorkPanel.name(), "Work panel");
@@ -176,12 +203,42 @@ mod tests {
         assert_eq!(Region::Sidebar.name(), "Sidebar");
     }
 
+    /// The region is inline at `width` and gives way one pixel narrower.
+    fn gives_way_below(region: Region, width: f32) {
+        let mut s = RegionState::default();
+        if !s.is_open(region) {
+            s.toggle(region, 2000.0);
+        }
+        assert_eq!(s.placement(region, width), Placement::Inline);
+        assert_eq!(s.placement(region, width - 1.0), Placement::Collapsed);
+    }
+
     #[test]
-    fn thresholds_are_sums_of_the_open_minimums() {
-        // Rail 48 + Sidebar 200 + Conversation 480 + Work panel 320 + two 240 columns.
-        assert_eq!(48.0 + 200.0 + 480.0 + 320.0 + 240.0 + 240.0, 1528.0);
-        assert_eq!(Region::SessionSummary.threshold(), 1528.0);
-        assert_eq!(48.0 + 480.0 + 320.0, Region::WorkPanel.threshold());
+    fn session_summary_gives_way_below_1408() {
+        gives_way_below(Region::SessionSummary, 1408.0);
+    }
+
+    #[test]
+    fn project_sidebar_gives_way_below_1168() {
+        gives_way_below(Region::ProjectSidebar, 1168.0);
+    }
+
+    #[test]
+    fn sidebar_gives_way_below_928() {
+        gives_way_below(Region::Sidebar, 928.0);
+    }
+
+    #[test]
+    fn work_panel_gives_way_below_728() {
+        gives_way_below(Region::WorkPanel, 728.0);
+    }
+
+    #[test]
+    fn the_collapse_order_follows_the_artboard_steps() {
+        assert_eq!(
+            Region::COLLAPSE_ORDER.map(Region::threshold),
+            [1408.0, 1168.0, 928.0, 728.0]
+        );
     }
 
     #[test]
@@ -196,7 +253,17 @@ mod tests {
         assert!(at(1600.0).iter().all(|p| *p == Placement::Inline));
         assert_eq!(at(1400.0)[0], Placement::Collapsed);
         assert_eq!(at(1400.0)[1], Placement::Inline);
-        assert!(at(800.0).iter().all(|p| *p == Placement::Collapsed));
+        // At the 800 px window minimum only the Work panel can stay inline (step 4 needs zoom).
+        assert_eq!(
+            at(800.0),
+            [
+                Placement::Collapsed,
+                Placement::Collapsed,
+                Placement::Collapsed,
+                Placement::Inline
+            ]
+        );
+        assert!(at(700.0).iter().all(|p| *p == Placement::Collapsed));
         assert!(at(1600.0).iter().all(|p| *p == Placement::Inline));
     }
 
@@ -206,7 +273,7 @@ mod tests {
         s.toggle(Region::SessionSummary, 2000.0);
         s.toggle(Region::SessionSummary, 1000.0);
         assert_eq!(s.overlay(), Some(Region::SessionSummary));
-        s.toggle(Region::Sidebar, 1000.0);
+        s.toggle(Region::Sidebar, 900.0);
         assert_eq!(
             s.overlay(),
             Some(Region::Sidebar),

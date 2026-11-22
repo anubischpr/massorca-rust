@@ -6,3 +6,4 @@ pub mod model;
 pub mod service;
 pub mod shell;
 pub mod store;
+pub mod window_identity;

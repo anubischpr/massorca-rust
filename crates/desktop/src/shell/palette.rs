@@ -22,9 +22,9 @@ use massorca_ui::components::text_field::TextField;
 use massorca_ui::style::Surface;
 use massorca_ui::theme::box_shadows;
 use massorca_ui::tokens::{
-    BORDER_WIDTH_THICK, LAYOUT_PALETTE_MAX_HEIGHT, LAYOUT_PALETTE_TOP, LAYOUT_PALETTE_WIDTH,
-    RADIUS_MD, RADIUS_XL, RADIUS_XS, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_4, TYPE_BODY,
-    TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
+    BORDER_WIDTH_THICK, LAYOUT_PALETTE_INPUT_HEIGHT, LAYOUT_PALETTE_MAX_HEIGHT, LAYOUT_PALETTE_TOP,
+    LAYOUT_PALETTE_WIDTH, RADIUS_MD, RADIUS_XL, RADIUS_XS, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2,
+    SPACE_4, TYPE_BODY, TYPE_BODY_SM, TYPE_CAPTION, TYPE_OVERLINE,
 };
 use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled, Theme};
 
@@ -97,6 +97,7 @@ fn panel(
     }
     div()
         .id("command-palette")
+        .debug_selector(|| "command-palette".into())
         .key_context("CommandPalette")
         .aria_label("Command palette")
         .on_action(cx.listener(|shell, _: &PaletteUp, _, cx| {
@@ -127,11 +128,13 @@ fn panel(
 fn query_row(palette: &PaletteModel, input: &Entity<TextField>, theme: &Theme) -> Div {
     let quick_open = palette.mode() == PaletteMode::GoToFile;
     let mut row = div()
+        .debug_selector(|| "palette-input-row".into())
         .flex()
         .flex_row()
         .items_center()
         .gap(px(SPACE_2))
-        .p(px(SPACE_2));
+        .h(px(LAYOUT_PALETTE_INPUT_HEIGHT))
+        .px(px(SPACE_2));
     if quick_open {
         row = row.child(
             div()

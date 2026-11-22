@@ -14,8 +14,9 @@ pub struct Migration {
 }
 
 /// Schema steps in order. The number applied is the database's `user_version`; shipped steps are never edited.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    sql: r#"
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        sql: r#"
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK(kind IN ('git','folder')),
@@ -48,8 +49,56 @@ CREATE TABLE settings (
     PRIMARY KEY(owner, key)
 );
 "#,
-    foreign_keys_off: false,
-}];
+        foreign_keys_off: false,
+    },
+    // Agent sessions (decision 0051). A workspace's removal removes its sessions. Forgetting a parent keeps its
+    // children, which become roots: they are sessions of their own in their own workspaces, and deleting them with
+    // the parent's record would lose their results.
+    Migration {
+        sql: r#"
+CREATE TABLE agent_sessions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    parent_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+    title TEXT,
+    read_only INTEGER NOT NULL,
+    agent_ref TEXT,
+    terminal_id TEXT,
+    request_id TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    exit_code INTEGER,
+    exit_signal TEXT,
+    exit_reason TEXT CHECK(exit_reason IN ('exited','killed','service_stopped')),
+    exited_at INTEGER,
+    activity TEXT CHECK(activity IN ('working','waiting','idle','done')),
+    activity_outcome TEXT CHECK(activity_outcome IN ('success','failure','cancelled','interrupted')),
+    activity_source TEXT CHECK(activity_source IN ('hook','process','output')),
+    activity_at INTEGER,
+    result TEXT,
+    brought_back_at INTEGER
+);
+CREATE INDEX agent_sessions_by_workspace ON agent_sessions(workspace_id, created_at);
+CREATE INDEX agent_sessions_by_parent ON agent_sessions(parent_id);
+"#,
+        foreign_keys_off: false,
+    },
+    Migration {
+        // Paired network devices (decision 0041). Only the hash of a device's public key is kept.
+        sql: r#"
+CREATE TABLE devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_pin TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL,
+    paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER,
+    revoked_at INTEGER
+);
+"#,
+        foreign_keys_off: false,
+    },
+];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
 /// `file` is `Some` for on-disk databases, which are backed up before their first migration.

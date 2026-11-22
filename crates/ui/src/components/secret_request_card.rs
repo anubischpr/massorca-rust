@@ -59,6 +59,14 @@ impl SecretState {
         }
     }
 
+    /// The word in the header; a failed save names its reason in the error row instead.
+    pub fn header_word(&self) -> String {
+        match self {
+            Self::Failed { .. } => "Not saved".to_owned(),
+            _ => self.word(),
+        }
+    }
+
     fn glyph(&self) -> IconName {
         match self {
             Self::Pending | Self::Entering => IconName::CircleHelp,
@@ -230,7 +238,7 @@ impl RenderOnce for SecretRequestCard {
         let theme = *cx.theme();
         let p = theme.palette;
         let id = self.id.clone();
-        let word = self.state.word();
+        let word = self.state.header_word();
         let ink: Color = match self.state {
             SecretState::Pending => p.agent.waiting,
             SecretState::Failed { .. } => p.status.danger_fg,
@@ -279,6 +287,23 @@ impl RenderOnce for SecretRequestCard {
                         .text_color(p.text.secondary)
                         .child(self.scope.clone()),
                 );
+            if self.state == SecretState::Stored {
+                row = row.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(SPACE_1))
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.tertiary)
+                        .child(
+                            Icon::new(IconName::Server)
+                                .size(IconSize::XSmall)
+                                .color(p.text.tertiary),
+                        )
+                        .child(self.host.clone()),
+                );
+            }
             if matches!(self.state, SecretState::Stored | SecretState::Linked) {
                 row = row.child(
                     div()
@@ -386,7 +411,8 @@ impl RenderOnce for SecretRequestCard {
             .bg(fill)
             .text_color(p.text.primary)
             .child(header)
-            .child(name_chip(&self.name, &p));
+            // A row keeps the chip as wide as its text instead of the card.
+            .child(div().flex().min_w_0().child(name_chip(&self.name, &p)));
         if let Some(reason) = &self.reason {
             card = card.child(
                 div()
@@ -394,6 +420,27 @@ impl RenderOnce for SecretRequestCard {
                     .text_color(p.text.secondary)
                     .line_clamp(3)
                     .child(reason.clone()),
+            );
+        }
+        if let SecretState::Failed { .. } = &self.state {
+            card = card.child(
+                div()
+                    .debug_selector(|| "error-row".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .px(px(SPACE_2))
+                    .py(px(SPACE_1))
+                    .rounded(px(RADIUS_SM))
+                    .bg(p.status.danger_bg)
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.status.danger_fg)
+                    .child(
+                        Icon::new(IconName::OctagonAlert)
+                            .size(IconSize::XSmall)
+                            .color(p.status.danger_fg),
+                    )
+                    .child(div().min_w_0().child(self.state.word())),
             );
         }
         card = card.child(actions).child(
@@ -463,6 +510,14 @@ mod tests {
             .word(),
             "Not saved: disk full"
         );
+        assert_eq!(
+            SecretState::Failed {
+                reason: "disk full".into()
+            }
+            .header_word(),
+            "Not saved"
+        );
+        assert_eq!(SecretState::Stored.header_word(), "Stored");
         assert!(SecretState::Linked.compact());
         assert!(!SecretState::Pending.compact());
         assert!(!SecretState::Entering.compact());

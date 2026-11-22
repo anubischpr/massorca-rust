@@ -3,7 +3,9 @@
 //! Timestamps are Unix milliseconds in `i64` and ids are strings. Selector strings
 //! (`project`, `workspace`) resolve by id, then exact name, then path.
 
+pub mod agents;
 pub mod config;
+pub mod devices;
 pub mod events;
 pub mod git;
 pub mod projects;

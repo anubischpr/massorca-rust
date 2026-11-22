@@ -58,7 +58,13 @@ fn board_column(_: &mut Window, cx: &mut App) -> AnyElement {
     let picked = div()
         .flex()
         .gap(px(SPACE_4))
-        .child(BoardColumn::new("picked-open", "Open"))
+        .child(
+            BoardColumn::new("picked-open", "Open").source_slot(
+                0,
+                card(cx, "lift-1-slot", "Write release notes for oppm")
+                    .status(AgentState::Idle, "Idle"),
+            ),
+        )
         .child(BoardColumn::new("picked-running", "Running").card(lifted));
     div()
         .flex()
