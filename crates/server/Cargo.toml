@@ -33,6 +33,10 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-rustls.workspace = true
 tracing.workspace = true
 
+# A vendor installer runs in its own process group on Unix, so a timeout ends everything it started (decision 0062).
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 # A vendor installer runs in a kill-on-close job, so a timeout ends everything it started (decision 0062).
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true

@@ -3792,6 +3792,7 @@ dependencies = [
  "massorca-profile",
  "massorca-protocol",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "subtle",
