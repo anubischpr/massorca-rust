@@ -451,8 +451,10 @@ fn exit_row(exit: Exit, palette: &Palette, restart: Option<RestartHandler>) -> D
         .child(text)
         .when_some(restart, |row, restart| {
             row.child(
-                Button::new("terminal-restart", "Restart")
-                    .on_click(move |window, cx| restart(window, cx)),
+                div().debug_selector(|| "terminal-restart".into()).child(
+                    Button::new("terminal-restart", "Restart")
+                        .on_click(move |window, cx| restart(window, cx)),
+                ),
             )
         })
 }
