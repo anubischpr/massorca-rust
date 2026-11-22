@@ -170,6 +170,11 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - F1 Conference room: needs live agents.
 - F4 skills picker: not listed as fixed.
 - F6 team characters: accepted in decision 0027 (#104).
+
+**Superseded in part by owner ruling (branch `desktop/board-header`)**
+- F2 is updated. The Board header is one 56 px row: "Board", the team pill and "Tasks come from the Conference room", with Filter at its end (`bt-board` `.head`). The header and the columns keep a 20 px inset. The columns start 16 px under the header, at y 108 at 1440×900 (`bt-board`); before this they started at y 140.
+- F6 is updated for the team pill. It draws the team's character, a triangle for Desarrollo (`bt-board`). The pill is the same on the Board, Files, Memory and project pages (A59). No artboard draws the other five shapes (square, circle, diamond, hexagon, star); their outlines are built on the artboard's 24-unit grid and need owner review.
+- Still open: the Bot Teams home and the gallery draw the generic users avatar (`Avatar::team`). The sidebar team row is not changed on this branch.
 - N39 dashed "Nightly summary" border: `board_column.rs`. Open (L4).
 
 ## Palette and quick open
