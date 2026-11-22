@@ -269,6 +269,75 @@ hardening points. All were fixed before merge:
   after a successful installer says, in the error data and in `install.log`, that the CLI may remain. The
   catalogue's piped `bash -c` installs start with `set -o pipefail`.
 
+### Second review
+
+The second independent review of the install path (2026-11-22) found one blocker (B1) and required items. Each is
+fixed with a test, except where a row says otherwise.
+
+- **First-party identity (B1).** Publisher `massorca` and any `massorca.*` id are refused at review and at install
+  from every source except the built-in catalogue, with `extension.reserved_publisher`. A lock entry under such an id
+  counts as installed only when it is the catalogue's own install with the embedded content hash; any other entry is
+  shown with that problem, never as a built-in, never runs its kinds and never blocks a built-in install, which
+  replaces it. The reviews show the source (`catalogue`, `dir` or `file` with its reference) first.
+- **Review shows what runs.** Each agent kind's program, arguments, environment names, credential home and files, and
+  each MCP server's command are listed. Values are not shown. Every installer step states that it installs the vendor's
+  current release and that the version is not pinned.
+- **Allowlist.** Install and uninstall commands start with `winget`, `brew`, `npm`, `powershell` or `bash`, bare. The
+  manifest refuses anything else, and the install refuses it again before it runs. Verify commands start with the
+  binary, as before.
+- **Verify is the gate.** `verify` is optional; without it the install succeeds when the binary resolves. A
+  PowerShell `irm | iex` can exit 0 after a failed download, so the gate is the verify command where the vendor documents
+  one. Tests with the fake runner cover an installer that exits 0 with a failing verify (Antigravity) and one that exits 0
+  with no binary (Codex). A real `irm | iex` cannot run in CI: it downloads and installs vendor software from the network
+  on a shared runner, so the behaviour is tested through the fake runner only.
+- **Lock released around the vendor command.** The change lock covers check, unpack and commit. The vendor command runs
+  between them with the package busy (`extension.busy`). Other packages can be enabled, disabled and removed meanwhile,
+  and a removal runs its uninstall commands outside the lock too. A test with a gated runner proves it.
+- **Vendor processes.** They start in a fresh private folder, removed after the run, never in the service's working
+  folder. They start suspended inside a kill-on-close job (the helper is `massorca_core_remote::windows_job`, moved from
+  core-git: core-git gains one edge to core-remote, which the service already depends on and which holds the other
+  process helpers; the alternative, a new crate, adds two edges and a crate for one function). Output is capped at 1 MiB
+  per run; the argv and the exit status or timeout are always written.
+- **Host paths.** A detected program's path reaches only a host administrator, in the review and the item views.
+- **Agent runs.** `massorca extension install --yes-run-installer` and `remove --uninstall-cli` refuse with
+  `extension.needs_person` when `MASSORCA_AGENT_SESSION` or `MASSORCA_AGENT_TOKEN` is set, before connecting. The CLI
+  forwards the run token as `agent_token`, and the service refuses a vendor installer or uninstaller for any request that
+  carries one. Limit: an agent that strips its environment is not detected by the CLI, and a direct call without the
+  token is not detected by the service. The real boundary is per-principal authentication, which is not built yet.
+- **Consent.** `--consent` sends the fingerprint the person read; a folder that changed after the review is refused with
+  `extension.consent_mismatch`. The CLI cannot re-inspect and resend a new fingerprint silently. A client that does
+  re-inspect and sends the new fingerprint is accepted: the server cannot know what the person saw, so the review is the
+  protection.
+- **Not covered by the fingerprint.** The program a bare name resolves to on the host's `PATH` (host state), and the
+  proxy variables (`HTTPS_PROXY` and the rest), which are passed through to vendor commands and may hold credentials.
+- **Fake vendor.** It is the example `massorca-fake-vendor`, not a binary: packaging copies `massorca` and the
+  `[[bin]]` targets only. `cargo test` does not build examples by default, so the extension tests build it once with
+  cargo into the same target folder.
+- **Forged data.** A lockfile entry whose path leaves its package folder, a publisher or id segment that names a
+  Windows device (`COM¹`, `LPT²`, superscript digits included), and a folder changed after review are each refused.
+  The lockfile is validated before it is written.
+- **Gentle Shell (open question for the owner).** The npm package and the binary name are unconfirmed and not shipped:
+  the package declares no vendor command, so it only detects and registers. Its binary stays `gentle-shell` as the
+  kind file has it. Its kind file reads `PI_CODING_AGENT_DIR` for credentials; the kind file is unchanged byte for byte
+  and that variable stays internal until a source is cited. No user-visible text names the unconfirmed package.
+
+#### Vendor commands
+
+Checked against the vendor pages on 2026-11-22. Each package's `cli` block records its source and the date.
+
+| Package | OS | Command | Source | Checked |
+|---|---|---|---|---|
+| `massorca.claude` | Windows | `winget install Anthropic.ClaudeCode` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.claude` | Linux | `npm install -g @anthropic-ai/claude-code@latest` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.claude` | macOS | `brew install --cask claude-code` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.codex` | all | `npm install -g @openai/codex` (no verify, no uninstall: not documented) | https://github.com/openai/codex | 2026-11-22 |
+| `massorca.antigravity` | Windows | `powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 \| iex"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
+| `massorca.antigravity` | Linux, macOS | `bash -c "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh \| bash"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
+| `massorca.gentle-shell` | all | none (detect and register only; see the open question above) | https://github.com/Gentleman-Programming/gentle-shell | 2026-11-22 |
+
+Uninstall commands, where documented: Claude `winget uninstall Anthropic.ClaudeCode`, `npm uninstall -g
+@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Antigravity and Codex document none.
+
 ## Alternatives
 
 - **Prompt in the CLI.** An interactive yes/no reads well, but it hangs on a

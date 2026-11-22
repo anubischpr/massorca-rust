@@ -65,7 +65,16 @@ pub fn item_lines(item: &ExtensionItem) -> Vec<String> {
         };
         lines.push(format!("agent {}: {found}{by_package}", agent.id));
         if let Some(cli) = &agent.cli {
-            lines.push(format!("  vendor install docs: {}", cli.source));
+            let checked = cli
+                .source_checked
+                .as_deref()
+                .map_or_else(String::new, |date| format!(" (checked {date})"));
+            lines.push(format!("  vendor install docs: {}{checked}", cli.source));
+            if !cli.install.is_empty() {
+                lines.push(
+                    "  installs the vendor's current release; the version is not pinned".to_owned(),
+                );
+            }
         }
     }
     if let Some(installed) = &item.installed {
@@ -212,7 +221,7 @@ fn plan_line(plan: &CliPlan) -> String {
                 .map_or_else(String::new, |path| format!(" at {path}"))
         ),
         CliPlanState::WillRun { command } => format!(
-            "cli {} ({binary}): not found; installing runs this vendor command: {}",
+            "cli {} ({binary}): not found; installing runs this vendor command: {}. Installs the vendor's current release; the version is not pinned.",
             plan.agent,
             command_text(command)
         ),
