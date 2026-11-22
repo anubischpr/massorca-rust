@@ -252,6 +252,7 @@ mod tests {
                 codes::EXTENSION_INVALID_LOCKFILE,
             ),
             (core_codes::IO, codes::EXTENSION_IO),
+            (core_codes::TAMPERED, codes::EXTENSION_TAMPERED),
             (
                 package_codes::INVALID_MANIFEST,
                 codes::EXTENSION_INVALID_MANIFEST,

@@ -165,3 +165,36 @@ fn a_failed_cli_uninstall_is_reported_after_the_removal() {
         serde_json::json!([])
     );
 }
+
+#[test]
+fn a_changed_installed_manifest_is_never_trusted_or_run() {
+    let s = installed(FakeHost::new(), true);
+    let rel = s.lock_json().expect("lock")["packages"][0]["path"]
+        .as_str()
+        .expect("path")
+        .to_owned();
+    let mut manifest = agent_package("acme", "kit", "kit");
+    manifest["contributes"]["agentAdapters"][0]["cli"]["uninstall"] = serde_json::json!([{ "os": "windows", "command": ["planted", "remove"] },
+                           { "os": "linux", "command": ["planted", "remove"] },
+                           { "os": "macos", "command": ["planted", "remove"] }]);
+    let path = s.service.layout().resolve(&format!("{rel}/extension.json"));
+    std::fs::write(path, serde_json::to_vec(&manifest).expect("json")).expect("tamper");
+
+    let error = massorca_core_extensions::installed_agent_kinds(&s.profile)
+        .expect_err("a tampered package");
+    assert_eq!(error.code(), codes::TAMPERED);
+    let item = s.service.get("acme.kit").expect_err("not trusted");
+    assert_eq!(item.code(), codes::TAMPERED);
+
+    let removed = s
+        .service
+        .remove("acme.kit", false, true)
+        .expect("still removable");
+    assert_eq!(removed.cli[0].action, CliAction::NoCommand);
+    assert!(
+        s.host.runs().iter().all(|argv| argv[0] != "planted"),
+        "{:?}",
+        s.host.runs()
+    );
+    assert!(!s.exists("pkgs/acme.kit"));
+}

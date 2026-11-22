@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -119,14 +120,16 @@ impl Extensions {
         let version = manifest.version.to_string();
         let rel = Layout::package_rel_path(&manifest.id, &version, &package.sha256);
         let dir = self.layout.resolve(&rel);
+        let files_sha256 = source::canonical_sha256(&package.files);
         self.unpack(&manifest.id, &package.files, &dir)?;
-        let entry = self
-            .run_installers(manifest, &plan)
+        let entry = check_unpacked(&manifest.id, &dir, &files_sha256)
+            .and_then(|()| self.run_installers(manifest, &plan))
             .map(|cli| LockEntry {
                 id: manifest.id.clone(),
                 version,
                 source: package.source.clone(),
                 sha256: package.sha256.clone(),
+                files_sha256: Some(files_sha256),
                 path: rel,
                 enabled: true,
                 consent: expected,
@@ -185,7 +188,13 @@ impl Extensions {
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(Error::io("cannot create", parent))?;
                 }
-                fs::write(&target, bytes).map_err(Error::io("cannot write", &target))?;
+                // A name that collides with one already written (an alias) fails the install.
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .and_then(|mut file| file.write_all(bytes))
+                    .map_err(Error::io("cannot write", &target))?;
             }
             if dir.exists() {
                 // A leftover from an install that never reached the lockfile.
@@ -268,11 +277,34 @@ impl Extensions {
     }
 }
 
-/// The manifest of an installed package, read from its unpacked folder. It passed validation at install.
+/// The manifest of an installed package, read from its unpacked folder. The folder is hashed first and must match the
+/// lockfile, so a file changed after the install is never trusted, and nothing it names runs.
 pub(crate) fn installed_manifest(layout: &Layout, entry: &LockEntry) -> Result<Manifest, Error> {
-    let path = layout.resolve(&entry.path).join(manifest::MANIFEST_FILE);
-    let bytes = fs::read(&path).map_err(Error::io("cannot read", &path))?;
-    Ok(manifest::parse(&bytes)?)
+    let expected = entry.files_sha256.as_deref().unwrap_or(&entry.sha256);
+    let files = installed_files(&entry.id, &layout.resolve(&entry.path), expected)?;
+    let bytes = files
+        .get(manifest::MANIFEST_FILE)
+        .ok_or_else(|| Error::Tampered(entry.id.clone()))?;
+    Ok(manifest::parse(bytes)?)
+}
+
+/// Reads an unpacked folder and checks its canonical hash. Any difference, or a file the folder rules refuse, is
+/// tampering; a missing folder stays an I/O error.
+fn installed_files(id: &str, dir: &Path, expected: &str) -> Result<Files, Error> {
+    let files = match source::read_dir(dir) {
+        Ok(files) => files,
+        Err(error @ Error::Io { .. }) => return Err(error),
+        Err(_) => return Err(Error::Tampered(id.to_owned())),
+    };
+    if !source::canonical_sha256(&files).eq_ignore_ascii_case(expected) {
+        return Err(Error::Tampered(id.to_owned()));
+    }
+    Ok(files)
+}
+
+/// After unpacking, the folder must hash to exactly what was reviewed.
+fn check_unpacked(id: &str, dir: &Path, expected: &str) -> Result<(), Error> {
+    installed_files(id, dir, expected).map(|_| ())
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);

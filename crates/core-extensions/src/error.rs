@@ -21,6 +21,7 @@ pub mod codes {
     pub const ASSET_TOO_LARGE: &str = "extension.asset_too_large";
     pub const INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
     pub const IO: &str = "extension.io";
+    pub const TAMPERED: &str = "extension.tampered";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -74,6 +75,8 @@ pub enum Error {
     AssetTooLarge { path: String, size: u64, limit: u64 },
     #[error("invalid lockfile: {0}")]
     InvalidLockfile(String),
+    #[error("the installed files of {0} differ from what was reviewed; reinstall it")]
+    Tampered(String),
     #[error("{context} {}: {source}", .path.display())]
     Io {
         context: &'static str,
@@ -102,6 +105,7 @@ impl Error {
             Self::AssetNotListed(_) => codes::ASSET_NOT_LISTED,
             Self::AssetTooLarge { .. } => codes::ASSET_TOO_LARGE,
             Self::InvalidLockfile(_) => codes::INVALID_LOCKFILE,
+            Self::Tampered(_) => codes::TAMPERED,
             Self::Io { .. } => codes::IO,
         }
     }

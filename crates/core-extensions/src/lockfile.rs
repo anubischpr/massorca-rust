@@ -43,6 +43,10 @@ pub struct LockEntry {
     pub version: String,
     pub source: LockSource,
     pub sha256: String,
+    /// The canonical hash of the unpacked files, checked before an installed manifest is trusted. It equals `sha256`
+    /// for a folder or catalogue entry; an archive's `sha256` is the archive's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_sha256: Option<String>,
     /// Relative to the extensions folder, `/`-separated: `pkgs/<id>/<version>-<hash8>`.
     pub path: String,
     pub enabled: bool,

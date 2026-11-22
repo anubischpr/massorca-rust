@@ -224,3 +224,5 @@ pub const EXTENSION_ASSET_NOT_LISTED: &str = "extension.asset_not_listed";
 pub const EXTENSION_ASSET_TOO_LARGE: &str = "extension.asset_too_large";
 pub const EXTENSION_INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
 pub const EXTENSION_IO: &str = "extension.io";
+/// An installed package's files no longer match its lockfile hash; nothing they name runs.
+pub const EXTENSION_TAMPERED: &str = "extension.tampered";

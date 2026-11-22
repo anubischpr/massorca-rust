@@ -5,7 +5,7 @@ use massorca_core_extensions::item::ItemState;
 use massorca_core_extensions::source::Source;
 
 use crate::fakes::FakeHost;
-use crate::fixture::agent_package;
+use crate::fixture::{agent_package, package_files, write_dir};
 use crate::service::setup;
 
 #[test]
@@ -74,17 +74,11 @@ fn an_asset_is_served_only_when_the_listing_names_it() {
 #[test]
 fn an_oversized_asset_is_refused() {
     let s = setup(FakeHost::new().with_program("kit"));
-    let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
-    s.install(&source, false).expect("installs");
-    let entry = s.lock_json().expect("lock")["packages"][0]["path"]
-        .as_str()
-        .expect("path")
-        .to_owned();
-    let logo = s
-        .service
-        .layout()
-        .resolve(&format!("{entry}/media/logo.svg"));
-    std::fs::write(logo, vec![b' '; 1024 * 1024 + 1]).expect("grow the logo");
+    let mut files = package_files(&agent_package("acme", "kit", "kit"));
+    files.insert("media/logo.svg".to_owned(), vec![b' '; 1024 * 1024 + 1]);
+    let dir = s.home.path().join("src").join("big");
+    write_dir(&dir, &files);
+    s.install(&Source::Dir(dir), false).expect("installs");
     let error = s
         .service
         .asset("acme.kit", "media/logo.svg")
