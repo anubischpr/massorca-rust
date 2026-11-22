@@ -90,8 +90,23 @@ are locked the same way: a key is created only while the vault holds no
 secret. One secret that does not open fails injection with
 `secret.unreadable`, which names its scope and name; nothing is marked used.
 
+**The key check.** When a key is created, a fixed text sealed under it is
+stored in the database (`secret_key_check`, migration step 5). Every open must
+open that check, or the vault is locked with reason `KeyMismatch`
+(`secret.vault_locked`) and nothing is written: a key planted in the vault
+directory with an edited `protection` file is refused. A vault from before the
+check accepts its key once, only when every existing secret opens with it, and
+then records the check; otherwise it is locked.
+
 The only ways out are restoring the key or `secret.remove` per name, which
-needs `force: true`, because the value cannot be checked.
+needs `force: true`, because the value cannot be checked. A vault that holds
+no secret can also forget its key with `secret.reset_key` (HostAdmin,
+`massorca secret reset-key`): it removes the key, the `protection` and `id`
+files, the keyring item and the key check, and the next `set` creates fresh
+ones. It is refused with `secret.vault_not_empty` while any secret exists.
+
+On Windows the vault folder and its files are created with an owner-only,
+protected DACL, so a file key never inherits the profile folder's permissions.
 
 ### Methods
 
@@ -125,6 +140,10 @@ screen show.
     the session of at most 128, refused with `secret.invalid_session`. Reason,
     session and scope ids refuse control characters, Unicode format
     characters (Cf, bidi controls included) and U+2028/U+2029.
+  - Limits, refused with `secret.request_limit`: at most 20 pending requests
+    per scope, requester and session, and at most 10 new requests a minute per
+    requester. The requester is the connection's principal, the owner or one
+    paired device, so a caller cannot widen its limit by naming new sessions.
   - `secret.requests`: lists open requests.
   - `secret.decline` `{ request }`: declines one.
   - A request resolves when a matching `set` or `link` lands. Its states are
@@ -133,7 +152,10 @@ screen show.
     that name opens a new one.
 
 Names are 1 to 64 characters: letters, digits and `_`, not starting with a
-digit (X-VT-01). Scopes are `global`, `project:<id>` and `team:<id>`. Team
+digit (X-VT-01). Windows environment variables ignore case, so a name that
+differs only by case from an owned or linked name one process would receive
+with it (global with any project, a project with global) is refused with
+`secret.name_in_use`. Scopes are `global`, `project:<id>` and `team:<id>`. Team
 scopes are accepted once Bot Teams has teams.
 
 Events, ids only and never values:
@@ -152,6 +174,8 @@ Events, ids only and never values:
   uses.
 
 **On the wire.** The `secret.set` params are the one place a value travels.
+- A malformed `secret.set` is refused with a message that names the field and
+  the expected type, never the value received.
 - The connection layer does not log request params for any method.
 - A test pins that a value sent through `secret.set` appears in no log line at
   any level.
@@ -182,6 +206,7 @@ massorca secret unlink <scope> <name>
 massorca secret remove <scope> <name> [--include-links] [--force]
 massorca secret requests
 massorca secret decline <request>
+massorca secret reset-key
 ```
 
 ## Alternatives
