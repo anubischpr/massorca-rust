@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn open_private_dir_creates_an_owner_only_folder_and_refuses_a_junction() {
-        use crate::root_access::open_private_dir;
+        use crate::private_dir::open_private_dir;
 
         let temp = tempfile::tempdir().expect("a temporary folder");
         let made = temp.path().join("made");
