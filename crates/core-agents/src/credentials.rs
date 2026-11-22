@@ -11,7 +11,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::UNIX_EPOCH;
 
 use massorca_protocol::codes;
@@ -30,6 +30,12 @@ pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
 /// Serialises imports and removals in this process, so two never swap the same home at once.
 static GATE: Mutex<()> = Mutex::new(());
+
+/// Holds the credential homes gate: no import or removal runs until the guard drops. Launch can hold it while it
+/// resolves a home, so a run never sees a home mid-swap.
+pub fn lock_homes() -> MutexGuard<'static, ()> {
+    GATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Purposes of the temporary siblings of a home: a new home being built, and an old one being replaced. Their names
 /// start with a dot and kind ids never do, so a sibling never names a home.
@@ -71,7 +77,7 @@ pub fn import(
         )));
     }
 
-    let _gate = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _gate = lock_homes();
     let home = home_of(profile_dir, &decl.id)?;
     if home_state(&home)? == HomeState::Directory && !replace {
         return Err(exists(&decl.id));
@@ -90,6 +96,7 @@ pub fn import(
     }
 
     let homes = homes_dir(profile_dir)?;
+    refuse_replaced_leftover(&homes, &decl.id)?;
     clear_leftovers(&homes, &decl.id);
     let staging = homes.join(sibling_name(&decl.id, STAGING));
     let placed = write_home(&staging, &contents)
@@ -124,6 +131,7 @@ pub fn import(
 pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
     let decl = declared(profile_dir, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
+    check_homes_dir(profile_dir)?;
     let exists = home_state(&home)? == HomeState::Directory;
     let names = decl
         .credentials
@@ -157,7 +165,8 @@ pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentErr
 /// refused, never followed.
 pub fn remove(profile_dir: &Path, kind: &str) -> Result<CredentialsRemoved, AgentError> {
     let home = home_of(profile_dir, kind)?;
-    let _gate = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _gate = lock_homes();
+    check_homes_dir(profile_dir)?;
     let removed = match home_state(&home)? {
         HomeState::Missing => false,
         HomeState::Directory => {
@@ -195,14 +204,25 @@ fn home_of(profile_dir: &Path, kind: &str) -> Result<PathBuf, AgentError> {
     paths::valid_home(profile_dir, kind).ok_or_else(|| not_found(kind))
 }
 
+/// What is at a credential home path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HomeState {
+pub enum HomeState {
     Missing,
+    /// A plain directory, not a link.
     Directory,
 }
 
+/// The kind's home when the profile has one: `<profile>/agents` and `homes` are plain directories (or absent) and the
+/// home is a plain directory. A link at any of them is refused with `agent.credentials_invalid`, never followed.
+/// Launch can use this instead of `is_dir`, under [`lock_homes`].
+pub fn usable_home(profile_dir: &Path, kind: &str) -> Result<Option<PathBuf>, AgentError> {
+    let home = home_of(profile_dir, kind)?;
+    check_homes_dir(profile_dir)?;
+    Ok((home_state(&home)? == HomeState::Directory).then_some(home))
+}
+
 /// What is at the home path, without following a link there. A link or anything but a directory is refused.
-fn home_state(home: &Path) -> Result<HomeState, AgentError> {
+pub fn home_state(home: &Path) -> Result<HomeState, AgentError> {
     match fs::symlink_metadata(home) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HomeState::Missing),
         Err(error) => Err(internal("read the credential home", &error)),
@@ -240,26 +260,64 @@ fn homes_dir(profile_dir: &Path) -> Result<PathBuf, AgentError> {
     Ok(homes)
 }
 
+/// Checks, without creating anything, that `<profile>/agents` and `homes` are plain directories when they exist.
+fn check_homes_dir(profile_dir: &Path) -> Result<(), AgentError> {
+    let agents = paths::agents_dir(profile_dir);
+    for dir in [agents.clone(), agents.join("homes")] {
+        match fs::symlink_metadata(&dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(internal("read the credential homes directory", &error)),
+            Ok(meta) if is_link(&meta) || !meta.is_dir() => {
+                return Err(invalid(format!(
+                    "{} is not a plain directory; credential homes are never reached through a link",
+                    dir.display()
+                )));
+            }
+            Ok(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Refuses an import while an old home of `kind` set aside by an earlier replace is still there: it may be the only
+/// copy of a login, so it is never deleted silently. The owner moves or deletes it by hand.
+fn refuse_replaced_leftover(homes: &Path, kind: &str) -> Result<(), AgentError> {
+    let prefix = format!(".{kind}.{REPLACED}-");
+    let entries =
+        fs::read_dir(homes).map_err(|error| internal("list the credential homes", &error))?;
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&prefix))
+        {
+            let path = entry.path();
+            let mut error = invalid(format!(
+                "{} holds an old credential home of agent kind {kind} set aside by an earlier replace; move or delete it by hand, then import again",
+                path.display()
+            ));
+            error.data = Some(json!({ "leftover": path.display().to_string() }));
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 fn sibling_name(kind: &str, purpose: &str) -> String {
     format!(".{kind}.{purpose}-{}", uuid::Uuid::new_v4().simple())
 }
 
-/// Deletes temporary siblings an interrupted import of `kind` left behind; they may hold credential copies.
+/// Deletes the half-built homes an interrupted import of `kind` left behind; they may hold credential copies. An old
+/// home set aside by a replace is never deleted here (see [`refuse_replaced_leftover`]).
 fn clear_leftovers(homes: &Path, kind: &str) {
     let Ok(entries) = fs::read_dir(homes) else {
         return;
     };
-    let prefixes = [
-        format!(".{kind}.{STAGING}-"),
-        format!(".{kind}.{REPLACED}-"),
-    ];
+    let prefix = format!(".{kind}.{STAGING}-");
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !prefixes
-            .iter()
-            .any(|prefix| name.starts_with(prefix.as_str()))
-        {
+        if !name.starts_with(&prefix) {
             continue;
         }
         let path = entry.path();
@@ -366,6 +424,11 @@ fn same_file(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
 /// Creates `dir` and writes each file new in it. Creating fails when anything is at a path, so no link is followed.
 fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError> {
     create_private_dir(dir).map_err(|error| internal("create the new credential home", &error))?;
+    // Windows: the profile directory keeps its inherited access (0004), which can include other users, so the home
+    // gets its own protected owner-only DACL before any file is written; the files inherit it.
+    #[cfg(windows)]
+    massorca_profile::restrict_dir_to_owner(dir)
+        .map_err(|error| internal("restrict the new credential home to its owner", &error))?;
     for (name, bytes) in contents {
         write_private_file(&dir.join(name), bytes)
             .map_err(|error| internal("write a credential file", &error))?;
@@ -373,7 +436,7 @@ fn write_home(dir: &Path, contents: &[(&str, Vec<u8>)]) -> Result<(), AgentError
     Ok(())
 }
 
-/// A new directory, `0700` on Unix; on Windows it inherits the profile directory's access (0004).
+/// A new directory, `0700` on Unix. On Windows it inherits its parent's access; a home is restricted after creation.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -417,19 +480,35 @@ fn put_in_place(staging: &Path, home: &Path, kind: &str, replace: bool) -> Resul
                 .map_err(|error| internal("move the old credential home aside", &error))?;
             if let Err(error) = fs::rename(staging, home) {
                 if fs::rename(&aside, home).is_err() {
-                    tracing::error!(kind, "the old credential home could not be put back");
+                    return Err(not_put_back(kind, &aside, &error));
                 }
                 return Err(internal("move the new credential home into place", &error));
             }
             if fs::remove_dir_all(&aside).is_err() {
                 tracing::warn!(
                     kind,
-                    "the replaced credential home could not be deleted; the next import retries"
+                    aside = %aside.display(),
+                    "the replaced credential home could not be deleted; delete it by hand before the next import"
                 );
             }
             Ok(())
         }
     }
+}
+
+/// The swap failed and the old home could not be put back either: it is still at `aside`, named in the text and in
+/// `data`, so the owner can rename it to the home by hand.
+fn not_put_back(kind: &str, aside: &Path, error: &io::Error) -> AgentError {
+    tracing::error!(kind, aside = %aside.display(), "the old credential home could not be put back");
+    let mut refused = AgentError::new(
+        codes::INTERNAL,
+        format!(
+            "cannot move the new credential home of agent kind {kind} into place ({error}), and the old one could not be put back: it is at {}; rename it to the home by hand",
+            aside.display()
+        ),
+    );
+    refused.data = Some(json!({ "aside": aside.display().to_string() }));
+    refused
 }
 
 fn modified_ms(meta: &fs::Metadata) -> Option<i64> {
@@ -772,6 +851,135 @@ mod tests {
             elsewhere.path().join("real.json").exists(),
             "the link target is untouched"
         );
+    }
+
+    /// A directory link: a symlink on Unix, a junction (no privilege needed) on Windows.
+    fn link_dir(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "mklink /J failed");
+        }
+    }
+
+    #[test]
+    fn show_and_remove_refuse_a_linked_agents_or_homes_directory() {
+        for linked in ["agents", "homes"] {
+            let fixture = Fixture::new(&["token.json"]);
+            let elsewhere = tempfile::tempdir().unwrap();
+            fs::create_dir_all(elsewhere.path().join("homes").join("fake")).unwrap();
+            fs::create_dir_all(elsewhere.path().join("fake")).unwrap();
+            fs::write(
+                elsewhere
+                    .path()
+                    .join("homes")
+                    .join("fake")
+                    .join("token.json"),
+                FAKE_TOKEN,
+            )
+            .unwrap();
+            fs::write(elsewhere.path().join("fake").join("token.json"), FAKE_TOKEN).unwrap();
+            let agents = paths::agents_dir(fixture.profile.path());
+            if linked == "agents" {
+                // Keep the declared kind reachable: move it into the link target first.
+                fs::create_dir_all(elsewhere.path().join("kinds")).unwrap();
+                fs::rename(
+                    agents.join("kinds").join("fake.json"),
+                    elsewhere.path().join("kinds").join("fake.json"),
+                )
+                .unwrap();
+                fs::remove_dir_all(&agents).unwrap();
+                link_dir(elsewhere.path(), &agents);
+            } else {
+                link_dir(elsewhere.path(), &agents.join("homes"));
+            }
+            for error in [
+                show(fixture.profile.path(), "fake").unwrap_err(),
+                remove(fixture.profile.path(), "fake").unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.code,
+                    codes::AGENT_CREDENTIALS_INVALID,
+                    "{linked}: {}",
+                    error.message
+                );
+            }
+            assert!(
+                elsewhere
+                    .path()
+                    .join("homes")
+                    .join("fake")
+                    .join("token.json")
+                    .exists()
+            );
+            assert!(elsewhere.path().join("fake").join("token.json").exists());
+        }
+    }
+
+    #[test]
+    fn an_old_home_left_aside_refuses_the_import_and_is_kept() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let homes = fixture.home().parent().unwrap().to_path_buf();
+        let aside = homes.join(".fake.old-0123");
+        fs::create_dir_all(&aside).unwrap();
+        fs::write(aside.join("token.json"), FAKE_TOKEN).unwrap();
+        let error = fixture.import(true).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(
+            error.message.contains(".fake.old-0123"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.data.unwrap()["leftover"], aside.display().to_string());
+        assert!(aside.join("token.json").exists(), "the only copy is kept");
+        assert!(!fixture.home().exists());
+    }
+
+    #[test]
+    fn a_failed_put_back_names_where_the_old_home_is() {
+        let aside = PathBuf::from("/profiles/default/agents/homes/.fake.old-0123");
+        let error = not_put_back("fake", &aside, &io::Error::other("busy"));
+        assert!(
+            error.message.contains(&aside.display().to_string()),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.data.unwrap()["aside"], aside.display().to_string());
+    }
+
+    #[test]
+    fn a_staging_leftover_is_cleared_by_the_next_import() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        let leftover = fixture.home().with_file_name(".fake.import-0123");
+        fs::create_dir_all(&leftover).unwrap();
+        fixture.import(false).unwrap();
+        assert_eq!(fixture.homes_entries(), ["fake"]);
+    }
+
+    /// The home gets its own protected DACL: the owner and SYSTEM only, nothing inherited from the profile's parent.
+    #[cfg(windows)]
+    #[test]
+    fn the_home_has_a_protected_owner_only_dacl() {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.import(false).unwrap();
+        let home = massorca_profile::dacl_sddl(&fixture.home()).unwrap();
+        let file = massorca_profile::dacl_sddl(&fixture.home().join("token.json")).unwrap();
+        assert!(home.starts_with("D:P"), "{home}");
+        for granted in [&home, &file] {
+            for other in [";AU)", ";BU)", ";WD)"] {
+                assert!(!granted.contains(other), "{granted}");
+            }
+        }
     }
 
     /// A junction needs no privilege on Windows, so this always runs there.

@@ -200,12 +200,20 @@ anything: each must be a regular file, checked with `symlink_metadata` and opene
 following a link (`O_NOFOLLOW` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, where
 every reparse point counts as a link), and at most 1 MiB as read from the open handle. The
 new home is written into a temporary sibling `homes/.<kind>.import-<id>` (`0700`, files
-`0600` and created new on Unix; inherited access on Windows) and renamed into place. With
+`0600` and created new on Unix; on Windows a protected DACL for the owner and SYSTEM, set
+before any file is written and inherited by the files) and renamed into place. With
 `replace` the old home is first renamed aside to `homes/.<kind>.old-<id>`, put back if the
-swap fails, and deleted after it succeeds; leftovers of an interrupted import are deleted by
-the next import of that kind. `agents`, `homes` and the home itself must not be links;
-show and remove refuse a linked home instead of following it. Imports and removals in one
-service run one at a time.
+swap fails (the error names where it is when that fails too), and deleted after it succeeds.
+Half-built `.import-` leftovers of an interrupted import are deleted by the next import of
+that kind; an `.old-` leftover may be the only copy of a login, so it is never deleted: the
+next import of the kind is refused with `agent.credentials_invalid` naming it
+(`data.leftover`) until the owner moves it. `agents`, `homes` and the home itself must not
+be links; show and remove check all three and refuse a link instead of following it.
+Imports and removals in one service run one at a time (`credentials::lock_homes`). The
+service refuses `import --replace` and `remove` with `agent.busy` while any session of the
+kind has a run that has not exited. Declared file names must also not be Windows device
+names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with any extension) or end
+in a dot or a space.
 
 ## Security
 
