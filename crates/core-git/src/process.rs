@@ -26,9 +26,6 @@ const ESCAPED_GRACE: Duration = Duration::from_secs(30);
 /// Git's messages are short; a child that floods stderr is cut here rather than filling memory.
 const MAX_STDERR: usize = 1 << 20;
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 #[derive(Debug)]
 pub(crate) struct Output {
     pub(crate) status: ExitStatus,
@@ -61,10 +58,7 @@ pub(crate) fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    massorca_process::creation_flags(command, 0);
     let (mut child, tree) = ProcessTree::spawn(command)?;
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = child
@@ -144,8 +138,8 @@ impl ProcessTree {
     /// The child is created inside the job, so nothing it starts escapes the job.
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        let (child, job) =
-            massorca_core_remote::windows_job::spawn_in_job(command, CREATE_NO_WINDOW)?;
+        // The helper keeps CREATE_NO_WINDOW and adds the suspended start (decision 0062).
+        let (child, job) = massorca_core_remote::windows_job::spawn_in_job(command, 0)?;
         Ok((child, Self { job }))
     }
 
@@ -156,7 +150,7 @@ impl ProcessTree {
         {
             // A negative id names the process group. Without `--`, procps `kill`
             // reads it as an option and exits 0 having killed nothing.
-            let _ = Command::new("kill")
+            let _ = massorca_process::command("kill")
                 .args(["-s", "KILL", "--"])
                 .arg(format!("-{}", self.group))
                 .stdin(Stdio::null())
@@ -282,7 +276,8 @@ mod tests {
 
     /// This test binary limited to `CHILD_TEST`: a real child process on every OS.
     fn test_binary() -> Command {
-        let mut command = Command::new(std::env::current_exe().expect("test binary path"));
+        let mut command =
+            massorca_process::command(std::env::current_exe().expect("test binary path"));
         command.args(["--exact", CHILD_TEST, "--nocapture"]);
         command
     }
@@ -344,7 +339,7 @@ mod tests {
     fn is_alive(pid: u32) -> bool {
         #[cfg(windows)]
         {
-            let output = Command::new("tasklist")
+            let output = massorca_process::command("tasklist")
                 .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
                 .output()
                 .expect("run tasklist");
@@ -352,7 +347,7 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            Command::new("kill")
+            massorca_process::command("kill")
                 .args(["-0", &pid.to_string()])
                 .stderr(Stdio::null())
                 .status()
@@ -497,7 +492,7 @@ mod tests {
 
     #[test]
     fn a_missing_program_is_a_spawn_error() {
-        let mut command = Command::new("massorca-no-such-program");
+        let mut command = massorca_process::command("massorca-no-such-program");
         let error = run_bounded(&mut command, Some(Duration::from_secs(5)), None)
             .expect_err("no such program");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);

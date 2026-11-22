@@ -5,7 +5,7 @@ use assert_cmd::cargo::cargo_bin;
 use predicates::str::contains;
 
 fn massorca() -> Command {
-    Command::new(cargo_bin("massorca"))
+    Command::from_std(massorca_process::command(cargo_bin("massorca")))
 }
 
 #[test]

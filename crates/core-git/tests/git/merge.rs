@@ -202,7 +202,7 @@ fn a_stopped_rebase_or_a_merge_in_progress_is_reported() {
         "second commit",
     );
     // An exec that fails stops the rebase with a clean work tree.
-    let stopped = std::process::Command::new("git")
+    let stopped = massorca_process::command("git")
         .args([
             "-c",
             "core.editor=true",
@@ -238,7 +238,7 @@ fn a_stopped_rebase_or_a_merge_in_progress_is_reported() {
 ",
         "main change",
     );
-    let conflicted = std::process::Command::new("git")
+    let conflicted = massorca_process::command("git")
         .args(["merge", "feature"])
         .current_dir(&repo)
         .output()

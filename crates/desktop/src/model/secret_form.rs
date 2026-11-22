@@ -1,7 +1,6 @@
 //! The dialog that adds or rotates a secret (decision 0071): the name rule, the scopes, and what may be sent. The
-//! value is held from the paste until a save sends it, and then it is gone. The form never shows or prints it.
-
-use std::fmt;
+//! value is typed or pasted into the dialog's masked field and read from it when a save sends it; the form keeps no
+//! copy, and it never shows or prints the value.
 
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::Project;
@@ -55,36 +54,25 @@ pub enum FormStatus {
     Refused(String),
 }
 
-/// One secret's form. Its value is held from the paste until a save takes it.
+/// One secret's form. It keeps the name, the scope and the status; the value stays in the dialog's masked field
+/// until a save reads it.
+#[derive(Debug)]
 pub struct SecretForm {
     pub mode: FormMode,
     /// The scope the value goes to; fixed for a rotation.
     pub scope: String,
     /// The name a rotation replaces. An add takes its name from the field when it is saved.
     pub name: String,
-    value: Option<String>,
     pub status: FormStatus,
 }
 
-impl fmt::Debug for SecretForm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SecretForm")
-            .field("mode", &self.mode)
-            .field("scope", &self.scope)
-            .field("name", &self.name)
-            .field("value", &self.value.as_ref().map(|_| "[redacted]"))
-            .field("status", &self.status)
-            .finish()
-    }
-}
-
 impl SecretForm {
-    /// An add to `scope`, with no value pasted yet.
+    /// An add to `scope`.
     pub fn add(scope: String) -> Self {
         Self::new(FormMode::Add, scope, String::new())
     }
 
-    /// A rotation of the owned secret `name` in `scope`, with no value pasted yet.
+    /// A rotation of the owned secret `name` in `scope`.
     pub fn rotate(scope: String, name: String) -> Self {
         Self::new(FormMode::Rotate, scope, name)
     }
@@ -94,59 +82,53 @@ impl SecretForm {
             mode,
             scope,
             name,
-            value: None,
             status: FormStatus::Idle,
         }
     }
 
-    /// Whether a value is waiting to be sent. The form never says what it is.
-    pub fn has_value(&self) -> bool {
-        self.value.is_some()
-    }
-
-    /// Takes the clipboard text as the value. Empty text is refused and keeps whatever was there, and nothing
-    /// is taken while a save is in flight.
-    pub fn paste(&mut self, text: &str) {
+    /// Whether clipboard text may go into the value field. Empty text is refused with the reason, and nothing is
+    /// taken while a save is in flight.
+    pub fn accepts_paste(&mut self, text: &str) -> bool {
         if self.status == FormStatus::Saving {
-            return;
+            return false;
         }
         if text.is_empty() {
             self.status = FormStatus::Refused(
                 "The clipboard holds no text. Copy the value, then paste it here.".to_owned(),
             );
-        } else {
-            self.value = Some(text.to_owned());
-            self.status = FormStatus::Idle;
+            return false;
         }
+        self.status = FormStatus::Idle;
+        true
     }
 
-    /// Whether the save may go: a valid name, a pasted value, the service connected, and nothing in flight.
-    pub fn can_save(&self, name: &str, connected: bool) -> bool {
-        connected
-            && name_problem(name).is_none()
-            && self.value.is_some()
-            && self.status != FormStatus::Saving
+    /// Whether the save may go: a valid name, a value in the field, the service connected, and nothing in flight.
+    pub fn can_save(&self, name: &str, has_value: bool, connected: bool) -> bool {
+        connected && name_problem(name).is_none() && has_value && self.status != FormStatus::Saving
     }
 
-    /// The request that stores `name` with the pasted value. The value leaves the form here: it is sent once and
-    /// never kept. A name or a missing value is refused first, and then the value stays where it was.
-    pub fn request(&mut self, name: &str) -> Result<SecretSet, &'static str> {
+    /// The request that stores `value` under `name`. The form keeps no copy: the field holds the value until the
+    /// service stores it or the dialog closes. A second request while a save is in flight is refused, so it is sent once.
+    pub fn request(&mut self, name: &str, value: &str) -> Result<SecretSet, &'static str> {
+        if self.status == FormStatus::Saving {
+            return Err("A save is already on its way.");
+        }
         if let Some(problem) = name_problem(name) {
             return Err(problem);
         }
-        let Some(value) = self.value.take() else {
-            return Err("Paste the value first.");
-        };
+        if value.is_empty() {
+            return Err("Enter or paste the value first.");
+        }
         self.status = FormStatus::Saving;
         Ok(SecretSet {
             scope: self.scope.clone(),
             name: name.to_owned(),
-            value,
+            value: value.to_owned(),
             replace: self.mode == FormMode::Rotate,
         })
     }
 
-    /// The service refused the save: the form stays open and says why. The value was already sent.
+    /// The service refused the save: the form stays open, says why, and the field keeps the value for a retry.
     pub fn refused(&mut self, sentence: String) {
         self.status = FormStatus::Refused(sentence);
     }
@@ -307,38 +289,41 @@ mod tests {
     }
 
     #[test]
-    fn a_request_takes_the_value_out_of_the_form_and_sends_it_once() {
+    fn a_request_sends_the_typed_value_once() {
         let mut form = SecretForm::add("global".to_owned());
-        form.paste(VALUE);
-        assert!(form.can_save("OPENAI_API_KEY", true));
+        assert!(form.can_save("OPENAI_API_KEY", true, true));
         let sent = form
-            .request("OPENAI_API_KEY")
+            .request("OPENAI_API_KEY", VALUE)
             .expect("the request is built");
-        assert_eq!(sent.value, VALUE);
+        assert!(sent.value == VALUE, "the typed value is what is sent");
         assert_eq!(sent.name, "OPENAI_API_KEY");
         assert!(!sent.replace, "an add never replaces");
-        assert!(!form.has_value(), "the value is gone after it is sent");
         assert_eq!(
-            form.request("OPENAI_API_KEY").unwrap_err(),
-            "Paste the value first."
+            form.request("OPENAI_API_KEY", VALUE).unwrap_err(),
+            "A save is already on its way.",
+            "a second request while the save is in flight is refused"
         );
     }
 
     #[test]
-    fn an_invalid_name_keeps_the_value_for_the_next_try() {
+    fn an_invalid_name_is_refused_and_the_form_stays_open() {
         let mut form = SecretForm::add("global".to_owned());
-        form.paste(VALUE);
-        assert!(form.request("1ST").is_err());
-        assert!(form.has_value(), "a refused name keeps the pasted value");
-        assert!(!form.can_save("1ST", true));
-        assert!(form.can_save("FIRST", true));
+        assert!(form.request("1ST", VALUE).is_err());
+        assert_eq!(
+            form.status,
+            FormStatus::Idle,
+            "a refused name is not a save"
+        );
+        assert!(!form.can_save("1ST", true, true));
+        assert!(form.can_save("FIRST", true, true));
     }
 
     #[test]
     fn a_rotation_replaces_the_named_secret_in_its_scope() {
         let mut form = SecretForm::rotate("project:oppm".to_owned(), "DB_PASSWORD".to_owned());
-        form.paste(VALUE);
-        let sent = form.request("DB_PASSWORD").expect("the rotation is built");
+        let sent = form
+            .request("DB_PASSWORD", VALUE)
+            .expect("the rotation is built");
         assert!(sent.replace);
         assert_eq!(sent.scope, "project:oppm");
     }
@@ -346,36 +331,42 @@ mod tests {
     #[test]
     fn nothing_can_be_saved_while_offline_or_while_a_save_is_in_flight() {
         let mut form = SecretForm::add("global".to_owned());
-        form.paste(VALUE);
-        assert!(!form.can_save("OPENAI_API_KEY", false));
-        form.request("OPENAI_API_KEY")
+        assert!(!form.can_save("OPENAI_API_KEY", true, false), "offline");
+        form.request("OPENAI_API_KEY", VALUE)
             .expect("the request is built");
-        form.paste(VALUE);
         assert!(
-            !form.has_value(),
-            "no value is taken while a save is in flight"
-        );
-        assert!(
-            !form.can_save("OPENAI_API_KEY", true),
+            !form.can_save("OPENAI_API_KEY", true, true),
             "a save is in flight"
         );
     }
 
     #[test]
-    fn an_empty_clipboard_is_refused_and_no_value_is_kept() {
+    fn an_empty_clipboard_is_refused_and_a_paste_is_taken_otherwise() {
         let mut form = SecretForm::add("global".to_owned());
-        form.paste("");
-        assert!(!form.has_value());
+        assert!(!form.accepts_paste(""));
         assert!(matches!(form.status, FormStatus::Refused(_)));
+        assert!(form.accepts_paste(VALUE));
+        assert_eq!(form.status, FormStatus::Idle);
     }
 
     #[test]
-    fn the_form_never_prints_its_value() {
+    fn no_paste_is_taken_while_a_save_is_in_flight() {
         let mut form = SecretForm::add("global".to_owned());
-        form.paste(VALUE);
+        form.request("OPENAI_API_KEY", VALUE)
+            .expect("the request is built");
+        assert!(
+            !form.accepts_paste(VALUE),
+            "no paste is taken while a save is in flight"
+        );
+    }
+
+    #[test]
+    fn the_form_never_prints_a_value() {
+        let mut form = SecretForm::add("global".to_owned());
+        form.request("OPENAI_API_KEY", VALUE)
+            .expect("the request is built");
         let printed = format!("{form:?}");
-        assert!(!printed.contains(VALUE), "{printed}");
-        assert!(printed.contains("[redacted]"), "{printed}");
+        assert!(!printed.contains(VALUE), "the form prints no value");
     }
 
     #[test]

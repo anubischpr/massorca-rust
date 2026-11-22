@@ -5,7 +5,6 @@
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::AsRawHandle;
-use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -31,10 +30,10 @@ unsafe extern "system" {
 pub fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Child, Option<Job>)> {
     let Ok(job) = Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())
     else {
-        command.creation_flags(flags);
+        massorca_process::creation_flags(command, flags);
         return Ok((command.spawn()?, None));
     };
-    command.creation_flags(flags | CREATE_SUSPENDED);
+    massorca_process::creation_flags(command, flags | CREATE_SUSPENDED);
     let mut child = command.spawn()?;
     let job = job
         .assign_process(child.as_raw_handle() as isize)

@@ -29,6 +29,7 @@ name = "massorca-fake-vendor"
 path = "examples/massorca-fake-vendor.rs"
 
 [dependencies]
+massorca-process.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 massorca-client.workspace = true

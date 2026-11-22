@@ -11,5 +11,3 @@ mod process;
 /// The suspended spawn into a kill-on-close job, shared by core-git and the service (decision 0062).
 #[cfg(windows)]
 pub mod windows_job;
-
-pub use process::hide_window;

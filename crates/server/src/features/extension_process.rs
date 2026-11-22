@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use massorca_core_agents::SearchEnv;
 use massorca_core_agents::resolve::resolve;
 use massorca_core_extensions::host::{CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver};
-use massorca_core_remote::hide_window;
 
 /// How often a running child is checked against its deadline.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -159,7 +158,7 @@ impl HostPrograms {
         // A fresh folder per run, so a command never starts in the service's own working folder.
         let work = WorkDir::create().map_err(&fail)?;
 
-        let mut command = Command::new(&resolved);
+        let mut command = massorca_process::command(&resolved);
         command
             .args(args)
             .current_dir(work.path())
@@ -168,7 +167,6 @@ impl HostPrograms {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        hide_window(&mut command);
         let (mut child, tree) = ProcessTree::spawn(&mut command).map_err(&fail)?;
         let readers: Vec<Receiver<()>> = [
             child
@@ -302,10 +300,7 @@ impl ProcessTree {
     /// installer starts can escape the job (decision 0062, second review).
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        // CREATE_NO_WINDOW, which `hide_window` set: the suspended spawn replaces the creation flags.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let (child, job) =
-            massorca_core_remote::windows_job::spawn_in_job(command, CREATE_NO_WINDOW)?;
+        let (child, job) = massorca_core_remote::windows_job::spawn_in_job(command, 0)?;
         if job.is_none() {
             tracing::warn!(
                 "no job object for a vendor command: a timeout ends only the command itself"
@@ -732,7 +727,7 @@ mod tests {
             return;
         }
         let argv = this_test("tree_grandchild");
-        let mut grandchild = Command::new(&argv[0])
+        let mut grandchild = massorca_process::command(&argv[0])
             .args(&argv[1..])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

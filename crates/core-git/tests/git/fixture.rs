@@ -2,7 +2,6 @@
 //! removed on drop, that holds the main worktree and room for linked ones.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use tempfile::TempDir;
 
@@ -38,7 +37,7 @@ impl Fixture {
 
 /// Runs git in `dir` with a fixed identity and returns its stdout; panics on failure.
 pub fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = massorca_process::command("git")
         .args([
             "-c",
             "user.name=t",
