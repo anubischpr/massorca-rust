@@ -334,6 +334,60 @@ fn push_fetch_and_pull_through_the_cli() {
         .stderr(contains("git.no_operation"));
 }
 
+/// A pull that could not fast-forward and a push the remote refused did not do what was asked: both exit 1 with a
+/// typed code, in text and under `--json`, and the JSON error carries the result.
+#[test]
+fn a_diverged_pull_and_a_rejected_push_exit_1_with_their_codes() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let remote = sandbox.home().join("remote.git");
+    let remote_text = remote.to_string_lossy().into_owned();
+    harness::git(sandbox.home(), &["init", "-q", "--bare", &remote_text]);
+    harness::git(&dir, &["remote", "add", "origin", &remote_text]);
+    sandbox.json_ok("default", &["git", "push", "-w", "feature"]);
+
+    let other = sandbox.home().join("other");
+    let other_text = other.to_string_lossy().into_owned();
+    harness::git(
+        sandbox.home(),
+        &["clone", "-q", "-b", "feature", &remote_text, &other_text],
+    );
+    std::fs::write(other.join("theirs.txt"), "theirs").expect("write");
+    harness::git(&other, &["add", "theirs.txt"]);
+    harness::git(&other, &["commit", "-q", "-m", "theirs"]);
+    harness::git(&other, &["push", "-q", "origin", "feature"]);
+    std::fs::write(dir.join("ours.txt"), "ours").expect("write");
+    harness::git(&dir, &["add", "ours.txt"]);
+    harness::git(&dir, &["commit", "-q", "-m", "ours"]);
+
+    sandbox
+        .run("default", &["git", "pull", "-w", "feature"])
+        .code(1)
+        .stderr(contains("diverge"))
+        .stderr(contains("git.diverged"));
+    let pulled = sandbox
+        .run("default", &["--json", "git", "pull", "-w", "feature"])
+        .code(1);
+    let document: serde_json::Value =
+        serde_json::from_str(stdout_text(&pulled).trim()).expect("one JSON document");
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "git.diverged");
+    assert_eq!(document["error"]["data"]["outcome"], "diverged");
+
+    sandbox
+        .run("default", &["git", "push", "-w", "feature"])
+        .code(1)
+        .stderr(contains("rejected"))
+        .stderr(contains("git.push_rejected"));
+    let pushed = sandbox
+        .run("default", &["--json", "git", "push", "-w", "feature"])
+        .code(1);
+    let document: serde_json::Value =
+        serde_json::from_str(stdout_text(&pushed).trim()).expect("one JSON document");
+    assert_eq!(document["error"]["code"], "git.push_rejected");
+    assert_eq!(document["error"]["data"]["outcome"]["kind"], "rejected");
+}
+
 #[test]
 fn watch_prints_ready_then_the_change_and_stops_after_max_events() {
     use std::io::{BufRead, BufReader};
@@ -368,5 +422,34 @@ fn watch_prints_ready_then_the_change_and_stops_after_max_events() {
             .as_array()
             .is_some_and(|kinds| !kinds.is_empty())
     );
+    assert!(child.wait().expect("wait").success());
+}
+
+/// An edit made the moment the ready line arrives is reported: the service watches before it says ready.
+#[test]
+fn watch_reports_an_edit_made_right_after_the_ready_line() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let mut child = sandbox
+        .command("default")
+        .args(["git", "watch", "-w", "feature", "--max-events", "1"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let ready = lines.next().expect("a ready line").expect("read");
+    assert_eq!(ready, "watching");
+    std::fs::write(
+        dir.join("README.md"),
+        "edited at once
+",
+    )
+    .expect("write");
+    let changed = lines.next().expect("a change line").expect("read");
+    assert!(changed.starts_with("changed: "), "{changed}");
+    assert!(changed.contains("worktree"), "{changed}");
     assert!(child.wait().expect("wait").success());
 }

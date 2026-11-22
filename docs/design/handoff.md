@@ -140,7 +140,7 @@ Collisions and conflicts to settle before build:
 | Title bar | Frame | Height 36 (Windows, Linux) or 40 (macOS) | n/a | n/a | No |
 
 - **Splitters** are 1 px lines with a 6 px hit area. On hover the line becomes `border.strong`; while dragging it becomes `accent.default` at 2 px. Double-click resets to the default width. Dragging below a minimum collapses the region at the minimum minus `SPLITTER_SNAP_PX` (40 px). Dragging back out reopens it at the minimum. A region never makes the Conversation narrower than 360 px. Widths are remembered per region, per window.
-- **Collapse order** when the window narrows: 1 Session summary, 2 Project sidebar, 3 Sidebar, 4 Work panel. Thresholds are 1528, 1288, 1048 and 848 px (design-system 5.1; X1): the sums of the minimums of the regions still open, with the Conversation at 480 px. Each collapsed region opens as an overlay (`z.region-overlay`, `shadow.e2`); only one overlay is open at a time; it closes on Escape, on a click outside, or when focus leaves. Pending decision [P8] says six regions need 1528 px. This conflict is X1.
+- **Collapse order** when the window narrows: 1 Session summary, 2 Project sidebar, 3 Sidebar, 4 Work panel. Thresholds are 1408, 1168, 928 and 728 px, as drawn on artboard `ws-narrow` (design-system 5.1; X1). Each collapsed region opens as an overlay (`z.region-overlay`, `shadow.e2`); only one overlay is open at a time; it closes on Escape, on a click outside, or when focus leaves. The earlier derived set and the 1528 px figure of [P8] are superseded by the artboard.
 - **Full pages** (Tasks, Calendar, Marketplace, Settings and the Bot Teams pages) cover the whole Canvas. The Title bar shows Back and the page title. Maximum content widths: Settings 880, Tasks and Marketplace 1120 (`layout.page.*`, absent as tokens). Calendar and Board are fluid. The Sidebar is hidden on full pages in design-system 5.1; P16 keeps it on Bot Teams pages (X2).
 - **Window chrome by OS** (5.2): macOS has traffic lights inside the Frame at the left, a 40 px title bar, and an 80 px left gutter when the Sidebar is hidden. The rail reserves a 40 px zone at its top, and the mode switch sits at y 48. Windows and Linux have a 36 px title bar with window controls at the right (46 by 36 px each), drawn by the app; the mode switch starts at y 8.
 - **Activity rail** (5.3): fixed 48 px. Top group: mode switch, Tasks, Calendar, Marketplace, then extension icons (three visible at minimum height). Bottom group: theme toggle, usage rings (one per provider), Settings. Buttons 36 px, icons 20 px.
@@ -339,7 +339,7 @@ Open: the split target is assumed to be the Work panel; Checklist uses `list-che
 
 | States | Keyboard | Focus | Resizing/responsive | Motion | GPUI build notes | React Native build notes | Platform differences |
 |---|---|---|---|---|---|---|---|
-| Default (no seam); loading (Frame paints, regions show skeletons); empty (start page); error per region; overlay (`surface.overlay`, `shadow.e2`); dialog (`scrim`, `shadow.e3`) | F6 and Shift+F6 cycle regions, skipping hidden ones; Escape closes the topmost overlay; Tab and Shift+Tab move inside a region | The Frame takes no ring; closing an overlay returns focus to its opener; open overlays join the F6 order | Collapse order: Session summary below 1408, Project sidebar below 1168, Sidebar below 928, Work panel below 728 (the sums of minimums); [P8] says 1528 for six regions (X1); Conversation minimum 360 | Region width `duration.moderate`, `ease.standard`; inner content keeps its width; reduced motion `duration.instant` | Frame on `surface.frame`; Canvas is one rectangle with a top-left `radius.canvas`; regions are flex columns; overlays in overlay layer; no border, shadow, blur or gradient | Compact: one pane under a 56 dp app bar. Medium and expanded: 360 dp master on `surface.frame`, detail on `surface.canvas` with `radius.canvas`, `space.4` padding | Desktop: Frame of rail, Sidebar and Title bar, plus the Canvas. Android: stack, then master-detail from 600 dp. Extensions are desktop only |
+| Default (no seam); loading (Frame paints, regions show skeletons); empty (start page); error per region; overlay (`surface.overlay`, `shadow.e2`); dialog (`scrim`, `shadow.e3`) | F6 and Shift+F6 cycle regions, skipping hidden ones; Escape closes the topmost overlay; Tab and Shift+Tab move inside a region | The Frame takes no ring; closing an overlay returns focus to its opener; open overlays join the F6 order | Collapse order: Session summary below 1408, Project sidebar below 1168, Sidebar below 928, Work panel below 728 (artboard `ws-narrow`; X1); [P8]'s 1528 px for six regions is superseded; Conversation minimum 360 | Region width `duration.moderate`, `ease.standard`; inner content keeps its width; reduced motion `duration.instant` | Frame on `surface.frame`; Canvas is one rectangle with a top-left `radius.canvas`; regions are flex columns; overlays in overlay layer; no border, shadow, blur or gradient | Compact: one pane under a 56 dp app bar. Medium and expanded: 360 dp master on `surface.frame`, detail on `surface.canvas` with `radius.canvas`, `space.4` padding | Desktop: Frame of rail, Sidebar and Title bar, plus the Canvas. Android: stack, then master-detail from 600 dp. Extensions are desktop only |
 
 Open: overlays are not modal and have no scrim (confirm); the Sidebar footer runs to the window bottom and belongs to the Sidebar tree (confirm); the list at line 53 omits the rail item (X57); `z.region-overlay` is the only z token defined.
 
@@ -779,7 +779,7 @@ Open: four columns are proposed; the automatic move to Done is undefined; Enter 
 |---|---|---|---|---|---|---|---|
 | Default; hover; pressed; focus-visible; selected or active; disabled; loading; empty; no match; error; long content | `Mod+K` opens; `Mod+P` opens quick open; `Mod+Shift+F` opens search in files; Up and Down move; Enter runs; Escape closes to the opener; Tab stays in the input; in a terminal, Ctrl+K and Ctrl+P go to the shell (K1) | Focus trapped as a dialog; the input keeps focus; the active row is shown through active descendant; Escape returns focus to the opener | Fixed 600 px width (`layout.palette.width`); top offset 96 px (`layout.palette.top`); maximum height 480 px; narrow windows use the window width minus `space.4` | Opens with scale 0.98 to 1 and an opacity change over `duration.moderate`, `ease.enter`; closes with `ease.exit`; reduced motion instant | Scrim quad; the panel sits at `z.dialog` (absent) in the overlay layer; IME-capable input; virtualised results | Not used on Android in v1. If needed, a sheet with search and ListRow results | Desktop: centred overlay with the full keyboard. Android: none in v1 |
 
-Open: the mode entry is undefined (`Mod+P`, `Mod+Shift+F` and a palette entry are proposed); five recent items are proposed; the width of 600 does not match the dialog widths in [P36] (X56).
+Open: the mode entry is undefined (`Mod+P`, `Mod+Shift+F` and a palette entry are proposed); five recent items are proposed; the width is 600 px as drawn on artboard `ws-palette`, not a dialog size (X56).
 
 #### 3.8.2 Find bar: [FindBar.md](components/FindBar.md) · D
 
@@ -910,7 +910,7 @@ These are the items in pending-owner-review.md (37, current numbering). Each is 
 | [P5] Marketplace on Android is a row inside Settings | Extension card; Android Settings (X24) | Extension card; Settings on Android |
 | [P6] Desktop mode switch: the first press returns home from other pages | Mode switch (X5) | Mode switch |
 | [P7] Session summary is never hidden automatically | Session summary card; title bar toggle | Session summary card |
-| [P8] Six regions need 1528 px; collapse order | Frame and Canvas; region model; minimap threshold (X1) | Region model |
+| [P8] Six regions need 1528 px; collapse order (superseded by the `ws-narrow` artboard: 1408 px first step) | Frame and Canvas; region model; minimap threshold (X1) | Region model |
 | [P9] Geist and JetBrains Mono; accent `#7461d8` dark and `#6447c9` light | Type tokens; accent seed | Type and palette tokens |
 | [P10] Light theme: frame `#eeeef2`, canvas `#fbfbfc` | Light token values | Light theme values |
 | [P11] Security defaults: no keyboard shortcut for approvals; terminal clipboard writes (OSC 52) blocked until allowed; high-risk extension install needs an acknowledgement; warning glyph on the composer chip in Full access | Message blocks; terminal surface; permission review; composer chip | Permission review; terminal; composer |
@@ -960,7 +960,7 @@ Source order applied: pending-owner-review items (1 to 37, current numbering, no
 
 | X# | Resolution |
 |---|---|
-| X1 | Breakpoints recomputed to 1528, 1288, 1048 and 848 px, with the Conversation at 480 px (the minimap width). Derived from the 1528 px owner figure, not stated by the owner: confirm. Updated design-system 5.1, FrameCanvas. [P8] |
+| X1 | Breakpoints set to the artboard `ws-narrow` steps: 1408, 1168, 928 and 728 px. They replace 1528, 1288, 1048 and 848 px, which were derived from a 480 px Conversation before the artboards existed. Updated design-system 5.1, FrameCanvas, decision 0027. [P8] |
 | X2 | Bot Teams pages keep the Sidebar; other full pages hide it. design-system 5.1. [P16] |
 | X3 | Two-line rows are 44 px on desktop and 56 dp on Android; 48 dp (`size.touch.large`) is for primary actions only. design-system 4.2. |
 | X4 | Done is one of the six state words in 8.4; ListRow lists it. [P30] |
@@ -1015,7 +1015,7 @@ Source order applied: pending-owner-review items (1 to 37, current numbering, no
 | X53 | Disabled reasons are visible text on desktop and Android; no tooltip carries them. Menu, Tooltip. |
 | X54 | Icon buttons have no long-press label; the Button rule applies (IconButton). Derived from the Button rule. |
 | X55 | Splitter Home and End go to the limits, and 8.3 now lists the splitter keys (8 px, 24 px with Shift). Splitter, design-system 8.3. |
-| X56 | The command palette is a dialog size: width 560 (`layout.dialog.width.lg`), not 600. CommandPalette. [P36] |
+| X56 | The command palette is 600 px wide with a 44 px input row, as drawn on artboard `ws-palette`. It is not a dialog size; the earlier 560 px (`layout.dialog.width.lg`) was derived. CommandPalette. [P36] |
 | X57 | Activity rail items are in the FrameCanvas extension list. FrameCanvas. |
 | X58 | Reduced motion: the usage ring changes instantly; the loading spinner keeps turning (4.7). UsageRing. |
 | X59 | After the modal closes, focus returns to the opener (Add secret), as 8.2 requires; the card container only if the opener is gone. SecretRequestCard. |

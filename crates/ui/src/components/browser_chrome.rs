@@ -322,7 +322,11 @@ impl RenderOnce for BrowserChrome {
             bar = bar.child(indicator);
         }
         if let Some(host) = &self.host {
-            bar = bar.child(Badge::text(format!("on {host}")).tone(BadgeTone::Neutral));
+            bar = bar.child(
+                Badge::text(format!("on {host}"))
+                    .tone(BadgeTone::Neutral)
+                    .glyph(IconName::Server),
+            );
         }
         bar = bar.child(address.clone());
 
@@ -419,6 +423,7 @@ impl RenderOnce for BrowserChrome {
                     .border_color(p.border.default)
                     .bg(p.accent.subtle_canvas)
                     .text_style(TYPE_LABEL)
+                    .text_color(p.text.primary)
                     .child(
                         Icon::new(IconName::Bot)
                             .size(IconSize::XSmall)

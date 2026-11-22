@@ -8,7 +8,7 @@ pub struct Situation {
     pub agent_busy: bool,
     /// The host has confirmed the session state; false while it is unreachable.
     pub host_confirmed: bool,
-    /// The session is archived or cannot take input (for example, sign-in is needed).
+    /// The session is archived or cannot take input, or sending waits (sign-in, no agent yet).
     pub disabled: bool,
     pub text_empty: bool,
     /// An IME composition is active; Enter confirms the composition instead.
