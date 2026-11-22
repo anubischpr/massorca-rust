@@ -212,6 +212,9 @@ CREATE TABLE secret_key_check (
 );
 ALTER TABLE secret_requests ADD COLUMN requester TEXT;
 CREATE INDEX secret_requests_by_requester ON secret_requests(requester, created_at);
+"#,
+        foreign_keys_off: false,
+    },
     // Agent accounts (decision 0059): several credential homes per kind, one active per kind, and per-project choices.
     // Deleting an account clears its active mark and its choices; deleting a project clears its choices.
     Migration {
