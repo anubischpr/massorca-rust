@@ -12,6 +12,8 @@ pub const TOPIC_PROJECT_ADDED: &str = "project.added";
 pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
 /// An agent session was started, changed, stopped or forgotten; the id is the session id.
 pub const TOPIC_AGENT_CHANGED: &str = "agent.changed";
+/// Topic of `agent.accounts_changed`, the account change of decision 0059; its id is the kind.
+pub const TOPIC_ACCOUNTS_CHANGED: &str = "agent.accounts_changed";
 
 /// Result of `events.subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

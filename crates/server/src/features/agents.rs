@@ -2,14 +2,14 @@
 //! handlers run its blocking calls on the blocking pool. `core-agents` announces every status change; the service
 //! turns each into `agent.changed` on the event bus and an item for `agent.watch` (0052).
 
-use std::path::{Path, PathBuf};
-
-use massorca_core_agents::{AgentError, Agents, Change, credentials};
+use massorca_core_agents::{AgentError, Agents, Change};
 use massorca_protocol::methods::agents::{
-    self, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentWatchEvent,
-    AgentWatchParams, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
-    CredentialsRemoved, CredentialsShown, PromptReceipt,
+    self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
+    AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
+    AccountsRemoveParams, AccountsRemoved, AgentHookParams, AgentKinds, AgentListParams,
+    AgentPromptParams, AgentSession, AgentSessionList, AgentSessionRef, AgentStartParams,
+    AgentStopParams, AgentWatchEvent, AgentWatchParams, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -118,6 +118,48 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             credentials_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_LIST,
+            agents_cap,
+            Permission::Read,
+            accounts_list,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_ADD,
+            agents_cap,
+            Permission::Workspace,
+            accounts_add,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_IMPORT,
+            agents_cap,
+            Permission::Workspace,
+            accounts_import,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_ACTIVATE,
+            agents_cap,
+            Permission::Workspace,
+            accounts_activate,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_REMOVE,
+            agents_cap,
+            Permission::Workspace,
+            accounts_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_CHECK,
+            agents_cap,
+            Permission::Workspace,
+            accounts_check,
         )?,
     ])
 }
@@ -261,41 +303,102 @@ async fn watch(ctx: RequestCtx, params: AgentWatchParams) -> Result<StreamSource
 
 /// Copies a kind's declared credential files into the profile's home for it (0056). Only names and sizes come back;
 /// nothing about the files is logged beyond that.
+/// Deprecated (0056, decision 0059): imports into the kind's active account. Refused while a run of the kind is live
+/// when it replaces the account.
 async fn credentials_import(
     ctx: RequestCtx,
     params: CredentialsImportParams,
 ) -> Result<CredentialsImported, ErrorBody> {
-    on_profile(&ctx, move |agents, profile_dir| {
+    on_agents(&ctx, move |agents| {
         if params.replace {
             refuse_live_runs(agents, &params.kind)?;
         }
-        credentials::import(
-            profile_dir,
-            &params.kind,
-            Path::new(&params.from),
-            params.replace,
-        )
+        agents.credentials_import(&params.kind, &params.from, params.replace)
     })
     .await
 }
 
+/// Deprecated (0056): the kind's active account's files, names and sizes only.
 async fn credentials_show(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsShown, ErrorBody> {
-    on_profile(&ctx, move |_agents, profile_dir| {
-        credentials::show(profile_dir, &params.kind)
-    })
-    .await
+    on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await
 }
 
+/// Deprecated (0056): removes the kind's active account. Refused while a run of the kind is live.
 async fn credentials_remove(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsRemoved, ErrorBody> {
-    on_profile(&ctx, move |agents, profile_dir| {
+    on_agents(&ctx, move |agents| {
         refuse_live_runs(agents, &params.kind)?;
-        credentials::remove(profile_dir, &params.kind)
+        agents.credentials_remove(&params.kind)
+    })
+    .await
+}
+
+/// The accounts of a kind (decision 0059).
+async fn accounts_list(
+    ctx: RequestCtx,
+    params: AccountsListParams,
+) -> Result<AccountsList, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents
+            .accounts_list(&params.kind)
+            .map(|accounts| AccountsList { accounts })
+    })
+    .await
+}
+
+/// Sign-in: a new account and the terminal that runs the kind's login (decision 0059).
+async fn accounts_add(
+    ctx: RequestCtx,
+    params: AccountsAddParams,
+) -> Result<AccountsAdded, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_add(&params.kind, params.label)
+    })
+    .await
+}
+
+/// Import into a new account from a directory the person names (decision 0059).
+async fn accounts_import(
+    ctx: RequestCtx,
+    params: AccountsImportParams,
+) -> Result<AccountsImported, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_import(&params.kind, &params.from, params.label)
+    })
+    .await
+}
+
+async fn accounts_activate(
+    ctx: RequestCtx,
+    params: AccountsActivateParams,
+) -> Result<AccountSummary, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_activate(&params.kind, &params.account, params.project.as_deref())
+    })
+    .await
+}
+
+async fn accounts_remove(
+    ctx: RequestCtx,
+    params: AccountsRemoveParams,
+) -> Result<AccountsRemoved, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_remove(&params.kind, &params.account)
+    })
+    .await
+}
+
+async fn accounts_check(
+    ctx: RequestCtx,
+    params: AccountsCheckParams,
+) -> Result<AccountSummary, ErrorBody> {
+    on_agents(&ctx, move |agents| {
+        agents.accounts_check(&params.kind, params.account.as_deref())
     })
     .await
 }
@@ -321,23 +424,6 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
     );
     error.data = Some(serde_json::json!({ "sessions": live }));
     Err(error)
-}
-
-/// Runs one call on the profile directory on the blocking pool and maps its refusal to the protocol error.
-async fn on_profile<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
-where
-    T: Send + 'static,
-    F: FnOnce(&Agents, &Path) -> Result<T, AgentError> + Send + 'static,
-{
-    let profile_dir: PathBuf = ctx.state.profile.dir().to_path_buf();
-    let agents = ctx.state.agents.clone();
-    match tokio::task::spawn_blocking(move || call(&agents, &profile_dir)).await {
-        Ok(result) => result.map_err(ErrorBody::from),
-        Err(error) => Err(ErrorBody::new(
-            codes::INTERNAL,
-            format!("the credentials task failed: {error}"),
-        )),
-    }
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.

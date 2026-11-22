@@ -48,8 +48,6 @@ pub const ACCOUNTS_IMPORT: &str = "agent.accounts.import";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
-/// Event topic of `agent.accounts_changed`; its id is the kind.
-pub const TOPIC_ACCOUNTS_CHANGED: &str = "agent.accounts_changed";
 
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;

@@ -18,7 +18,9 @@ use massorca_profile::owner_only_security_descriptor;
 use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::PeerInfo;
-use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_CHANGED};
+use massorca_protocol::methods::events::{
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED,
+};
 use massorca_protocol::methods::service::ServiceInfo;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -137,6 +139,14 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
         let id = match &change {
             Change::Updated(session) => session.id.clone(),
             Change::Forgotten(id) => id.clone(),
+            // An account change is announced under its kind; it is not a session change, so no watcher gets it.
+            Change::Account(account) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
+                    id: account.kind.clone(),
+                });
+                return;
+            }
         };
         events.publish(ChangeEvent {
             topic: TOPIC_AGENT_CHANGED.to_owned(),
