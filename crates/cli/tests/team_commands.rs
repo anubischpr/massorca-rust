@@ -407,3 +407,93 @@ fn a_task_is_updated_and_an_empty_bot_clears_it() {
         .code(1);
     assert!(stderr_text(&missing).contains("task.not_found"));
 }
+
+#[test]
+fn a_teams_bots_and_projects_are_listed_in_json_and_text() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+
+    let none = sandbox
+        .run("default", &["team", "bot", "list", "alpha"])
+        .success();
+    assert_eq!(stdout_text(&none).trim(), "no bots");
+    let none = sandbox
+        .run("default", &["team", "project", "list", "alpha"])
+        .success();
+    assert_eq!(stdout_text(&none).trim(), "no projects");
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "team",
+                "bot",
+                "add",
+                "alpha",
+                "mara",
+                "--agent",
+                "claude",
+                "--job",
+                "Writes the parser",
+                "--lead",
+            ],
+        )
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team", "bot", "add", "alpha", "ada", "--agent", "codex", "--job", "Reviews",
+            ],
+        )
+        .success();
+    sandbox
+        .run(
+            "default",
+            &[
+                "team", "project", "add", "alpha", "parser", "--goal", "Ship it",
+            ],
+        )
+        .success();
+
+    let bots = sandbox.json_ok("default", &["team", "bot", "list", "alpha"]);
+    let names: Vec<&str> = bots["bots"]
+        .as_array()
+        .expect("bots array")
+        .iter()
+        .filter_map(|bot| bot["name"].as_str())
+        .collect();
+    assert_eq!(names, ["mara", "ada"]);
+    assert_eq!(bots["bots"][0]["lead"], true);
+
+    let text = sandbox
+        .run("default", &["team", "bot", "list", "alpha"])
+        .success();
+    let lines: Vec<String> = stdout_text(&text).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[0].starts_with("mara	claude	lead	Writes the parser	"),
+        "{lines:?}"
+    );
+    assert!(lines[1].starts_with("ada	codex	-	Reviews	"), "{lines:?}");
+
+    let projects = sandbox.json_ok("default", &["team", "project", "list", "alpha"]);
+    assert_eq!(projects["projects"][0]["name"], "parser");
+    assert_eq!(projects["projects"][0]["goal"], "Ship it");
+    let text = sandbox
+        .run("default", &["team", "project", "list", "alpha"])
+        .success();
+    assert!(stdout_text(&text).starts_with("parser	Ship it	"));
+
+    let missing = sandbox
+        .run("default", &["team", "bot", "list", "gamma"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&missing).contains("gamma"));
+    sandbox
+        .run("default", &["team", "project", "list", "gamma"])
+        .failure()
+        .code(1);
+}
