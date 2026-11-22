@@ -6,6 +6,7 @@ mod bridge;
 mod connection;
 mod launch;
 mod refusal;
+mod terminals;
 mod update;
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ pub use connection::{
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
+pub use terminals::{StreamEnd, TerminalStream, TerminalStreamItem};
 pub use update::{StoreState, StoreUpdate};
 
 #[cfg(test)]

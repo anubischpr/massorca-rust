@@ -16,6 +16,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// that inherited the pipes must not hold the caller indefinitely.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
+/// How long a kill waits for the processes of a Windows job to exit.
+#[cfg(windows)]
+const KILL_WAIT: Duration = Duration::from_secs(10);
+
 /// How long a finished command with no deadline waits for a pipe held outside its process tree.
 const ESCAPED_GRACE: Duration = Duration::from_secs(30);
 
@@ -159,9 +163,12 @@ impl ProcessTree {
                 .stderr(Stdio::null())
                 .status();
         }
-        // Closing the only handle to a kill-on-close job terminates its processes.
+        // Termination is asynchronous: wait until the job is empty, so nothing git started (such as the `git branch`
+        // a `worktree add -b` runs) can still write once the caller starts cleaning up after it.
         #[cfg(windows)]
-        drop(self.job);
+        if let Some(job) = self.job {
+            crate::windows_job_spawn::terminate_and_wait(&job, KILL_WAIT);
+        }
     }
 
     /// Leaves processes the child left running alone, as a plain spawn would.

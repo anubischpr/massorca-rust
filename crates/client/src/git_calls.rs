@@ -21,6 +21,7 @@ use massorca_protocol::methods::git::status::{self, GitStatus, GitStatusParams};
 
 use crate::client::Client;
 use crate::error::ClientError;
+use crate::subscription::Subscription;
 
 impl Client {
     /// `git.status`: the changed files of a workspace and its branch state.
@@ -74,6 +75,12 @@ impl Client {
     /// `git.abort`: aborts the merge, rebase, cherry-pick or revert in progress.
     pub async fn git_abort(&self, params: &GitWorkspaceRef) -> Result<GitAborted, ClientError> {
         self.call(remote::ABORT, params).await
+    }
+
+    /// `git.watch`: a stream of what changes; the first item says whether working-tree edits are observed.
+    pub async fn git_watch(&self, params: &GitWorkspaceRef) -> Result<Subscription, ClientError> {
+        self.subscribe(massorca_protocol::methods::git::watch::WATCH, params)
+            .await
     }
 
     /// `git.log`: one page of history; pass `next_cursor` back for the next page.

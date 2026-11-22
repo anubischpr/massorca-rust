@@ -93,6 +93,8 @@ pub const GIT_DETACHED_HEAD: &str = "git.detached_head";
 pub const GIT_NO_OPERATION: &str = "git.no_operation";
 /// A merge or rebase would overwrite local changes; commit, stash elsewhere or discard them first.
 pub const GIT_LOCAL_CHANGES: &str = "git.local_changes";
+/// The repository's git directory cannot be watched; the stream ends with this code.
+pub const GIT_WATCH_UNAVAILABLE: &str = "git.watch_unavailable";
 pub const CONFIG_UNKNOWN_KEY: &str = "config.unknown_key";
 pub const CONFIG_INVALID_VALUE: &str = "config.invalid_value";
 /// The store was written by a newer build; it is left untouched (decision 0005).

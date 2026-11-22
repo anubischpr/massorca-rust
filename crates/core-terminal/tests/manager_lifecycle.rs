@@ -617,6 +617,55 @@ async fn a_cursor_query_seen_by_a_silent_client_is_answered_when_it_detaches() {
 }
 
 #[tokio::test]
+async fn a_client_attaching_answers_a_query_a_stalled_client_holds() {
+    let dir = temp_dir();
+    let manager = Managed::new();
+    let mut create = spec("ws", dir.path());
+    if cfg!(unix) {
+        // After the reply, echoes the length of the next line, so a late duplicate reply shows.
+        create.shell = Some(script_shell(
+            "read go; stty -icanon -echo; printf '\\033[6n'; \
+             dd bs=1 count=6 of=/dev/null 2>/dev/null; echo replied-$((6*7)); \
+             read rest; echo \"got-${#rest}-$((6*7))\"; sleep 60",
+        ));
+    }
+    let info = manager.create(create).expect("create");
+
+    // Attached and silent: it has the query but is not reading, as a stalled client would.
+    let mut stalled = manager.attach(&info.id, Some(0)).expect("attach");
+    if cfg!(unix) {
+        manager.input(&info.id, &line("go")).expect("input");
+    }
+    let mut raw = Vec::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !raw.windows(4).any(|window| window == b"\x1b[6n") {
+        assert!(Instant::now() < deadline, "no cursor query in {raw:?}");
+        match tokio::time::timeout(TIMEOUT, stalled.next()).await {
+            Ok(Some(AttachItem::Output { bytes, .. })) => raw.extend_from_slice(&bytes),
+            Ok(Some(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    // Another client's snapshot cannot show the query, so the shell must not wait on it.
+    if cfg!(unix) {
+        wait_for_screen(&manager, &info.id, "replied-42").await;
+    }
+    // The stalled client catches up and answers late; that reply must not reach the shell.
+    manager.input(&info.id, b"\x1b[1;1R").expect("input");
+    let expected = if cfg!(windows) {
+        let (command, expected) = marker_command("answered");
+        manager.input(&info.id, &command).expect("input");
+        expected
+    } else {
+        manager.input(&info.id, &line("next")).expect("input");
+        "got-4-42".to_owned()
+    };
+    wait_for_screen(&manager, &info.id, &expected).await;
+    drop(stalled);
+}
+
+#[tokio::test]
 async fn input_typed_while_the_shell_is_busy_reaches_it() {
     let dir = temp_dir();
     let manager = Managed::new();
