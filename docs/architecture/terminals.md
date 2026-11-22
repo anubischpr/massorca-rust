@@ -115,7 +115,7 @@ Capability `terminals/1`. Terminal output uses binary frames, which need
 | `terminal.create` | `workspace`, `shell?`, `cwd?`, `env?`, `cols?`, `rows?`, `title?`, `request_id?` | `Terminal` |
 | `terminal.list` | `workspace?` | `{ terminals }` |
 | `terminal.show` | `terminal` | `Terminal` |
-| `terminal.attach` | `terminal`, `since?`, `cols?`, `rows?` | stream (below) |
+| `terminal.attach` | `terminal`, `since?`, `cols?`, `rows?`, `answers_queries?` | stream (below) |
 | `terminal.input` | `terminal`, `data` (base64) | `null` |
 | `terminal.resize` | `terminal`, `cols`, `rows` | `Terminal` |
 | `terminal.kill` | `terminal`, `force?` | `Terminal` |

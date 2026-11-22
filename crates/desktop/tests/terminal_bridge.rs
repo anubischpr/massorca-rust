@@ -181,6 +181,7 @@ fn attach_params(terminal: &str, since: Option<u64>) -> TerminalAttachParams {
         since,
         cols: None,
         rows: None,
+        answers_queries: None,
     }
 }
 

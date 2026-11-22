@@ -39,6 +39,7 @@ async fn attach(
         since,
         cols,
         rows,
+        ..
     } = params;
     let manager = ctx.state.terminals.clone();
     let attachment = on_manager(move || {

@@ -146,6 +146,7 @@ fn attach_params(terminal: &str) -> TerminalAttachParams {
         since: None,
         cols: None,
         rows: None,
+        answers_queries: None,
     }
 }
 

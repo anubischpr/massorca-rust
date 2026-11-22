@@ -69,6 +69,7 @@ pub async fn attach(client: &Client, terminal: &str) -> Result<(), CliError> {
             since: None,
             cols,
             rows,
+            answers_queries: None,
         })
         .await?;
     write_stderr(&format!(
