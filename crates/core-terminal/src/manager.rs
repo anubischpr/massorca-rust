@@ -373,7 +373,7 @@ impl TerminalManager {
                 kill_reason: None,
                 attachments: Vec::new(),
                 query_match: 0,
-                unanswered: VecDeque::new(),
+                held: VecDeque::new(),
             }),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
@@ -435,11 +435,27 @@ impl TerminalManager {
         if terminal.is_exited() {
             return Err(TerminalError::Exited);
         }
-        let answered = count_cursor_reports(bytes);
-        if answered > 0 {
+        let reports = cursor_reports(bytes);
+        let mut kept = None;
+        if !reports.is_empty() {
             let mut core = lock(&terminal.core);
-            let left = core.unanswered.len().saturating_sub(answered);
-            core.unanswered.truncate(left);
+            let mut filtered = Vec::with_capacity(bytes.len());
+            let mut from = 0;
+            for report in reports {
+                let Some(query) = core.held.pop_front() else {
+                    break;
+                };
+                if query.answered {
+                    filtered.extend_from_slice(&bytes[from..report.start]);
+                    from = report.end;
+                }
+            }
+            filtered.extend_from_slice(&bytes[from..]);
+            kept = Some(filtered);
+        }
+        let bytes = kept.as_deref().unwrap_or(bytes);
+        if bytes.is_empty() {
+            return Ok(());
         }
         terminal.master.write_all(bytes).map_err(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe || terminal.is_exited() {
@@ -513,6 +529,7 @@ impl TerminalManager {
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Attachment> {
         let terminal = self.inner.find(id)?;
         let shared = Arc::new(AttachShared::default());
+        let mut replies = Vec::new();
         // Under the lock: the copy, its offset, and the registration, so no chunk falls between.
         let frozen = {
             let mut core = lock(&terminal.core);
@@ -548,12 +565,17 @@ impl TerminalManager {
             };
             if !exited {
                 core.attachments.push(Arc::clone(&shared));
+                answer_held(&mut core.held, &mut replies);
             } else {
                 queue.push_back(AttachItem::Exited { info });
                 queue.ended = true;
             }
             frozen
         };
+        if !replies.is_empty() {
+            // A failed reply means the terminal is closing; the waiter records that.
+            let _ = terminal.master.write_all(&replies);
+        }
         if let Some(frozen) = frozen {
             // Outside the lock. Output queued meanwhile follows the `Attached` item, so the
             // snapshot is inserted right after it.
@@ -681,10 +703,20 @@ struct Core {
     attachments: Vec<Arc<AttachShared>>,
     /// Bytes of a cursor query matched at the end of the previous read.
     query_match: usize,
-    /// Answers to cursor queries that arrived while a client was attached. A client's reply
-    /// takes one off; the rest are written when the last client detaches, so a client that
-    /// never answers (a one-off screen read) cannot leave ConPTY waiting for good.
-    unanswered: VecDeque<Vec<u8>>,
+    /// Cursor queries that arrived while a client was attached, oldest first. A client's
+    /// reply takes the oldest off. The service answers them itself when a client attaches
+    /// (its snapshot cannot show the query) and when every client that received one has
+    /// detached, so a client that stalls or never answers cannot leave the shell waiting.
+    held: VecDeque<HeldQuery>,
+}
+
+/// A cursor query an attached client may still answer.
+struct HeldQuery {
+    reply: Vec<u8>,
+    /// The service already wrote `reply`; a client's late reply to it is dropped.
+    answered: bool,
+    /// The attachments that received the query, the only clients that can reply to it.
+    witnesses: Vec<usize>,
 }
 
 impl Core {
@@ -732,7 +764,12 @@ impl Core {
                 if self.attachments.is_empty() {
                     replies.extend_from_slice(reply.as_bytes());
                 } else {
-                    self.unanswered.push_back(reply.into_bytes());
+                    let witnesses = self.attachments.iter().map(attachment_key).collect();
+                    self.held.push_back(HeldQuery {
+                        reply: reply.into_bytes(),
+                        answered: false,
+                        witnesses,
+                    });
                 }
             }
         }
@@ -954,16 +991,25 @@ impl Terminal {
     }
 
     pub(crate) fn detach(&self, shared: &Arc<AttachShared>) {
-        let replies: Vec<u8> = {
+        let mut replies = Vec::new();
+        {
             let mut core = lock(&self.core);
             core.attachments
                 .retain(|attachment| !Arc::ptr_eq(attachment, shared));
-            if core.attachments.is_empty() {
-                core.unanswered.drain(..).flatten().collect()
-            } else {
-                Vec::new()
-            }
-        };
+            let leaving = attachment_key(shared);
+            // A query no attached client received can only be answered by the service, and
+            // once answered, no late reply to it can come.
+            core.held.retain_mut(|query| {
+                query.witnesses.retain(|witness| *witness != leaving);
+                if !query.witnesses.is_empty() {
+                    return true;
+                }
+                if !query.answered {
+                    replies.extend_from_slice(&query.reply);
+                }
+                false
+            });
+        }
         if !replies.is_empty() {
             // A failed reply means the terminal is closing; the waiter records that.
             let _ = self.master.write_all(&replies);
@@ -971,22 +1017,41 @@ impl Terminal {
     }
 }
 
-/// Counts cursor position reports (`ESC [ row ; col R`) in a client's input.
-fn count_cursor_reports(bytes: &[u8]) -> usize {
-    let mut count = 0;
-    let mut rest = bytes;
-    while let Some(start) = rest.windows(2).position(|pair| pair == b"\x1b[") {
-        rest = &rest[start + 2..];
-        let body = rest
+/// Identity of an attachment while it is registered.
+fn attachment_key(attachment: &Arc<AttachShared>) -> usize {
+    Arc::as_ptr(attachment).addr()
+}
+
+/// Writes the reply of every held query not yet answered into `replies`, marking it answered.
+fn answer_held(held: &mut VecDeque<HeldQuery>, replies: &mut Vec<u8>) {
+    for query in held.iter_mut().filter(|query| !query.answered) {
+        replies.extend_from_slice(&query.reply);
+        query.answered = true;
+    }
+}
+
+/// Byte ranges of the cursor position reports (`ESC [ row ; col R`) in a client's input.
+fn cursor_reports(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut reports = Vec::new();
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(2).position(|pair| pair == b"\x1b[") {
+        let start = at + found;
+        let body_start = start + 2;
+        let body = bytes[body_start..]
             .iter()
             .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
             .count();
-        let separators = rest[..body].iter().filter(|byte| **byte == b';').count();
-        if rest.get(body) == Some(&b'R') && separators == 1 {
-            count += 1;
+        let body_end = body_start + body;
+        let separators = bytes[body_start..body_end]
+            .iter()
+            .filter(|byte| **byte == b';')
+            .count();
+        if bytes.get(body_end) == Some(&b'R') && separators == 1 {
+            reports.push(start..body_end + 1);
         }
+        at = body_start;
     }
-    count
+    reports
 }
 
 fn read_output(terminal: &Terminal, mut reader: PtyReader, _done: mpsc::Sender<()>) {
@@ -1044,12 +1109,12 @@ mod tests {
     fn is_send_sync<T: Send + Sync>() {}
 
     #[test]
-    fn counts_only_cursor_position_reports() {
-        use super::count_cursor_reports;
-        assert_eq!(count_cursor_reports(b"\x1b[12;40R"), 1);
-        assert_eq!(count_cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), 2);
+    fn finds_only_cursor_position_reports() {
+        use super::cursor_reports;
+        assert_eq!(cursor_reports(b"\x1b[12;40R"), vec![0..8]);
+        assert_eq!(cursor_reports(b"a\x1b[1;1Rb\x1b[3;4R"), vec![1..7, 8..14]);
         // Arrow keys, a bare `R` and a report without a column are not answers.
-        assert_eq!(count_cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R"), 0);
+        assert!(cursor_reports(b"\x1b[A\x1b[1;5A R \x1b[5R").is_empty());
     }
 
     #[test]

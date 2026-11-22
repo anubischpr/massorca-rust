@@ -20,5 +20,6 @@ pub mod sidebar;
 pub mod start_page;
 pub mod status_items;
 pub mod teams;
+pub mod terminals;
 pub mod title_bar;
 pub mod workspace_flow;

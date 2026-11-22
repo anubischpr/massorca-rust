@@ -33,6 +33,14 @@ rendered snapshot on reattach rather than a raw replay.
   by the model's callbacks and sent in the `Terminal` record, not inside the
   bytes. A full-screen program in the alternate screen redraws itself after
   the client's resize, as in the old app.
+- **Grid switching** uses `?1049`, not `?47`: alacritty, the desktop emulator,
+  ignores 47, so a snapshot that used it drew the alternate grid over the main
+  one and left the cursor at the alternate grid's home. A live main screen draws
+  the alternate grid inside `?1049h`…`?1049l`, then the main grid last, so the
+  main cursor, saved cursor and margins win. A live alternate screen places the
+  main cursor where `?1049h` saves it, then draws the alternate grid. Margins and
+  origin mode are reset before each grid, because alacritty keeps them for the
+  whole terminal.
 - **Atomicity.** The reader thread applies one chunk to the model, the ring
   and every attachment under one lock, so a snapshot or a ring read taken
   under that lock sits exactly between two chunks. The offset in the snapshot
@@ -51,9 +59,12 @@ rendered snapshot on reattach rather than a raw replay.
   answers `ESC [ 6 n` from the model's cursor. ConPTY sends that query when a
   terminal starts and renders nothing until it is answered; an attached
   client's emulator answers it instead (TERM-15). A query that arrives while
-  a client is attached is held until a client's reply comes through input;
-  any still held when the last client detaches are answered then, so a
-  client that never replies (a one-off screen read) cannot stall the shell.
+  a client is attached is held until a client's reply comes through input.
+  The service answers a held query itself when another client attaches (its
+  snapshot cannot show the query) and when every client that received it has
+  detached, so a client that stalls or never replies cannot stall the shell.
+  A client's late reply to a query the service already answered is dropped:
+  the shell would read it as typed input.
 - **No disk history in Phase 2.** Nothing is written to disk: no checkpoints,
   no output log, no cold restore (TERM-08, TERM-09 are later). Terminal
   output is never logged.

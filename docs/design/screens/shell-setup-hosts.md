@@ -65,7 +65,7 @@ At least one artboard per area is light: the shell (`sh-host-unreachable`), firs
 **D-SH-04 Project sidebar shell.** Designed as a shell here; no artboard. A Canvas region at the right edge with a 28 px tab strip. Tabs are the owner's four: File explorer (D-ED-11), Sessions list (the old "vault" tab, merged, D-SH-04 owner rule), Source control (D-DF-02), Checks (D-DF-04), plus extension tabs (D-SL-01). Width 288 (240 to 480). Open, closed, and hidden on full pages. The pv96 extra tabs (workspaces, PR checks, Ports for SSH hosts, plugin tabs) are not in the owner list; they are an open item and have no row here.
 
 **D-SH-05 Status bar.** Designed. Shown in both artboards.
-- 24 px strip under the Canvas column, `surface.canvas`, caption text (11 px). Items: agent status (AgentStatus glyph at 16 px and a count such as "1 waiting for you"), memory ("1.22 GB"), terminals ("2 terminals" or "No terminals"), ports ("No ports" or "2 ports"), hosts ("2 hosts" with a connection dot: solid success for connected, ring for not connected).
+- 24 px strip under the Canvas column, `surface.canvas`, caption text (11 px). Items: agent status (AgentStatus glyph at 12 px, `size.icon.xs`, and a count such as "1 waiting for you"), memory ("1.22 GB"), terminals ("2 terminals" or "No terminals"), ports ("No ports" or "2 ports"), hosts ("2 hosts" with a connection dot: solid success for connected, ring for not connected).
 - Unreachable host: the hosts item reads "1 of 2 hosts unreachable" in `text.tertiary`, and its tooltip gives the age.
 - Right-click opens the visibility menu (one checkbox per item). Narrow windows drop the lowest priority item first; hidden items stay in the menu (open point: no overflow button).
 

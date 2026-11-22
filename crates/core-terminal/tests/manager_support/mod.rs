@@ -288,9 +288,40 @@ impl Watch {
 
     /// The next item, applied to this watch's state. Panics after `TIMEOUT`.
     pub async fn step(&mut self) -> Option<AttachItem> {
-        let item = tokio::time::timeout(TIMEOUT, self.attachment.next())
-            .await
-            .expect("timed out waiting for an attach item");
+        let Ok(item) = tokio::time::timeout(TIMEOUT, self.attachment.next()).await else {
+            // Names the cause: a shell that printed nothing, or bytes the stream never sent.
+            // A probe resuming at this watch's offset shows what the ring holds beyond it.
+            let mut beyond = String::from("probe failed");
+            if let Ok(mut probe) = self.manager.attach(&self.id, Some(self.offset())) {
+                let mut bytes = 0;
+                let mut items = Vec::new();
+                while let Ok(Some(item)) =
+                    tokio::time::timeout(Duration::from_secs(1), probe.next()).await
+                {
+                    match item {
+                        AttachItem::Output { bytes: chunk, .. } => bytes += chunk.len(),
+                        AttachItem::Attached { mode, .. } => items.push(format!("{mode:?}")),
+                        other => items.push(format!("{other:?}").chars().take(40).collect()),
+                    }
+                }
+                beyond = format!("{bytes} bytes beyond, items {items:?}");
+            }
+            panic!(
+                "timed out waiting for an attach item: watch at offset {} (base {}, {} output \
+                 items, {} snapshots, {} cursor queries seen); ring: {beyond}; terminal now \
+                 {:?}; screen ends {:?}",
+                self.offset(),
+                self.base,
+                self.output_items,
+                self.snapshots,
+                self.output
+                    .windows(CURSOR_QUERY.len())
+                    .filter(|w| *w == CURSOR_QUERY)
+                    .count(),
+                self.manager.get(&self.id),
+                self.visible.tail()
+            );
+        };
         self.apply(&item);
         item
     }

@@ -3,7 +3,9 @@
 
 use super::Shell;
 use crate::model::region_cycle::{Zone, next_zone};
-use gpui::{App, Context, FocusHandle, Window};
+use gpui::{App, BoxShadow, Context, FocusHandle, Window, point, px};
+use massorca_ui::Theme;
+use massorca_ui::tokens::BORDER_FOCUS_WIDTH;
 
 /// One focus handle per zone, so F6 can move focus into a zone and see where focus is.
 #[derive(Debug)]
@@ -21,6 +23,19 @@ impl ZoneFocus {
     pub(super) fn get(&self, zone: Zone) -> &FocusHandle {
         &self.handles[zone.index()]
     }
+}
+
+/// The ring a region shows when keyboard focus lands on it (design system 8.2): the focus colour
+/// as a band inside its edges, because a region sits at the window edge where an outer ring would
+/// be clipped.
+pub(super) fn region_focus_ring(theme: &Theme) -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: theme.palette.border.focus.into(),
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(BORDER_FOCUS_WIDTH),
+        inset: true,
+    }]
 }
 
 impl Shell {

@@ -1,5 +1,6 @@
-//! The notice above the Canvas while the service is not connected (X-CN-01): connecting,
-//! reconnecting with its attempt, or unreachable, each with "Retry now" where it helps.
+//! The notice above the Canvas while the service is connecting or reconnecting (X-CN-01): the
+//! attempt, with "Retry now" where it helps. A service that cannot be reached takes the whole
+//! Canvas instead (canvas.rs), so it draws no banner here.
 
 use super::Shell;
 use crate::model::shell::{ServiceNotice, ServiceTone};
@@ -12,6 +13,12 @@ pub(super) fn service_banner(
     notice: &ServiceNotice,
     shell: &WeakEntity<Shell>,
 ) -> impl IntoElement {
+    if notice.tone == ServiceTone::Unreachable {
+        return div().hidden();
+    }
+    let frame = div()
+        .debug_selector(|| "service-banner".to_owned())
+        .flex_none();
     let variant = match notice.tone {
         ServiceTone::Ok => BannerVariant::Success,
         ServiceTone::Busy => BannerVariant::Info,
@@ -34,10 +41,5 @@ pub(super) fn service_banner(
                 }),
         );
     }
-    div()
-        .debug_selector(|| "service-banner".to_owned())
-        .flex_none()
-        .px(px(SPACE_3))
-        .pt(px(SPACE_2))
-        .child(banner)
+    frame.px(px(SPACE_3)).pt(px(SPACE_2)).child(banner)
 }
