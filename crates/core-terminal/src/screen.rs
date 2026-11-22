@@ -23,9 +23,12 @@ const SUB: u8 = 0x1a;
 const RESET: &str = "\x1bc";
 const CLEAR_ATTRS: &str = "\x1b[m";
 const HOME: &str = "\x1b[H";
-// `?47` switches grids without the side effects of `?1049`, which save the main cursor.
+// Probe only: `?47` switches grids without clearing or saving. Clients get `?1049`, because
+// alacritty ignores 47.
 const ENTER_ALTERNATE_GRID: &str = "\x1b[?47h";
 const LEAVE_ALTERNATE_GRID: &str = "\x1b[?47l";
+const ENTER_ALTERNATE_SCREEN: &str = "\x1b[?1049h";
+const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 const HIDE: &str = "\x1b[?25l";
 const SHOW: &str = "\x1b[?25h";
 /// A longer escape sequence is dropped whole, as vt100 drops it.
@@ -118,8 +121,9 @@ impl Screen {
     }
 
     /// Escape bytes that rebuild this screen in a fresh emulator of the same size: reset, the
-    /// scrollback oldest first, each grid's rows with its margins and cursors (main first), then
-    /// the character set, autowrap, pen and input modes.
+    /// scrollback oldest first, each grid's rows with its margins and cursors (switched with
+    /// `?1049`, which every emulator implements), then the character set, autowrap, pen and input
+    /// modes.
     pub fn snapshot(&self) -> Vec<u8> {
         self.freeze().serialize()
     }
@@ -146,28 +150,41 @@ impl FrozenScreen {
         *probe.screen_mut() = self.screen;
         let alternate = probe.screen().alternate_screen();
         if alternate {
-            // Leaving the grid without `?1049l` keeps the main cursor where it is.
+            // Probe only: `?47l` returns to the main grid with its cursor where it was.
             probe.process(LEAVE_ALTERNATE_GRID.as_bytes());
         }
-        let mut out = String::from(RESET);
-        write_rows(&mut out, probe.screen_mut(), true);
+        let mut main_rows = String::new();
+        write_rows(&mut main_rows, probe.screen_mut(), true);
         let main = read_grid(&mut probe, self.modes.origin, MAIN);
-        // Always written, so that a later `?47h` shows the alternate grid as it was.
+        // `?47` does not clear the alternate grid, so the probe reads what it holds.
         probe.process(ENTER_ALTERNATE_GRID.as_bytes());
         let mut alternate_rows = String::new();
         write_rows(&mut alternate_rows, probe.screen_mut(), false);
         let alternate_grid = read_grid(&mut probe, self.modes.origin, ALTERNATE);
 
         let (saved, rows) = (self.modes.saved_charsets, rows.get());
-        write_grid(&mut out, &main, saved, rows);
-        out.push_str(ENTER_ALTERNATE_GRID);
-        out.push_str(HOME);
-        out.push_str(&alternate_rows);
-        write_grid(&mut out, &alternate_grid, saved, rows);
-        if !alternate {
-            out.push_str(LEAVE_ALTERNATE_GRID);
+        let mut out = String::from(RESET);
+        if alternate {
+            // `?1049h` saves the cursor it finds, so the main cursor is placed before it.
+            out.push_str(&main_rows);
+            write_entry(&mut out, &main, rows);
+            enter_alternate_screen(&mut out, saved);
+            home_grid(&mut out);
+            out.push_str(&alternate_rows);
+            write_grid(&mut out, &alternate_grid, saved, rows);
+        } else {
+            enter_alternate_screen(&mut out, Charsets::default());
+            home_grid(&mut out);
+            out.push_str(&alternate_rows);
+            write_grid(&mut out, &alternate_grid, saved, rows);
+            out.push_str(LEAVE_ALTERNATE_SCREEN);
+            home_grid(&mut out);
+            out.push_str(&main_rows);
+            write_grid(&mut out, &main, saved, rows);
         }
-        if self.modes.charsets != Charsets::default() {
+        // Last, so that no save or restore above changes it. A default pair is left out, as it
+        // always was, so a plain snapshot holds no stray characters.
+        if self.modes.charsets != Charsets::default() || saved != Charsets::default() {
             out.push_str(&charset_sequence(self.modes.charsets));
         }
         if self.modes.autowrap_off {
@@ -242,9 +259,41 @@ fn read_grid(probe: &mut vt100::Parser, origin: [bool; 4], index: usize) -> Grid
     }
 }
 
+/// `?1049h`, which saves the cursor along with the character sets; `saved` is designated first.
+fn enter_alternate_screen(out: &mut String, saved: Charsets) {
+    let designated = saved != Charsets::default();
+    if designated {
+        out.push_str(&charset_sequence(saved));
+    }
+    out.push_str(ENTER_ALTERNATE_SCREEN);
+    if designated {
+        out.push_str(&charset_sequence(Charsets::default()));
+    }
+}
+
+/// Margins and origin mode are per grid in vt100 but global in alacritty, so a grid's rows are
+/// drawn from home with both reset.
+fn home_grid(out: &mut String) {
+    out.push_str("\x1b[r\x1b[?6l");
+    out.push_str(HOME);
+}
+
+/// Writes the main grid's margins, pen and saved cursor, the state `?1049h` saves on entry. The
+/// cursor is left at the saved one, which `?1049l` returns to.
+fn write_entry(out: &mut String, grid: &GridView, rows: u16) {
+    let mut region = (0, rows - 1);
+    let mut origin = false;
+    set_region(out, &mut region, grid.margins);
+    // Origin mode cannot reach a row outside the margins: such a cursor is placed absolutely.
+    let inside = (grid.margins.0..=grid.margins.1).contains(&grid.saved.at.0);
+    set_origin(out, &mut origin, grid.saved_origin && inside);
+    place(out, &grid.saved, &grid.saved_bytes, origin, region.0);
+    out.push_str(&grid.pen);
+}
+
 /// Writes a grid's margins, saved cursor and cursor after its rows, each before what it moves.
 fn write_grid(out: &mut String, grid: &GridView, saved: Charsets, rows: u16) {
-    // A fresh grid has the whole screen as its region and origin mode off.
+    // The grid is entered with the whole screen as its region and origin mode off.
     let mut region = (0, rows - 1);
     let mut origin = false;
     let (top, bottom) = grid.margins;
