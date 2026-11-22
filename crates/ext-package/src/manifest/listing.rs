@@ -6,12 +6,16 @@
 //! `themes` when the package holds only theme kinds, else `extensions`. `services` is never derived; it must be
 //! declared.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 
 use super::contributes::{Contributes, has_non_theme_contributions};
 use super::views::Slot;
 use super::{Manifest, check_path, is_https_url};
-use crate::error::Problems;
+use crate::error::{Problems, at};
+use crate::ids;
+use crate::permission::PermissionKind;
 
 /// Marketplace data for one item.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -21,6 +25,9 @@ pub struct Listing {
     pub category: Option<Category>,
     pub developer: Option<Developer>,
     pub mention: Option<String>,
+    pub banner: Option<Banner>,
+    #[serde(default)]
+    pub connections: Vec<Connection>,
 }
 
 /// The Marketplace categories.
@@ -40,6 +47,55 @@ pub enum Category {
 pub struct Developer {
     pub name: String,
     pub url: Option<String>,
+}
+
+/// The banner: an optional image and one to six examples of how to invoke the item.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Banner {
+    pub image: Option<String>,
+    pub examples: Vec<Example>,
+}
+
+/// One invocation example. A `mention` example repeats `@` plus the listing's mention, a `command` example names a
+/// declared command, and a `usage` example is only a caption.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Example {
+    pub kind: ExampleKind,
+    pub text: Option<String>,
+    pub caption: String,
+}
+
+/// The kinds of banner example.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExampleKind {
+    Mention,
+    Command,
+    Usage,
+}
+
+/// An account or sign-in the item asks for, shown on the item page under Connection.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Connection {
+    pub id: String,
+    pub kind: ConnectionKind,
+    pub title: String,
+    #[serde(default)]
+    pub multiple: bool,
+}
+
+/// How a connection signs in. `agent-login` is owned by the agents session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ConnectionKind {
+    #[serde(rename = "oauth")]
+    OAuth,
+    #[serde(rename = "api-key")]
+    ApiKey,
+    #[serde(rename = "agent-login")]
+    AgentLogin,
 }
 
 /// The category the item page shows: the declared one, else the one derived from the contributions.
@@ -112,6 +168,10 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
             "has no @, no spaces, and at most 32 characters",
         );
     }
+    if let Some(banner) = &listing.banner {
+        validate_banner(banner, listing, manifest, problems);
+    }
+    validate_connections(&listing.connections, manifest, problems);
 }
 
 fn validate_category(category: Category, contributes: &Contributes, problems: &mut Problems) {
@@ -138,6 +198,113 @@ fn category_name(category: Category) -> &'static str {
         Category::Skills => "skills",
         Category::Services => "services",
         Category::Themes => "themes",
+    }
+}
+
+fn validate_banner(
+    banner: &Banner,
+    listing: &Listing,
+    manifest: &Manifest,
+    problems: &mut Problems,
+) {
+    if let Some(image) = &banner.image {
+        check_path(image, "/listing/banner/image", problems);
+    }
+    if !(1..=6).contains(&banner.examples.len()) {
+        problems.add("/listing/banner/examples", "needs 1 to 6 examples");
+    }
+    for (index, example) in banner.examples.iter().enumerate() {
+        let here = at("/listing/banner/examples", index);
+        if example.caption.trim().is_empty() {
+            problems.add(at(&here, "caption"), "is required");
+        }
+        match example.kind {
+            ExampleKind::Mention => validate_mention_example(example, listing, &here, problems),
+            ExampleKind::Command => validate_command_example(example, manifest, &here, problems),
+            ExampleKind::Usage => {}
+        }
+    }
+}
+
+fn validate_mention_example(
+    example: &Example,
+    listing: &Listing,
+    here: &str,
+    problems: &mut Problems,
+) {
+    let pointer = at(here, "text");
+    match (&example.text, &listing.mention) {
+        (None, _) => problems.add(pointer, "is required for a mention example"),
+        (Some(_), None) => problems.add(pointer, "needs listing.mention"),
+        (Some(text), Some(mention)) if *text != format!("@{mention}") => {
+            problems.add(pointer, format!("must equal `@{mention}`"));
+        }
+        _ => {}
+    }
+}
+
+fn validate_command_example(
+    example: &Example,
+    manifest: &Manifest,
+    here: &str,
+    problems: &mut Problems,
+) {
+    let pointer = at(here, "text");
+    let Some(text) = &example.text else {
+        problems.add(pointer, "is required for a command example");
+        return;
+    };
+    let declared = manifest
+        .contributes
+        .commands
+        .iter()
+        .any(|command| command.id == *text || command.keys.as_deref() == Some(text.as_str()));
+    if !declared {
+        problems.add(
+            pointer,
+            format!("`{text}` is not a declared command's keys or id"),
+        );
+    }
+}
+
+fn validate_connections(connections: &[Connection], manifest: &Manifest, problems: &mut Problems) {
+    let mut seen = HashSet::new();
+    let has = |kind: PermissionKind| {
+        manifest
+            .permissions
+            .iter()
+            .any(|permission| permission.kind == kind)
+    };
+    for (index, connection) in connections.iter().enumerate() {
+        let here = at("/listing/connections", index);
+        if !ids::is_contribution_id(&connection.id) {
+            problems.add(
+                at(&here, "id"),
+                format!("`{}` is not a valid id", connection.id),
+            );
+        } else if !seen.insert(connection.id.as_str()) {
+            problems.add(
+                at(&here, "id"),
+                format!("`{}` is declared twice", connection.id),
+            );
+        }
+        if connection.title.trim().is_empty() {
+            problems.add(at(&here, "title"), "is required");
+        }
+        let missing = match connection.kind {
+            ConnectionKind::ApiKey if !has(PermissionKind::Secrets) => "needs a secrets permission",
+            ConnectionKind::OAuth if !has(PermissionKind::Net) || !has(PermissionKind::Secrets) => {
+                "needs net and secrets permissions"
+            }
+            ConnectionKind::AgentLogin if !has(PermissionKind::Credentials) => {
+                "needs a credentials permission"
+            }
+            ConnectionKind::AgentLogin if manifest.contributes.agent_adapters.is_empty() => {
+                "needs at least one agentAdapters entry"
+            }
+            _ => continue,
+        };
+        problems.add(here, format!("`{}` {missing}", connection.id));
     }
 }
 

@@ -149,6 +149,100 @@ fn the_mention_has_no_at_sign_no_spaces_and_at_most_32_characters() {
 }
 
 #[test]
+fn banner_examples_are_one_to_six_and_match_their_kind() {
+    let none = listing_with(json!({ "banner": { "examples": [] } }));
+    assert!(has_problem(
+        &problems(&none),
+        "/listing/banner/examples",
+        "1 to 6"
+    ));
+
+    let seven: Vec<Value> = (0..7)
+        .map(|_| json!({ "kind": "usage", "caption": "Use it" }))
+        .collect();
+    let many = listing_with(json!({ "banner": { "examples": seven } }));
+    assert!(has_problem(
+        &problems(&many),
+        "/listing/banner/examples",
+        "1 to 6"
+    ));
+
+    let mismatched = listing_with(json!({
+        "mention": "GitHub",
+        "banner": { "examples": [{ "kind": "mention", "text": "@Github", "caption": "Type it" }] }
+    }));
+    assert!(has_problem(
+        &problems(&mismatched),
+        "/listing/banner/examples/0/text",
+        "must equal `@GitHub`"
+    ));
+
+    let missing_mention = listing_with(json!({
+        "banner": { "examples": [{ "kind": "mention", "text": "@GitHub", "caption": "Type it" }] }
+    }));
+    assert!(has_problem(
+        &problems(&missing_mention),
+        "/listing/banner/examples/0/text",
+        "needs listing.mention"
+    ));
+}
+
+#[test]
+fn a_command_example_names_a_declared_command_by_keys_or_id() {
+    let by_keys = listing_with(json!({
+        "banner": { "examples": [{ "kind": "command", "text": "Ctrl+Alt+N", "caption": "Add a note" }] }
+    }));
+    assert!(load(&bytes(&by_keys)).is_ok());
+
+    let by_id = listing_with(json!({
+        "banner": { "examples": [{ "kind": "command", "text": "add-note", "caption": "Add a note" }] }
+    }));
+    assert!(load(&bytes(&by_id)).is_ok());
+
+    let unknown = listing_with(json!({
+        "banner": { "examples": [{ "kind": "command", "text": "/review", "caption": "Review" }] }
+    }));
+    assert!(has_problem(
+        &problems(&unknown),
+        "/listing/banner/examples/0/text",
+        "not a declared command"
+    ));
+}
+
+#[test]
+fn connections_need_the_permissions_their_kind_implies() {
+    let mut api_key = listing_with(json!({
+        "connections": [{ "id": "token", "kind": "api-key", "title": "API key" }]
+    }));
+    api_key["permissions"] = json!([]);
+    assert!(has_problem(
+        &problems(&api_key),
+        "/listing/connections/0",
+        "needs a secrets permission"
+    ));
+
+    let mut oauth = listing_with(json!({
+        "connections": [{ "id": "account", "kind": "oauth", "title": "GitHub account", "multiple": true }]
+    }));
+    oauth["permissions"] = json!([{ "kind": "net", "scope": { "hosts": ["api.example.com"] }, "reason": "Calls the API." }]);
+    assert!(has_problem(
+        &problems(&oauth),
+        "/listing/connections/0",
+        "needs net and secrets"
+    ));
+
+    let mut login = listing_with(json!({
+        "connections": [{ "id": "login", "kind": "agent-login", "title": "Agent login" }]
+    }));
+    login["permissions"] = json!([{ "kind": "credentials", "reason": "Signs in." }]);
+    assert!(has_problem(
+        &problems(&login),
+        "/listing/connections/0",
+        "at least one agentAdapters entry"
+    ));
+}
+
+#[test]
 fn a_declared_category_must_agree_with_the_contributions() {
     let skills = listing_with(json!({ "category": "skills" }));
     assert!(has_problem(
@@ -197,5 +291,34 @@ fn the_listing_object_and_the_old_icon_field_reject_unknown_fields() {
             assert!(found[0].message.contains("unknown field `icon`"))
         }
         other => panic!("expected a shape error, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_logo_and_the_banner_image_must_be_in_the_package() {
+    let value = listing_with(json!({
+        "logo": "icon.svg",
+        "banner": { "image": "media/banner.png", "examples": [{ "kind": "usage", "caption": "Use it" }] }
+    }));
+    let manifest: Manifest = load(&bytes(&value)).expect("valid listing");
+    assert!(
+        massorca_ext_package::manifest::check_files_present(
+            &manifest,
+            ["main.js", "icon.svg", "media/banner.png", "views/wall.json"]
+        )
+        .is_ok()
+    );
+    match massorca_ext_package::manifest::check_files_present(
+        &manifest,
+        ["main.js", "views/wall.json"],
+    ) {
+        Err(Error::MissingFiles(missing)) => {
+            let paths: Vec<&str> = missing
+                .iter()
+                .map(|problem| problem.path.as_str())
+                .collect();
+            assert_eq!(paths, ["/listing/logo", "/listing/banner/image"]);
+        }
+        other => panic!("expected missing listing files, got {other:?}"),
     }
 }

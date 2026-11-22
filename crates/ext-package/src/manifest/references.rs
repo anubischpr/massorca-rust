@@ -15,12 +15,17 @@ pub(crate) fn referenced(manifest: &Manifest) -> Vec<(String, String)> {
     if let Some(readme) = &manifest.readme {
         out.push(("/readme".to_owned(), readme.clone()));
     }
-    if let Some(logo) = manifest
-        .listing
-        .as_ref()
-        .and_then(|listing| listing.logo.as_ref())
-    {
-        out.push(("/listing/logo".to_owned(), logo.clone()));
+    if let Some(listing) = &manifest.listing {
+        if let Some(logo) = &listing.logo {
+            out.push(("/listing/logo".to_owned(), logo.clone()));
+        }
+        if let Some(image) = listing
+            .banner
+            .as_ref()
+            .and_then(|banner| banner.image.as_ref())
+        {
+            out.push(("/listing/banner/image".to_owned(), image.clone()));
+        }
     }
     for (index, theme) in contributes.themes.iter().enumerate() {
         let here = format!("/contributes/themes/{index}");
