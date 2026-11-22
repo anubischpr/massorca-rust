@@ -9,13 +9,16 @@ use gpui::{AnyElement, App, Context, Entity, PathPromptOptions, WeakEntity, div,
 use massorca_ui::assets::FONT_MONO;
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
+use massorca_ui::components::popover::OverlayLayer;
+use massorca_ui::components::select::SelectView;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::tokens::{RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
 use super::Shell;
 use crate::model::add_host::{
-    Check, SshTarget, can_add, no_program_sentence, passed_sentence, program_for,
+    Check, SshTarget, can_add, key_choice_at, key_labels, list_key_files, no_program_sentence,
+    passed_sentence, program_for,
 };
 use crate::model::pairing::name_or_none;
 use crate::service::{SshHost, bundled_program};
@@ -30,6 +33,9 @@ pub(super) struct AddHostFlow {
     pub address: Entity<TextField>,
     pub port: Entity<TextField>,
     pub user: Entity<TextField>,
+    /// The SSH key menu: the ssh config's choice, then the key files listed when the dialog opened.
+    pub key: Entity<SelectView>,
+    pub keys: Vec<PathBuf>,
     pub advanced_open: bool,
     /// The developer's override, picked under Advanced options. None uses the program packaged with the app.
     pub chosen_program: Option<PathBuf>,
@@ -45,21 +51,41 @@ pub(super) struct AddHostFlow {
 
 /// The target the dialog's fields make now, or why they do not.
 fn typed_target(flow: &AddHostFlow, cx: &App) -> Result<SshTarget, String> {
+    let key = key_choice_at(&flow.keys, flow.key.read(cx).selected_index());
     SshTarget::from_fields(
         flow.address.read(cx).text(),
         flow.port.read(cx).text(),
         flow.user.read(cx).text(),
+        key.identity(),
     )
+}
+
+/// The user's `.ssh` folder, where the key menu lists the keys; empty when the system names no home folder.
+pub(super) fn default_ssh_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join(".ssh"))
+        .unwrap_or_default()
 }
 
 impl Shell {
     /// "Add host" in Settings, Hosts: opens the dialog with empty fields.
     pub(super) fn open_add_host(&mut self, cx: &mut Context<Self>) {
+        let keys = list_key_files(&self.ssh_dir);
+        let key = cx.new(|cx| {
+            SelectView::new(key_labels(&keys), cx)
+                .label("SSH key")
+                .mono()
+                .layer(OverlayLayer::Dialog)
+                .selected(Some(0))
+        });
         self.add_host = Some(AddHostFlow {
             name: cx.new(|cx| TextField::new(cx).placeholder("The server's name")),
             address: cx.new(|cx| TextField::new(cx).placeholder("vps.example.ts.net").mono()),
             port: cx.new(|cx| TextField::new(cx).placeholder("22").mono()),
             user: cx.new(|cx| TextField::new(cx).placeholder("deploy").mono()),
+            key,
+            keys,
             advanced_open: false,
             chosen_program: None,
             check: Check::Idle,
@@ -284,7 +310,8 @@ fn dialog_body(
                 .child(flow.port.clone())
                 .into_any_element(),
         ))
-        .child(field_row("User", flow.user.clone().into_any_element()));
+        .child(field_row("User", flow.user.clone().into_any_element()))
+        .child(key_field(flow, theme));
     if let Some(error) = &flow.form_error {
         body = body.child(note(error, theme.palette.status.danger_fg));
     }
@@ -316,6 +343,24 @@ fn dialog_body(
     }
     body = body.child(advanced(flow, shell, theme));
     body.into_any_element()
+}
+
+/// The SSH key field: the menu's choice, with the line that says what the menu lists.
+fn key_field(flow: &AddHostFlow, theme: &Theme) -> AnyElement {
+    let helper = div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.tertiary)
+        .child("Lists the keys in your SSH config. The passphrase is asked only when needed.");
+    field_row(
+        "SSH key",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1))
+            .child(flow.key.clone())
+            .child(helper)
+            .into_any_element(),
+    )
 }
 
 /// One labelled field of the form.
