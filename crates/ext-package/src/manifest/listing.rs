@@ -12,7 +12,8 @@ use serde::Deserialize;
 
 use super::contributes::{Contributes, has_non_theme_contributions};
 use super::views::Slot;
-use super::{Manifest, check_path, is_https_url};
+use super::{HIDDEN_TEXT, Manifest, check_path, is_https_url};
+use crate::display_chars;
 use crate::error::{Problems, at};
 use crate::ids;
 use crate::permission::PermissionKind;
@@ -152,6 +153,8 @@ pub(crate) fn validate(manifest: &Manifest, problems: &mut Problems) {
     if let Some(developer) = &listing.developer {
         if developer.name.trim().is_empty() {
             problems.add("/listing/developer/name", "is required");
+        } else if display_chars::hidden_char(&developer.name).is_some() {
+            problems.add("/listing/developer/name", HIDDEN_TEXT);
         }
         if let Some(url) = developer.url.as_deref().filter(|url| !is_https_url(url)) {
             problems.add(
@@ -217,6 +220,8 @@ fn validate_banner(
         let here = at("/listing/banner/examples", index);
         if example.caption.trim().is_empty() {
             problems.add(at(&here, "caption"), "is required");
+        } else if display_chars::hidden_char(&example.caption).is_some() {
+            problems.add(at(&here, "caption"), HIDDEN_TEXT);
         }
         match example.kind {
             ExampleKind::Mention => validate_mention_example(example, listing, &here, problems),
@@ -290,6 +295,8 @@ fn validate_connections(connections: &[Connection], manifest: &Manifest, problem
         }
         if connection.title.trim().is_empty() {
             problems.add(at(&here, "title"), "is required");
+        } else if display_chars::hidden_char(&connection.title).is_some() {
+            problems.add(at(&here, "title"), HIDDEN_TEXT);
         }
         let missing = match connection.kind {
             ConnectionKind::ApiKey if !has(PermissionKind::Secrets) => "needs a secrets permission",
@@ -313,6 +320,9 @@ fn is_mention(text: &str) -> bool {
     !text.is_empty()
         && text.chars().count() <= 32
         && !text.chars().any(|character| {
-            character == '@' || character.is_whitespace() || character.is_control()
+            character == '@'
+                || character.is_whitespace()
+                || display_chars::is_format(character)
+                || character.is_control()
         })
 }

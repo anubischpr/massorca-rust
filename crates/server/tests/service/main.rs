@@ -8,6 +8,7 @@ mod config;
 mod config_keys;
 mod core_methods;
 mod events;
+mod extensions;
 mod frames;
 mod git_branches;
 mod git_commit;
