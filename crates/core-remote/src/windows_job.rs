@@ -28,7 +28,7 @@ unsafe extern "system" {
 /// Spawns `command` with `flags` inside a new kill-on-close job. Assigning a running child left a window in which
 /// a busy machine let it start a hook outside the job, and the hook then survived the kill. Without a job the
 /// child runs alone, and only it can be killed.
-pub(crate) fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Child, Option<Job>)> {
+pub fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Child, Option<Job>)> {
     let Ok(job) = Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())
     else {
         command.creation_flags(flags);
@@ -55,7 +55,7 @@ pub(crate) fn spawn_in_job(command: &mut Command, flags: u32) -> io::Result<(Chi
 
 /// Terminates every process in `job` and waits, up to `wait`, until none is left. Closing the job alone also kills
 /// them, but returns before they exit.
-pub(crate) fn terminate_and_wait(job: &Job, wait: Duration) {
+pub fn terminate_and_wait(job: &Job, wait: Duration) {
     // SAFETY: `job.handle()` is the job's open handle, valid for as long as `job` lives.
     unsafe { TerminateJobObject(job.handle() as *mut c_void, 1) };
     let deadline = Instant::now() + wait;

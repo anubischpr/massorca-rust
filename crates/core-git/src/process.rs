@@ -144,7 +144,8 @@ impl ProcessTree {
     /// The child is created inside the job, so nothing it starts escapes the job.
     #[cfg(windows)]
     fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        let (child, job) = crate::windows_job_spawn::spawn_in_job(command, CREATE_NO_WINDOW)?;
+        let (child, job) =
+            massorca_core_remote::windows_job::spawn_in_job(command, CREATE_NO_WINDOW)?;
         Ok((child, Self { job }))
     }
 
@@ -167,7 +168,7 @@ impl ProcessTree {
         // a `worktree add -b` runs) can still write once the caller starts cleaning up after it.
         #[cfg(windows)]
         if let Some(job) = self.job {
-            crate::windows_job_spawn::terminate_and_wait(&job, KILL_WAIT);
+            massorca_core_remote::windows_job::terminate_and_wait(&job, KILL_WAIT);
         }
     }
 

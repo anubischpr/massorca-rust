@@ -19,7 +19,6 @@ mod repository;
 mod status;
 mod version;
 #[cfg(windows)]
-mod windows_job_spawn;
 mod worktree;
 mod worktree_locks;
 mod worktree_porcelain;

@@ -3608,12 +3608,12 @@ name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "massorca-core-remote",
  "massorca-protocol",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "win32job",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
