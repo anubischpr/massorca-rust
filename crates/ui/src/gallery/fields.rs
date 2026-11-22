@@ -3,10 +3,11 @@
 use gpui::{AnyElement, App, Focusable, IntoElement, ParentElement, Styled, Window, div, px};
 
 use super::{Story, variant};
+use crate::components::empty_state::EmptyState;
 use crate::components::search_field::SearchField;
 use crate::components::text_field::TextField;
 use crate::icon::IconName;
-use crate::tokens::SPACE_4;
+use crate::tokens::{SPACE_2, SPACE_4};
 
 pub fn stories() -> Vec<Story> {
     vec![
@@ -40,7 +41,16 @@ fn search_field_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .gap(px(SPACE_4))
         .child(variant("Idle", idle, cx))
         .child(variant("Results", results, cx))
-        .child(variant("No matches", no_matches, cx))
+        .child(variant(
+            "No matches: the count, and the filtered empty state with Clear search",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .child(no_matches)
+                .child(EmptyState::filtered("search-no-matches", "oppm", |_, _| {})),
+            cx,
+        ))
         .into_any_element()
 }
 

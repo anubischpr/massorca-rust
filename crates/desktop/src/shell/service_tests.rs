@@ -13,10 +13,10 @@ use massorca_protocol::methods::workspaces::WorkspaceRemoved;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
-struct Rig {
-    shell: Entity<Shell>,
-    updates: UnboundedSender<StoreUpdate>,
-    script: Script,
+pub(super) struct Rig {
+    pub(super) shell: Entity<Shell>,
+    pub(super) updates: UnboundedSender<StoreUpdate>,
+    pub(super) script: Script,
 }
 
 fn setup(cx: &mut TestAppContext) {
@@ -26,11 +26,11 @@ fn setup(cx: &mut TestAppContext) {
     });
 }
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
-fn connected() -> ConnectionState {
+pub(super) fn connected() -> ConnectionState {
     ConnectionState::Connected {
         server: "massorca".into(),
         version: "0.1.0".into(),
@@ -38,13 +38,14 @@ fn connected() -> ConnectionState {
 }
 
 /// A shell on a service store with these projects and one workspace, connected.
-fn rig<'a>(
+pub(super) fn rig<'a>(
     cx: &'a mut TestAppContext,
     projects: &[(&str, &str)],
 ) -> (Rig, &'a mut VisualTestContext) {
     setup(cx);
     let (updates, rx) = unbounded_channel();
     let (handle, script) = ServiceHandle::scripted();
+    script.set_connection(connected());
     let (shell, cx) = cx.add_window_view(|window, cx| {
         let store = cx.new(|cx| ServiceStore::following(rx, cx));
         Shell::with_store(
@@ -84,7 +85,7 @@ fn rig<'a>(
     )
 }
 
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     draw(cx);
     let bounds = cx
         .debug_bounds(selector)

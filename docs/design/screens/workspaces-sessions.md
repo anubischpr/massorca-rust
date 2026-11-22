@@ -422,7 +422,7 @@ One viewer host with type-specific views: image (fit, 100 percent, zoom with Mod
 ### D-ED-11 File explorer (Project sidebar, Files tab)
 
 - **Purpose.** The tree of workspace files with search.
-- **Layout.** Project sidebar (288, min 240): the tab strip (icon-only, 28 px tabs, active one with `fill.selected.canvas` and a 2 px underline; Files, Sessions, Source control, Checks); the project name with three 24 px buttons (collapse all, refresh, more); the search field "Search files"; the "Names | Content" SegmentedControl; the tree. Rows 28 px, indent 12, chevron 12, folder or file icon 16, name, git letter at the right edge (M `status.warning.fg`, A `diff.add.fg`, D `diff.remove.fg`, ? `status.info.fg`). Ignored files are italic in `text.tertiary`.
+- **Layout.** Project sidebar (288, min 240): the tab strip (36 px, icon-only, 28 px tabs, active one with `fill.selected.canvas` and a 2 px underline; Files, Sessions, Source control, Checks); the project name with three 24 px buttons (collapse all, refresh, more); the search field "Search files"; the "Names | Content" SegmentedControl; the tree. Rows 28 px, indent 12, chevron 12, folder or file icon 16, name, git letter at the right edge (M `status.warning.fg`, A `diff.add.fg`, D `diff.remove.fg`, ? `status.info.fg`). Ignored files are italic in `text.tertiary`.
 - **Search.** Names filters the tree and highlights matches on `match.bg`. Content lists matching lines with their path in `mono-sm` (D-CP-03).
 - **States.** Loading; empty ("This folder is empty."); filtered; no match ("No files match your search."); error ("Could not read the file list." with "Retry"); host unreachable (the last tree, dimmed, with "Last known state, 5 min ago").
 - **Interactions.** Click opens a file as a Work panel tab (single click previews in an italic tab, double click keeps it); right-click: "Open", "Reveal in file manager", "Copy path", "Add to chat". Arrow keys, Enter, F2 rename.
@@ -570,7 +570,7 @@ The owner did not make these. Each follows the owner's notes as closely as possi
 
 | # | Decision | Alternative | What changes |
 |---|---|---|---|
-| 1 | `ws-session` is 1600 by 900, not 1440. All six regions open with a minimap need 48 + 200 + 480 + 240 + 320 + 240 = 1528 px, because the minimap needs a 480 px Conversation. | Keep 1440 and lower the minimap threshold to 360 px. | One number in the MessageMinimap spec; at 1440 the six-region view would show a minimap on a 392 px Conversation. |
+| 1 | `ws-session` is 1600 by 900, not 1440. (Derived reasoning; the measured ladder in `ws-narrow` is 1408, 1168, 928 and 728 px.) All six regions open with a minimap need 48 + 200 + 480 + 240 + 320 + 240 = 1528 px, because the minimap needs a 480 px Conversation. | Keep 1440 and lower the minimap threshold to 360 px. | One number in the MessageMinimap spec; at 1440 the six-region view would show a minimap on a 392 px Conversation. |
 | 2 | The Model picker opens above the Composer in a session (owner reference) and flips below it on the start page (ModelPicker spec). | Always above. | On the start page the picker would cover the heading and the placement row. |
 | 3 | The agents overview (D-AG-22) has no page: the Sessions tab and a Status bar popover do the job. Kanban view and terminal popout are not carried over. | A full-canvas overview page. | One more Sidebar or rail entry and a page. |
 | 4 | A workspace's label colour comes from the six usage slot colours, not from status colours (D-WS-04, D-WS-06). | Free colour choice. | A user tag could look like an error or a waiting state. |
@@ -582,7 +582,7 @@ The owner did not make these. Each follows the owner's notes as closely as possi
 | 10 | The floating terminal panel is 480 by 320 with four tabs (Terminal, Checklist, New session, Sessions). No source gives size or position. | A different default size, or no floating panel. | Setting D-ST-03 defaults. |
 | 11 | Terminal clipboard writes (OSC 52) are blocked by default with a one-line choice (D-TM-07). | Allow with a visible notice. | Some programs copy without a click; they would need the user's choice each time. |
 | 12 | Agent marks in the artboards are neutral placeholders, not provider artwork. | Real provider marks. | Assets only. |
-| 13 | The Project sidebar tab strip is 36 px high (28 px tabs with 4 px padding) so its rule lines up with the Work panel tab strip, as in the owner's reference. The ProjectSidebarTabs spec says 28 px. | Keep 28 px. | The two strips would not share one baseline. |
+| 13 | The Project sidebar tab strip is 36 px high (28 px tabs with 4 px padding) so its rule lines up with the Work panel tab strip, as in the owner's reference. The ProjectSidebarTabs spec now says the same (measured in the artboards, 2026-11-21). | Keep 28 px. | The two strips would not share one baseline. |
 | 14 | The No Git popover on the Sidebar row repeats the explanation of the composer Banner and offers "Initialize Git" in both places. | The popover only, or the Banner only. | One place fewer to learn. |
 
 ## Component gaps

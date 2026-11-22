@@ -11,7 +11,7 @@ use crate::components::model_picker::{
 };
 use crate::components::queued_message::{QueueStatus, QueuedItem, QueuedMessages, WaitReason};
 use crate::icon::IconName;
-use crate::tokens::SPACE_4;
+use crate::tokens::{LAYOUT_MODEL_PICKER_MAX_HEIGHT, SPACE_4};
 
 pub fn stories() -> Vec<Story> {
     vec![
@@ -81,7 +81,7 @@ fn composer_story(window: &mut Window, cx: &mut App) -> AnyElement {
     });
     let disabled = window.use_keyed_state("composer-gallery/composer/disabled", cx, |_, cx| {
         let mut composer = Composer::new(sample_state(), access_modes(), cx);
-        composer.set_disabled_reason(Some("Sign in to Claude to continue".into()), cx);
+        composer.set_signed_out(true, cx);
         composer
     });
     let unreachable =
@@ -113,7 +113,11 @@ fn composer_story(window: &mut Window, cx: &mut App) -> AnyElement {
         ))
         .child(variant("Agent running, empty: Stop", busy, cx))
         .child(variant("Agent running, with text: Queue", queued, cx))
-        .child(variant("Signed out: the reason line", disabled, cx))
+        .child(variant(
+            "Signed out: the reason line and Sign in",
+            disabled,
+            cx,
+        ))
         .child(variant(
             "Host unreachable: the message stays in the composer",
             unreachable,
@@ -265,7 +269,10 @@ fn model_picker_story(window: &mut Window, cx: &mut App) -> AnyElement {
         .child(variant("Trigger chip, closed", closed, cx))
         .child(variant(
             "Popover open above the chip, search focused",
-            open,
+            // Room above the chip, so the popover opens above it as in the Composer.
+            div()
+                .pt(px(LAYOUT_MODEL_PICKER_MAX_HEIGHT + SPACE_4))
+                .child(open),
             cx,
         ))
         .into_any_element()

@@ -11,8 +11,8 @@ Inventory IDs: D-CP-01 (Desktop), with D-CP-02, D-CP-03 and D-CP-04 as its modes
 | Part | Tokens | Size |
 |---|---|---|
 | Scrim | `scrim` | Whole window, behind the panel |
-| Panel | `surface.overlay`, `border.default`, `shadow.e3`, `radius.xl` | Width `layout.palette.width` (560, the dialog width `lg`); top offset `layout.palette.top` (96) |
-| Mode label and input | `text.primary` input text; `text.tertiary` placeholder; bottom rule `border.subtle` | Input height `size.control.comfortable` (32) |
+| Panel | `surface.overlay`, `border.default`, `shadow.e3`, `radius.xl` | Width `layout.palette.width` (600, as drawn on artboard `ws-palette`); top offset `layout.palette.top` (96) |
+| Mode label and input | `text.primary` input text; `text.tertiary` placeholder; bottom rule `border.subtle` | Input row height `layout.palette.input-height` (44, as drawn on `ws-palette`); the field inside is `size.control.default` (28), centred |
 | Group header | `overline` type style, `text.tertiary` | 16 px line |
 | Result row | `fill.hover.overlay` on hover; `fill.selected.overlay` and a 2 px `accent.fg` bar when active | Height `size.control.default` (28) |
 | Icon | `text.secondary`; a file result shows its file-type icon (A46 to A48); a session result shows its agent icon in full colour (A13) | `size.icon.sm` (16) |
@@ -79,7 +79,7 @@ Not used on Android in v1. If a palette-like search is needed, use a Sheet with 
 
 ## Token gaps and open points
 
-Token gaps: none. Width, maximum height and top offset are `layout.palette.*` tokens.
+Token gaps: none. Width, input row height, maximum height and top offset are `layout.palette.*` tokens.
 
 Open points:
 - How a user enters each mode is not defined. This spec uses Mod+P, Mod+Shift+F and a palette entry for settings search. Confirm.

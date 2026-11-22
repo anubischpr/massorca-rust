@@ -8,7 +8,10 @@ use massorca_protocol::methods::git::remote::{
 };
 
 use super::WorkspaceArg;
-use crate::error::CliError;
+use massorca_protocol::codes;
+use serde::Serialize;
+
+use crate::error::{CliError, exit};
 use crate::output::Output;
 
 #[derive(Debug, Args)]
@@ -95,8 +98,12 @@ pub(super) async fn run_pull(
             timeout_ms: None,
         })
         .await?;
-    output.success(&pulled, &[pull_line(&pulled)]);
-    Ok(())
+    let refusal = match &pulled {
+        GitPulled::Diverged { .. } => Some(codes::GIT_DIVERGED),
+        GitPulled::Conflicts { .. } => Some(codes::GIT_CONFLICTS),
+        _ => None,
+    };
+    finish(output, &pulled, pull_line(&pulled), refusal)
 }
 
 pub(super) async fn run_push(
@@ -112,8 +119,9 @@ pub(super) async fn run_push(
             timeout_ms: None,
         })
         .await?;
-    output.success(&pushed, &[push_line(&pushed)]);
-    Ok(())
+    let refusal =
+        matches!(pushed.outcome, PushOutcome::Rejected { .. }).then_some(codes::GIT_PUSH_REJECTED);
+    finish(output, &pushed, push_line(&pushed), refusal)
 }
 
 pub(super) async fn run_abort(
@@ -131,6 +139,23 @@ pub(super) async fn run_abort(
         &[format!("aborted the {:?}", aborted.operation).to_lowercase()],
     );
     Ok(())
+}
+
+/// Prints `line` as a success, or, when the operation did not do what was asked, fails with `refusal` (exit 1) and the
+/// result as the error data, so scripts and `--json` callers see the typed outcome.
+fn finish<T: Serialize>(
+    output: Output,
+    result: &T,
+    line: String,
+    refusal: Option<&str>,
+) -> Result<(), CliError> {
+    let Some(code) = refusal else {
+        output.success(result, &[line]);
+        return Ok(());
+    };
+    let mut error = CliError::new(code, line, exit::ERROR);
+    error.data = serde_json::to_value(result).ok().map(Box::new);
+    Err(error)
 }
 
 fn short(id: &str) -> &str {

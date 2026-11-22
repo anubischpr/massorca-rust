@@ -20,5 +20,7 @@ pub(crate) struct Session {
     /// Who the connection acts as, decided once at the handshake.
     pub(crate) principal: Principal,
     pub(crate) outbound: mpsc::Sender<Frame>,
+    /// The largest frame body this connection's transport carries.
+    pub(crate) max_frame_len: u32,
     pub(crate) streams: StreamTable,
 }

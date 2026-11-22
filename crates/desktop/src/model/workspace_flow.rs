@@ -210,7 +210,7 @@ pub enum DialogKind {
 
 /// The words of one remove dialog.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoveCopy {
+pub struct DialogCopy {
     pub kind: DialogKind,
     pub title: String,
     pub body: String,
@@ -308,6 +308,7 @@ impl RemoveFlow {
             Refusal::NameProblem { .. }
             | Refusal::PathProblem { .. }
             | Refusal::Failed { .. }
+            | Refusal::GitRefused { .. }
             | Refusal::Unavailable { .. } => {
                 self.error = Some(refusal.message());
                 return false;
@@ -318,24 +319,24 @@ impl RemoveFlow {
     }
 
     /// What the current dialog says.
-    pub fn copy(&self) -> RemoveCopy {
+    pub fn copy(&self) -> DialogCopy {
         let name = &self.workspace_name;
         match &self.stage {
-            RemoveStage::Confirm => RemoveCopy {
+            RemoveStage::Confirm => DialogCopy {
                 kind: DialogKind::Destructive,
                 title: format!("Delete workspace {name}?"),
                 body: "This removes the worktree folder from This PC.".to_owned(),
                 loss: Vec::new(),
                 action: DELETE_ACTION,
             },
-            RemoveStage::Dirty => RemoveCopy {
+            RemoveStage::Dirty => DialogCopy {
                 kind: DialogKind::Destructive,
                 title: format!("Delete workspace {name}?"),
                 body: "This workspace has changes that are not committed.".to_owned(),
                 loss: vec!["Uncommitted and untracked changes are deleted.".to_owned()],
                 action: DELETE_ACTION,
             },
-            RemoveStage::IgnoredFiles => RemoveCopy {
+            RemoveStage::IgnoredFiles => DialogCopy {
                 kind: DialogKind::Destructive,
                 title: format!("Delete workspace {name}?"),
                 body: "This workspace holds files that git ignores.".to_owned(),
@@ -345,7 +346,7 @@ impl RemoveFlow {
                 ],
                 action: DELETE_ACTION,
             },
-            RemoveStage::Orphan => RemoveCopy {
+            RemoveStage::Orphan => DialogCopy {
                 kind: DialogKind::Confirm,
                 title: format!("Forget {name}?"),
                 body: "Its folder is not a git worktree any more. MassOrca forgets the workspace \
@@ -354,7 +355,7 @@ impl RemoveFlow {
                 loss: Vec::new(),
                 action: "Forget workspace",
             },
-            RemoveStage::Refused { message } => RemoveCopy {
+            RemoveStage::Refused { message } => DialogCopy {
                 kind: DialogKind::Error,
                 title: format!("Cannot remove {name}"),
                 body: message.clone(),

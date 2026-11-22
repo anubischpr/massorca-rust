@@ -141,3 +141,25 @@ fn a_tree_with_only_ignored_files_is_not_clean_but_has_no_other_changes() {
 fn commit_file_in(repo: &std::path::Path, name: &str, contents: &str) {
     crate::fixture::commit_file(repo, name, contents, "add ignore rules");
 }
+
+/// `repository_dirs` reads `.git` without spawning git; it must agree with `rev-parse` for the main and a linked work tree.
+#[test]
+fn repository_dirs_agree_with_rev_parse() {
+    let fixture = Fixture::new();
+    let linked = fixture.sibling("linked");
+    run_git(
+        &fixture.repo(),
+        &["worktree", "add", "-q", "-b", "linked", text(&linked)],
+    );
+    for dir in [fixture.repo(), linked] {
+        let (git_dir, common) = git().repository_dirs(&dir).expect("repository dirs");
+        let expected_git = run_git(&dir, &["rev-parse", "--absolute-git-dir"]);
+        let expected_common = run_git(&dir, &["rev-parse", "--git-common-dir"]);
+        let expected_common = dir.join(expected_common.trim());
+        assert_eq!(
+            canonical(&git_dir),
+            canonical(std::path::Path::new(expected_git.trim()))
+        );
+        assert_eq!(canonical(&common), canonical(&expected_common));
+    }
+}

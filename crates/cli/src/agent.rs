@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
-use massorca_profile::Profile;
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
     AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
@@ -18,6 +17,7 @@ use crate::agent_text;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
+use crate::target::Target;
 use crate::terminal_attach;
 
 #[derive(Debug, Subcommand)]
@@ -202,9 +202,9 @@ pub struct AgentListArgs {
     pub workspace: Option<String>,
 }
 
-/// Runs one `agent` subcommand against the service of `profile`.
+/// Runs one `agent` subcommand against the service `target` names.
 pub async fn execute(
-    profile: &Profile,
+    target: &Target,
     autostart: bool,
     command: AgentCommand,
     output: Output,
@@ -220,12 +220,12 @@ pub async fn execute(
         }
         // Checked before connecting, so a refused attach never starts the service.
         terminal_attach::require_terminal()?;
-        let client = connect(profile, autostart).await?;
+        let client = connect(target, autostart).await?;
         let terminal = live_terminal(&client, session).await?;
         return terminal_attach::attach(&client, &terminal).await;
     }
 
-    let client = connect(profile, autostart).await?;
+    let client = connect(target, autostart).await?;
     match command {
         AgentCommand::Kinds => {
             let kinds = client.agent_kinds().await?;
