@@ -40,6 +40,10 @@ use crate::prompt;
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
+mod delegation;
+
+pub use delegation::{MergeResult, RepoOps};
+
 /// How often the terminals of live runs are checked for an exit (0052).
 pub const SWEEP_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -190,6 +194,8 @@ struct Inner {
     listener: OnceLock<Listener>,
     /// Serialises starts, so the one-writer check and the request id check see every earlier start.
     start_gate: Mutex<()>,
+    /// Serialises bring-backs, so a child is merged and marked once (0055).
+    bring_back_gate: Mutex<()>,
 }
 
 /// A run whose exit the service has not seen yet.
@@ -255,6 +261,7 @@ impl Agents {
                 status: Mutex::new(HashMap::new()),
                 listener: OnceLock::new(),
                 start_gate: Mutex::new(()),
+                bring_back_gate: Mutex::new(()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -293,6 +300,15 @@ impl Agents {
 
     /// Starts a session: its first run in a new terminal in the workspace root (0051).
     pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
+        self.start_session(params, None)
+    }
+
+    /// Starts a session, delegated from `parent_id` when one is given (0055).
+    fn start_session(
+        &self,
+        params: AgentStartParams,
+        parent_id: Option<String>,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
             && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
@@ -386,7 +402,7 @@ impl Agents {
             id: session_id.clone(),
             kind: decl.id.clone(),
             workspace_id: workspace.id,
-            parent_id: None,
+            parent_id,
             title: params.title,
             read_only: params.read_only,
             agent_ref,

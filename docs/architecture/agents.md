@@ -97,7 +97,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.resume` | workspace | `session` | `AgentSession` |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child) |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -185,6 +185,25 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+## Delegation
+
+`agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
+
+- The result of `agent.delegate` is the child's `AgentSession` with an optional `note` beside its fields
+  (`AgentDelegated`), so a reader that expects a session reads it unchanged. A writing child's note says that the
+  parent's uncommitted changes were not carried over.
+- The kind is checked before the child workspace is created, so an unknown or missing kind leaves no workspace. A child
+  workspace whose run then fails to start is kept; a retry with the same `request_id` reuses it.
+- `<parent workspace>-<n>` skips a number whose workspace name, branch or directory is already taken.
+- A token that does not match the parent's live run is refused with `agent.hook_refused`, in `agent.delegate` and
+  `agent.bring_back`.
+- `agent.tree` of a child returns its parent as the root.
+- `agent.bring_back` of a session that was not delegated is `request.invalid_params`. A child is finished when its run
+  has exited, or its activity is `done` and no prompt was typed since. Bring-backs are serialised, and the parent
+  workspace's git mutation lock (0010) is held for the whole call. The git work goes through a `RepoOps` port that the
+  service implements with `core-git`. The prompt to the parent is one line: control characters in the child's result,
+  line breaks included, become spaces, and at most 4 KiB of it is quoted, so it passes the prompt rules (0058).
 
 ## Status store
 

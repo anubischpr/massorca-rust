@@ -29,7 +29,7 @@ pub const RESUME: &str = "agent.resume";
 pub const HOOK: &str = "agent.hook";
 /// Params: [`AgentWatchParams`]. Result: `{ stream }`, as `events.subscribe`; then [`AgentWatchEvent`]s.
 pub const WATCH: &str = "agent.watch";
-/// Params: [`AgentDelegateParams`]. Result: [`AgentSession`], the child.
+/// Params: [`AgentDelegateParams`]. Result: [`AgentDelegated`]: the child's [`AgentSession`] with an optional `note`.
 pub const DELEGATE: &str = "agent.delegate";
 /// Params: [`AgentSessionRef`]. Result: [`AgentTree`].
 pub const TREE: &str = "agent.tree";
@@ -233,6 +233,17 @@ pub struct AgentDelegateParams {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+}
+
+/// Result of `agent.delegate`: the child's record, with its fields at the top level, and an optional note. A reader that
+/// expects an [`AgentSession`] reads it unchanged; `note` was added for the result to say that the parent's uncommitted
+/// changes were not carried over (0055).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDelegated {
+    #[serde(flatten)]
+    pub session: AgentSession,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Result of `agent.tree`.
