@@ -23,7 +23,9 @@ pub use connection::{
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
-pub use terminals::{StreamEnd, TerminalStream, TerminalStreamItem};
+pub use terminals::{StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
+#[cfg(test)]
+pub(crate) use terminals::{TerminalCommand, TerminalWrite};
 pub use update::{GitUpdate, StoreState, StoreUpdate, WorkspaceGit};
 
 #[cfg(test)]

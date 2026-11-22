@@ -5,6 +5,7 @@ use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
 use super::teams;
+use super::work_panel::{self, WorkFrame};
 use super::zones::{ZoneFocus, region_focus_ring};
 use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Page};
@@ -32,6 +33,8 @@ pub(super) struct PageFrames<'a> {
     pub settings: SettingsFrame<'a>,
     pub start: Option<StartFrame>,
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
+    /// The Work panel, while its region is on screen.
+    pub work_panel: Option<WorkFrame>,
     /// The body of the Project sidebar, when it is on screen.
     pub project: Option<AnyElement>,
     /// The diff of the file open from Source control, which takes the Canvas over the start page.
@@ -48,6 +51,7 @@ pub(super) fn canvas(
     let theme = *cx.theme();
     let overlay = model.overlay().filter(|region| *region != Region::Sidebar);
     let shell = cx.entity().downgrade();
+    let mut work = pages.work_panel.take();
     let mut project = pages.project.take();
     let surface = div()
         .debug_selector(|| "canvas".to_owned())
@@ -64,7 +68,7 @@ pub(super) fn canvas(
         .overflow_hidden()
         .child(conversation(model, &shell, pages, window, cx, &theme))
         .children(model.inline_regions().into_iter().map(|region| {
-            let body = body_of(region, &mut project);
+            let body = region_body(region, &mut work, &mut project, cx);
             region_column(
                 region,
                 zones.get(Zone::of_region(region)).clone(),
@@ -73,7 +77,7 @@ pub(super) fn canvas(
             )
         }));
     surface.children(overlay.map(|region| {
-        let body = body_of(region, &mut project);
+        let body = region_body(region, &mut work, &mut project, cx);
         overlay_panel(
             region,
             zones.get(Zone::of_region(region)).clone(),
@@ -83,12 +87,18 @@ pub(super) fn canvas(
     }))
 }
 
-/// The Project sidebar's body goes into its own column or overlay, once.
-fn body_of(region: Region, project: &mut Option<AnyElement>) -> Option<AnyElement> {
-    if region == Region::ProjectSidebar {
-        project.take()
-    } else {
-        None
+/// The body of a region, taken once: the Work panel's pane or the Project sidebar's body, and
+/// nothing for the other regions.
+fn region_body(
+    region: Region,
+    work: &mut Option<WorkFrame>,
+    project: &mut Option<AnyElement>,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    match region {
+        Region::WorkPanel => work.take().map(|frame| work_panel::work_panel(frame, cx)),
+        Region::ProjectSidebar => project.take(),
+        _ => None,
     }
 }
 
