@@ -479,7 +479,9 @@ impl RenderOnce for Dialog {
                 ),
         );
 
-        let scrim_closes = self.dismiss_on_scrim && self.variant.scrim_dismisses(false);
+        // A busy dialog ignores the scrim as it ignores Escape: a save in flight is never dismissed.
+        let scrim_closes =
+            self.dismiss_on_scrim && !self.busy && self.variant.scrim_dismisses(false);
         let outside = self.on_dismiss.clone();
 
         let panel = dialog_frame(
@@ -803,6 +805,35 @@ mod element_tests {
 
         cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
         assert_eq!(dismissals.get(), 1, "a press on the scrim dismisses");
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_scrim_is_ignored_while_busy(cx: &mut TestAppContext) {
+        let (view, cx, _actions, dismissals, _opener) = open_window(cx, DialogVariant::Confirm);
+        view.update(cx, |harness, cx| {
+            harness.dismiss_on_scrim = true;
+            harness.busy = true;
+            cx.notify();
+        });
+        set_open(&view, cx, true);
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "a busy dialog stays open from the scrim, as it does for Escape"
+        );
+
+        view.update(cx, |harness, cx| {
+            harness.busy = false;
+            cx.notify();
+        });
+        set_open(&view, cx, true);
+        cx.simulate_click(point(px(4.), px(4.)), Modifiers::none());
+        assert_eq!(
+            dismissals.get(),
+            1,
+            "once idle, a press on the scrim dismisses"
+        );
     }
 
     #[gpui::test]

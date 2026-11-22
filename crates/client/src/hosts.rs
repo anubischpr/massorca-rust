@@ -108,28 +108,54 @@ impl Hosts {
     }
 
     /// Stores a new host with its device identity. Refuses to replace an existing host, and to write into a profile
-    /// others could change. `hosts` and the host's folder are held open without following links, and each file is
-    /// written through the open folder (relative to its descriptor on Unix), so no link redirects a write.
+    /// others could change. The files are written into a staged folder held open without following links, and the
+    /// folder is renamed to the host's name only once all of them are there, so a crash never leaves half a host.
     pub fn add(&self, record: &HostRecord, identity: &TlsIdentity) -> Result<(), ClientError> {
         validate_host_name(&record.name)?;
-        let dir = self.dir.join(&record.name);
-        if dir.join(HOST_FILE).exists() {
-            return Err(ClientError::HostExists(record.name.clone()));
+        let name = record.name.as_str();
+        let dir = self.dir.join(name);
+        if present(&dir.join(HOST_FILE)).map_err(|error| unreadable(name, &error))? {
+            return Err(ClientError::HostExists(name.to_owned()));
         }
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        // One writer at a time, across processes: a sweep then never deletes another add's staged folder.
+        let _lock = hosts.lock()?;
         hosts.sweep_leftovers()?;
-        let host = hosts.child(&record.name)?;
-        host.sweep_leftovers()?;
+        // A host folder without a host file is what an interrupted add of an older build left: it never became a host.
+        // It is moved aside only when the host file is certainly absent, checked again under the held folder.
+        if present(&dir).map_err(|error| unreadable(name, &error))? {
+            match hosts.remove_child_dir_unless(name, HOST_FILE) {
+                Ok(true) => {}
+                Ok(false) => return Err(ClientError::HostExists(name.to_owned())),
+                Err(massorca_profile::RootAccessError::Io(error)) => {
+                    return Err(unreadable(name, &error));
+                }
+                Err(refused) => return Err(refused.into()),
+            }
+        }
         let (key_pem, cert_pem) = identity.to_pem().map_err(|error| {
             ClientError::Protocol(format!("cannot save the device key: {error}"))
         })?;
         let json = serde_json::to_vec_pretty(record)
             .map_err(|error| ClientError::Protocol(error.to_string()))?;
-        host.write_file(KEY_FILE, key_pem.as_bytes())?;
-        host.write_file(CERT_FILE, cert_pem.as_bytes())?;
-        host.write_file(HOST_FILE, &json)?;
-        Ok(())
+        let staged = hosts.staged_child()?;
+        let written = staged
+            .write_file(KEY_FILE, key_pem.as_bytes())
+            .and_then(|()| staged.write_file(CERT_FILE, cert_pem.as_bytes()))
+            .and_then(|()| staged.write_file(HOST_FILE, &json));
+        if let Err(error) = written {
+            let _ = hosts.discard(staged);
+            return Err(error.into());
+        }
+        // Publishing never replaces a host folder: when another add published the same name first, this one loses.
+        hosts.publish(staged, name).map_err(|error| {
+            if present(&dir).unwrap_or(false) {
+                ClientError::HostExists(name.to_owned())
+            } else {
+                error.into()
+            }
+        })
     }
 
     /// Forgets a host and deletes its device key. Refuses a profile others could change, and a host folder that is a
@@ -137,12 +163,20 @@ impl Hosts {
     /// only the moved folder is deleted.
     pub fn remove(&self, name: &str) -> Result<(), ClientError> {
         validate_host_name(name)?;
-        if !self.dir.join(name).join(HOST_FILE).exists() {
+        if !present(&self.dir.join(name).join(HOST_FILE))
+            .map_err(|error| unreadable(name, &error))?
+        {
             return Err(ClientError::HostNotFound(name.to_owned()));
         }
         massorca_profile::secure_root(&self.profile)?;
         let hosts = massorca_profile::open_private_dir(&self.dir)?;
+        let _lock = hosts.lock()?;
         hosts.sweep_leftovers()?;
+        if !present(&self.dir.join(name).join(HOST_FILE))
+            .map_err(|error| unreadable(name, &error))?
+        {
+            return Err(ClientError::HostNotFound(name.to_owned()));
+        }
         hosts.remove_child_dir(name)?;
         Ok(())
     }
@@ -156,11 +190,39 @@ pub fn validate_host_name(name: &str) -> Result<(), ClientError> {
             .next()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        && name != "local";
+        && name != "local"
+        && !is_windows_reserved(name);
     if valid {
         Ok(())
     } else {
         Err(ClientError::InvalidHostName(name.to_owned()))
+    }
+}
+
+/// Whether `path` exists; only "not found" means absent, and any other error is returned.
+fn present(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn unreadable(name: &str, error: &io::Error) -> ClientError {
+    ClientError::HostUnreadable {
+        name: name.to_owned(),
+        reason: error.to_string(),
+    }
+}
+
+/// Whether Windows reserves `name` for a device, so no file or folder can have it: CON, PRN, AUX, NUL, COM1 to COM9 and
+/// LPT1 to LPT9, in any case, alone or before an extension. Trailing dots and spaces cannot appear in a host name.
+fn is_windows_reserved(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
+    match base.as_bytes() {
+        b"con" | b"prn" | b"aux" | b"nul" => true,
+        [b'c', b'o', b'm', digit] | [b'l', b'p', b't', digit] => (b'1'..=b'9').contains(digit),
+        _ => false,
     }
 }
 
@@ -251,7 +313,7 @@ mod tests {
     fn plant_link(link: &std::path::Path, target: &std::path::Path) {
         #[cfg(windows)]
         {
-            let made = std::process::Command::new("cmd")
+            let made = massorca_process::command("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(link)
                 .arg(target)
@@ -366,7 +428,7 @@ mod tests {
         drop(massorca_profile::open_private_dir(&hosts).expect("hosts"));
         #[cfg(windows)]
         {
-            let granted = std::process::Command::new("icacls")
+            let granted = massorca_process::command("icacls")
                 .arg(&hosts)
                 .args(["/grant", "*S-1-1-0:(OI)(CI)(M)"])
                 .output()
@@ -447,7 +509,7 @@ mod tests {
         let profile = private_profile(temp.path());
         let hosts = profile.dir().join("hosts");
         drop(massorca_profile::open_private_dir(&hosts).expect("hosts"));
-        let granted = std::process::Command::new("icacls")
+        let granted = massorca_process::command("icacls")
             .arg(&hosts)
             .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
             .output()
@@ -466,5 +528,210 @@ mod tests {
             other => panic!("expected a refusal, got {other:?}"),
         }
         assert!(!hosts.join("office").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_crash_while_adding_leaves_no_host_and_the_next_add_succeeds() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        let dir = profile.dir().join("hosts");
+        drop(massorca_profile::open_private_dir(&dir).expect("hosts"));
+        // This layout: a staged folder that never got its host file.
+        let staged = dir.join(".writing-crashed");
+        std::fs::create_dir(&staged).expect("a staged folder");
+        std::fs::write(staged.join("device.key"), b"old key").expect("a key");
+        // An older build's layout: the host folder itself, with a key but no host file.
+        let half = dir.join("office");
+        std::fs::create_dir(&half).expect("a half-written host");
+        std::fs::write(half.join("device.key"), b"old key").expect("a key");
+        let hosts = Hosts::of(&profile);
+        assert!(
+            hosts.list().expect("listed").is_empty(),
+            "neither is a host"
+        );
+
+        hosts
+            .add(&office(), &identity)
+            .expect("added over the leftovers");
+
+        assert_eq!(hosts.get("office").expect("the host").name, "office");
+        assert_ne!(
+            std::fs::read(half.join("device.key")).expect("the new key"),
+            b"old key"
+        );
+        assert!(!staged.exists(), "the staged folder was swept");
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("listed")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let mut names = names;
+        names.sort();
+        // The writers' lock file stays; no leftover does.
+        assert_eq!(names, vec![".lock".to_owned(), "office".to_owned()]);
+    }
+
+    #[test]
+    fn windows_reserved_device_names_and_trailing_dots_or_spaces_are_not_host_names() {
+        use super::validate_host_name;
+
+        for name in [
+            "con",
+            "prn",
+            "aux",
+            "nul",
+            "com1",
+            "com9",
+            "lpt1",
+            "lpt9",
+            "CON",
+            "Nul",
+            "aux.txt",
+            "nul.tar.gz",
+            "office.",
+            "office ",
+            "office..",
+            "com1.",
+        ] {
+            assert!(validate_host_name(name).is_err(), "{name:?}");
+        }
+        for name in [
+            "console",
+            "com0",
+            "com10",
+            "lpt",
+            "auxiliary",
+            "null",
+            "office",
+        ] {
+            assert!(validate_host_name(name).is_ok(), "{name:?}");
+        }
+    }
+
+    /// Makes `host.json` in `office` unreadable to this user without removing anything; `undo` gives access back.
+    fn block_host_file(office: &std::path::Path) {
+        #[cfg(windows)]
+        for (path, right) in [
+            (office.to_path_buf(), "(RD)"),
+            (office.join("host.json"), "(RA)"),
+        ] {
+            let denied = massorca_process::command("icacls")
+                .arg(&path)
+                .args(["/deny", &format!("*S-1-1-0:{right}")])
+                .output()
+                .expect("icacls runs");
+            assert!(
+                denied.status.success(),
+                "{}",
+                String::from_utf8_lossy(&denied.stderr)
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(office, std::fs::Permissions::from_mode(0o000))
+                .expect("chmod");
+        }
+    }
+
+    fn unblock_host_file(office: &std::path::Path) {
+        #[cfg(windows)]
+        for path in [office.join("host.json"), office.to_path_buf()] {
+            let _ = massorca_process::command("icacls")
+                .arg(&path)
+                .args(["/remove:d", "*S-1-1-0"])
+                .output();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(office, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    #[test]
+    fn a_host_file_that_cannot_be_read_refuses_the_add_and_deletes_nothing() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = private_profile(temp.path());
+        let identity = TlsIdentity::generate("laptop").expect("a device identity");
+        let hosts = Hosts::of(&profile);
+        hosts.add(&office(), &identity).expect("a host");
+        let office_dir = profile.dir().join("hosts").join("office");
+        let key = std::fs::read(office_dir.join("device.key")).expect("its key");
+        block_host_file(&office_dir);
+        let blocked = std::fs::symlink_metadata(office_dir.join("host.json"));
+        if blocked.as_ref().is_ok_and(|_| true)
+            || blocked
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            unblock_host_file(&office_dir);
+            panic!("the test could not make the host file unreadable: {blocked:?}");
+        }
+
+        let other = TlsIdentity::generate("laptop").expect("another identity");
+        let refused = hosts.add(&office(), &other);
+        unblock_host_file(&office_dir);
+
+        match refused {
+            Err(crate::ClientError::HostUnreadable { name, .. }) => assert_eq!(name, "office"),
+            other => panic!("expected the add to be refused, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(office_dir.join("device.key")).expect("the key"),
+            key
+        );
+        assert!(office_dir.join("host.json").is_file());
+    }
+
+    #[test]
+    fn two_concurrent_adds_of_one_name_leave_one_whole_host() {
+        for _ in 0..5 {
+            let temp = tempfile::tempdir().expect("a temporary folder");
+            let profile = private_profile(temp.path());
+            let hosts = Hosts::of(&profile);
+            let identities = [
+                TlsIdentity::generate("first").expect("an identity"),
+                TlsIdentity::generate("second").expect("an identity"),
+            ];
+            let start = std::sync::Barrier::new(2);
+            let results: Vec<_> = std::thread::scope(|scope| {
+                let handles: Vec<_> = identities
+                    .iter()
+                    .map(|identity| {
+                        let (hosts, start) = (&hosts, &start);
+                        scope.spawn(move || {
+                            start.wait();
+                            hosts.add(&office(), identity)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("a thread"))
+                    .collect()
+            });
+
+            let winners: Vec<usize> = (0..2).filter(|index| results[*index].is_ok()).collect();
+            assert_eq!(winners.len(), 1, "{results:?}");
+            let loser = &results[1 - winners[0]];
+            assert!(
+                matches!(loser, Err(crate::ClientError::HostExists(name)) if name == "office"),
+                "{loser:?}"
+            );
+            let (winner_key, _) = identities[winners[0]].to_pem().expect("its key");
+            let office_dir = profile.dir().join("hosts").join("office");
+            assert_eq!(
+                std::fs::read_to_string(office_dir.join("device.key")).expect("the key"),
+                winner_key
+            );
+            assert_eq!(hosts.get("office").expect("the host").name, "office");
+        }
     }
 }
