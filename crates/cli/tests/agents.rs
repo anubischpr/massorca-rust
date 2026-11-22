@@ -128,7 +128,7 @@ fn a_started_agent_runs_in_its_workspace_and_stops_and_is_forgotten() {
         .success()
         .stdout(contains(format!("id: {session}")))
         .stdout(contains("execution: live"))
-        .stdout(contains("activity: no status"));
+        .stdout(contains("activity: done (success) from hook"));
 
     assert_eq!(
         error_code(&sandbox, &["agent", "start", "fake", "--workspace", "main"]),

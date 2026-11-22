@@ -119,6 +119,7 @@ impl SearchField {
                 .placeholder(placeholder)
                 .leading_icon(IconName::Search)
                 .clearable()
+                .clear_when_filled()
                 .search()
                 .with_text(query)
         });

@@ -6,6 +6,7 @@ use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
 use massorca_protocol::methods::terminals::{
     Terminal, TerminalAttachParams, TerminalCreateParams, TerminalResizeParams,
 };
+use massorca_ui::components::terminal_surface::feed::FeedEvent;
 use tokio::sync::{mpsc, oneshot};
 
 use super::bridge::{Command, ServiceHandle};
@@ -237,6 +238,43 @@ pub(super) async fn list_terminals(client: &Client) -> Result<Vec<Terminal>, Cli
         Ok(list) => Ok(list.terminals),
         Err(ClientError::Remote(_)) => Ok(Vec::new()),
         Err(error) => Err(error),
+    }
+}
+
+/// The feed events one attach update stands for: a snapshot is its header, then its bytes (0034).
+/// Every attached view feeds its emulator through this, so the desktop and its tests agree.
+pub fn feed_events(update: &AttachUpdate) -> Vec<FeedEvent<'_>> {
+    match update {
+        AttachUpdate::Attached { offset, .. } => vec![FeedEvent::Attached { offset: *offset }],
+        AttachUpdate::Snapshot {
+            offset,
+            cols,
+            rows,
+            bytes,
+        } => vec![
+            FeedEvent::Snapshot {
+                offset: *offset,
+                cols: *cols,
+                rows: *rows,
+                len: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            },
+            FeedEvent::SnapshotBytes(bytes),
+        ],
+        AttachUpdate::Output { offset, bytes } => vec![FeedEvent::Output {
+            offset: *offset,
+            bytes,
+        }],
+        AttachUpdate::Resized { cols, rows } => vec![FeedEvent::Resized {
+            cols: *cols,
+            rows: *rows,
+        }],
+        AttachUpdate::Exited { terminal } => vec![FeedEvent::Exited {
+            code: terminal
+                .exit
+                .as_ref()
+                .and_then(|exit| exit.code)
+                .and_then(|code| i32::try_from(code).ok()),
+        }],
     }
 }
 

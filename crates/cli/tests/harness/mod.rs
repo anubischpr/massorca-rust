@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
@@ -31,7 +31,13 @@ pub const WAIT: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_millis(100);
 
 /// Variables a test must not inherit from the developer's shell.
-const CLEARED_ENV: [&str; 3] = ["MASSORCA_PROFILE", "MASSORCA_NO_AUTOSTART", "MASSORCA_LOG"];
+const CLEARED_ENV: [&str; 5] = [
+    "MASSORCA_PROFILE",
+    "MASSORCA_NO_AUTOSTART",
+    "MASSORCA_LOG",
+    "MASSORCA_HOST",
+    "MASSORCA_LISTEN",
+];
 
 /// The `massorca` binary with `home` on its environment and no profile flag.
 pub fn massorca_in(home: &Path) -> Command {
@@ -46,10 +52,15 @@ pub fn massorca_in(home: &Path) -> Command {
 /// Runs `command` to completion with its stdout and stderr in temporary files, and returns its output.
 /// Returns `None` after `timeout`, once the command has been killed.
 pub fn capture(command: &mut Command, timeout: Duration) -> Option<Output> {
+    capture_with(command, Stdio::null(), timeout)
+}
+
+/// `capture` with `stdin` as the command's standard input.
+fn capture_with(command: &mut Command, stdin: Stdio, timeout: Duration) -> Option<Output> {
     let mut stdout = tempfile::tempfile().expect("a temporary file for stdout");
     let mut stderr = tempfile::tempfile().expect("a temporary file for stderr");
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(stdout.try_clone().expect("stdout can be duplicated"))
         .stderr(stderr.try_clone().expect("stderr can be duplicated"))
         .spawn()
@@ -86,6 +97,20 @@ fn read_back(file: &mut File) -> Vec<u8> {
 /// Runs `command` to completion within `COMMAND_TIMEOUT` and returns its outcome for assertions.
 pub fn execute(command: &mut Command) -> Assert {
     let output = capture(command, COMMAND_TIMEOUT)
+        .unwrap_or_else(|| panic!("the command did not finish in time: {command:?}"));
+    Assert::new(output)
+}
+
+/// Runs `command` with `input` on its standard input, to completion within `COMMAND_TIMEOUT`.
+pub fn execute_with_stdin(command: &mut Command, input: &str) -> Assert {
+    let mut stdin = tempfile::tempfile().expect("a temporary file for stdin");
+    stdin
+        .write_all(input.as_bytes())
+        .expect("the input can be written");
+    stdin
+        .seek(SeekFrom::Start(0))
+        .expect("the input can be rewound");
+    let output = capture_with(command, Stdio::from(stdin), COMMAND_TIMEOUT)
         .unwrap_or_else(|| panic!("the command did not finish in time: {command:?}"));
     Assert::new(output)
 }
@@ -344,6 +369,11 @@ impl ChildGuard {
 }
 
 impl ChildGuard {
+    /// Guards a child the test spawned itself.
+    pub fn new(child: Child) -> Self {
+        Self(child)
+    }
+
     /// `true` while the child has not exited.
     pub fn is_running(&mut self) -> bool {
         matches!(self.0.try_wait(), Ok(None))

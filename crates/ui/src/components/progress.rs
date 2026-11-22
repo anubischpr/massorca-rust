@@ -322,6 +322,15 @@ fn status_color(state: &ProgressState, palette: &Palette) -> Color {
     }
 }
 
+/// The glyph that leads a finished or failed status word, in its colour (Progress.md, States).
+fn status_glyph(state: &ProgressState, palette: &Palette) -> Option<(IconName, Color)> {
+    match state {
+        ProgressState::Complete => Some((IconName::CircleCheck, palette.status.success_fg)),
+        ProgressState::Failed => Some((IconName::OctagonAlert, palette.status.danger_fg)),
+        _ => None,
+    }
+}
+
 /// A bar for work with a name. The name is the thing in progress, as text.
 #[derive(Debug, IntoElement)]
 pub struct ProgressBar {
@@ -409,12 +418,8 @@ impl RenderOnce for ProgressBar {
                 .text_style(TYPE_CAPTION)
                 .tabular_figures()
                 .text_color(color);
-            if matches!(self.state, ProgressState::Failed) {
-                word = word.child(
-                    Icon::new(IconName::OctagonAlert)
-                        .size(IconSize::XSmall)
-                        .color(color),
-                );
+            if let Some((icon, icon_colour)) = status_glyph(&self.state, &palette) {
+                word = word.child(Icon::new(icon).size(IconSize::XSmall).color(icon_colour));
             }
             word.child(text)
         });
@@ -560,6 +565,20 @@ mod tests {
                 "{state:?}"
             );
         }
+    }
+
+    #[test]
+    fn finished_and_failed_statuses_lead_with_their_glyph() {
+        let p = Palette::DARK;
+        assert!(matches!(
+            status_glyph(&ProgressState::Complete, &p),
+            Some((IconName::CircleCheck, _))
+        ));
+        assert!(matches!(
+            status_glyph(&ProgressState::Failed, &p),
+            Some((IconName::OctagonAlert, _))
+        ));
+        assert!(status_glyph(&ProgressState::Active, &p).is_none());
     }
 
     #[gpui::test]

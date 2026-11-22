@@ -2,7 +2,10 @@
 
 mod actions;
 mod canvas;
+mod debug_focus;
+mod diff_page;
 mod palette;
+mod project_sidebar;
 mod rail;
 mod resize_edges;
 mod service_banner;
@@ -10,19 +13,24 @@ mod settings;
 mod setup;
 mod sidebar;
 mod sidebar_rows;
+mod source_control;
+mod source_control_dialogs;
 mod start_page;
 mod status_bar;
 mod teams;
 mod title_bar;
 mod tooltip;
+mod work_panel;
 mod workspace_dialog_views;
 mod workspace_dialogs;
 mod zones;
 
 use crate::data::DataSource;
+use crate::launch_options::DebugFocus;
 use crate::model::navigation::Page;
 use crate::model::palette::{Command, PaletteAction, PaletteMode};
 use crate::model::region_cycle::Zone;
+use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
@@ -38,21 +46,29 @@ use gpui::{
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
-use massorca_ui::components::text_field::{self, TextField, TextFieldEvent};
+use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 use rail::RailState;
+use source_control::SourceControl;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
 #[cfg(test)]
+mod debug_focus_tests;
+#[cfg(test)]
 mod service_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
+mod source_control_tests;
+#[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_panel_tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).
 #[derive(Debug)]
@@ -87,11 +103,25 @@ pub struct Shell {
     /// Keeps the bridge's runtime alive for as long as the shell lives.
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
+    /// Keeps the debug focus's query log alive; only a debug launch sets it.
+    _debug_input: Option<Subscription>,
+    /// The debug focus the launch asked for, if any; the start page composer logs for it.
+    debug_focus: Option<DebugFocus>,
+    /// Each workspace's start page composer, kept so its draft survives redraws.
+    start_composers: HashMap<String, start_page::StartComposer>,
     dialogs: WorkspaceDialogs,
+    /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
+    source_control: SourceControl,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
+    terminal_views: BTreeMap<String, work_panel::TerminalView>,
+    /// The terminal whose closing waits for the stop question.
+    stop_prompt: Option<String>,
+    /// A refused terminal call, as its title and its reason, under the Work panel's strip.
+    terminal_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -143,6 +173,7 @@ impl Shell {
             if store.read(cx).state().connection.is_connected() {
                 shell.settings.folder.forget_read_failure();
             }
+            shell.prune_terminal_views(store.read(cx).state());
             shell.model.set_snapshot(snapshot);
             cx.notify();
         });
@@ -178,6 +209,16 @@ impl Shell {
                 }
             },
         );
+        let commit_field = cx.new(|cx| {
+            TextField::new(cx)
+                .label("Message")
+                .placeholder("Commit message")
+        });
+        let commit_changes = cx.subscribe(&commit_field, |shell, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                shell.read_commit_message(cx);
+            }
+        });
         Self {
             model,
             focus,
@@ -198,9 +239,16 @@ impl Shell {
             service,
             _bridge: bridge,
             _store_changes: store_changes,
+            _debug_input: None,
+            debug_focus: None,
+            start_composers: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
+            source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            terminal_views: BTreeMap::new(),
+            stop_prompt: None,
+            terminal_notice: None,
         }
     }
 
@@ -315,7 +363,8 @@ impl Shell {
 
 /// Registers the key bindings of the shell and of the widgets it uses.
 pub fn bind_keys(cx: &mut App) {
-    text_field::bind_keys(cx);
+    // The composer binds its text area and the text fields it holds: Enter, Backspace, arrows.
+    massorca_ui::components::composer::bind_keys(cx);
     actions::bind_keys(cx);
 }
 
@@ -349,6 +398,21 @@ impl Render for Shell {
         let resize_grabs = resize_edges::resize_grabs(window);
         self.refresh_folder(cx);
         self.sync_folder_field(window, cx);
+        self.sync_source_control(window, cx);
+        let connected = self.store.read(cx).state().connection.is_connected();
+        // The start page's composer is created before the frames below borrow the Shell's fields.
+        let start = self.model.selected_workspace().and_then(|id| {
+            crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
+        });
+        let start = start.map(|page| {
+            let composer = self.start_composer(&page.id, cx);
+            start_page::StartFrame {
+                page,
+                composer,
+                shell: shell.clone(),
+                connected,
+            }
+        });
         let connection = self.store.read(cx).state().connection.clone();
         let settings = settings::SettingsFrame {
             model: &self.settings,
@@ -362,16 +426,19 @@ impl Render for Shell {
             self.store.read(cx).state(),
             if theme.is_dark() { "Dark" } else { "Light" },
         );
-        let start = self
+        let work_panel = self
             .model
-            .selected_workspace()
-            .and_then(|id| {
-                crate::model::start_page::workspace_start(self.store.read(cx).state(), id)
-            })
-            .map(|page| start_page::StartFrame {
-                page,
-                shell: shell.clone(),
-            });
+            .region_visible(Region::WorkPanel)
+            .then(|| self.work_frame(shell.clone(), cx));
+        let diff = self
+            .source_control
+            .open
+            .is_some()
+            .then(|| diff_page::diff_page(self, &shell, cx));
+        let project = self
+            .model
+            .region_visible(Region::ProjectSidebar)
+            .then(|| project_sidebar::project_body(self, &shell, cx));
         let canvas = canvas::canvas(
             &self.model,
             &self.zones,
@@ -379,6 +446,9 @@ impl Render for Shell {
                 settings,
                 start,
                 setup_rows,
+                work_panel,
+                project,
+                diff,
             },
             window,
             cx,
@@ -476,6 +546,11 @@ impl Render for Shell {
             .menu
             .as_ref()
             .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
+        let discard = self
+            .source_control
+            .discard
+            .as_ref()
+            .map(|flow| source_control_dialogs::discard_dialog(flow, &shell, cx));
         let team_dialog = self
             .team_dialog
             .as_ref()
@@ -484,6 +559,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let stop_terminal = self
+            .stop_prompt
+            .is_some()
+            .then(|| work_panel::stop_dialog(&shell, cx));
         div()
             .size_full()
             .flex()
@@ -493,7 +572,8 @@ impl Render for Shell {
             .text_body()
             .track_focus(&self.focus)
             // Escape closes the palette first, then an overlay region. The palette's own
-            // Escape binding loses to this one, so the palette is handled here.
+            // Escape binding loses to this one, so the palette is handled here. With nothing
+            // of the shell open it propagates, so a focused Search field clears.
             .on_action(cx.listener(|shell, _: &CloseOverlay, window, cx| {
                 if shell.model.palette().is_some() {
                     shell.close_palette(window, cx);
@@ -502,9 +582,11 @@ impl Render for Shell {
                     cx.notify();
                 } else if shell.settings.folder.dirty() {
                     shell.revert_folder(window, cx);
-                } else {
+                } else if shell.model.has_overlay() {
                     shell.model.close_overlay();
                     cx.notify();
+                } else {
+                    cx.propagate();
                 }
             }))
             .on_action(cx.listener(|shell, _: &CycleRegionForward, window, cx| {
@@ -539,8 +621,10 @@ impl Render for Shell {
             .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
+            .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
+            .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }
