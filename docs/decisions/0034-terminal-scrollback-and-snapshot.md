@@ -33,6 +33,14 @@ rendered snapshot on reattach rather than a raw replay.
   by the model's callbacks and sent in the `Terminal` record, not inside the
   bytes. A full-screen program in the alternate screen redraws itself after
   the client's resize, as in the old app.
+- **Grid switching** uses `?1049`, not `?47`: alacritty, the desktop emulator,
+  ignores 47, so a snapshot that used it drew the alternate grid over the main
+  one and left the cursor at the alternate grid's home. A live main screen draws
+  the alternate grid inside `?1049h`…`?1049l`, then the main grid last, so the
+  main cursor, saved cursor and margins win. A live alternate screen places the
+  main cursor where `?1049h` saves it, then draws the alternate grid. Margins and
+  origin mode are reset before each grid, because alacritty keeps them for the
+  whole terminal.
 - **Atomicity.** The reader thread applies one chunk to the model, the ring
   and every attachment under one lock, so a snapshot or a ring read taken
   under that lock sits exactly between two chunks. The offset in the snapshot

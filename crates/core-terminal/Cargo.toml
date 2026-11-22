@@ -23,6 +23,7 @@ rustix.workspace = true
 win32job.workspace = true
 
 [dev-dependencies]
+alacritty_terminal.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 

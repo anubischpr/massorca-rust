@@ -10,6 +10,12 @@ use super::types::{
 };
 use crate::model::shell::{Agent, HostReach};
 
+/// The host the sample team runs on, named as the shell names it.
+const VPS: &str = "VPS";
+
+/// VPS is unreachable for 5 minutes, as the shell snapshot shows it (data.rs).
+const VPS_REACH: HostReach = HostReach::Unreachable { minutes: 5 };
+
 /// Fills the Bot Teams state. Each source is chosen where the shell starts.
 pub trait TeamsSource {
     fn teams(&self) -> TeamsState;
@@ -42,8 +48,8 @@ fn sample_hosts() -> Vec<HostChoice> {
             reach: HostReach::Connected,
         },
         HostChoice {
-            name: "vps".into(),
-            reach: HostReach::Connected,
+            name: VPS.into(),
+            reach: VPS_REACH,
         },
     ]
 }
@@ -88,7 +94,7 @@ fn routine(
         cadence,
         time: time.into(),
         bot: Some(bot),
-        host: "vps".into(),
+        host: VPS.into(),
         enabled: true,
         last_run: None,
     }
@@ -104,7 +110,7 @@ fn desarrollo() -> Team {
         Some(BRUNO),
         None,
     );
-    nightly.reach = HostReach::Unreachable { minutes: 5 };
+    nightly.reach = VPS_REACH;
     let mut weekly_check = routine(
         1,
         "Check staging sign-up errors",
@@ -152,8 +158,8 @@ fn desarrollo() -> Team {
         id: TeamId(1),
         name: "Desarrollo".into(),
         purpose: "Sign-in and copy for oppm.".into(),
-        host: "vps".into(),
-        reach: HostReach::Connected,
+        host: VPS.into(),
+        reach: VPS_REACH,
         bots: vec![
             bot(
                 MARA,
@@ -204,7 +210,7 @@ fn desarrollo() -> Team {
         addresses: vec![WebAddress {
             id: AddressId(1),
             name: "Release hook".into(),
-            host: "vps".into(),
+            host: VPS.into(),
             created: "11 Nov 2026".into(),
             token: "sample-token".into(),
         }],
@@ -247,6 +253,7 @@ fn desarrollo() -> Team {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::{DataSource, SampleDataSource};
 
     #[test]
     fn the_sample_team_has_the_bots_and_board_the_specs_name() {
@@ -289,5 +296,22 @@ mod tests {
             created.0 > 7,
             "ids in the sample reach 7 and new ones follow"
         );
+    }
+
+    #[test]
+    fn the_sample_vps_is_unreachable_as_the_shell_snapshot_shows_it() {
+        let snapshot = SampleDataSource.snapshot();
+        let shell_vps = snapshot
+            .projects
+            .iter()
+            .flat_map(|project| &project.hosts)
+            .find(|host| host.name == VPS)
+            .expect("the shell snapshot has a VPS host");
+        let state = SampleTeamsSource.teams();
+        let host = state.hosts().iter().find(|host| host.name == VPS).unwrap();
+        let team = &state.teams()[0];
+        assert_eq!(host.reach, shell_vps.reach);
+        assert_eq!(team.host, VPS);
+        assert_eq!(team.reach, shell_vps.reach);
     }
 }

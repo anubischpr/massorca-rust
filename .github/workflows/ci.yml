@@ -18,14 +18,17 @@ env:
 # (massorca-ui and massorca-desktop, which build GPUI). A pull request runs
 # only the group it touches; workspace-wide files run both. Pushes to main
 # run both. To add a job, give it `needs: changes` and an `if:` on the
-# group it belongs to. When `desktop` starts depending on `client`, add the
-# crates it uses to the `ui` pattern so a core change also rebuilds the app.
+# group it belongs to. The desktop depends on every core crate (client,
+# protocol, server and what it runs), so a core-only change also runs the
+# desktop's real-service integration tests (`desktop-integration`), without
+# the ui unit suite.
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
       core: ${{ steps.groups.outputs.core }}
       ui: ${{ steps.groups.outputs.ui }}
+      desktop_deps: ${{ steps.groups.outputs.desktop_deps }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -38,17 +41,19 @@ jobs:
           fi
           files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
           echo "$files"
-          all=false; core=false; ui=false
+          all=false; core=false; ui=false; deps=false
           while IFS= read -r f; do
             case "$f" in
               Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|.github/workflows/*) all=true ;;
               crates/ui/*|crates/desktop/*) ui=true ;;
+              crates/protocol/*|crates/client/*|crates/server/*|crates/core-*/*|crates/profile/*|crates/cli/*) core=true; deps=true ;;
               crates/*) core=true ;;
             esac
           done <<< "$files"
           if [ "$all" = true ]; then core=true; ui=true; fi
           echo "core=$core" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "desktop_deps=$deps" >> "$GITHUB_OUTPUT"
 
   fmt:
     runs-on: ubuntu-latest
@@ -143,3 +148,30 @@ jobs:
       - if: runner.os == 'Linux'
         run: cargo clippy -p massorca-ui -p massorca-desktop --all-targets --locked -- -D warnings
       - run: cargo test -p massorca-ui -p massorca-desktop --locked
+
+  # A core-only change still reaches the desktop through the client and the
+  # service, so the desktop's real-service tests run against it. Only the
+  # integration targets run (`--test '*'`); the `ui` cache key is shared so
+  # GPUI comes from the cache instead of a fresh build. When `ui` runs, it
+  # already includes these tests.
+  desktop-integration:
+    needs: changes
+    if: needs.changes.outputs.desktop_deps == 'true' && needs.changes.outputs.ui != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - name: Install GPUI system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig-dev libwayland-dev             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libglib2.0-dev libasound2-dev libva-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ui
+          save-if: false
+      - run: cargo test -p massorca-desktop --test '*' --locked
