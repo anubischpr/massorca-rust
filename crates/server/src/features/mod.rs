@@ -2,6 +2,7 @@
 
 mod agents;
 mod config;
+mod config_keys;
 mod events;
 mod git;
 mod projects;

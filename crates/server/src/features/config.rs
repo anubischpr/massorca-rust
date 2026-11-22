@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::NoParams;
+use crate::features::{NoParams, config_keys};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -19,7 +19,11 @@ use crate::store_blocking;
 pub(crate) const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
-    Ok(vec![
+    let mut handles = Vec::new();
+    for decl in config_keys::core_settings(home_path(&["MassOrca", "Conversations"])?) {
+        handles.push(registries.settings.register(decl)?);
+    }
+    handles.extend([
         registries
             .capabilities
             .register(capabilities::CONFIG, Owner::Core)?,
@@ -52,16 +56,22 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Read,
             list,
         )?,
-    ])
+    ]);
+    Ok(handles)
 }
 
 /// `<user home>/massorca/workspaces`, as a string the protocol can carry.
 pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
+    home_path(&["massorca", "workspaces"])
+}
+
+/// `parts` joined under the user's home directory, as a string the protocol can carry.
+fn home_path(parts: &[&str]) -> Result<String, ServiceError> {
     let base = directories::BaseDirs::new().ok_or_else(|| {
         ServiceError::DefaultWorkspaceRoot("there is no user home directory".to_owned())
     })?;
     let mut path = base.home_dir().to_path_buf();
-    path.extend(["massorca", "workspaces"]);
+    path.extend(parts);
     path.into_os_string().into_string().map_err(|_| {
         ServiceError::DefaultWorkspaceRoot("the user home directory is not UTF-8".to_owned())
     })
