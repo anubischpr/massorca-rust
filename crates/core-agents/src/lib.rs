@@ -18,4 +18,4 @@ pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
 pub use event::{DoneOutcome, EventTarget};
 pub use kind::KindDecl;
 pub use resolve::SearchEnv;
-pub use sessions::{AgentError, Agents, AgentsConfig, Change, Listener};
+pub use sessions::{AgentError, Agents, AgentsConfig, Change, Listener, MergeResult, RepoOps};

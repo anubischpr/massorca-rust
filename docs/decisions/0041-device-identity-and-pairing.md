@@ -48,10 +48,17 @@ continues as that device. The client stores the host (0046).
 - An offer expires after 10 minutes by default, 1 hour at most. A used,
   unknown or wrong secret is `pairing.invalid`; an expired one is
   `pairing.expired`. At most 16 offers are pending.
-- Failed pairing attempts are limited per source address (5 in 5 minutes)
-  and overall (30 in 5 minutes). Past the limit every pairing attempt from
-  that address, right or wrong, is `pairing.rate_limited` until the window
-  passes. With a 256-bit secret, guessing is not the threat; the limit bounds
+- Failed pairing attempts are limited per source (5 in 5 minutes; an IPv4
+  address, or an IPv6 /64). Past the limit every pairing attempt from that
+  source, right or wrong, is `pairing.rate_limited` until the window passes.
+  Once 30 failures from all sources together are in the window, any source
+  that has failed at least once is limited too; a source with no failures
+  can always pair, so nobody can lock pairing for everyone.
+- An offer is spent only when its device is stored. If storing the device
+  fails, the offer stays usable.
+- A device connection is registered for revocation before its row is checked
+  a second time, so a revocation that lands while the device authenticates
+  either closes the connection or refuses it. With a 256-bit secret, guessing is not the threat; the limit bounds
   noise and work.
 - Possession of the offer is the owner's approval: only the owner or a
   device-admin can create one, and it reaches the device through a channel

@@ -148,7 +148,7 @@ fn read_record(path: &Path) -> Result<Option<HostRecord>, ClientError> {
     }
 }
 
-/// Creates a directory only the user can enter (0700 on Unix; Windows keeps the profile's per-user access).
+/// Creates a directory only the user can enter (0700 on Unix; a protected owner-only DACL on Windows).
 fn create_private_dir(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -156,5 +156,7 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(windows)]
+    massorca_profile::restrict_to_owner(dir)?;
     Ok(())
 }
