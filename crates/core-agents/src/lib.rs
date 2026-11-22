@@ -8,6 +8,7 @@ pub mod event;
 pub mod kind;
 pub mod launch;
 pub mod paths;
+pub mod prompt;
 pub mod resolve;
 pub mod sessions;
 pub mod status;
