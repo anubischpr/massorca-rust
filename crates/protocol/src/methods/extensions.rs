@@ -92,6 +92,9 @@ pub struct ExtensionRemoveParams {
     /// A request carrying one may not run a vendor uninstaller (`extension.needs_person`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
+    /// The fingerprint of the uninstall commands the person accepted (`extension.consent_required` carries it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uninstall_consent: Option<String>,
 }
 
 /// Result of `extensions.list` and `extensions.catalogue`.
@@ -401,6 +404,9 @@ pub struct KindView {
     pub env: Vec<String>,
     #[serde(default)]
     pub credential_home_env: Option<String>,
+    /// A built-in's own credential home: named, never with its variable.
+    #[serde(default)]
+    pub own_credential_home: bool,
     #[serde(default)]
     pub credential_files: Vec<String>,
 }
@@ -418,6 +424,12 @@ pub struct CliPlan {
     pub agent: String,
     #[serde(default)]
     pub binary: Option<String>,
+    /// The verify command, after the install; absent when none is documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Vec<String>>,
+    /// The uninstall command for this host, when one is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uninstall: Option<Vec<String>>,
     #[serde(flatten)]
     pub state: CliPlanState,
 }

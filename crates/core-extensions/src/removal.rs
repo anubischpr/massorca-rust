@@ -10,8 +10,10 @@ use serde::Serialize;
 use crate::error::{Error, HookError, codes};
 use crate::hooks::{HookHandle, HookKind};
 use crate::host::INSTALLER_TIMEOUT;
-use crate::lockfile::LockCli;
+use crate::lockfile::{LockCli, LockEntry};
+use crate::review::uninstall_fingerprint;
 use crate::service::{Extensions, describe};
+use massorca_ext_package::manifest::agent::CliOs;
 
 /// The result of `set_enabled`. `changed` is false when the package was already in that state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -127,6 +129,7 @@ impl Extensions {
         id: &str,
         delete_agent_homes: bool,
         uninstall_cli: bool,
+        uninstall_consent: Option<&str>,
     ) -> Result<Removed, Error> {
         // The change lock covers the lockfile and the files. The uninstall commands run after it is released, with the
         // package busy, so other packages can change meanwhile.
@@ -140,6 +143,23 @@ impl Extensions {
                 .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
             // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
             let manifest = self.installed_manifest(&entry).ok();
+            if uninstall_cli {
+                // The uninstall runs only for the commands the person accepted (0062, V2): nothing changes without them.
+                let commands = pending_uninstalls(&entry, manifest.as_ref(), self.os);
+                if !commands.is_empty() {
+                    let fingerprint = uninstall_fingerprint(&commands);
+                    match uninstall_consent {
+                        None => {
+                            return Err(Error::UninstallConsentRequired {
+                                commands,
+                                fingerprint,
+                            });
+                        }
+                        Some(given) if given != fingerprint => return Err(Error::ConsentMismatch),
+                        Some(_) => {}
+                    }
+                }
+            }
             self.run_guards(id)?;
             lockfile.packages.retain(|package| package.id != id);
             lockfile.write(&self.layout.lock_path())?;
@@ -254,4 +274,30 @@ fn remove_tree(dir: &Path) -> std::io::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+/// The uninstall commands a removal would run for the CLIs this package installed, for this OS.
+fn pending_uninstalls(
+    entry: &LockEntry,
+    manifest: Option<&Manifest>,
+    os: Option<CliOs>,
+) -> Vec<Vec<String>> {
+    entry
+        .cli
+        .iter()
+        .filter(|cli| cli.installed_by_package)
+        .filter_map(|cli| {
+            manifest?
+                .contributes
+                .agent_adapters
+                .iter()
+                .find(|adapter| adapter.id == cli.agent)?
+                .cli
+                .as_ref()?
+                .uninstall
+                .iter()
+                .find(|step| Some(step.os) == os)
+                .map(|step| step.command.clone())
+        })
+        .collect()
 }

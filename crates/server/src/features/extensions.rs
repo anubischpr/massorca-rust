@@ -196,7 +196,12 @@ async fn remove(
         )?;
     }
     let removed = on_extensions(&ctx, move |extensions| {
-        extensions.remove(&params.id, params.delete_agent_homes, params.uninstall_cli)
+        extensions.remove(
+            &params.id,
+            params.delete_agent_homes,
+            params.uninstall_cli,
+            params.uninstall_consent.as_deref(),
+        )
     })
     .await?;
     publish(&ctx, TOPIC_EXTENSION_REMOVED, &removed.id);

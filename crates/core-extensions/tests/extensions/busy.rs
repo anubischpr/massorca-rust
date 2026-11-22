@@ -59,7 +59,7 @@ fn other_packages_change_while_an_install_runs_its_vendor_command() {
     assert_eq!(second.expect_err("busy").code(), codes::BUSY);
     assert_eq!(
         service
-            .remove("massorca.codex", false, false)
+            .remove("massorca.codex", false, false, None)
             .expect_err("busy")
             .code(),
         codes::BUSY
@@ -73,7 +73,7 @@ fn other_packages_change_while_an_install_runs_its_vendor_command() {
 
     // Committed: the mark is gone, so the removal now goes through.
     let removed = service
-        .remove("massorca.codex", false, false)
+        .remove("massorca.codex", false, false, None)
         .expect("removed");
     assert_eq!(removed.id, "massorca.codex");
 }

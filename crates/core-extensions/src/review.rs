@@ -44,6 +44,10 @@ pub struct CliPlan {
     pub agent: String,
     /// `None` when the adapter declares no `cli` block.
     pub binary: Option<String>,
+    /// The verify command, which runs after the install; `None` when the built-in documents none.
+    pub verify: Option<Vec<String>>,
+    /// The uninstall command for this OS, if one is declared.
+    pub uninstall: Option<Vec<String>>,
     #[serde(flatten)]
     pub state: PlanState,
 }
@@ -74,6 +78,13 @@ pub fn plan(
             CliPlan {
                 agent: adapter.id.clone(),
                 binary: cli.map(|cli| cli.binary.clone()),
+                verify: cli.and_then(|cli| cli.verify.clone()),
+                uninstall: cli.and_then(|cli| {
+                    cli.uninstall
+                        .iter()
+                        .find(|step| Some(step.os) == os)
+                        .map(|step| step.command.clone())
+                }),
                 state: cli.map_or(PlanState::Unsupported, |cli| plan_one(cli, resolver, os)),
             }
         })
@@ -179,6 +190,8 @@ pub fn review(
                 KindView::of(
                     &adapter.id,
                     package.files.get(&adapter.kind).map(Vec::as_slice),
+                    // A built-in's internal names stay out of the review (0062, V3).
+                    package.source.kind == crate::lockfile::SourceKind::Catalogue,
                 )
             })
             .collect(),
@@ -189,4 +202,14 @@ pub fn review(
         cli,
         consent,
     }
+}
+
+/// The consent fingerprint of an uninstall: SHA-256 over the commands the removal would run, as one JSON array. A removal
+/// runs them only when the person accepts exactly these (0062, V2).
+pub fn uninstall_fingerprint(commands: &[Vec<String>]) -> String {
+    sha256_hex(
+        json!(["massorca.uninstall/1", commands])
+            .to_string()
+            .as_bytes(),
+    )
 }

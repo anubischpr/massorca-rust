@@ -91,7 +91,7 @@ fn a_guard_refusal_stops_the_removal() {
     });
     let error = s
         .service
-        .remove("acme.kit", true, true)
+        .remove("acme.kit", true, true, None)
         .expect_err("refused");
     assert_eq!(error.code(), "agent.busy");
     assert_eq!(*seen.lock().expect("seen"), vec!["acme.kit".to_owned()]);
@@ -107,7 +107,7 @@ fn removal_deletes_the_package_and_its_data() {
     let s = installed_claude();
     let removed = s
         .service
-        .remove("massorca.claude", false, false)
+        .remove("massorca.claude", false, false, None)
         .expect("removes");
     assert_eq!(removed.id, "massorca.claude");
     assert!(removed.failures.is_empty());
@@ -119,7 +119,7 @@ fn removal_deletes_the_package_and_its_data() {
     assert!(!s.exists("data/massorca.claude"));
     let again = s
         .service
-        .remove("massorca.claude", false, false)
+        .remove("massorca.claude", false, false, None)
         .expect_err("gone");
     assert_eq!(again.code(), codes::NOT_INSTALLED);
 }
@@ -136,7 +136,7 @@ fn cleanups_run_only_when_asked_and_their_failures_are_reported() {
         });
         let removed = s
             .service
-            .remove("acme.kit", delete_agent_homes, false)
+            .remove("acme.kit", delete_agent_homes, false, None)
             .expect("removes despite the cleanup");
         assert_eq!(
             s.lock_json().expect("lock")["packages"],
@@ -158,7 +158,7 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
     let s = installed_claude();
     let offered = s
         .service
-        .remove("massorca.claude", false, false)
+        .remove("massorca.claude", false, false, None)
         .expect("removes");
     let command = claude_uninstall();
     assert_eq!(
@@ -171,7 +171,7 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
     let s = installed_claude();
     let ran = s
         .service
-        .remove("massorca.claude", false, true)
+        .remove("massorca.claude", false, true, Some(&confirm()))
         .expect("removes");
     assert_eq!(
         ran.cli[0].action,
@@ -184,7 +184,10 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
     assert!(s.service.layout().uninstall_log("massorca.claude").exists());
 
     let s = installed(FakeHost::new().with_program("kit"), false);
-    let left = s.service.remove("acme.kit", false, true).expect("removes");
+    let left = s
+        .service
+        .remove("acme.kit", false, true, None)
+        .expect("removes");
     assert_eq!(left.cli[0].action, CliAction::LeftAlone);
     assert!(s.host.runs().is_empty());
 }
@@ -194,7 +197,7 @@ fn a_failed_cli_uninstall_is_reported_after_the_removal() {
     let s = installed_claude_with(FakeHost::new().exit_for("uninstall", 2));
     let removed = s
         .service
-        .remove("massorca.claude", false, true)
+        .remove("massorca.claude", false, true, Some(&confirm()))
         .expect("removes");
     assert!(matches!(removed.cli[0].action, CliAction::Failed { .. }));
     assert_eq!(
@@ -224,7 +227,7 @@ fn a_forged_lockfile_path_is_refused_and_nothing_outside_the_package_is_deleted(
 
     let error = s
         .service
-        .remove("acme.kit", false, false)
+        .remove("acme.kit", false, false, None)
         .expect_err("a path outside the package is refused");
 
     assert_eq!(
@@ -262,4 +265,58 @@ fn a_changed_installed_manifest_is_never_trusted_or_run() {
     assert_eq!(kinds[1].kind_id, "other");
     assert!(kinds[1].path.is_some() && kinds[1].error.is_none());
     assert!(s.host.runs().iter().all(|argv| argv[0] != "planted"));
+}
+
+#[test]
+fn an_uninstall_runs_only_after_its_confirmation_and_nothing_changes_without_it() {
+    let s = installed_claude();
+    let commands = vec![claude_uninstall()];
+    let fingerprint = massorca_core_extensions::review::uninstall_fingerprint(&commands);
+
+    let refused = s.service.remove("massorca.claude", false, true, None);
+    let error = refused.expect_err("the uninstall needs its confirmation");
+    assert_eq!(error.code(), codes::CONSENT_REQUIRED);
+    let data = error.data().expect("the error names what would run");
+    assert_eq!(data["uninstall"], serde_json::json!(commands));
+    assert_eq!(data["fingerprint"], fingerprint.as_str());
+    assert!(
+        s.host.runs().iter().all(|argv| argv[1] != "uninstall"),
+        "no uninstall ran"
+    );
+    assert_eq!(
+        s.lock_json().expect("lock")["packages"][0]["id"],
+        "massorca.claude"
+    );
+
+    let wrong = s
+        .service
+        .remove("massorca.claude", false, true, Some("stale"))
+        .expect_err("a different review is refused");
+    assert_eq!(wrong.code(), codes::CONSENT_MISMATCH);
+    assert_eq!(
+        s.lock_json().expect("lock")["packages"][0]["id"],
+        "massorca.claude"
+    );
+
+    let removed = s
+        .service
+        .remove("massorca.claude", false, true, Some(&fingerprint))
+        .expect("removes with the confirmation");
+    assert!(matches!(removed.cli[0].action, CliAction::Ran { .. }));
+    assert_eq!(s.host.runs().last(), Some(&claude_uninstall()));
+}
+
+#[test]
+fn removing_without_an_uninstall_asks_nothing() {
+    let s = installed_claude();
+    let removed = s
+        .service
+        .remove("massorca.claude", false, false, None)
+        .expect("removes");
+    assert!(matches!(removed.cli[0].action, CliAction::Offered { .. }));
+}
+
+/// The confirmation a person gives the built-in Claude's uninstall on this host.
+fn confirm() -> String {
+    massorca_core_extensions::review::uninstall_fingerprint(&[claude_uninstall()])
 }

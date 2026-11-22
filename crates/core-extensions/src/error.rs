@@ -66,6 +66,13 @@ pub enum Error {
     KindConflict { kind: String, installed_by: String },
     #[error("a package archive needs its SHA-256")]
     HashRequired,
+    #[error(
+        "removing runs a vendor uninstall command; accept it with --yes or --uninstall-consent {fingerprint}"
+    )]
+    UninstallConsentRequired {
+        commands: Vec<Vec<String>>,
+        fingerprint: String,
+    },
     #[error("the install review was not accepted")]
     ConsentRequired,
     #[error("the package or its install plan changed since the review")]
@@ -127,6 +134,7 @@ impl Error {
             Self::InvalidLockfile(_) => codes::INVALID_LOCKFILE,
             Self::Tampered(_) => codes::TAMPERED,
             Self::ReservedIdentity { .. } => codes::RESERVED_PUBLISHER,
+            Self::UninstallConsentRequired { .. } => codes::CONSENT_REQUIRED,
             Self::Io { .. } => codes::IO,
         }
     }
@@ -135,6 +143,10 @@ impl Error {
     /// that ran and that its CLI may remain on the host.
     pub fn data(&self) -> Option<serde_json::Value> {
         match self {
+            Self::UninstallConsentRequired {
+                commands,
+                fingerprint,
+            } => Some(serde_json::json!({ "uninstall": commands, "fingerprint": fingerprint })),
             Self::VerifyFailed {
                 agent,
                 installer: Some(command),

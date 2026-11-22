@@ -95,3 +95,22 @@ fn the_review_shows_what_each_agent_kind_starts_and_reads_and_each_mcp_command()
     assert_eq!(kind.credential_files, ["auth.json"]);
     assert!(review.mcp_servers.is_empty());
 }
+
+#[test]
+fn the_built_in_review_shows_its_verify_and_uninstall_commands_for_this_host() {
+    let review = claude_review(&FakeHost::new());
+    assert_eq!(
+        review.cli[0].verify.as_deref(),
+        Some(&["claude".to_owned(), "--version".to_owned()][..])
+    );
+    assert!(review.cli[0].uninstall.is_some());
+}
+
+#[test]
+fn a_built_in_kind_names_no_internal_variable() {
+    let review = claude_review(&FakeHost::new());
+    let kind = &review.kinds[0];
+    assert!(kind.own_credential_home);
+    assert_eq!(kind.credential_home_env, None);
+    assert!(kind.env.is_empty());
+}

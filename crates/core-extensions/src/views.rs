@@ -242,11 +242,14 @@ pub struct KindView {
     pub env: Vec<String>,
     /// The variable that points at the credential home, and the files kept there.
     pub credential_home_env: Option<String>,
+    /// A built-in keeps its own credential home: the review says so and names no variable (0062, V3).
+    pub own_credential_home: bool,
     pub credential_files: Vec<String>,
 }
 
 impl KindView {
-    pub fn of(id: &str, declaration: Option<&[u8]>) -> Self {
+    /// `builtin` marks a built-in kind, whose internal names the review leaves out.
+    pub fn of(id: &str, declaration: Option<&[u8]>, builtin: bool) -> Self {
         let value: Option<serde_json::Value> =
             declaration.and_then(|bytes| serde_json::from_slice(bytes).ok());
         let Some(value) = value else {
@@ -257,6 +260,7 @@ impl KindView {
                 args: Vec::new(),
                 env: Vec::new(),
                 credential_home_env: None,
+                own_credential_home: false,
                 credential_files: Vec::new(),
             };
         };
@@ -277,13 +281,15 @@ impl KindView {
             .filter_map(|name| name.as_str().map(str::to_owned))
             .collect();
         env.sort();
+        let home = credentials["home_env"].as_str().map(str::to_owned);
         Self {
             id: id.to_owned(),
             readable: true,
             program: strings("program"),
             args: strings("args"),
-            env,
-            credential_home_env: credentials["home_env"].as_str().map(str::to_owned),
+            env: if builtin { Vec::new() } else { env },
+            credential_home_env: if builtin { None } else { home.clone() },
+            own_credential_home: builtin && home.is_some(),
             credential_files: credentials["files"]
                 .as_array()
                 .into_iter()
