@@ -253,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_writable_by_others_says_it_must_be_reviewed_or_recreated() {
+    fn a_profile_writable_by_others_says_why_and_names_profile_secure() {
         let error = CliError::from(ServiceError::from(RootAccessError::WritableByOthers {
             paths: vec![planted()],
         }));
@@ -266,7 +266,8 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("review it, then recreate the profile"),
+                .contains("other programs on this computer could change these files")
+                && error.message.contains("massorca profile secure"),
             "{}",
             error.message
         );
