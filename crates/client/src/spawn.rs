@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use massorca_profile::Profile;
 use massorca_protocol::ErrorBody;
@@ -78,19 +78,43 @@ pub(crate) fn service_run(
 
 /// A new folder only this user can reach, outside the profile: a refused profile is never written to.
 fn status_dir() -> std::io::Result<PathBuf> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let dir = std::env::temp_dir().join(format!("massorca-start-{}-{nanos}", std::process::id()));
-    if massorca_profile::create_private_dir(&dir)? {
-        Ok(dir)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("{} already exists", dir.display()),
-        ))
+    create_unique_dir(&std::env::temp_dir(), status_dir_name)
+}
+
+/// Starts this process has made; with random bytes it names each status folder, since two starts from one process can
+/// read the same clock value.
+static STARTS: AtomicU64 = AtomicU64::new(0);
+
+/// How many names are tried before a start gives up on its status folder.
+const STATUS_DIR_ATTEMPTS: usize = 8;
+
+fn status_dir_name() -> std::io::Result<String> {
+    let mut random = [0u8; 8];
+    getrandom::fill(&mut random).map_err(|_| std::io::Error::other("no random source"))?;
+    Ok(format!(
+        "massorca-start-{}-{}-{:016x}",
+        std::process::id(),
+        STARTS.fetch_add(1, Ordering::Relaxed),
+        u64::from_ne_bytes(random)
+    ))
+}
+
+/// Creates a folder under `parent` that did not exist, so this start alone owns it; a taken name is retried with the
+/// next one `name` gives.
+fn create_unique_dir(
+    parent: &Path,
+    mut name: impl FnMut() -> std::io::Result<String>,
+) -> std::io::Result<PathBuf> {
+    for _ in 0..STATUS_DIR_ATTEMPTS {
+        let dir = parent.join(name()?);
+        if massorca_profile::create_private_dir(&dir)? {
+            return Ok(dir);
+        }
     }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("no free name in {}", parent.display()),
+    ))
 }
 
 /// A status file larger than this is ignored.
@@ -224,6 +248,55 @@ mod tests {
             massorca_profile::secure_root(&profile).expect("checked"),
             massorca_profile::RootAccess::Private
         );
+    }
+
+    /// Starts from one process at the same instant, as two clients joined in one task are, each get a folder of their
+    /// own, and releasing one leaves the others in place.
+    #[test]
+    fn concurrent_starts_from_one_process_each_get_their_own_status_folder() {
+        const THREADS: usize = 16;
+        const ROUNDS: usize = 64;
+        let barrier = std::sync::Barrier::new(THREADS);
+        let dirs: Vec<PathBuf> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        (0..ROUNDS)
+                            .map(|_| super::status_dir().expect("a status folder of its own"))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().expect("the worker finishes"))
+                .collect()
+        });
+
+        let unique: std::collections::BTreeSet<&PathBuf> = dirs.iter().collect();
+        assert_eq!(unique.len(), THREADS * ROUNDS);
+        std::fs::remove_dir_all(&dirs[0]).expect("one start releases its folder");
+        assert!(dirs[1..].iter().all(|dir| dir.is_dir()));
+        for dir in &dirs[1..] {
+            std::fs::remove_dir_all(dir).expect("removed");
+        }
+    }
+
+    #[test]
+    fn a_status_folder_name_that_is_taken_is_retried_and_the_existing_folder_is_left_alone() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let taken = temp.path().join("taken");
+        std::fs::create_dir(&taken).expect("a folder another start owns");
+        let mut names = ["taken", "free"]
+            .into_iter()
+            .map(|name| Ok(name.to_owned()));
+
+        let dir = super::create_unique_dir(temp.path(), || names.next().expect("a name"))
+            .expect("the next name");
+
+        assert_eq!(dir, temp.path().join("free"));
+        assert!(taken.is_dir());
     }
 
     fn exit_status(code: u32) -> std::process::ExitStatus {
