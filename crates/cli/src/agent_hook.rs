@@ -22,9 +22,19 @@ pub const ENV_TOKEN: &str = "MASSORCA_AGENT_TOKEN";
 /// The whole command's budget, reading stdin included.
 pub const BUDGET: Duration = Duration::from_secs(5);
 
-/// Sends one report. Never fails: a problem is written to stderr and the command still exits 0.
-pub fn run(home: Option<PathBuf>, profile: Option<String>, event: String, payload: Option<String>) {
-    if let Err(problem) = report(home, profile, event, payload) {
+/// Sends one report. Never fails: a problem is written to stderr and the command still exits 0. A missing event is
+/// such a problem.
+pub fn run(
+    home: Option<PathBuf>,
+    profile: Option<String>,
+    event: Option<String>,
+    payload: Option<String>,
+) {
+    let outcome = match event {
+        Some(event) => report(home, profile, event, payload),
+        None => Err("no event was given".to_owned()),
+    };
+    if let Err(problem) = outcome {
         let _ = writeln!(
             io::stderr().lock(),
             "massorca agent hook: {problem}; nothing was reported"
@@ -67,7 +77,7 @@ fn report(
         .build()
         .map_err(|error| error.to_string())?;
     let remaining = deadline.saturating_duration_since(Instant::now());
-    runtime.block_on(async move {
+    let outcome = runtime.block_on(async move {
         let call = async {
             let client = connect_running(&profile)
                 .await
@@ -81,7 +91,11 @@ fn report(
         tokio::time::timeout(remaining, call)
             .await
             .map_err(|_| format!("the service did not answer within {} s", BUDGET.as_secs()))?
-    })
+    });
+    // A connect still running on the blocking pool (it can wait without a bound on Windows) must not hold the
+    // command past its budget: the runtime is dropped without waiting for it.
+    runtime.shutdown_background();
+    outcome
 }
 
 fn env_value(name: &str) -> Option<String> {

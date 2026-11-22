@@ -376,3 +376,26 @@ fn the_first_report_of_a_run_is_never_refused() {
     let idle = until(&sandbox, session, "idle");
     assert_eq!(activity(&idle), ("idle", None, "hook"));
 }
+
+#[test]
+fn a_hook_with_a_command_line_it_does_not_expect_still_exits_zero() {
+    let sandbox = Sandbox::new();
+    for args in [
+        &["agent", "hook"][..],
+        &["agent", "hook", "start", "{}", "extra", "--unknown-flag"][..],
+        &["agent", "hook", "--odd-event"][..],
+    ] {
+        let mut hook = sandbox.command("default");
+        hook.args(args)
+            .env_remove("MASSORCA_AGENT_SESSION")
+            .env_remove("MASSORCA_AGENT_TOKEN");
+        let output =
+            capture(&mut hook, Duration::from_secs(30)).expect("the hook finishes in time");
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(
+            !output.stderr.is_empty(),
+            "{args:?}: the problem is on stderr"
+        );
+    }
+}

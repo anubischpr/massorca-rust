@@ -99,12 +99,19 @@ impl UntilState {
     }
 }
 
+/// The hook's arguments. Every form parses, so a hook never fails the agent on its command line (0053): a missing
+/// event is reported on stderr and words after the payload are ignored.
 #[derive(Debug, Args)]
 pub struct AgentHookArgs {
     /// The hook event, mapped to an activity by the kind's declaration.
-    pub event: String,
+    #[arg(allow_hyphen_values = true)]
+    pub event: Option<String>,
     /// The hook's payload, at most 64 KiB. Without it, stdin is read when it is not a terminal.
+    #[arg(allow_hyphen_values = true)]
     pub payload: Option<String>,
+    /// Anything after the payload; ignored.
+    #[arg(hide = true, num_args = 0.., allow_hyphen_values = true, trailing_var_arg = true)]
+    pub ignored: Vec<String>,
 }
 
 #[derive(Debug, Args)]

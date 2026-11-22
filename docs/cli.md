@@ -139,7 +139,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   argument or else from stdin when stdin is not a terminal (at most 64 KiB). It never starts
   the service. It always exits 0 within 5 s and prints nothing on success; a problem, such
   as a refused report (`agent.hook_refused`), goes to stderr only, so a status problem never
-  breaks the agent.
+  breaks the agent. Its command line never fails either: a missing event is reported on
+  stderr, words after the payload are ignored, and values may start with `-`.
 - `agent attach` needs a terminal like `terminal attach`. It refuses a run that has exited
   and names the terminal whose last screen `terminal screen` can print.
 
