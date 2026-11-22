@@ -80,5 +80,9 @@ dbg_macro = "warn"
 print_stdout = "warn"
 print_stderr = "warn"
 
+# Line tables keep backtraces readable; full debug info made each target tens of GB. `test` inherits `dev`.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 debug = false
