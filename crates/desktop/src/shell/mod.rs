@@ -223,6 +223,11 @@ impl Shell {
             let hosts =
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
+            if shell.service.is_some() {
+                let hosts =
+                    crate::model::hosts::marketplace_hosts(store.read(cx).state(), Instant::now());
+                shell.model.set_marketplace_hosts(hosts);
+            }
             cx.notify();
         });
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -235,6 +240,12 @@ impl Shell {
             Instant::now(),
         ));
         model.set_marketplace(marketplace.snapshot());
+        if service.is_some() {
+            model.set_marketplace_hosts(crate::model::hosts::marketplace_hosts(
+                store.read(cx).state(),
+                Instant::now(),
+            ));
+        }
         let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
         let marketplace_search_changes = cx.subscribe(
             &marketplace_search,

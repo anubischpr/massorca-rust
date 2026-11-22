@@ -111,6 +111,11 @@ impl ShellModel {
     }
 
     /// Swaps in the Bot Teams data of a source; the shell starts with the source it was given.
+    /// The hosts the Marketplace lists while a service answers: This PC and the paired hosts.
+    pub fn set_marketplace_hosts(&mut self, hosts: Vec<crate::model::marketplace::Host>) {
+        self.marketplace.hosts = hosts;
+    }
+
     /// The paired remote hosts and their states, as the store holds them now.
     pub fn set_remote_hosts(&mut self, hosts: Vec<(String, HostState)>) {
         self.remote_hosts = hosts;

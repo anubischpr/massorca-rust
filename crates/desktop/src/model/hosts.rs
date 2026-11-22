@@ -5,7 +5,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::service::{HostEntry, HostLink};
+use crate::model::marketplace::{Host, HostId, HostState as MarketHostState};
+use crate::model::service_view::LOCAL_HOST;
+use crate::service::{HostEntry, HostLink, StoreState};
 
 /// A host's state as its row shows it: a word, its colour family and an optional line under the name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +75,34 @@ pub fn host_rows(entries: &[HostEntry], now: Instant) -> Vec<(String, HostState)
         .iter()
         .map(|entry| (entry.record.name.clone(), host_state(entry, now)))
         .collect()
+}
+
+/// The hosts the Marketplace lists while a service answers: This PC first, then each paired host.
+pub fn marketplace_hosts(state: &StoreState, now: Instant) -> Vec<Host> {
+    let this_pc = if state.connection.is_connected() {
+        MarketHostState::Connected
+    } else {
+        MarketHostState::Unreachable
+    };
+    let mut hosts = vec![Host {
+        id: HostId(1),
+        name: LOCAL_HOST.to_owned(),
+        state: this_pc,
+    }];
+    for (index, entry) in state.hosts.iter().enumerate() {
+        let link = host_state(entry, now);
+        let state = match link.tone {
+            HostTone::Connected => MarketHostState::Connected,
+            HostTone::Unreachable => MarketHostState::Unreachable,
+            _ => MarketHostState::Other(link.word),
+        };
+        hosts.push(Host {
+            id: HostId(u32::try_from(index + 2).unwrap_or(u32::MAX)),
+            name: entry.record.name.clone(),
+            state,
+        });
+    }
+    hosts
 }
 
 #[cfg(test)]
@@ -207,5 +237,36 @@ mod tests {
                 assert!(!word.contains(banned), "{word} says {banned}");
             }
         }
+    }
+
+    #[test]
+    fn the_marketplace_lists_this_pc_then_each_paired_host_with_its_state() {
+        use crate::model::marketplace::HostState as MarketState;
+        use crate::service::ConnectionState;
+        let mut checking = entry(HostLink::Checking, None);
+        checking.record.name = "nas".into();
+        let state = StoreState {
+            connection: ConnectionState::Connected {
+                server: "massorca".into(),
+                version: "0.1.0".into(),
+            },
+            hosts: vec![
+                entry(
+                    HostLink::Connected {
+                        server: "vps-server".into(),
+                        version: "0.1.0".into(),
+                    },
+                    None,
+                ),
+                checking,
+            ],
+            ..StoreState::default()
+        };
+        let hosts = marketplace_hosts(&state, Instant::now());
+        let names: Vec<&str> = hosts.iter().map(|host| host.name.as_str()).collect();
+        assert_eq!(names, ["This PC", "vps", "nas"]);
+        assert_eq!(hosts[0].state, MarketState::Connected);
+        assert_eq!(hosts[1].state, MarketState::Connected);
+        assert_eq!(hosts[2].state.word(), "Checking");
     }
 }
