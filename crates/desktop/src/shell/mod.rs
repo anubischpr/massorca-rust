@@ -2,6 +2,7 @@
 
 mod actions;
 mod canvas;
+mod debug_focus;
 mod palette;
 mod rail;
 mod resize_edges;
@@ -46,6 +47,8 @@ use workspace_dialogs::WorkspaceDialogs;
 use zones::ZoneFocus;
 
 #[cfg(test)]
+mod debug_focus_tests;
+#[cfg(test)]
 mod service_tests;
 #[cfg(test)]
 mod settings_tests;
@@ -87,6 +90,8 @@ pub struct Shell {
     /// Keeps the bridge's runtime alive for as long as the shell lives.
     _bridge: Option<ServiceBridge>,
     _store_changes: Subscription,
+    /// Keeps the debug focus's query log alive; only a debug launch sets it.
+    _debug_input: Option<Subscription>,
     dialogs: WorkspaceDialogs,
     /// The New team or Add bot dialog on screen, if any (screens 4.5, D-AG-33).
     team_dialog: Option<teams::TeamDialog>,
@@ -198,6 +203,7 @@ impl Shell {
             service,
             _bridge: bridge,
             _store_changes: store_changes,
+            _debug_input: None,
             dialogs: WorkspaceDialogs::default(),
             team_dialog: None,
             team_confirm: None,
