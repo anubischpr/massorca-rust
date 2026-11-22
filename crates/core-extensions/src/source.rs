@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use massorca_ext_package::archive::{self, ArchiveLimits};
@@ -33,6 +34,9 @@ impl Source {
         if rest.is_empty() {
             return Err(invalid());
         }
+        if kind != "catalogue" && is_network_or_device_path(rest) {
+            return Err(invalid());
+        }
         match kind {
             "catalogue" => Ok(Self::Catalogue(rest.to_owned())),
             "dir" => Ok(Self::Dir(PathBuf::from(rest))),
@@ -54,6 +58,14 @@ impl Source {
             extra: Default::default(),
         }
     }
+}
+
+/// A UNC share (`\\host\share`, `//host/share` on Windows) or a device namespace path (`\\?\`, `\\.\`, `\??\`):
+/// reading one could reach another machine or a device, so a source never names one.
+fn is_network_or_device_path(path: &str) -> bool {
+    path.starts_with(r"\\")
+        || path.starts_with(r"\??\")
+        || (cfg!(windows) && path.starts_with("//"))
 }
 
 /// A checked package, held in memory.
@@ -144,30 +156,49 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 fn read_archive(path: &Path) -> Result<Vec<u8>, Error> {
     let limit = ArchiveLimits::default().max_uncompressed_bytes;
-    let size = fs::metadata(path)
-        .map_err(Error::io("cannot read", path))?
-        .len();
-    if size > limit {
-        return Err(massorca_ext_package::Error::LimitExceeded(format!(
-            "the archive is {size} bytes, the limit is {limit}"
-        ))
-        .into());
-    }
-    fs::read(path).map_err(Error::io("cannot read", path))
+    read_regular_file(path, limit, path)?.ok_or_else(|| {
+        massorca_ext_package::Error::InvalidArchive("the source is not a regular file".to_owned())
+            .into()
+    })
 }
 
-/// Reads a package folder with the archive's rules: safe names, no symbolic links, no case-only duplicates, and the
-/// same entry and size limits.
-fn read_dir(root: &Path) -> Result<Files, Error> {
+/// Opens `path` once and reads it, if the opened handle is a regular file; `None` for anything else (a FIFO, a
+/// socket, a device). More than `limit` bytes is refused while reading, whatever the size the file reported. An I/O
+/// error names `shown`, the path the caller sent, and never a deeper host path.
+fn read_regular_file(path: &Path, limit: u64, shown: &Path) -> Result<Option<Vec<u8>>, Error> {
+    let file = fs::File::open(path).map_err(Error::io("cannot read", shown))?;
+    if !file
+        .metadata()
+        .map_err(Error::io("cannot read", shown))?
+        .is_file()
+    {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(Error::io("cannot read", shown))?;
+    if bytes.len() as u64 > limit {
+        return Err(
+            massorca_ext_package::Error::LimitExceeded(format!("more than {limit} bytes")).into(),
+        );
+    }
+    Ok(Some(bytes))
+}
+
+/// Reads a package folder with the archive's rules: safe names, no symbolic links, no case-only duplicates, only
+/// regular files and folders, and the same entry and size limits, enforced while reading.
+pub(crate) fn read_dir(root: &Path) -> Result<Files, Error> {
     let limits = ArchiveLimits::default();
     let mut files = BTreeMap::new();
     let mut folded = BTreeSet::new();
     let mut total: u64 = 0;
     let mut pending = vec![(root.to_path_buf(), String::new())];
     let mut entries = 0usize;
+    let cannot_read = || Error::io("cannot read", root);
     while let Some((dir, prefix)) = pending.pop() {
-        for item in fs::read_dir(&dir).map_err(Error::io("cannot read", &dir))? {
-            let item = item.map_err(Error::io("cannot read", &dir))?;
+        for item in fs::read_dir(&dir).map_err(cannot_read())? {
+            let item = item.map_err(cannot_read())?;
             entries += 1;
             if entries > limits.max_entries {
                 return Err(massorca_ext_package::Error::LimitExceeded(format!(
@@ -189,9 +220,7 @@ fn read_dir(root: &Path) -> Result<Files, Error> {
                     reason,
                 }
             })?;
-            let kind = item
-                .file_type()
-                .map_err(Error::io("cannot read", &item.path()))?;
+            let kind = item.file_type().map_err(cannot_read())?;
             if kind.is_symlink() {
                 return Err(unsafe_entry(rel, "symbolic link"));
             }
@@ -199,18 +228,26 @@ fn read_dir(root: &Path) -> Result<Files, Error> {
                 pending.push((item.path(), format!("{rel}/")));
                 continue;
             }
+            if !kind.is_file() {
+                return Err(unsafe_entry(rel, "not a regular file or folder"));
+            }
             if !folded.insert(rel.to_ascii_lowercase()) {
                 return Err(unsafe_entry(rel, "differs from another entry only in case"));
             }
-            let bytes = fs::read(item.path()).map_err(Error::io("cannot read", &item.path()))?;
+            let left = limits.max_uncompressed_bytes - total;
+            let bytes = read_regular_file(&item.path(), left, root)
+                .map_err(|error| match error {
+                    Error::Package(massorca_ext_package::Error::LimitExceeded(_)) => {
+                        massorca_ext_package::Error::LimitExceeded(format!(
+                            "more than {} bytes",
+                            limits.max_uncompressed_bytes
+                        ))
+                        .into()
+                    }
+                    other => other,
+                })?
+                .ok_or_else(|| unsafe_entry(rel.clone(), "not a regular file or folder"))?;
             total += bytes.len() as u64;
-            if total > limits.max_uncompressed_bytes {
-                return Err(massorca_ext_package::Error::LimitExceeded(format!(
-                    "more than {} bytes",
-                    limits.max_uncompressed_bytes
-                ))
-                .into());
-            }
             files.insert(rel, bytes);
         }
     }
