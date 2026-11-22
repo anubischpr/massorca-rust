@@ -64,7 +64,8 @@ Tier 1 installs from three sources:
 A remote index (Marketplace download) arrives with the signed index at M6.
 
 For a folder or catalogue entry, the hash is SHA-256 over the sorted list of
-`path`, NUL, length, NUL, bytes.
+`path`, NUL, length (decimal), NUL, bytes. An archive's review hashes the
+file as read; its install still needs the pin.
 
 ### Review and consent
 
@@ -74,7 +75,9 @@ For a folder or catalogue entry, the hash is SHA-256 over the sorted list of
   - the `listing`;
   - for each agent entry, the CLI plan: `detected` (with its path), or
     `will_run` with the exact command for this OS, or `unsupported` when no
-    command fits this OS;
+    command fits this OS or the entry has no `cli` block. An `unsupported`
+    CLI does not stop the install: the package registers and the CLI stays
+    missing;
   - a `consent` fingerprint.
 - The fingerprint is SHA-256 over:
   - the id;
@@ -82,6 +85,9 @@ For a folder or catalogue entry, the hash is SHA-256 over the sorted list of
   - the package hash;
   - the sorted permissions;
   - the planned installer commands.
+
+  They are encoded as one JSON array, never a map, so the fingerprint does not
+  depend on key order.
 - `extensions.install { source, consent, run_installer, sha256? }` refuses with
   `extension.consent_required` when `consent` is missing. It refuses with
   `extension.consent_mismatch` when the package or plan changed since the review.
@@ -132,7 +138,8 @@ For a folder or catalogue entry, the hash is SHA-256 over the sorted list of
      and only for CLIs the lockfile says this package installed. That is the
      same High-risk consent as the installer; the CLI flag is
      `--uninstall-cli`. Otherwise the result lists the command, for the
-     Danger Zone to offer.
+     Danger Zone to offer. Its output goes to `logs/<id>-uninstall.log`,
+     because `data/<id>/` is already deleted.
 - Guards and cleanups are registered with an owner and return a drop handle:
   `register_remove_guard` and `register_remove_cleanup`. Each is
   `Fn(&str package_id) -> Result<(), ErrorBody>`.
@@ -187,7 +194,13 @@ listing names.
   - `extensions.install`, `set_enabled` and `remove` require `HostAdmin`,
     because they can run programs on the host.
 - Error codes are `extension.*` in `protocol::codes`. The format codes from
-  0061 move there as well.
+  0061 move there as well. `core-extensions` defines them first:
+  `invalid_source`, `not_found` (no catalogue entry), `not_installed`,
+  `already_installed`, `kind_conflict`, `hash_required`, `consent_required`,
+  `consent_mismatch`, `installer_consent_required`, `installer_failed`,
+  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`
+  and `io`. A guard's refusal keeps the guard's own code, such as
+  `agent.busy`.
 - The CLI group is `massorca extension`, with the reserved `massorca ext` as a
   visible alias:
   - `list`;
