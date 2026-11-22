@@ -154,9 +154,12 @@ impl DiscardFlow {
                 paths,
                 message,
             }) => {
-                let covered = paths
-                    .iter()
-                    .all(|path| self.targets.iter().any(|target| target.path == *path));
+                // A refusal that names no file cannot be waived: a waiver would name nothing.
+                // A refusal that names no file cannot be waived: a waiver would name nothing.
+                let covered = !paths.is_empty()
+                    && paths
+                        .iter()
+                        .all(|path| self.targets.iter().any(|target| target.path == *path));
                 self.stage = match code.as_str() {
                     codes::GIT_DISCARD_UNTRACKED if covered && !self.waivers.delete_untracked => {
                         DiscardStage::Untracked { paths }
@@ -432,6 +435,24 @@ mod tests {
                 message: "the service says no".into()
             }
         );
+    }
+
+    #[test]
+    fn a_refusal_that_names_no_files_is_an_error_not_a_waiver() {
+        for code in [codes::GIT_DISCARD_UNTRACKED, codes::GIT_DISCARD_STAGED] {
+            let mut flow = DiscardFlow::new(1, "w1", tracked(&["a.txt"]));
+            flow.confirm(CALL);
+            assert_eq!(
+                flow.answered(CALL, Err(refused(code, &[]))),
+                Answer::Continues
+            );
+            assert!(
+                matches!(flow.stage(), DiscardStage::Refused { .. }),
+                "{code} with no paths offers no waiver"
+            );
+            assert!(flow.confirm(CALL).is_none(), "a plain refusal runs nothing");
+            assert_eq!(flow.copy().kind, DialogKind::Error);
+        }
     }
 
     #[test]

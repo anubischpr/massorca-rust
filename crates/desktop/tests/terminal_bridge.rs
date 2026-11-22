@@ -1,5 +1,5 @@
 //! Terminal calls and attach streams through the bridge, against a real service in a temporary
-//! profile. The attached feed answers the program's queries, as an attached client must (0034).
+//! profile. The attached feed answers the program's queries and declares it (0034, 0036).
 //! No window opens: the feed is the emulator the desktop surface uses, without GPUI.
 
 use std::path::Path;
@@ -12,7 +12,7 @@ use massorca_desktop::model::work_panel::{
     CloseStep, TerminalSelection, close_step, detached_text, status_banner, terminal_strip,
 };
 use massorca_desktop::service::{
-    ServiceBridge, ServiceHandle, StoreState, StoreUpdate, StreamEnd, TerminalStream,
+    AttachRole, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, StreamEnd, TerminalStream,
     TerminalStreamItem, connect_options, feed_events,
 };
 use massorca_profile::Profile;
@@ -179,13 +179,9 @@ fn create_params(workspace: &str) -> TerminalCreateParams {
     }
 }
 
+/// Attaches as an emulator: the feed answers the queries its output carries.
 fn attach_params(terminal: &str, since: Option<u64>) -> TerminalAttachParams {
-    TerminalAttachParams {
-        terminal: terminal.to_owned(),
-        since,
-        cols: None,
-        rows: None,
-    }
+    AttachRole::AnswersQueries.attach_params(terminal, since)
 }
 
 /// Feeds one attach update to the emulator, the way the desktop surface does.

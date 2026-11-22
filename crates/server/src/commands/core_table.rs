@@ -38,7 +38,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
-            "config.get",
+            "settings.get",
             "Read a setting",
             "config.get",
             json!({
@@ -48,7 +48,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
-            "config.set",
+            "settings.set",
             "Change a setting",
             "config.set",
             json!({
@@ -57,7 +57,17 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "properties": { "owner": { "type": "string" }, "key": { "type": "string" }, "value": {} }
             }),
         ),
-        command("config.list", "List settings", "config.list", no_args()),
+        command("settings.list", "List settings", "config.list", no_args()),
+        command(
+            "settings.reset",
+            "Restore a setting's default",
+            "config.reset",
+            json!({
+                "type": "object",
+                "required": ["key"],
+                "properties": { "owner": { "type": "string" }, "key": { "type": "string" } }
+            }),
+        ),
         command(
             "project.add",
             "Register a project",
@@ -305,6 +315,26 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "required": ["session"],
                 "properties": { "session": { "type": "string" }, "force": { "type": "boolean" } }
             }),
+        ),
+        command(
+            "agent.prompt",
+            "Type a prompt into an agent session's terminal",
+            "agent.prompt",
+            json!({
+                "type": "object",
+                "required": ["session", "text"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "text": { "type": "string" },
+                    "force": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "agent.resume",
+            "Start a new run of an exited agent session",
+            "agent.resume",
+            selector("session"),
         ),
         command(
             "agent.forget",

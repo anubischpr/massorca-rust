@@ -59,8 +59,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
-    /// Reads and changes settings.
-    Config {
+    /// Reads, changes and resets settings. `config` is an older name for it.
+    #[command(alias = "config")]
+    Settings {
         #[command(subcommand)]
         command: ConfigCommand,
     },
@@ -170,6 +171,8 @@ pub enum ConfigCommand {
     Set(ConfigSetArgs),
     /// Lists every setting.
     List,
+    /// Removes the stored value, so the setting's default applies again.
+    Reset(ConfigGetArgs),
 }
 
 #[derive(Debug, Subcommand)]

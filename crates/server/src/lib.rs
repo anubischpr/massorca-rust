@@ -23,6 +23,7 @@ mod registry;
 mod service;
 mod service_json;
 mod session;
+mod setting_values;
 mod settings;
 mod shutdown;
 mod store_blocking;

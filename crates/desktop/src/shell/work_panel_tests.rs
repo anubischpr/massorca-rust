@@ -179,6 +179,19 @@ fn open_terminal_opens_the_work_panel_and_shows_the_terminal_it_creates(cx: &mut
 }
 
 #[gpui::test]
+fn the_pane_declares_that_it_answers_the_queries_it_forwards(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page(cx);
+    open_terminal(&mut rig, cx);
+    let (params, _items) = attach_with_stream(&mut rig.script);
+    assert_eq!(params.terminal, "t1");
+    assert_eq!(
+        params.answers_queries,
+        Some(true),
+        "the pane forwards its replies"
+    );
+}
+
+#[gpui::test]
 fn typing_in_the_pane_sends_the_keys_to_the_terminal(cx: &mut TestAppContext) {
     let (mut rig, cx) = start_page(cx);
     let _items = open_and_show(&mut rig, cx);
