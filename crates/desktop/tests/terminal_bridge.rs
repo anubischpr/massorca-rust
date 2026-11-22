@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use massorca_client::{AttachUpdate, Client, ConnectOptions};
 use massorca_desktop::service::{
     ServiceBridge, ServiceHandle, StoreState, StoreUpdate, StreamEnd, TerminalStream,
-    TerminalStreamItem, connect_options,
+    TerminalStreamItem, connect_options, feed_events,
 };
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
@@ -19,7 +19,7 @@ use massorca_protocol::methods::terminals::{
 };
 use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 use massorca_server::{RunningService, Service, ServiceConfig};
-use massorca_ui::components::terminal_surface::feed::{FeedEvent, TerminalFeed};
+use massorca_ui::components::terminal_surface::feed::TerminalFeed;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
@@ -186,42 +186,9 @@ fn attach_params(terminal: &str, since: Option<u64>) -> TerminalAttachParams {
 
 /// Feeds one attach update to the emulator, the way the desktop surface does.
 fn apply(feed: &mut TerminalFeed, update: &AttachUpdate) {
-    let outcome = match update {
-        AttachUpdate::Attached { offset, .. } => {
-            feed.apply(FeedEvent::Attached { offset: *offset })
-        }
-        AttachUpdate::Snapshot {
-            offset,
-            cols,
-            rows,
-            bytes,
-        } => {
-            feed.apply(FeedEvent::Snapshot {
-                offset: *offset,
-                cols: *cols,
-                rows: *rows,
-                len: bytes.len() as u64,
-            })
-            .expect("a snapshot starts");
-            feed.apply(FeedEvent::SnapshotBytes(bytes))
-        }
-        AttachUpdate::Output { offset, bytes } => feed.apply(FeedEvent::Output {
-            offset: *offset,
-            bytes,
-        }),
-        AttachUpdate::Resized { cols, rows } => feed.apply(FeedEvent::Resized {
-            cols: *cols,
-            rows: *rows,
-        }),
-        AttachUpdate::Exited { terminal } => feed.apply(FeedEvent::Exited {
-            code: terminal
-                .exit
-                .as_ref()
-                .and_then(|exit| exit.code)
-                .and_then(|code| i32::try_from(code).ok()),
-        }),
-    };
-    outcome.expect("the feed accepts the item");
+    for event in feed_events(update) {
+        feed.apply(event).expect("the feed accepts the item");
+    }
 }
 
 /// Reads the attach until `done` holds on the feed, answering the program's queries as it goes.
