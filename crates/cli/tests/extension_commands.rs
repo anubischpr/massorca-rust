@@ -311,3 +311,51 @@ fn bad_sources_and_usage_errors_are_reported_without_installing() {
     alone.code(2).stderr(contains("--yes"));
     assert!(stdout_text(&host.run(&["extension", "list"]).success()).contains("no extensions"));
 }
+
+#[test]
+fn a_fingerprint_from_one_run_accepts_exactly_that_review_in_the_next() {
+    let host = Host::new();
+    host.put_cli("acmecli");
+    let install = marking_install(&host);
+    let source = host.write_dir(KIT, &args_of(&install));
+    let review = host.json_error(&["extension", "install", &source]);
+    let consent = review["data"]["consent"]
+        .as_str()
+        .expect("a fingerprint")
+        .to_owned();
+
+    host.run(&["extension", "install", &source])
+        .code(1)
+        .stderr(contains(format!("consent: {consent}")))
+        .stderr(contains(format!("--consent {consent}")));
+    let stale = host.json_error(&[
+        "extension",
+        "install",
+        &source,
+        "--consent",
+        &"0".repeat(64),
+    ]);
+    let installed = host.json(&["extension", "install", &source, "--consent", &consent]);
+
+    assert_eq!(stale["code"], "extension.consent_mismatch");
+    assert_eq!(installed["id"], "acme.kit");
+    let both = host.run(&[
+        "extension",
+        "install",
+        &source,
+        "--yes",
+        "--consent",
+        &consent,
+    ]);
+    both.code(2);
+}
+
+#[test]
+fn the_review_quotes_every_argument_unambiguously() {
+    let host = Host::new();
+    let source = host.write_dir(KIT, &["install", "two words", "a\"b", "plain"]);
+
+    let text = stdout_text(&host.run(&["extension", "inspect", &source]).success());
+
+    assert!(text.contains(r#""two words" "a\"b" plain"#), "{text}");
+}

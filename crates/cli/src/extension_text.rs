@@ -114,6 +114,7 @@ pub fn review_lines(review: &ExtensionReview) -> Vec<String> {
         );
     }
     lines.extend(review.cli.iter().map(plan_line));
+    lines.push(format!("consent: {}", review.consent));
     lines
 }
 
@@ -245,15 +246,21 @@ fn removal_line(removal: &CliRemoval) -> String {
     }
 }
 
-/// An argv for display: parts with spaces are quoted. It is never run from this text.
+/// An argv for display. A part with anything but plain characters is quoted with Rust escaping, so quotes, spaces,
+/// control characters and look-alike Unicode cannot blur where one argument ends. It is never run from this text.
 pub fn command_text(command: &[String]) -> String {
     command
         .iter()
         .map(|part| {
-            if part.is_empty() || part.contains(char::is_whitespace) {
-                format!("\"{part}\"")
-            } else {
+            let plain = !part.is_empty()
+                && part.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '+' | ',')
+                });
+            if plain {
                 part.clone()
+            } else {
+                format!("{part:?}")
             }
         })
         .collect::<Vec<_>>()

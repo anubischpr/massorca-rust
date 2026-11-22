@@ -1,11 +1,12 @@
 //! `massorca extension ...` (alias `ext`): install, list, enable, disable and remove packages (decision 0062).
 //!
 //! The CLI never prompts. `install` without `--yes` prints the review and fails with `extension.consent_required`;
-//! `--yes` accepts the review it just printed, and `--yes-run-installer` also accepts running the vendor command.
+//! `--yes` accepts the review it just printed, `--consent <FINGERPRINT>` accepts exactly the review an earlier run
+//! printed, and `--yes-run-installer` also accepts running the vendor command.
 
 use std::path::Path;
 
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args, Subcommand};
 use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
@@ -54,6 +55,7 @@ pub enum ExtensionCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("accept").args(["yes", "consent"])))]
 pub struct InstallArgs {
     /// catalogue:<id>, dir:<path> or file:<path>, read on the service host.
     pub source: String,
@@ -63,8 +65,11 @@ pub struct InstallArgs {
     /// Accepts the review this command prints: the risk and the permissions.
     #[arg(long)]
     pub yes: bool,
-    /// Also accepts running the vendor installer the review lists. Needs --yes.
-    #[arg(long, requires = "yes")]
+    /// Accepts the review an earlier run printed, by its consent fingerprint. The install fails if anything changed.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub consent: Option<String>,
+    /// Also accepts running the vendor installer the review lists. Needs --yes or --consent.
+    #[arg(long, requires = "accept")]
     pub yes_run_installer: bool,
 }
 
@@ -137,6 +142,19 @@ async fn install(
     output: Output,
 ) -> Result<(), CliError> {
     let source = source_for(&args.source, target);
+    if let Some(consent) = args.consent {
+        // The person reviewed in an earlier run; the service refuses if the package or plan changed since.
+        let installed = client
+            .extension_install(&ExtensionInstallParams {
+                source,
+                consent: Some(consent),
+                run_installer: args.yes_run_installer,
+                sha256: args.sha256,
+            })
+            .await?;
+        output.success(&installed, &installed_lines(&installed));
+        return Ok(());
+    }
     let review = client.extension_inspect(&source).await?;
     if let Some(pinned) = &args.sha256
         && !pinned.eq_ignore_ascii_case(&review.sha256)
@@ -149,9 +167,15 @@ async fn install(
     }
     if !args.yes {
         let hint = if review.runs_installer {
-            "review it above, then re-run with --yes --yes-run-installer to accept it and run the vendor installer"
+            format!(
+                "review it above, then re-run with --consent {} --yes-run-installer (or --yes --yes-run-installer) to accept exactly this review and run the vendor installer",
+                review.consent
+            )
         } else {
-            "review it above, then re-run with --yes to accept it"
+            format!(
+                "review it above, then re-run with --consent {} (or --yes) to accept exactly this review",
+                review.consent
+            )
         };
         return Err(refusal(
             codes::EXTENSION_CONSENT_REQUIRED,
@@ -172,8 +196,9 @@ async fn install(
         return Err(refusal(
             codes::EXTENSION_INSTALLER_CONSENT_REQUIRED,
             format!(
-                "installing runs a vendor installer ({}); re-run with --yes --yes-run-installer to allow it",
-                commands.join("; ")
+                "installing runs a vendor installer ({}); re-run with --consent {} --yes-run-installer to allow it",
+                commands.join("; "),
+                review.consent
             ),
             &review,
             output,
