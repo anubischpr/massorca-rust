@@ -225,13 +225,15 @@ fn actions(frame: &StartFrame) -> AnyElement {
                 .disabled(true)
                 .tooltip(TERMINALS_LATER),
         )
-        .child(
+        .child({
+            let shell = shell.clone();
             Button::new("start-source-control", "Source control")
                 .variant(ButtonVariant::Secondary)
                 .leading_icon(IconName::GitBranch)
-                .disabled(true)
-                .tooltip(GIT_LATER),
-        )
+                .on_click(move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.open_source_control(cx));
+                })
+        })
         .child(
             Button::new("start-remove", "Delete workspace…")
                 .variant(ButtonVariant::Ghost)
