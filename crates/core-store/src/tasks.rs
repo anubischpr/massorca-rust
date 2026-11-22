@@ -198,6 +198,35 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Links a task that has no session yet to `session_id` and clears its error. Returns false when the task is gone
+    /// or another start linked it first; the whole-row `update_task` would overwrite a concurrent change.
+    pub fn link_task_session(
+        &self,
+        id: &str,
+        session_id: &str,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET session_id = ?2, error = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
+            params![id, session_id, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Records why a start failed on a task that has no session. Returns false when the task is gone or was linked.
+    pub fn set_task_start_error(
+        &self,
+        id: &str,
+        error: &str,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET error = ?2, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
+            params![id, error, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Deletes a task. Returns whether a row was removed.
     pub fn delete_task(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self

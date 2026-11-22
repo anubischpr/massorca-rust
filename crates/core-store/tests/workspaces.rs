@@ -193,3 +193,25 @@ fn workspace_for_a_missing_project_is_a_constraint_error() {
     let error = store.insert_workspace(&orphan).unwrap_err();
     assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
 }
+
+#[test]
+fn only_a_folder_workspace_can_share_its_writers() {
+    let (store, project) = store_with_project();
+    let mut folder = workspace_row(&project.id, "team", "ws-team");
+    folder.kind = WorkspaceKind::Folder;
+    folder.branch = None;
+    folder.base_ref = None;
+    folder.created_branch = false;
+    store.insert_workspace(&folder).unwrap();
+    let worktree = workspace_row(&project.id, "feature", "ws-feature");
+    store.insert_workspace(&worktree).unwrap();
+
+    assert!(!store.workspace_shares_writers(&folder.id).unwrap());
+    assert!(store.share_workspace_writers(&folder.id).unwrap());
+    assert!(store.workspace_shares_writers(&folder.id).unwrap());
+
+    assert!(!store.share_workspace_writers(&worktree.id).unwrap());
+    assert!(!store.workspace_shares_writers(&worktree.id).unwrap());
+    assert!(!store.share_workspace_writers("missing").unwrap());
+    assert!(!store.workspace_shares_writers("missing").unwrap());
+}

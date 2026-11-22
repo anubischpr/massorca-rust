@@ -42,6 +42,30 @@ impl Workspaces {
         }
     }
 
+    /// Lets several agents write in a folder workspace at once (a Bot Teams team folder, decision 0072 amendment).
+    /// A worktree is refused: its git index is never shared.
+    pub fn share_writers(&self, id: &str) -> Result<(), DomainError> {
+        if self.store.share_workspace_writers(id)? {
+            return Ok(());
+        }
+        Err(DomainError::new(
+            massorca_protocol::codes::REQUEST_INVALID_PARAMS,
+            format!(
+                "workspace {id} is not a folder workspace; only a folder can have several writers"
+            ),
+        ))
+    }
+
+    /// Whether several agents may write in the workspace at once. Every worktree, and every folder not marked, has one.
+    pub fn shares_writers(&self, id: &str) -> Result<bool, DomainError> {
+        Ok(self.store.workspace_shares_writers(id)?)
+    }
+
+    /// Where new workspace roots go unless a project names its own.
+    pub fn default_root(&self) -> &std::path::Path {
+        &self.default_root
+    }
+
     /// The git runner the domain uses; git features run their commands through it.
     pub fn git(&self) -> &Git {
         &self.git

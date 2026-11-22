@@ -258,3 +258,40 @@ fn a_task_must_name_an_existing_team_bot_and_project() {
     ));
     assert_eq!(store.list_tasks(None).unwrap(), Vec::<TaskRow>::new());
 }
+
+#[test]
+fn a_start_error_is_recorded_and_a_session_link_clears_it_once() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+
+    assert!(
+        store
+            .set_task_start_error(&row.id, "no such agent kind", 20)
+            .unwrap()
+    );
+    let failed = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(failed.error.as_deref(), Some("no such agent kind"));
+    assert_eq!(failed.updated_at, 20);
+
+    assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
+    let linked = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(linked.session_id.as_deref(), Some("session-1"));
+    assert_eq!(linked.error, None);
+    assert_eq!(linked.updated_at, 30);
+
+    // A second start finds the task linked: neither the link nor an error replaces it.
+    assert!(!store.link_task_session(&row.id, "session-2", 40).unwrap());
+    assert!(
+        !store
+            .set_task_start_error(&row.id, "late failure", 40)
+            .unwrap()
+    );
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.session_id.as_deref(), Some("session-1"));
+    assert_eq!(kept.error, None);
+
+    assert!(!store.link_task_session("missing", "session-3", 50).unwrap());
+}
