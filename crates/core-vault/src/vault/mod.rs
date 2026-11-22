@@ -55,6 +55,8 @@ pub enum VaultError {
     InvalidReason,
     #[error("the session must be plain text of at most 128 characters")]
     InvalidSession,
+    #[error("the vault holds {count} secrets; remove them before resetting its key")]
+    VaultNotEmpty { count: u64 },
     #[error("{name} in {scope} could not be opened; set it again with replace")]
     Unreadable { scope: String, name: String },
     #[error("there is no secret request {0}")]

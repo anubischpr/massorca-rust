@@ -47,13 +47,16 @@ pub struct SecretRequestRow {
     pub name: String,
     pub reason: String,
     pub session: Option<String>,
+    /// The connection's principal that asked (`owner` or `device:<id>`), for the request limits.
+    pub requester: Option<String>,
     pub state: String,
     pub created_at: i64,
     pub resolved_at: Option<i64>,
 }
 
 const SECRET_COLUMNS: &str = "id, scope, name, nonce, ciphertext, created_at, rotated_at, used_at";
-const REQUEST_COLUMNS: &str = "id, scope, name, reason, session, state, created_at, resolved_at";
+const REQUEST_COLUMNS: &str =
+    "id, scope, name, reason, session, state, created_at, resolved_at, requester";
 
 fn secret_row(row: &Row<'_>) -> rusqlite::Result<SecretRow> {
     Ok(SecretRow {
@@ -87,6 +90,7 @@ fn request_row(row: &Row<'_>) -> rusqlite::Result<SecretRequestRow> {
         state: row.get(5)?,
         created_at: row.get(6)?,
         resolved_at: row.get(7)?,
+        requester: row.get(8)?,
     })
 }
 
@@ -223,7 +227,7 @@ impl Store {
     pub fn insert_secret_request(&self, request: &SecretRequestRow) -> Result<(), StoreError> {
         self.lock().execute(
             &format!(
-                "INSERT INTO secret_requests ({REQUEST_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+                "INSERT INTO secret_requests ({REQUEST_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
             ),
             params![
                 request.id,
@@ -233,7 +237,8 @@ impl Store {
                 request.session,
                 request.state,
                 request.created_at,
-                request.resolved_at
+                request.resolved_at,
+                request.requester
             ],
         )?;
         Ok(())
@@ -260,6 +265,35 @@ impl Store {
             [pending_only],
             request_row,
         )
+    }
+
+    /// Pending requests `requester` made for `scope` from `session`, or from no session.
+    pub fn count_pending_secret_requests(
+        &self,
+        scope: &str,
+        requester: &str,
+        session: Option<&str>,
+    ) -> Result<u64, StoreError> {
+        let count: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM secret_requests              WHERE scope = ?1 AND requester = ?2 AND session IS ?3 AND state = 'pending'",
+            params![scope, requester, session],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    /// Requests `requester` made at or after `since` (ms), in any scope and state.
+    pub fn count_secret_requests_since(
+        &self,
+        requester: &str,
+        since: i64,
+    ) -> Result<u64, StoreError> {
+        let count: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM secret_requests WHERE requester = ?1 AND created_at >= ?2",
+            params![requester, since],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(count).unwrap_or(0))
     }
 
     /// Moves a pending request to `state`. Returns whether a pending request with `id` existed.

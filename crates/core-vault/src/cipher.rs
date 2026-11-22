@@ -59,6 +59,21 @@ impl Aad {
     }
 }
 
+const KEY_CHECK_AAD: &[u8] = b"massorca-key-check/1";
+const KEY_CHECK_TEXT: &str = "massorca vault key check";
+
+/// Seals the key check: a fixed text under its own associated data, which no secret row can have.
+pub(crate) fn seal_key_check(key: &MasterKey) -> Result<Sealed, SealError> {
+    let text = SecretValue::new(KEY_CHECK_TEXT.to_owned()).map_err(|_| SealError::Encrypt)?;
+    seal(key, &Aad(KEY_CHECK_AAD.to_vec()), &text)
+}
+
+/// Whether `key` is the key that sealed this check.
+pub(crate) fn opens_key_check(key: &MasterKey, nonce: &[u8], sealed: &[u8]) -> bool {
+    open(key, &Aad(KEY_CHECK_AAD.to_vec()), nonce, sealed)
+        .is_ok_and(|text| text.expose() == KEY_CHECK_TEXT)
+}
+
 /// A sealed value as the `secrets` table stores it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Sealed {

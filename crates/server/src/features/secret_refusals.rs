@@ -36,6 +36,10 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
         VaultError::TooLarge => (codes::SECRET_TOO_LARGE, None),
         VaultError::InvalidReason => (codes::SECRET_INVALID_REASON, None),
         VaultError::InvalidSession => (codes::SECRET_INVALID_SESSION, None),
+        VaultError::VaultNotEmpty { count } => (
+            codes::SECRET_VAULT_NOT_EMPTY,
+            Some(json!({ "count": count })),
+        ),
         VaultError::Unreadable { scope, name } => {
             (codes::SECRET_UNREADABLE, Some(named(scope, name)))
         }

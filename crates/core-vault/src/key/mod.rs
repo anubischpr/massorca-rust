@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 const KEY_LEN: usize = 32;
 const KEY_FILE: &str = "key";
 const PROTECTION_FILE: &str = "protection";
+const ID_FILE: &str = "id";
 
 /// The 32-byte key that seals every secret of one profile. It never prints and is zeroed on drop.
 pub struct MasterKey(Zeroizing<[u8; KEY_LEN]>);
@@ -111,6 +112,8 @@ pub enum LockReason {
     ProtectionUnavailable,
     /// A key exists without a protection file, so which protection wraps it is unknown.
     KeyWithoutProtection,
+    /// The key opens but is not the one that sealed this vault: its key check does not open.
+    KeyMismatch,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,6 +154,14 @@ impl KeyStore {
             Err(_) => Err(KeyError::Locked(LockReason::UnknownProtection)),
         }
     }
+
+    /// Removes the key, its protection and id, and its keyring item. The caller makes sure nothing is sealed with it.
+    ///
+    /// # Errors
+    /// `Io` when a file exists and cannot be removed.
+    pub fn reset(vault_dir: &Path) -> Result<(), KeyError> {
+        reset(vault_dir)
+    }
 }
 
 fn open_existing(protection: Protection, vault_dir: &Path) -> Result<MasterKey, LockReason> {
@@ -170,6 +181,19 @@ fn open_existing(protection: Protection, vault_dir: &Path) -> Result<MasterKey, 
         // The protections of other hosts.
         _ => Err(LockReason::ProtectionUnavailable),
     }
+}
+
+/// Forgets the key of `vault_dir`: its keyring item, the key, protection and id files. A missing file is fine.
+fn reset(vault_dir: &Path) -> Result<(), KeyError> {
+    #[cfg(target_os = "linux")]
+    linux::delete(vault_dir);
+    for name in [KEY_FILE, PROTECTION_FILE, ID_FILE] {
+        match std::fs::remove_file(vault_dir.join(name)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn read_key_file(vault_dir: &Path) -> Result<Zeroizing<Vec<u8>>, LockReason> {

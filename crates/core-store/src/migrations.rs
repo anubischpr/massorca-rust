@@ -134,6 +134,20 @@ CREATE TABLE secret_requests (
 "#,
         foreign_keys_off: false,
     },
+    // The vault key check, so a planted key is refused, and who asked for each request, for its limits (0071).
+    Migration {
+        sql: r#"
+CREATE TABLE secret_key_check (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    nonce BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+);
+ALTER TABLE secret_requests ADD COLUMN requester TEXT;
+CREATE INDEX secret_requests_by_requester ON secret_requests(requester, created_at);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

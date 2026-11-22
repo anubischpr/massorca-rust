@@ -33,6 +33,7 @@ impl Vault {
             name: name.to_owned(),
             reason: reason.to_owned(),
             session,
+            requester: None,
             state: "pending".to_owned(),
             created_at: now_ms(),
             resolved_at: None,
