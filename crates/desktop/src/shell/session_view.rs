@@ -11,6 +11,7 @@ use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
 };
+use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::terminal_surface::TerminalSurface;
@@ -100,6 +101,10 @@ pub(super) struct SessionFrame {
     pub notice: Option<String>,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
+    /// The open session's id, for the header's Delegate action.
+    pub session: String,
+    /// Whether the header offers Delegate: a service is connected and the session's run has not ended.
+    pub can_delegate: bool,
 }
 
 /// The session view: its header, then the terminal's pane, or the refusal of its attach with Retry, then the notice of
@@ -107,6 +112,15 @@ pub(super) struct SessionFrame {
 pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = theme.palette;
+    let delegate = frame.can_delegate.then(|| {
+        let (shell, session) = (frame.shell.clone(), frame.session.clone());
+        Button::new("session-delegate", "Delegate")
+            .variant(ButtonVariant::Secondary)
+            .size(ButtonSize::Compact)
+            .on_click(move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.open_delegate(&session, window, cx));
+            })
+    });
     let header = div()
         .debug_selector(|| "session-header".to_owned())
         .flex()
@@ -131,7 +145,9 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                 .text_style(TYPE_BODY_SM)
                 .text_color(p.text.tertiary)
                 .child(frame.kind),
-        );
+        )
+        .child(div().flex_1())
+        .when_some(delegate, |header, button| header.child(button));
     let body = match (frame.failure, frame.terminal, frame.surface) {
         (Some(detail), Some(terminal), _) => {
             let (shell, workspace) = (frame.shell, frame.workspace);
@@ -225,6 +241,9 @@ impl Shell {
             notice: self.session_notices.get(&id).cloned(),
             composer,
             shell: cx.entity().downgrade(),
+            session: id.clone(),
+            can_delegate: self.service.is_some()
+                && session.execution.state != TerminalState::Exited,
         })
     }
 

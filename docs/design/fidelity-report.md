@@ -193,6 +193,19 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - "Sending…" and "Resuming…" under the text while a call is in flight, and the ended-session lines "This session has ended." and "This session has ended and cannot be resumed.", with the Resume button beside the first.
 - The notice above the composer when a stop or resume is refused: "Could not stop the agent: …" and "Could not resume the session: …".
 
+## Delegate (X-CH-06)
+
+**Matches**
+- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. A retry sends the same request id. The form closes once the service starts the child, and the child appears in the session tree after the refetch.
+- The agents offered are the ones turned on and detected on this host, as the start page offers them.
+
+**Cannot match yet**
+- X-CH-06 draws the delegation as a card in the transcript, with a "Runs in" choice for each child. The desktop opens a dialog and offers a read-only switch instead. The service decides where a writing child runs.
+- The prompt is a single-line field. The composer is multi-line, so a long prompt scrolls sideways.
+
+**No artboard**
+- The Delegate dialog. `ws-delegation` draws the card and the tree, not this form.
+
 ## Palette and quick open
 
 **Matches**
