@@ -187,10 +187,11 @@ This report compares the desktop shell and the UI gallery with the design artboa
 
 **Cannot match yet**
 - The access chip, model picker, attach button and voice input are not offered in a session. The access chip has no modes to show and the rest have no service behind them yet. Voice is disabled with its reason, as on the start page.
-- Composer.md says a message typed while the agent runs queues behind it. The service refuses a prompt while the agent works, so the session composer stops the run instead and offers no Queue.
+- Known gap: queued messages. Composer.md and the artboard's queued-message dock show a message typed while the agent runs waiting behind it. The service refuses `agent.prompt` while the agent works, and keeps no queue of its own, so the session composer offers Stop and no Queue. The service side needs a per-session queue it owns and delivers when the agent reports ready, with reads, edit, remove and send now, and an event when it changes.
 
 **No artboard**
 - "Sending…" and "Resuming…" under the text while a call is in flight, and the ended-session lines "This session has ended." and "This session has ended and cannot be resumed.", with the Resume button beside the first.
+- The Stop in the session header while the run is live and the composer does not stop it, as for a kind without status hooks. The desktop session artboard has no header actions.
 - The notice above the composer when a stop or resume is refused: "Could not stop the agent: …" and "Could not resume the session: …".
 
 ## Delegate (X-CH-06)

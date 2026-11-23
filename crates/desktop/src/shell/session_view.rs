@@ -59,6 +59,9 @@ pub(super) struct ComposerTerms {
     pub reason: Option<&'static str>,
     /// An ended session of a kind that can resume offers Resume beside its reason.
     pub resume: bool,
+    /// The run is live but nothing says the agent works, as with a kind without status hooks: Send stays the
+    /// primary button and the header keeps a Stop, so a live run can always be stopped.
+    pub stop_aside: bool,
 }
 
 /// The composer's terms for `session`, given whether its kind can resume and the call it has in flight.
@@ -72,6 +75,10 @@ pub(super) fn composer_terms(
         AgentState::Running | AgentState::Waiting
     );
     let ended = session.execution.state == TerminalState::Exited;
+    let live = matches!(
+        session.execution.state,
+        TerminalState::Live | TerminalState::Unverifiable
+    );
     let (reason, resume) = match call {
         Some(SessionCall::Sending) => (Some(SENDING), false),
         Some(SessionCall::Resuming) => (Some(RESUMING), false),
@@ -83,6 +90,7 @@ pub(super) fn composer_terms(
         busy,
         reason,
         resume,
+        stop_aside: live && !busy,
     }
 }
 
@@ -99,9 +107,11 @@ pub(super) struct SessionFrame {
     pub failure: Option<String>,
     /// Why the last stop or resume of the session was refused.
     pub notice: Option<String>,
+    /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
+    pub stop_aside: Option<bool>,
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
-    /// The open session's id, for the header's Delegate action.
+    /// The open session's id, for the header's Delegate and Stop.
     pub session: String,
     /// Whether the header offers Delegate: a service is connected and the session's run has not ended.
     pub can_delegate: bool,
@@ -147,7 +157,20 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                 .child(frame.kind),
         )
         .child(div().flex_1())
-        .when_some(delegate, |header, button| header.child(button));
+        .when_some(delegate, |header, button| header.child(button))
+        .when_some(frame.stop_aside, |header, held| {
+            let shell = frame.shell.clone();
+            let session = frame.session.clone();
+            header.child(
+                Button::new("session-stop", "Stop")
+                    .size(ButtonSize::Compact)
+                    .variant(ButtonVariant::Secondary)
+                    .disabled(held)
+                    .on_click(move |_, cx| {
+                        let _ = shell.update(cx, |shell, cx| shell.stop_session(&session, cx));
+                    }),
+            )
+        });
     let body = match (frame.failure, frame.terminal, frame.surface) {
         (Some(detail), Some(terminal), _) => {
             let (shell, workspace) = (frame.shell, frame.workspace);
@@ -223,7 +246,8 @@ impl Shell {
         let resumable = kinds
             .iter()
             .any(|kind| kind.id == session.kind && kind.resumable);
-        let terms = composer_terms(&session, resumable, self.session_calls.get(&id).copied());
+        let call = self.session_calls.get(&id).copied();
+        let terms = composer_terms(&session, resumable, call);
         let composer = self.session_composer(&id, cx);
         composer.update(cx, |composer, cx| {
             composer.set_busy(terms.busy, cx);
@@ -231,6 +255,7 @@ impl Shell {
             composer.set_resume_offered(terms.resume, cx);
         });
         Some(SessionFrame {
+            stop_aside: terms.stop_aside.then_some(call.is_some()),
             title: session_title(&session, &kinds),
             kind: kind_name(&session.kind, &kinds),
             status: glyph_state(session_state(&session)),
@@ -499,7 +524,30 @@ mod tests {
                 busy: false,
                 reason: None,
                 resume: false,
+                stop_aside: true,
             }
+        );
+    }
+
+    #[test]
+    fn a_live_run_without_status_reports_keeps_a_stop_beside_send() {
+        let hookless = agent("s", "w1", 1);
+        assert!(
+            hookless.activity.is_none(),
+            "a kind without status hooks never reports"
+        );
+        let terms = composer_terms(&hookless, false, None);
+        assert!(!terms.busy, "Send stays the primary button");
+        assert!(terms.stop_aside, "the run can still be stopped");
+        let mut unverifiable = agent("s", "w1", 1);
+        unverifiable.execution.state = TerminalState::Unverifiable;
+        assert!(composer_terms(&unverifiable, false, None).stop_aside);
+        assert!(!composer_terms(&ended("s"), true, None).stop_aside);
+        let mut working = agent("s", "w1", 1);
+        working.activity = Some(activity(ActivityState::Working));
+        assert!(
+            !composer_terms(&working, false, None).stop_aside,
+            "the composer's primary button stops it"
         );
     }
 
