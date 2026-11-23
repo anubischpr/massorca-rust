@@ -5,10 +5,13 @@ use std::time::Duration;
 use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TEAM_CHANGED};
+use massorca_protocol::methods::tasks::{self, Task, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
-    TeamCharacter, TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, MemorySource, Team,
+    TeamAccess, TeamCharacter, TeamCreateParams, TeamList, TeamMemoryAddParams, TeamMemoryLine,
+    TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
+    TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use serde_json::Value;
 use tokio::time::timeout;
@@ -674,5 +677,304 @@ async fn a_teams_bots_and_projects_are_listed_in_creation_order_and_only_its_own
         .await
         .expect_err("an unknown team");
     assert_eq!(remote_code(&missing), codes::TEAM_NOT_FOUND);
+    stop(running).await;
+}
+
+fn memory_add(team: &str, text: &str) -> TeamMemoryAddParams {
+    TeamMemoryAddParams {
+        team: team.to_owned(),
+        bot: None,
+        text: text.to_owned(),
+        task: None,
+    }
+}
+
+fn memory_ids(lines: &[TeamMemoryLine]) -> Vec<String> {
+    lines.iter().map(|line| line.id.clone()).collect()
+}
+
+#[tokio::test]
+async fn team_memory_lines_are_added_listed_newest_first_per_scope_and_removed() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let alpha: Team = client
+        .call(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let mara: Bot = client
+        .call(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect("team.bot_add");
+    let task: Task = client
+        .call(
+            tasks::CREATE,
+            &TaskCreateParams {
+                team: "alpha".to_owned(),
+                title: "Parse the config".to_owned(),
+                body: None,
+                bot: Some("mara".to_owned()),
+                project: None,
+                origin: None,
+            },
+        )
+        .await
+        .expect("task.create");
+
+    let rule: TeamMemoryLine = client
+        .call(
+            teams::MEMORY_ADD,
+            &memory_add("alpha", "  Keep the parser small.  "),
+        )
+        .await
+        .expect("team.memory_add");
+    assert_eq!(rule.team_id, alpha.id);
+    assert_eq!(rule.bot_id, None);
+    assert_eq!(rule.text, "Keep the parser small.");
+    assert_eq!(rule.source, MemorySource::Person);
+    assert_eq!(rule.task_id, None);
+    tokio::time::sleep(Duration::from_millis(3)).await;
+
+    let note: TeamMemoryLine = client
+        .call(
+            teams::MEMORY_ADD,
+            &TeamMemoryAddParams {
+                team: "alpha".to_owned(),
+                bot: Some("mara".to_owned()),
+                text: "Mara checks the tables.".to_owned(),
+                task: None,
+            },
+        )
+        .await
+        .expect("a line in a bot scope");
+    assert_eq!(note.bot_id.as_deref(), Some(mara.id.as_str()));
+    tokio::time::sleep(Duration::from_millis(3)).await;
+
+    let from_task: TeamMemoryLine = client
+        .call(
+            teams::MEMORY_ADD,
+            &TeamMemoryAddParams {
+                team: "alpha".to_owned(),
+                bot: Some("mara".to_owned()),
+                text: "The config keeps its keys.".to_owned(),
+                task: Some(task.id.clone()),
+            },
+        )
+        .await
+        .expect("a line written by a task");
+    assert_eq!(from_task.source, MemorySource::Task);
+    assert_eq!(from_task.task_id.as_deref(), Some(task.id.as_str()));
+
+    let everything: TeamMemoryList = client
+        .call(
+            teams::MEMORY_LIST,
+            &TeamMemoryListParams {
+                team: "alpha".to_owned(),
+                bot: None,
+            },
+        )
+        .await
+        .expect("team.memory_list");
+    assert_eq!(
+        memory_ids(&everything.lines),
+        [from_task.id.clone(), note.id.clone(), rule.id.clone()]
+    );
+
+    let mara_only: TeamMemoryList = client
+        .call(
+            teams::MEMORY_LIST,
+            &TeamMemoryListParams {
+                team: "alpha".to_owned(),
+                bot: Some("mara".to_owned()),
+            },
+        )
+        .await
+        .expect("a bot lines");
+    assert_eq!(
+        memory_ids(&mara_only.lines),
+        [from_task.id.clone(), note.id.clone()]
+    );
+
+    let removed: TeamMemoryLine = client
+        .call(
+            teams::MEMORY_REMOVE,
+            &TeamMemoryRemoveParams {
+                team: "alpha".to_owned(),
+                line: rule.id.clone(),
+            },
+        )
+        .await
+        .expect("team.memory_rm");
+    assert_eq!(removed, rule);
+    let left: TeamMemoryList = client
+        .call(
+            teams::MEMORY_LIST,
+            &TeamMemoryListParams {
+                team: "alpha".to_owned(),
+                bot: None,
+            },
+        )
+        .await
+        .expect("team.memory_list");
+    assert_eq!(
+        memory_ids(&left.lines),
+        [from_task.id.clone(), note.id.clone()]
+    );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn team_memory_text_is_bounded_and_unknown_selectors_are_refused_with_typed_codes() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("beta"))
+        .await
+        .expect("beta");
+    client
+        .call::<_, Bot>(teams::BOT_ADD, &bot_params("alpha", "mara", false))
+        .await
+        .expect("team.bot_add");
+    let beta_task: Task = client
+        .call(
+            tasks::CREATE,
+            &TaskCreateParams {
+                team: "beta".to_owned(),
+                title: "Parse the config".to_owned(),
+                body: None,
+                bot: None,
+                project: None,
+                origin: None,
+            },
+        )
+        .await
+        .expect("beta task");
+
+    let longest = "a".repeat(500);
+    let accepted: TeamMemoryLine = client
+        .call(teams::MEMORY_ADD, &memory_add("alpha", &longest))
+        .await
+        .expect("500 characters");
+    assert_eq!(accepted.text.chars().count(), 500);
+    let accents = "é".repeat(500);
+    client
+        .call::<_, TeamMemoryLine>(teams::MEMORY_ADD, &memory_add("alpha", &accents))
+        .await
+        .expect("500 scalar values, whatever their bytes");
+
+    let too_long = client
+        .call::<_, TeamMemoryLine>(teams::MEMORY_ADD, &memory_add("alpha", &"a".repeat(501)))
+        .await
+        .expect_err("501 characters");
+    assert_eq!(remote_code(&too_long), codes::REQUEST_INVALID_PARAMS);
+    let blank = client
+        .call::<_, TeamMemoryLine>(teams::MEMORY_ADD, &memory_add("alpha", "   "))
+        .await
+        .expect_err("a blank text");
+    assert_eq!(remote_code(&blank), codes::REQUEST_INVALID_PARAMS);
+
+    let unknown_team = client
+        .call::<_, TeamMemoryLine>(teams::MEMORY_ADD, &memory_add("nowhere", "x"))
+        .await
+        .expect_err("an unknown team");
+    assert_eq!(remote_code(&unknown_team), codes::TEAM_NOT_FOUND);
+    let unknown_bot = client
+        .call::<_, TeamMemoryLine>(
+            teams::MEMORY_ADD,
+            &TeamMemoryAddParams {
+                team: "alpha".to_owned(),
+                bot: Some("nobody".to_owned()),
+                text: "x".to_owned(),
+                task: None,
+            },
+        )
+        .await
+        .expect_err("an unknown bot");
+    assert_eq!(remote_code(&unknown_bot), codes::BOT_NOT_FOUND);
+    let other_teams_task = client
+        .call::<_, TeamMemoryLine>(
+            teams::MEMORY_ADD,
+            &TeamMemoryAddParams {
+                team: "alpha".to_owned(),
+                bot: None,
+                text: "x".to_owned(),
+                task: Some(beta_task.id.clone()),
+            },
+        )
+        .await
+        .expect_err("a task of another team");
+    assert_eq!(remote_code(&other_teams_task), codes::TASK_NOT_FOUND);
+
+    let unknown_line = client
+        .call::<_, TeamMemoryLine>(
+            teams::MEMORY_REMOVE,
+            &TeamMemoryRemoveParams {
+                team: "alpha".to_owned(),
+                line: "missing".to_owned(),
+            },
+        )
+        .await
+        .expect_err("an unknown line");
+    assert_eq!(remote_code(&unknown_line), codes::TEAM_MEMORY_NOT_FOUND);
+    let through_beta = client
+        .call::<_, TeamMemoryLine>(
+            teams::MEMORY_REMOVE,
+            &TeamMemoryRemoveParams {
+                team: "beta".to_owned(),
+                line: accepted.id.clone(),
+            },
+        )
+        .await
+        .expect_err("a line of another team");
+    assert_eq!(remote_code(&through_beta), codes::TEAM_MEMORY_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn team_memory_changes_publish_team_changed_with_the_team_id() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let alpha: Team = client
+        .call(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    assert_eq!(next_event(&mut events).await.id, alpha.id);
+
+    let line: TeamMemoryLine = client
+        .call(teams::MEMORY_ADD, &memory_add("alpha", "Keep it small."))
+        .await
+        .expect("team.memory_add");
+    assert_eq!(
+        next_event(&mut events).await,
+        ChangeEvent {
+            topic: TOPIC_TEAM_CHANGED.to_owned(),
+            id: alpha.id.clone()
+        }
+    );
+
+    client
+        .call::<_, TeamMemoryLine>(
+            teams::MEMORY_REMOVE,
+            &TeamMemoryRemoveParams {
+                team: "alpha".to_owned(),
+                line: line.id.clone(),
+            },
+        )
+        .await
+        .expect("team.memory_rm");
+    assert_eq!(
+        next_event(&mut events).await,
+        ChangeEvent {
+            topic: TOPIC_TEAM_CHANGED.to_owned(),
+            id: alpha.id.clone()
+        }
+    );
     stop(running).await;
 }

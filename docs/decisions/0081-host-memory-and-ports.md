@@ -44,6 +44,27 @@ machine attributed to a workspace by working directory or command line, scanned 
   cannot be read (it exited, or access is denied) is skipped and counted in `unreadable`; it never fails the sample.
   A terminal whose processes cannot be listed, or of which none could be read, is marked `unverifiable`, shown as
   unknown, and left out of the total: never reported as zero.
+- D6 What a terminal's tree counts, and how a read is trusted. Each platform counts a different thing, and the answer
+  does not hide the difference. Windows counts the job: its members cannot leave it, because the terminal's job does not
+  allow breakaway, so the count is exact. Linux counts the session: a process that starts a session of its own (`setsid`,
+  as daemons do) is not counted, while one reparented to init keeps its session and is counted. macOS counts the parent
+  walk from the shell: a process whose parent exited and was reparented to launchd is not counted, although the terminal
+  started it, and one that starts its own session but keeps its parent is counted. The service's own process is never a
+  member. A process is read only while it is the one listed: its start time, and on Linux its session, must match the
+  listing before and after the read, so a reused pid is unreadable. A macOS listing that grows while it is read is asked
+  again with more room; one that still does not fit makes the table incomplete, and the terminals read from it are
+  `partial`. Samples are shared for about a second, so a call within that time gets the sample already taken.
+- D7 Ports, as settled. `host.ports` lists one entry per listening TCP socket, so a process on IPv4 and IPv6 has two
+  (same `port` and `pid`, two addresses) and nothing is merged; a client groups them when it shows one row per process.
+  `connect_host` is `localhost` for a wildcard bind. A terminal is `unverifiable` when none of its members can be read and
+  `partial` when some cannot be read or have left it; when the host's socket table cannot be read, no port is listed and
+  the answer is `unverifiable`. Polling is every 30 seconds while the ports are visible, and nothing is pushed. macOS is
+  not read until its socket layouts are verified (libc 0.2.191 declares none of them), so its answer is unverifiable.
+  A socket several members hold on Linux belongs to the one that started first. Limits, which the answer does not hide:
+  a link-local IPv6 listener loses its zone (the scope id), so its address is listed without it. On Windows the owner pid
+  is the process that created the socket, so a listener handed to a child after its creator exited may be missed, or
+  attributed to another member of the same terminal. Linux reads only the service's own network namespace. A member that
+  ends between the listing and the check makes its terminal `partial`.
 
 ## Alternatives
 
@@ -58,8 +79,9 @@ machine attributed to a workspace by working directory or command line, scanned 
 
 ## Consequences
 
-- New capability `host/1` with the Read method `host.memory`; ports add `host.ports` to the same capability later.
-- `core-terminal` depends on `massorca-host-stats` on macOS only, for the parent-id walk.
+- Capability `host/1` with the Read methods `host.memory` and `host.ports`, the second added within the version: additive
+  changes keep a capability's version.
+- `core-terminal` depends on `massorca-host-stats` on every platform: its memory and membership reads go through it.
 - `massorca host memory` targets the service like other service commands, so `--host` works for it, unlike the other
   `host` commands.
 - Process-enumeration code gets an independent review before merge.
