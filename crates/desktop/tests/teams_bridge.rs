@@ -444,3 +444,93 @@ async fn a_card_is_finished_and_reopened_through_the_service() {
     .await;
     stop_service(service).await;
 }
+
+/// Params of a bot named Nora, who reviews and runs as Claude.
+fn nora(team: &str, lead: bool) -> BotAddParams {
+    BotAddParams {
+        team: team.to_owned(),
+        name: "Nora".to_owned(),
+        job: "Reviews".to_owned(),
+        kind: "claude".to_owned(),
+        model: None,
+        effort: None,
+        lead,
+    }
+}
+
+#[tokio::test]
+async fn a_bot_with_no_card_is_listed_from_the_first_read() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .team_bot_add(&nora(&team.id, true))
+        .await
+        .expect("the bot is added");
+
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    let view = teams_view(&state);
+    let team = &view.teams()[0];
+    assert!(team.tasks.is_empty(), "the bot owns no card");
+    assert_eq!(team.lead_name(), Some("Nora"));
+    let bot = &team.bots[0];
+    assert_eq!(
+        (bot.role.as_str(), bot.agent),
+        ("Reviews", Some(Agent::Claude))
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_bot_added_through_another_client_reaches_the_store_without_a_request() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+
+    client
+        .team_bot_add(&nora(&team.id, false))
+        .await
+        .expect("the bot is added");
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    stop_service(service).await;
+}

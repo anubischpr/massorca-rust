@@ -234,7 +234,7 @@ impl ServiceHandle {
             .await
     }
 
-    /// `team.bot_add`. The bot is listed once the service's answer is folded in.
+    /// `team.bot_add`. The bot is listed by the read that follows the answer.
     pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
             .await
