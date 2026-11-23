@@ -325,6 +325,11 @@ fixed with a test, except where a row says otherwise.
   registered. No uninstall is declared: the vendor's own is `gentle-shell self-uninstall`, which is not on the program
   allowlist, and the vendor says npm removal on Windows is not verified yet. The npm name appears only inside the quoted
   install command; every user-visible name is "Gentle Shell".
+  A Gentle Shell the vendor's bundle installer put on the machine (a generated `gentle-shell.cmd` launcher in a bundle
+  folder on `PATH`, with its own runtime) resolves like any program, so the install registers it and runs nothing.
+- **Package scripts.** When the planned command is `npm install`, the review's plan carries `runs_package_scripts` (an
+  optional wire field older peers omit), and the CLI says that npm also runs the package's own install script, which
+  the review cannot show. It applies to every built-in that installs with npm, not only Gentle Shell.
 
 #### Third-party vendor commands (refused in tier 1)
 

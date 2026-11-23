@@ -36,9 +36,24 @@ fn a_missing_cli_plans_the_built_in_install_command_for_this_os() {
     assert_eq!(
         review.cli[0].state,
         PlanState::WillRun {
-            command: claude_install()
+            runs_package_scripts: claude_install()[0] == "npm",
+            command: claude_install(),
         }
     );
+}
+
+#[test]
+fn an_npm_install_says_the_package_scripts_run_and_others_do_not() {
+    let source = Source::Catalogue("massorca.gentle-shell".to_owned());
+    let package = load(&source, None).expect("loads");
+    let gentle = review(&package, &FakeHost::new(), current_os());
+    let value = serde_json::to_value(&gentle).expect("the review serializes");
+    assert_eq!(value["cli"][0]["command"][0], "npm");
+    assert_eq!(value["cli"][0]["runs_package_scripts"], true);
+
+    let claude = serde_json::to_value(claude_review(&FakeHost::new())).expect("serializes");
+    let npm = claude_install()[0] == "npm";
+    assert_eq!(claude["cli"][0].get("runs_package_scripts").is_some(), npm);
 }
 
 #[test]

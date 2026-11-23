@@ -223,10 +223,18 @@ fn plan_line(plan: &CliPlan) -> String {
             path.as_ref()
                 .map_or_else(String::new, |path| format!(" at {path}"))
         ),
-        CliPlanState::WillRun { command } => format!(
-            "cli {} ({binary}): not found; installing runs this vendor command: {}. Installs the vendor's current release; the version is not pinned.",
+        CliPlanState::WillRun {
+            command,
+            runs_package_scripts,
+        } => format!(
+            "cli {} ({binary}): not found; installing runs this vendor command: {}. Installs the vendor's current release; the version is not pinned.{}",
             plan.agent,
-            command_text(command)
+            command_text(command),
+            if *runs_package_scripts {
+                " npm also runs the package's own install script, which this review cannot show."
+            } else {
+                ""
+            }
         ),
         CliPlanState::Unsupported => format!(
             "cli {} ({binary}): not found, and no vendor command for this system; the agent registers without it",
