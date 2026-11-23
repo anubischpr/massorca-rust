@@ -46,6 +46,15 @@ jobs:
         with:
           key: check
       - run: cargo check --workspace --all-targets --locked
+      # The phone's build of the client (decision 0080): the network path only, without the local service's crates.
+      - name: Check the client without the local service
+        shell: bash
+        run: |
+          cargo check -p massorca-client --no-default-features --locked
+          if cargo tree -p massorca-client --no-default-features -e normal --target aarch64-linux-android             | grep -E 'interprocess|massorca-process|massorca-profile'; then
+            echo "the client without 'local' still depends on the local service's crates" >&2
+            exit 1
+          fi
 
   changes:
     runs-on: ubuntu-latest
