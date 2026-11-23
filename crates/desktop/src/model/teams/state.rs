@@ -1,6 +1,8 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
+use massorca_protocol::methods::teams::TeamCharacter;
+
 use super::live::agent_of_kind;
 use super::page::TeamPage;
 use super::types::{
@@ -169,6 +171,8 @@ impl TeamsState {
         self.teams.push(Team {
             id,
             name,
+            // The triangle is the character the service gives a team created without one.
+            character: TeamCharacter::Triangle,
             purpose: new.purpose.trim().to_owned(),
             host: host.name,
             reach: host.reach,
@@ -198,7 +202,7 @@ impl TeamsState {
             name,
             role: new.role.trim().to_owned(),
             agent: agent_of_kind(&new.kind),
-            kind_unavailable: false,
+            kind_unavailable: None,
         });
         if team.lead.is_none() {
             team.lead = Some(id);

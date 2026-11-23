@@ -55,10 +55,13 @@ pub fn is_handler(text: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// A publisher or name segment. It becomes a folder name, so it follows the same Windows rule as a package path
+/// (no device names such as `con` or `com1`).
 fn is_extension_segment(text: &str) -> bool {
     segment(text, 32, |byte| {
         byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
     }) && !text.starts_with('-')
+        && crate::package_path::windows_name_problem(text).is_none()
 }
 
 fn segment(text: &str, max: usize, allowed: impl Fn(u8) -> bool) -> bool {
@@ -108,6 +111,14 @@ mod tests {
         assert!(!is_extension_id("acme."));
         assert_eq!(publisher_of("acme.tool"), Some("acme"));
         assert_eq!(publisher_of("acme"), None);
+    }
+
+    #[test]
+    fn extension_id_segments_follow_the_windows_name_rule() {
+        for id in ["con.kit", "acme.com1", "lpt9.kit", "acme.aux", "acme.nul"] {
+            assert!(!is_extension_id(id), "{id}");
+        }
+        assert!(is_extension_id("acme.console"));
     }
 
     #[test]

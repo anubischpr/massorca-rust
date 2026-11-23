@@ -1,6 +1,7 @@
 //! The plain data of Bot Teams: teams and what each one holds, as the pages show it (screens 4).
 
 use crate::model::shell::{Agent, HostReach};
+use massorca_protocol::methods::teams::TeamCharacter;
 
 macro_rules! ids {
     ($($(#[$doc:meta])* $name:ident),* $(,)?) => {
@@ -98,8 +99,8 @@ pub struct Bot {
     pub role: String,
     /// The agent the bot runs as; `None` when the service does not say which one.
     pub agent: Option<Agent>,
-    /// The bot's kind is known and not detected on its host, so the bot cannot run there.
-    pub kind_unavailable: bool,
+    /// Why the bot's kind cannot run on its host (turned off, or not detected there); `None` when it can.
+    pub kind_unavailable: Option<&'static str>,
 }
 
 /// A task on a Board. Its card shows the column's status word, the bot and the time.
@@ -283,6 +284,8 @@ pub struct HostChoice {
 pub struct Team {
     pub id: TeamId,
     pub name: String,
+    /// The team's shape and eyes, drawn beside its name (A57, A59).
+    pub character: TeamCharacter,
     pub purpose: String,
     pub host: String,
     pub reach: HostReach,

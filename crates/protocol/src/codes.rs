@@ -127,6 +127,8 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
+/// `device.forget` on a device that is still active; revoke it first.
+pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";
@@ -157,6 +159,8 @@ pub const SECRET_VAULT_NOT_EMPTY: &str = "secret.vault_not_empty";
 pub const SECRET_REQUEST_LIMIT: &str = "secret.request_limit";
 /// Names stored before case clashes were refused would reach one process together; the data names each one.
 pub const SECRET_NAME_CLASH: &str = "secret.name_clash";
+/// The name loads code, redirects lookups or swaps an endpoint (decision 0071); the data names it.
+pub const SECRET_RESERVED_NAME: &str = "secret.reserved_name";
 pub const SECRET_REQUEST_NOT_FOUND: &str = "secret.request_not_found";
 /// The request is no longer pending.
 pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
@@ -183,6 +187,8 @@ pub const AGENT_CREDENTIALS_UNSUPPORTED: &str = "agent.credentials_unsupported";
 pub const AGENT_CREDENTIALS_EXIST: &str = "agent.credentials_exist";
 pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
+/// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
+pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
@@ -205,3 +211,45 @@ pub const TASK_RUNNING: &str = "task.running";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";
+
+// Extension codes (decision 0062). The package-format ones come from decision 0061.
+pub const EXTENSION_INVALID_MANIFEST: &str = "extension.invalid_manifest";
+pub const EXTENSION_INVALID_HASH: &str = "extension.invalid_hash";
+pub const EXTENSION_HASH_MISMATCH: &str = "extension.hash_mismatch";
+pub const EXTENSION_INVALID_ARCHIVE: &str = "extension.invalid_archive";
+pub const EXTENSION_UNSAFE_PATH: &str = "extension.unsafe_path";
+pub const EXTENSION_UNSAFE_ENTRY: &str = "extension.unsafe_entry";
+pub const EXTENSION_LIMIT_EXCEEDED: &str = "extension.limit_exceeded";
+pub const EXTENSION_MISSING_FILE: &str = "extension.missing_file";
+/// The source is not `catalogue:<id>`, `dir:<path>` or `file:<path>`.
+pub const EXTENSION_INVALID_SOURCE: &str = "extension.invalid_source";
+/// No catalogue entry has that id.
+pub const EXTENSION_NOT_FOUND: &str = "extension.not_found";
+pub const EXTENSION_NOT_INSTALLED: &str = "extension.not_installed";
+pub const EXTENSION_ALREADY_INSTALLED: &str = "extension.already_installed";
+/// Another package already installed the agent kind.
+pub const EXTENSION_KIND_CONFLICT: &str = "extension.kind_conflict";
+/// A package archive needs its SHA-256.
+pub const EXTENSION_HASH_REQUIRED: &str = "extension.hash_required";
+/// An install without the fingerprint of an accepted review.
+pub const EXTENSION_CONSENT_REQUIRED: &str = "extension.consent_required";
+/// The package or its install plan changed since the review.
+pub const EXTENSION_CONSENT_MISMATCH: &str = "extension.consent_mismatch";
+/// The install runs a vendor installer and `run_installer` was not set.
+pub const EXTENSION_INSTALLER_CONSENT_REQUIRED: &str = "extension.installer_consent_required";
+pub const EXTENSION_INSTALLER_FAILED: &str = "extension.installer_failed";
+pub const EXTENSION_VERIFY_FAILED: &str = "extension.verify_failed";
+pub const EXTENSION_ASSET_NOT_LISTED: &str = "extension.asset_not_listed";
+pub const EXTENSION_ASSET_TOO_LARGE: &str = "extension.asset_too_large";
+pub const EXTENSION_INVALID_LOCKFILE: &str = "extension.invalid_lockfile";
+pub const EXTENSION_IO: &str = "extension.io";
+/// An installed package's files no longer match its lockfile hash; nothing they name runs.
+pub const EXTENSION_TAMPERED: &str = "extension.tampered";
+/// A package from outside the built-in catalogue claims publisher `massorca` or a `massorca.*` id.
+pub const EXTENSION_RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
+/// Another install or removal of the same package is running; try again when it has finished.
+pub const EXTENSION_BUSY: &str = "extension.busy";
+/// A package from outside the built-in catalogue declares a vendor command (install, verify or uninstall).
+pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
+/// A vendor installer or uninstaller needs a person: an agent run may not start one.
+pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";

@@ -19,7 +19,7 @@ use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, shared};
 use crate::owner::Owner;
-use crate::permission::Permission;
+use crate::permission::{Permission, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -103,6 +103,7 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
         },
         title: params.title,
         request_id: params.request_id,
+        holds_secrets: false,
     };
     let manager = ctx.state.terminals.clone();
     let info = on_manager(move || manager.create(spec)).await?;
@@ -135,7 +136,29 @@ async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBod
         .map_err(error_of)
 }
 
+/// Refuses a caller below host-admin scope on the terminal of an agent run that holds vault secrets (decision 0071):
+/// reading, attaching to, resizing or writing to it.
+pub(super) async fn require_admin_for_terminal(
+    ctx: &RequestCtx,
+    terminal: &str,
+) -> Result<(), ErrorBody> {
+    if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
+        return Ok(());
+    }
+    // The terminal's own mark, set at its creation: an exited terminal of an earlier run keeps it.
+    let holds = ctx
+        .state
+        .terminals
+        .get(terminal)
+        .is_ok_and(|info| info.holds_secrets);
+    if holds {
+        return authorize(&ctx.principal, Permission::HostAdmin);
+    }
+    Ok(())
+}
+
 async fn input(ctx: RequestCtx, params: TerminalInputParams) -> Result<(), ErrorBody> {
+    require_admin_for_terminal(&ctx, &params.terminal).await?;
     let bytes = params.decode_data().map_err(|error| {
         let code = match error {
             terminals::InputDecodeError::InvalidBase64 => codes::REQUEST_INVALID_PARAMS,
@@ -149,6 +172,7 @@ async fn input(ctx: RequestCtx, params: TerminalInputParams) -> Result<(), Error
 }
 
 async fn resize(ctx: RequestCtx, params: TerminalResizeParams) -> Result<Terminal, ErrorBody> {
+    require_admin_for_terminal(&ctx, &params.terminal).await?;
     let id = params.terminal;
     let size = PtySize {
         cols: params.cols,
@@ -229,6 +253,7 @@ pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
         cwd: info.cwd,
         created_at_ms: info.created_at_ms,
         exit: info.exit.map(exit_of),
+        holds_secrets: info.holds_secrets,
     }
 }
 

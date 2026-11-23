@@ -9,6 +9,7 @@ use super::types::{
     WebAddress, Weekday,
 };
 use crate::model::shell::{Agent, HostReach};
+use massorca_protocol::methods::teams::TeamCharacter;
 
 /// The host the sample team runs on, named as the shell names it.
 const VPS: &str = "VPS";
@@ -64,7 +65,7 @@ fn bot(id: BotId, name: &str, role: &str, agent: Agent) -> Bot {
         name: name.into(),
         role: role.into(),
         agent: Some(agent),
-        kind_unavailable: false,
+        kind_unavailable: None,
     }
 }
 
@@ -158,6 +159,7 @@ fn desarrollo() -> Team {
     Team {
         id: TeamId(1),
         name: "Desarrollo".into(),
+        character: TeamCharacter::Triangle,
         purpose: "Sign-in and copy for oppm.".into(),
         host: VPS.into(),
         reach: VPS_REACH,
@@ -262,6 +264,7 @@ mod tests {
         assert!(state.is_connected());
         let team = &state.teams()[0];
         assert_eq!(team.name, "Desarrollo");
+        assert_eq!(team.character, TeamCharacter::Triangle);
         assert_eq!(team.lead_name(), Some("Mara"));
         let names: Vec<&str> = team.bots.iter().map(|bot| bot.name.as_str()).collect();
         assert_eq!(names, ["Mara", "Bruno", "Iris"]);

@@ -10,8 +10,10 @@ use serde::Serialize;
 use crate::error::{Error, HookError, codes};
 use crate::hooks::{HookHandle, HookKind};
 use crate::host::INSTALLER_TIMEOUT;
-use crate::lockfile::LockCli;
+use crate::lockfile::{LockCli, LockEntry};
+use crate::review::uninstall_fingerprint;
 use crate::service::{Extensions, describe};
+use massorca_ext_package::manifest::agent::CliOs;
 
 /// The result of `set_enabled`. `changed` is false when the package was already in that state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -101,6 +103,7 @@ impl Extensions {
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<EnabledOutcome, Error> {
         let _changes = self.lock_changes();
         let mut lockfile = self.read_lockfile()?;
+        self.refuse_if_busy(id)?;
         let entry = lockfile
             .get_mut(id)
             .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
@@ -126,19 +129,59 @@ impl Extensions {
         id: &str,
         delete_agent_homes: bool,
         uninstall_cli: bool,
+        uninstall_consent: Option<&str>,
     ) -> Result<Removed, Error> {
-        let _changes = self.lock_changes();
-        let mut lockfile = self.read_lockfile()?;
-        let entry = lockfile
-            .get(id)
-            .cloned()
-            .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
-        // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
-        let manifest = self.installed_manifest(&entry).ok();
-        self.run_guards(id)?;
-        lockfile.packages.retain(|package| package.id != id);
-        lockfile.write(&self.layout.lock_path())?;
+        // The change lock covers the lockfile and the files. The uninstall commands run after it is released, with the
+        // package busy, so other packages can change meanwhile.
+        let (entry, manifest, failures, _busy) = {
+            let _changes = self.lock_changes();
+            self.refuse_if_busy(id)?;
+            let mut lockfile = self.read_lockfile()?;
+            let entry = lockfile
+                .get(id)
+                .cloned()
+                .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
+            // A package whose files are damaged can still be removed; its CLI uninstall is then unknown.
+            let manifest = self.installed_manifest(&entry).ok();
+            if uninstall_cli {
+                // The uninstall runs only for the commands the person accepted (0062, V2): nothing changes without them.
+                let commands = pending_uninstalls(&entry, manifest.as_ref(), self.os);
+                if !commands.is_empty() {
+                    let fingerprint = uninstall_fingerprint(&commands);
+                    match uninstall_consent {
+                        None => {
+                            return Err(Error::UninstallConsentRequired {
+                                commands,
+                                fingerprint,
+                            });
+                        }
+                        Some(given) if given != fingerprint => return Err(Error::ConsentMismatch),
+                        Some(_) => {}
+                    }
+                }
+            }
+            self.run_guards(id)?;
+            lockfile.packages.retain(|package| package.id != id);
+            lockfile.write(&self.layout.lock_path())?;
+            let failures = self.delete_package(id, delete_agent_homes);
+            let busy = self.mark_busy(id, Vec::new())?;
+            (entry, manifest, failures, busy)
+        };
+        let cli = entry
+            .cli
+            .iter()
+            .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
+            .collect();
+        Ok(Removed {
+            id: id.to_owned(),
+            version: entry.version,
+            failures,
+            cli,
+        })
+    }
 
+    /// Deletes a removed package's folders and, when asked, runs the cleanups. A failure is reported, not rolled back.
+    fn delete_package(&self, id: &str, delete_agent_homes: bool) -> Vec<Failure> {
         let mut failures = Vec::new();
         for dir in [self.layout.package_root(id), self.layout.data_dir(id)] {
             if let Err(error) = remove_tree(&dir) {
@@ -160,17 +203,7 @@ impl Extensions {
                 }
             }
         }
-        let cli = entry
-            .cli
-            .iter()
-            .map(|cli| self.remove_cli(id, cli, manifest.as_ref(), uninstall_cli))
-            .collect();
-        Ok(Removed {
-            id: id.to_owned(),
-            version: entry.version,
-            failures,
-            cli,
-        })
+        failures
     }
 
     fn remove_cli(
@@ -208,6 +241,12 @@ impl Extensions {
     }
 
     fn run_uninstall(&self, id: &str, command: Vec<String>) -> CliAction {
+        if !massorca_ext_package::manifest::agent::is_vendor_program(&command) {
+            return CliAction::Failed {
+                message: "its program is not on the vendor allowlist".to_owned(),
+                command,
+            };
+        }
         let log = self.layout.uninstall_log(id);
         let ran = log
             .parent()
@@ -235,4 +274,30 @@ fn remove_tree(dir: &Path) -> std::io::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+/// The uninstall commands a removal would run for the CLIs this package installed, for this OS.
+fn pending_uninstalls(
+    entry: &LockEntry,
+    manifest: Option<&Manifest>,
+    os: Option<CliOs>,
+) -> Vec<Vec<String>> {
+    entry
+        .cli
+        .iter()
+        .filter(|cli| cli.installed_by_package)
+        .filter_map(|cli| {
+            manifest?
+                .contributes
+                .agent_adapters
+                .iter()
+                .find(|adapter| adapter.id == cli.agent)?
+                .cli
+                .as_ref()?
+                .uninstall
+                .iter()
+                .find(|step| Some(step.os) == os)
+                .map(|step| step.command.clone())
+        })
+        .collect()
 }

@@ -247,7 +247,7 @@ impl Colours {
     }
 }
 
-fn fill_polygon(window: &mut Window, points: &[(f32, f32)], color: Hsla) {
+pub(super) fn fill_polygon(window: &mut Window, points: &[(f32, f32)], color: Hsla) {
     let mut points = points.iter().map(|&(x, y)| point(px(x), px(y)));
     let Some(first) = points.next() else {
         return;

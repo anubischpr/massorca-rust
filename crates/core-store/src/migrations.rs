@@ -266,6 +266,13 @@ END;
 "#,
         foreign_keys_off: false,
     },
+    // Whether an agent session's current or last run received vault secrets (decision 0071); never their names.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 CHECK(holds_secrets IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
     // Team memory (decision 0072): lines a team or one of its bots keeps for later tasks. A bot-less line is the team's
     // scope. A team's or a bot's removal removes its lines.
     Migration {

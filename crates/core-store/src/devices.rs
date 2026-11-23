@@ -89,6 +89,15 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Deletes a revoked device. Returns whether one was deleted; an active device is never deleted.
+    pub fn forget_device(&self, id: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "DELETE FROM devices WHERE id = ?1 AND revoked_at IS NOT NULL",
+            params![id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Records that a device connected at `at`.
     pub fn touch_device(&self, id: &str, at: i64) -> Result<(), StoreError> {
         self.lock().execute(
