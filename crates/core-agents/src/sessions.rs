@@ -1617,17 +1617,23 @@ fn clear_starting(run_dir: &Path) {
     let _ = std::fs::remove_file(run_dir.join(STARTING_MARK));
 }
 
-/// Test-only: names a point where the service exits at once, as a crash there would. Inert unless set, which only the
-/// CLI tests do.
+/// Test-only: names a point where the service exits at once, as a crash there would. Compiled in only with the
+/// `test-hooks` feature, which only test builds enable.
+#[cfg(feature = "test-hooks")]
 const CRASH_AT_ENV: &str = "MASSORCA_TEST_CRASH_AT";
 
-/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would.
+/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would. Without the `test-hooks`
+/// feature it does nothing and reads no variable.
+#[cfg(feature = "test-hooks")]
 fn crash_point(point: &str) {
     if std::env::var_os(CRASH_AT_ENV).is_some_and(|value| value == point) {
         tracing::error!(point, "exiting at a test crash point");
         std::process::exit(70);
     }
 }
+
+#[cfg(not(feature = "test-hooks"))]
+fn crash_point(_point: &str) {}
 
 fn running(state: TerminalState) -> Execution {
     Execution { state, exit: None }

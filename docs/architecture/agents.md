@@ -329,8 +329,10 @@ run. With a row, the start or resume was recorded and only the mark is removed; 
 stale like any other run of the previous service.
 
 The CLI tests reach both points through `MASSORCA_TEST_CRASH_AT` (`agent-start-spawned`,
-`agent-resume-spawned`), which makes the service exit there at once, as a crash would. It is inert
-unless set.
+`agent-resume-spawned`), which makes the service exit there at once, as a crash would. The crash
+points exist only with core-agents' `test-hooks` feature, which only the CLI's dev-dependencies
+enable, so a release build carries neither the points nor the variable;
+`crates/core-agents/tests/test_hooks_gate.rs` fails when any normal or build dependency enables it.
 
 ## Prompt queue (decision 0084)
 
