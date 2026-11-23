@@ -33,6 +33,7 @@ fn session_row(workspace_id: &str, created_at: i64) -> AgentSessionRow {
         activity: None,
         result: None,
         brought_back_at: None,
+        holds_secrets: false,
     }
 }
 
@@ -298,7 +299,11 @@ fn a_restart_moves_an_exited_session_to_a_new_terminal_and_clears_its_exit_and_a
     store.insert_agent_session(&row).unwrap();
 
     let terminal = new_id();
-    assert!(store.restart_agent_session(&row.id, &terminal).unwrap());
+    assert!(
+        store
+            .restart_agent_session(&row.id, &terminal, false)
+            .unwrap()
+    );
     let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
     assert_eq!(restarted.terminal_id.as_deref(), Some(terminal.as_str()));
     assert_eq!(restarted.exit, None);
@@ -313,7 +318,11 @@ fn a_live_session_is_not_restarted() {
     let row = session_row(&workspace, 10);
     store.insert_agent_session(&row).unwrap();
 
-    assert!(!store.restart_agent_session(&row.id, &new_id()).unwrap());
+    assert!(
+        !store
+            .restart_agent_session(&row.id, &new_id(), false)
+            .unwrap()
+    );
     assert_eq!(store.get_agent_session(&row.id).unwrap(), Some(row));
 }
 
@@ -391,4 +400,37 @@ fn a_bring_back_is_recorded_once() {
             .brought_back_at,
         Some(40)
     );
+}
+
+#[test]
+fn the_secrets_mark_is_sticky_across_restarts() {
+    let (store, workspace) = store_with_workspace();
+    let exited = || {
+        Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: 20,
+        })
+    };
+    let mut row = session_row(&workspace, 10);
+    row.exit = exited();
+    store.insert_agent_session(&row).unwrap();
+
+    assert!(store.restart_agent_session(&row.id, "t-1", true).unwrap());
+    assert!(
+        store
+            .get_agent_session(&row.id)
+            .unwrap()
+            .unwrap()
+            .holds_secrets
+    );
+    store
+        .set_agent_session_exit(&row.id, "t-1", exited().as_ref().unwrap())
+        .unwrap();
+    // A later restart without secrets keeps the mark: the scrollback may still hold them.
+    assert!(store.restart_agent_session(&row.id, "t-2", false).unwrap());
+    let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(restarted.terminal_id.as_deref(), Some("t-2"));
+    assert!(restarted.holds_secrets);
 }

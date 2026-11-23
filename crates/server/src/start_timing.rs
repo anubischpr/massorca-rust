@@ -27,8 +27,13 @@ impl StartTimings {
     /// Ends the phase `name` at this moment; the next phase starts now.
     pub(crate) fn mark(&mut self, name: &'static str) {
         let now = Instant::now();
-        self.phases.push((name, now - self.last));
+        let took = now - self.last;
+        self.phases.push((name, took));
         self.last = now;
+        // With the variable set, each phase is logged as it ends, so a start that stalls shows the last phase it reached.
+        if std::env::var_os(START_TIMING_ENV).is_some() {
+            tracing::info!(phase = name, took_ms = took.as_millis(), "start phase done");
+        }
     }
 
     /// One line: the total and each phase in milliseconds, in order.

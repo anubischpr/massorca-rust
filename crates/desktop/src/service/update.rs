@@ -449,6 +449,8 @@ pub(crate) mod fixtures {
             },
             activity: None,
             result: None,
+            holds_secrets: false,
+            secrets_withheld: None,
         }
     }
 

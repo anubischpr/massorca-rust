@@ -253,3 +253,33 @@ fn a_case_clash_stored_by_an_older_build_is_reported_and_refused_at_injection() 
         assert_eq!(meta.used_at, None, "{} was not handed out", meta.name);
     }
 }
+
+#[test]
+fn a_dangerous_name_is_refused_when_set_linked_or_requested() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = vault(dir.path());
+    let is_reserved = |error: &VaultError| matches!(error, VaultError::ReservedName { .. });
+    for name in [
+        "PATH",
+        "Node_Options",
+        "LD_PRELOAD",
+        "ANTHROPIC_BASE_URL",
+        "GIT_ASKPASS",
+    ] {
+        let set = vault
+            .set(&scope("global"), name, &value(), false)
+            .unwrap_err();
+        assert!(is_reserved(&set), "{name}: {set:?}");
+        let requested = vault
+            .request(&scope("global"), name, "why", None, "owner")
+            .unwrap_err();
+        assert!(is_reserved(&requested), "{name}: {requested:?}");
+        let linked = vault
+            .link(&scope("project:p"), name, &scope("global"))
+            .unwrap_err();
+        assert!(is_reserved(&linked), "{name}: {linked:?}");
+    }
+    vault
+        .set(&scope("global"), "OPENAI_API_KEY", &value(), false)
+        .expect("an API key is what the vault is for");
+}

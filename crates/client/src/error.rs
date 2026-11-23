@@ -49,8 +49,18 @@ pub enum ClientError {
     #[error("a host named {0:?} already exists")]
     HostExists(String),
     /// Whether a host's files are there could not be read, so nothing was changed rather than risk losing a key.
-    #[error("the files of host {name} cannot be read, so nothing was changed: {reason}")]
-    HostUnreadable { name: String, reason: String },
+    #[error(
+        "the files of host {name} cannot be read, so nothing was changed: {reason}. Check that you can read {}, or remove that folder by hand if the host is no longer needed",
+        path.display()
+    )]
+    HostUnreadable {
+        name: String,
+        path: std::path::PathBuf,
+        reason: String,
+    },
+    /// Another command held the hosts folder for too long; nothing was changed.
+    #[error("{0}")]
+    HostsBusy(String),
     #[error(
         "{0:?} is not a host name: 1 to 32 of a-z, 0-9, - and _, starting with a letter or digit, and not \"local\""
     )]
@@ -113,6 +123,7 @@ impl ClientError {
             | Self::HostNotFound(_)
             | Self::HostExists(_)
             | Self::HostUnreadable { .. }
+            | Self::HostsBusy(_)
             | Self::InvalidHostName(_)
             | Self::StartRefused(_)
             | Self::ProfileRefused(_) => 1,

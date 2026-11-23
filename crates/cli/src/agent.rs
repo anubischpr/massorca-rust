@@ -240,7 +240,7 @@ pub async fn execute(
         terminal_attach::require_terminal()?;
         let client = connect(target, autostart).await?;
         let terminal = live_terminal(&client, session).await?;
-        return terminal_attach::attach(&client, &terminal).await;
+        return terminal_attach::attach(target, &client, &terminal).await;
     }
 
     let client = connect(target, autostart).await?;
@@ -322,7 +322,7 @@ pub async fn execute(
             );
         }
         AgentCommand::Accounts { command } => {
-            agent_accounts::execute(&client, command, output, json).await?;
+            agent_accounts::execute(target, &client, command, output, json).await?;
         }
         AgentCommand::Delegate(args) => {
             let inside = run_identity();
