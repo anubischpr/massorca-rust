@@ -75,9 +75,19 @@ returns the device row.
 
 **Scopes.** Permission classes are `read`, `workspace`, `host-admin` and the
 new `device-admin` (offers, device list and revoke). The local owner holds all
-of them. A device holds the classes chosen when its offer was made: by default
-`read` and `workspace`; `--admin` adds `host-admin` and `device-admin`.
-Scopes never widen after pairing; a device that needs more is paired again.
+of them. A device holds the classes chosen when its offer was made.
+
+*Changed on 2026-11-22, by the owner's direction:* a paired device is the owner
+themself, so an offer grants every class by default, as other coding tools
+treat a signed-in machine. Restrictions come from the agent's permission mode,
+not from the device, and the protection for a lost device is revoking it. A
+reduced offer (`read` and `workspace`) stays available as an advanced option
+(`pair offer --standard`, `standard: true` in `pairing.create`). `admin: true`
+is still accepted; clients send it so that services from before this change
+also grant full access. `device.grant` (host-admin) raises an existing device to
+every class from its next connection, so devices paired under the old default
+need not pair again. This replaces the earlier rule that scopes never widen
+after pairing.
 
 **Device list and revoke.** `device.list` and `device.revoke` need
 `device-admin`; any device may revoke itself (unpairing). Revoking marks the

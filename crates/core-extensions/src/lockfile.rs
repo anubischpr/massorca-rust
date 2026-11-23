@@ -22,6 +22,9 @@ pub struct Lockfile {
     pub version: u32,
     #[serde(default)]
     pub packages: Vec<LockEntry>,
+    /// The one-time changes this profile has made, by name, such as `builtin-agents` (decision 0063).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -31,6 +34,7 @@ impl Default for Lockfile {
         Self {
             version: LOCKFILE_VERSION,
             packages: Vec::new(),
+            migrations: Vec::new(),
             extra: Map::new(),
         }
     }
@@ -58,6 +62,9 @@ pub struct LockEntry {
     /// The package's agent kind ids at install, so its kinds can be named even when its files cannot be trusted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_kinds: Vec<String>,
+    /// Registered at upgrade as a built-in, without a vendor command or consent (decision 0063).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adopted: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -164,6 +171,18 @@ impl Lockfile {
     pub fn get_mut(&mut self, id: &str) -> Option<&mut LockEntry> {
         self.packages.iter_mut().find(|entry| entry.id == id)
     }
+
+    /// Whether the one-time change `name` has run on this profile.
+    pub fn has_migration(&self, name: &str) -> bool {
+        self.migrations.iter().any(|done| done == name)
+    }
+
+    /// Records the one-time change `name`, once.
+    pub fn record_migration(&mut self, name: &str) {
+        if !self.has_migration(name) {
+            self.migrations.push(name.to_owned());
+        }
+    }
 }
 
 impl LockEntry {
@@ -196,6 +215,10 @@ impl LockEntry {
         }
         Ok(())
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Makes the rename durable: on Unix the folder entry is synced too. Windows has no folder handle to sync.

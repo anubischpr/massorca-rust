@@ -135,6 +135,8 @@ pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
+/// `device.grant` on a revoked device; pair it again instead.
+pub const DEVICE_REVOKED: &str = "device.revoked";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";
