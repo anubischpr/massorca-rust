@@ -1,7 +1,18 @@
 # 0078: A pairing scope without program execution
 
-Status: proposed, 2026-11-22. Adds a scope to 0041's **Scopes**. Answers the
-open design item in 0071's trust boundary.
+Status: not adopted (owner direction, 2026-11-22). The design below is kept
+only as a record; no slice of it will be built.
+
+A paired device is the owner themself. As in Claude Code, Codex and
+Antigravity, every tool is usable from the first moment, and restrictions
+come from the agent's permission mode (plan, always ask, automatic), not from
+the device. A per-device level between `read` and `workspace` is therefore
+more machinery than the product needs. Pairing defaults to full access, all
+scopes including host admin; the existing scopes stay in the code as an
+optional, advanced restriction and are not a product feature to extend. The
+one part that shipped is the git rule for reads by a caller without
+`workspace` (PR #202): it is cheap and protects a device the owner
+deliberately paired with reduced scopes.
 
 ## Context
 
