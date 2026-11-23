@@ -274,19 +274,32 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Marks every run created before `created_before` that never recorded an outcome as interrupted with `code` and
-    /// `message`. Nothing retries them. Returns how many runs it marked.
-    pub fn interrupt_pending_routine_runs(
+    /// Settles every run created before `created_before` that never recorded an outcome, from what its task shows: a
+    /// task whose session is linked started, so the run has no error; a task that kept a start error gives the run that
+    /// error; any other run is interrupted with `code` and `message`. Nothing retries them. Returns how many it settled.
+    pub fn settle_pending_routine_runs(
         &self,
         created_before: i64,
         code: &str,
         message: &str,
         settled_at: i64,
     ) -> Result<usize, StoreError> {
-        Ok(self.lock().execute(
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        let started = transaction.execute(
+            "UPDATE team_routine_runs SET error = NULL, error_code = NULL, settled_at = ?2 WHERE settled_at IS NULL AND created_at < ?1 AND task_id IN (SELECT id FROM tasks WHERE session_id IS NOT NULL)",
+            params![created_before, settled_at],
+        )?;
+        let failed = transaction.execute(
+            "UPDATE team_routine_runs SET error = (SELECT error FROM tasks WHERE tasks.id = team_routine_runs.task_id), error_code = (SELECT error_code FROM tasks WHERE tasks.id = team_routine_runs.task_id), settled_at = ?2 WHERE settled_at IS NULL AND created_at < ?1 AND task_id IN (SELECT id FROM tasks WHERE session_id IS NULL AND error IS NOT NULL)",
+            params![created_before, settled_at],
+        )?;
+        let interrupted = transaction.execute(
             "UPDATE team_routine_runs SET error = ?2, error_code = ?3, settled_at = ?4 WHERE settled_at IS NULL AND created_at < ?1",
             params![created_before, message, code, settled_at],
-        )?)
+        )?;
+        transaction.commit()?;
+        Ok(started + failed + interrupted)
     }
 
     /// The runs of one routine, newest first; `limit` keeps the newest that many.

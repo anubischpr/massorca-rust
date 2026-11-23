@@ -326,7 +326,7 @@ fn only_runs_pending_from_before_a_start_are_marked_interrupted() {
     }
 
     let marked = store
-        .interrupt_pending_routine_runs(400, "routine.run_interrupted", "stopped", 450)
+        .settle_pending_routine_runs(400, "routine.run_interrupted", "stopped", 450)
         .unwrap();
 
     assert_eq!(marked, 1);
@@ -384,4 +384,44 @@ fn the_store_refuses_an_unknown_cadence_and_a_month_day_outside_one_to_twenty_ei
     day_29.cadence = "monthly".to_owned();
     day_29.month_day = Some(29);
     assert!(store.insert_routine(&day_29).is_err());
+}
+
+#[test]
+fn a_pending_run_is_settled_from_what_its_task_shows() {
+    let store = store();
+    let team = team(&store);
+    let bot = bot(&store, &team.id);
+    let routine = routine(&team.id, Some(&bot.id), None);
+    store.insert_routine(&routine).unwrap();
+    let mut linked_task = task(&team.id, &bot.id);
+    linked_task.session_id = Some("session-1".to_owned());
+    let mut failed_task = task(&team.id, &bot.id);
+    failed_task.error = Some("no agent of that kind".to_owned());
+    failed_task.error_code = Some("agent.kind_unavailable".to_owned());
+    let quiet_task = task(&team.id, &bot.id);
+    let mut runs = Vec::new();
+    for (at, task) in [(100, &linked_task), (110, &failed_task), (120, &quiet_task)] {
+        let mut row = run(&routine.id, at);
+        row.task_id = Some(task.id.clone());
+        store.insert_routine_run(&row, Some(task)).unwrap();
+        runs.push(row.id);
+    }
+
+    let settled = store
+        .settle_pending_routine_runs(400, "routine.run_interrupted", "stopped", 450)
+        .unwrap();
+
+    assert_eq!(settled, 3);
+    let [started, failed, interrupted] =
+        [&runs[0], &runs[1], &runs[2]].map(|id| store.get_routine_run(id).unwrap().unwrap());
+    // The start linked a session, so the run started even though its outcome was never written.
+    assert_eq!((started.error, started.error_code), (None, None));
+    assert_eq!(started.settled_at, Some(450));
+    assert_eq!(failed.error.as_deref(), Some("no agent of that kind"));
+    assert_eq!(failed.error_code.as_deref(), Some("agent.kind_unavailable"));
+    assert_eq!(interrupted.error.as_deref(), Some("stopped"));
+    assert_eq!(
+        interrupted.error_code.as_deref(),
+        Some("routine.run_interrupted")
+    );
 }
