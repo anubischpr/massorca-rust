@@ -60,6 +60,11 @@ machine attributed to a workspace by working directory or command line, scanned 
   `partial` when some cannot be read or have left it; when the host's socket table cannot be read, no port is listed and
   the answer is `unverifiable`. Polling is every 30 seconds while the ports are visible, and nothing is pushed. macOS is
   not read until its socket layouts are verified (libc 0.2.191 declares none of them), so its answer is unverifiable.
+  A socket several members hold on Linux belongs to the one that started first. Limits, which the answer does not hide:
+  a link-local IPv6 listener loses its zone (the scope id), so its address is listed without it. On Windows the owner pid
+  is the process that created the socket, so a listener handed to a child after its creator exited may be missed, or
+  attributed to another member of the same terminal. Linux reads only the service's own network namespace. A member that
+  ends between the listing and the check makes its terminal `partial`.
 
 ## Alternatives
 

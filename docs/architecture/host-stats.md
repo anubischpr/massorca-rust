@@ -67,11 +67,24 @@ Each platform reads the listening sockets natively, and only for the processes a
   pid; addresses and ports are read in network byte order. After the read, each owner that is a terminal member is
   checked again on its own handle (`IsProcessInJob`), so a pid reused meanwhile is not attributed.
 - Linux: the LISTEN rows of `/proc/net/tcp` and `/proc/net/tcp6` give each socket's inode. Each member's descriptors
-  (`/proc/<pid>/fd`, `socket:[inode]`) name the inodes it holds, and the lowest pid holding an inode owns it. A member is
-  read only while it is the one listed: its start time and session must match before and after the read.
+  (`/proc/<pid>/fd`, `socket:[inode]`) name the inodes it holds. A socket several members hold is owned by the one that
+  started first, since a forked child starts after its parent; pids wrap, so the number gives no order. A member is read
+  only while it is the one listed: its start time and session must match before and after the read.
 - macOS: not read yet. libc 0.2.191 declares neither `socket_fdinfo` nor the TCP socket structures, and their layouts
   cannot be checked here, so the socket table reads as unreadable and the answer is unverifiable until a macOS build
   verifies them.
+
+Limits, which the answer does not hide:
+
+- A link-local IPv6 listener (`fe80::/10`) loses its zone, the scope id: its address is listed without it, so the bare
+  address may not connect on its own.
+- On Windows the owner pid is the process that created the socket. A listener handed to a child after its creator
+  exited (for example through an inherited handle) may be missed, or attributed to another member of the same terminal,
+  because the table does not say which process holds it now.
+- Linux reads only the sockets of the service's own network namespace. A terminal in another namespace (a container, or
+  `unshare -n`) may listen on sockets this table does not show.
+- A member that ends between the membership listing and the check is not confirmed, so its terminal is `partial`: its
+  list may miss the ports of that member, which has ended.
 
 ## Reading
 
@@ -81,7 +94,9 @@ Each platform reads the listening sockets natively, and only for the processes a
   than 1024 processes); then per pid `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetExitCodeProcess` (an ended
   process whose handle is still held is not counted), `IsProcessInJob` on that handle (a pid reused since the listing
   is not read) and `K32GetProcessMemoryInfo` for the working set. A Toolhelp32 snapshot gives names and parent ids.
-- Linux: `VmRSS` from `/proc/<pid>/status`; names, parents, session ids and start times from `/proc/<pid>/stat`.
+- Linux: `VmRSS` from `/proc/<pid>/status`; names, parents, session ids and start times from `/proc/<pid>/stat`. A `/proc`
+  mounted with `hidepid` lists only some processes (read from `/proc/self/mountinfo`): the table is then incomplete, and
+  the terminals read from it are `partial`.
 - macOS: `proc_pidinfo` (`PROC_PIDTASKINFO` for the resident size, `PROC_PIDTBSDINFO` for parents, names and start
   times) and `proc_listallpids`, asked again while the count grows.
 
@@ -95,7 +110,9 @@ ids can name a parent that exited. The service's own process is never a member.
 
 Each process is read only while it is the one the table listed: its start time, and on Linux its session, must match
 the listing before and after the read. A pid reused since the listing is counted unreadable and never summed. A macOS
-table that still does not fit after its bounded retries is incomplete: the terminals read from it are `partial`.
+table that still does not fit after its bounded retries, or a Linux listing that `hidepid` keeps short, is incomplete: the
+terminals read from it are `partial`. On Windows a terminal's processes come from its job, so the snapshot's completeness
+does not decide them.
 
 ## Polling
 
