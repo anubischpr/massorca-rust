@@ -178,3 +178,35 @@ fn a_task_started_by_a_workspace_device_runs_without_vault_variables() {
         "fake-agent: env TEAM_TOKEN set",
     );
 }
+
+#[test]
+fn a_workspace_device_cannot_give_a_team_full_access() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let _service = start_server(&server);
+    prepare(&server);
+    pair(&server, &client);
+
+    // Without `access`, the device's team gets default access.
+    let made = device_ok(&client, &["team", "create", "beta"]);
+    assert_eq!(made["access"], "default", "{made}");
+
+    // An explicit request for full access is refused, on create and on update.
+    for args in [
+        &["team", "create", "gamma", "--access", "full"][..],
+        &["team", "update", "beta", "--access", "full"][..],
+    ] {
+        let mut full = vec!["--json", "--host", "srv"];
+        full.extend_from_slice(args);
+        let outcome = client.run("client", &full).failure();
+        let document = single_document(&outcome);
+        assert_eq!(document["error"]["code"], "permission.denied", "{document}");
+    }
+    let shown = server.json_ok(SERVER, &["team", "show", "beta"]);
+    assert_eq!(shown["access"], "default", "{shown}");
+    let teams = server.json_ok(SERVER, &["team", "list"]);
+    assert!(
+        !teams.to_string().contains("gamma"),
+        "a refused create made no team: {teams}"
+    );
+}

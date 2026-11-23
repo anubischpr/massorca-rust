@@ -12,6 +12,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
+use crate::features::agent_redaction::is_host_admin;
 use crate::features::workspace_domain::publish;
 use crate::owner::Owner;
 use crate::permission::Permission;
@@ -71,7 +72,12 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     ])
 }
 
-async fn create(ctx: RequestCtx, params: TeamCreateParams) -> Result<Team, ErrorBody> {
+async fn create(ctx: RequestCtx, mut params: TeamCreateParams) -> Result<Team, ErrorBody> {
+    // Only a host-admin caller makes a full-access team; another caller's team defaults to `default`.
+    params.access = Some(match params.access {
+        None if !is_host_admin(&ctx) => TeamAccess::Default,
+        access => checked_access(&ctx, access.unwrap_or_default())?,
+    });
     let team = blocking(&ctx, move |store, _agents| create_team(store, params)).await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &team.id);
     Ok(team)
@@ -94,6 +100,9 @@ async fn show(ctx: RequestCtx, params: TeamRef) -> Result<Team, ErrorBody> {
 }
 
 async fn update(ctx: RequestCtx, params: TeamUpdateParams) -> Result<Team, ErrorBody> {
+    if let Some(access) = params.access {
+        checked_access(&ctx, access)?;
+    }
     let team = blocking(&ctx, move |store, _agents| update_team(store, params)).await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &team.id);
     Ok(team)
@@ -194,6 +203,18 @@ fn character_of(name: &str) -> TeamCharacter {
         .iter()
         .find(|(_, known)| *known == name)
         .map_or(TeamCharacter::Unknown, |(character, _)| *character)
+}
+
+/// Refuses full access to a caller below host-admin scope: a full-access team's bots skip permission prompts, and runs
+/// of routines a host-admin set up also hold vault secrets (decisions 0071 and 0083).
+fn checked_access(ctx: &RequestCtx, access: TeamAccess) -> Result<TeamAccess, ErrorBody> {
+    if access == TeamAccess::Full && !is_host_admin(ctx) {
+        return Err(ErrorBody::new(
+            codes::PERMISSION_DENIED,
+            "full team access needs a host-admin caller, because the team's bots then run without asking for permission; use --access default, or ask the host's owner",
+        ));
+    }
+    Ok(access)
 }
 
 /// The store name of an access mode.
