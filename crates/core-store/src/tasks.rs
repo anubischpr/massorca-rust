@@ -1,5 +1,5 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
@@ -132,30 +132,35 @@ pub struct TaskDetails<'a> {
     pub body: Option<&'a str>,
 }
 
+/// Inserts a task on `connection`, so a caller's transaction can hold it with its own rows.
+pub(crate) fn insert_task_row(connection: &Connection, row: &TaskRow) -> Result<(), StoreError> {
+    connection.execute(
+        "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, workspace_id, branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            row.id,
+            row.team_id,
+            row.project_id,
+            row.bot_id,
+            row.title,
+            row.body,
+            row.origin,
+            row.session_id,
+            row.outcome,
+            row.error,
+            row.error_code,
+            row.workspace_id,
+            row.branch,
+            row.created_at,
+            row.updated_at
+        ],
+    )?;
+    Ok(())
+}
+
 impl Store {
     /// Inserts a task. Its team, bot and project must exist; a missing one is `StoreError::Constraint`.
     pub fn insert_task(&self, row: &TaskRow) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, workspace_id, branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            params![
-                row.id,
-                row.team_id,
-                row.project_id,
-                row.bot_id,
-                row.title,
-                row.body,
-                row.origin,
-                row.session_id,
-                row.outcome,
-                row.error,
-                row.error_code,
-                row.workspace_id,
-                row.branch,
-                row.created_at,
-                row.updated_at
-            ],
-        )?;
-        Ok(())
+        insert_task_row(&self.lock(), row)
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<TaskRow>, StoreError> {

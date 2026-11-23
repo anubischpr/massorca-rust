@@ -328,3 +328,126 @@ The workspace domain lets one agent write in a workspace at a time
 - The bot's model and effort are not passed yet, because `agent.start` has no
   field for them.
 - **Done latch:** a task whose session reports Done with an outcome keeps that outcome in `outcome` once the host can see the run; an unverifiable run latches nothing, so the Board keeps Done after the session is forgotten. Every change of a linked session publishes `task.changed`, and a session that finished before `task.start` linked it latches at the link.
+
+## Amendment 2026-11-23: routines
+
+A routine is a schedule that starts a bot on a task. It belongs to a team and
+names one of the team's bots. Its fields are a name, a prompt, a cadence (daily,
+weekly on a weekday, monthly on day 1 to 28, or once on a date), a 24-hour time,
+an IANA zone (the host's zone when unset), a paused flag and the next run. The
+schedule itself is decided by `massorca-core-schedule` (decision 0082): the
+occurrences, the daylight-saving rules and the claim. A routine adds its store,
+its methods and its timer, and nothing else.
+
+Runs:
+
+- The host checks every 30 seconds, and once at start. A check claims each
+  routine whose next run is due by a compare-and-swap on that next run, then
+  starts that run before it claims the next routine. The claim writes the run
+  and the run's task in the same transaction, so an occurrence runs once and a
+  run never exists without the task it made. A shutdown signal stops the timer
+  before any further check starts.
+- A check that finds several missed occurrences claims only the latest; the
+  earlier ones are dropped. Pausing clears the next run. Resuming schedules the
+  first occurrence after now, so nothing missed while paused is made up.
+- A run makes a task. Its title is the routine's name. Its body is the prompt,
+  then a line that names the day the run stands for in the routine's zone, so
+  "today" means that day. Its bot is the routine's bot. The task starts through
+  the same start a person's Start uses.
+- A run's task keeps the origin `cli`, the origin of a task a command made. A new
+  origin value would be unknown to older clients, so none was added.
+- A run records its task and any error with its code (`error_code`). A failed
+  start keeps the task Open with its own error, and the run keeps the error too.
+  No run is retried: a failed run waits for the next occurrence.
+- A run is pending from its claim until its start records an outcome
+  (`settled_at`). When the service stops in between, such as a crash, the next
+  service start marks every run left pending from before it as interrupted
+  (`team.routine_run_interrupted`, "the service stopped before this run
+  started"). Its task stays Open and is not started; nothing retries the run,
+  and the next occurrence runs as usual. A run whose outcome cannot be written
+  is tried once more, then left pending for that mark, so its state is always
+  in the store.
+- A schedule that no longer compiles, such as a zone the database no longer
+  knows, finishes the routine. The claim's run records the reason, and nothing
+  retries it.
+
+Removals:
+
+- A bot's removal keeps its routines with no bot (`ON DELETE SET NULL`). Each
+  run of such a routine records `bot removed: the routine has no bot to run`,
+  makes no task and starts no agent. Updating the routine with another bot
+  restores it.
+- A team's removal removes its routines and their runs. Deleting a routine
+  removes its runs and never its tasks.
+
+Caller scope:
+
+- A scheduled run acts with the scope of the caller that last added or updated
+  the routine. `starts_as_admin` records whether that caller held host-admin
+  scope: an add or an update by a host-admin caller sets it, and an update by any
+  other caller clears it. Pause and resume leave it as it is. A scheduled run
+  receives vault secrets (`SecretGrant::Provide`) only when it is set; otherwise
+  it starts with `SecretGrant::Withhold`.
+- A manual run (`team.routine_run`) receives vault secrets only when the caller
+  and the routine are both host-admin, so a caller with less scope cannot widen
+  what a routine may do.
+- An edit, a pause or a resume writes only while the stored routine still equals
+  the one it read; otherwise it reads the routine again and reapplies itself, at
+  most five times, then answers `team.routine_changed`. Two concurrent changes
+  both survive, and no change can restore a `starts_as_admin` another caller
+  cleared or a schedule another caller set.
+
+Zones:
+
+- A routine without a zone runs in the host's zone. `Routine.zone_used` names
+  that zone (its IANA name, or `UTC` when the host's zone cannot be read) so the
+  zone a run uses is never silent. While the host's zone cannot be read, an add
+  without a zone and an update that clears the zone are refused with
+  `request.invalid_params`.
+
+Methods (capability `teams/1`):
+
+- `team.routine_list { team }` lists the routines in creation order.
+- `team.routine_add { team, bot, name, prompt, cadence, time, weekday?, month_day?, run_date?, zone? }`.
+- `team.routine_update { team, routine, ... }` changes only the fields given. An
+  empty `zone` returns the routine to the host's zone.
+- `team.routine_rm`, `team.routine_pause` and `team.routine_resume` take
+  `{ team, routine }` and return the routine.
+- `team.routine_runs { team, routine, limit? }` lists the runs newest first: 50
+  when `limit` is unset, at most 500.
+- `team.routine_run { team, routine }` makes one run now. It does not move the
+  schedule.
+
+Refusals use `request.invalid_params` for a schedule that core-schedule refuses,
+a blank name or prompt, a cadence or weekday outside the known values, and a
+one-time date that has passed. `team.routine_not_found`, `team.not_found` and
+`bot.not_found` name the rest. Cadence and weekday values this build does not
+know decode as `unknown`. Changes publish `team.changed` with the team id, and a
+run that makes a task publishes `task.changed` for that task. An older host
+answers `team.routine_*` with `method.not_found`, which `massorca team routine`
+reports as "this host is too old for routines; update it".
+
+Daylight saving follows decision 0082: a wall time that does not exist fires at
+the end of the gap, and a repeated one fires once, at the earlier instant. The
+server tests cover both in America/New_York.
+
+Storage: migration step 18 adds `team_routines` and `team_routine_runs`, whose
+runs keep `error_code` and `settled_at`. `RoutineRun.error_code` and
+`Routine.zone_used` are optional fields an older peer omits.
+
+CLI:
+
+```
+massorca team routine list <team>
+massorca team routine add <team> <name> --bot <bot> --prompt <text> --time <HH:MM> --cadence daily|weekly|monthly|once [--weekday mon..sun] [--month-day <1-28>] [--date <YYYY-MM-DD>] [--zone <IANA>]
+massorca team routine update <team> <routine> [the same options]
+massorca team routine rm <team> <routine>
+massorca team routine pause <team> <routine>
+massorca team routine resume <team> <routine>
+massorca team routine runs <team> <routine> [--limit <n>]
+massorca team routine run <team> <routine> --now
+```
+
+Not in this change: one-time routines created from a Conference room (AUTO-13),
+the Calendar (AUTO-30), the desktop Routines page and the phone, which still show
+sample data, and moving routines onto the Automations engine (AUTO-01).

@@ -1,6 +1,9 @@
-//! `massorca team ...`: teams, their bots, projects and memory, and their Boards (decision 0072).
+//! `massorca team ...`: teams, their bots, projects, memory and routines, and their Boards (decision 0072).
 
+mod routine;
 mod text;
+
+use routine::RoutineCommand;
 
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
@@ -53,6 +56,11 @@ pub enum TeamCommand {
     Memory {
         #[command(subcommand)]
         command: TeamMemoryCommand,
+    },
+    /// Lists, adds, changes, pauses, runs and removes a team's routines: schedules that start a bot on a task.
+    Routine {
+        #[command(subcommand)]
+        command: RoutineCommand,
     },
     /// Shows a team's Board: its tasks in four columns, or only one project's.
     Board {
@@ -321,6 +329,7 @@ pub async fn execute(
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
+        TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
         TeamCommand::Board { team, project } => {
             let board = client.team_board(&BoardParams { team, project }).await?;
             output.success(&board, &text::board_lines(&board));
