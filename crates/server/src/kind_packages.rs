@@ -4,25 +4,30 @@ use std::collections::BTreeSet;
 
 use massorca_core_agents::{KindPackages, PackageKind, PackageState, used_kinds};
 use massorca_core_extensions::item::ItemState;
-use massorca_core_extensions::{Extensions, catalogue_agent_kinds, package_agent_kinds};
+use massorca_core_extensions::{Extensions, PackageKindsCache, catalogue_agent_kinds};
 use massorca_core_store::Store;
 use massorca_profile::Profile;
 
-/// Reads the profile's lockfile on every catalog load, so an install, a disable or a removal applies to the next run.
+/// Reads the profile's lockfile on every catalog load, so an install, a disable or a removal applies to the next run;
+/// the packages' files are hashed again only when the lockfile changed ([`PackageKindsCache`]).
 #[derive(Debug)]
 pub(crate) struct ExtensionKindPackages {
     profile: Profile,
+    cache: PackageKindsCache,
 }
 
 impl ExtensionKindPackages {
     pub(crate) fn new(profile: Profile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            cache: PackageKindsCache::default(),
+        }
     }
 }
 
 impl KindPackages for ExtensionKindPackages {
     fn kinds(&self) -> Vec<PackageKind> {
-        match package_agent_kinds(&self.profile) {
+        match self.cache.read(&self.profile) {
             Ok(kinds) => kinds
                 .into_iter()
                 .map(|kind| PackageKind {

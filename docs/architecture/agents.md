@@ -62,6 +62,10 @@ read) is refused with the same code, and its message names that read failure ins
 installing or enabling cannot fix it. A package whose files change under the read because it is
 being updated is read again from the new lockfile; one whose lockfile keeps changing is listed with
 the problem that it is being updated (`extension.busy`), not that its files were tampered with.
+The service reuses its last read of the packages while the lockfile's bytes are unchanged, since a
+read hashes every installed package's files; any lockfile write reads them again, and a read that
+found an unusable package is not kept. Files changed without a lockfile write are seen at the next
+lockfile change or service start.
 The check runs right after the kind is found and before its declaration's problems and its
 program are checked, on `agent.start`, `agent.delegate` (and every other start through
 `Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.

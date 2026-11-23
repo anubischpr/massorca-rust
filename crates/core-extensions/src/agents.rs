@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use massorca_ext_package::manifest;
 use massorca_profile::Profile;
@@ -232,6 +233,45 @@ pub fn package_agent_kinds(profile: &Profile) -> Result<Vec<PackageAgentKind>, E
     Ok(out)
 }
 
+/// [`package_agent_kinds`], reused while the profile's lockfile is unchanged: a read hashes every installed package's
+/// files, and a catalog load reads the kinds for every start. Any lockfile write (an install, update, enable, disable or
+/// removal) reads them again; files changed without one are seen at the next lockfile change or service start. A read
+/// that found an unusable package is not kept, so the next one checks its files again.
+#[derive(Debug, Default)]
+pub struct PackageKindsCache {
+    last: Mutex<Option<(Vec<u8>, Vec<PackageAgentKind>)>>,
+}
+
+impl PackageKindsCache {
+    pub fn read(&self, profile: &Profile) -> Result<Vec<PackageAgentKind>, Error> {
+        // Read before the kinds, so a lockfile written in between makes the next call read again.
+        let key = match fs::read(Layout::new(profile).lock_path()) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+            Err(_) => None,
+        };
+        if let Some(key) = &key
+            && let Some((cached, kinds)) = self.lock().as_ref()
+            && cached == key
+        {
+            return Ok(kinds.clone());
+        }
+        let kinds = package_agent_kinds(profile)?;
+        if let Some(key) = key
+            && kinds.iter().all(|kind| kind.decl.is_ok())
+        {
+            *self.lock() = Some((key, kinds.clone()));
+        }
+        Ok(kinds)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(Vec<u8>, Vec<PackageAgentKind>)>> {
+        self.last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 fn available(kind: &CatalogueAgentKind) -> PackageAgentKind {
     PackageAgentKind {
         kind_id: kind.kind_id.clone(),
@@ -295,7 +335,10 @@ mod tests {
 
     /// One kind of package `ext.fake`, unusable (tampered) while the lockfile is marked `broken`.
     fn kinds(lockfile: &Lockfile) -> Vec<InstalledAgentKind> {
-        let broken = lockfile.migrations.iter().any(|mark| mark.starts_with("broken"));
+        let broken = lockfile
+            .migrations
+            .iter()
+            .any(|mark| mark.starts_with("broken"));
         vec![InstalledAgentKind {
             package_id: "ext.fake".to_owned(),
             package_version: "1.0.0".to_owned(),
@@ -338,7 +381,9 @@ mod tests {
 
     #[test]
     fn a_package_whose_lockfile_keeps_changing_is_reported_as_being_updated() {
-        let marks: Vec<String> = (0..=UPDATE_RETRIES + 1).map(|n| format!("broken-{n}")).collect();
+        let marks: Vec<String> = (0..=UPDATE_RETRIES + 1)
+            .map(|n| format!("broken-{n}"))
+            .collect();
         let marks: Vec<&str> = marks.iter().map(String::as_str).collect();
         let out = settled(reads(&marks), kinds).unwrap();
         assert_eq!(code(&out).as_deref(), Some(codes::BUSY));
