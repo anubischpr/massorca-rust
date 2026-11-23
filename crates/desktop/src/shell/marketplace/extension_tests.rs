@@ -1,0 +1,535 @@
+//! Element tests of the install review: what the service reported is what the dialog holds, and the install is sent
+//! only from the person's press, with the consent of the review they read. A scripted service answers each call.
+
+use super::InstallReview;
+use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, problem_alert};
+use crate::model::navigation::MarketplacePage;
+use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate};
+use crate::shell::service_tests::{Rig, click, draw, rig};
+use gpui::{TestAppContext, VisualTestContext};
+use massorca_protocol::methods::extensions::{
+    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
+    ExtensionReview, ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk,
+    RiskLevel, SourceKind, SourceRef, UninstallEffects,
+};
+use tokio::sync::oneshot;
+
+const CONSENT: &str = "fingerprint-of-the-review";
+
+fn catalogue_package() -> ExtensionItem {
+    ExtensionItem {
+        id: "acme.notes".to_owned(),
+        name: "Notes".to_owned(),
+        description: "Keeps notes beside the workspace.".to_owned(),
+        version: "1.0.0".to_owned(),
+        publisher: "acme".to_owned(),
+        state: ExtensionState::Available,
+        installed: None,
+        listing: Listing {
+            logo: None,
+            category: "extensions".to_owned(),
+            developer: None,
+            mention: None,
+            banner: None,
+            connections: Vec::new(),
+        },
+        permissions: Vec::new(),
+        risk: Risk {
+            level: RiskLevel::Low,
+            reasons: Vec::new(),
+        },
+        readme: None,
+        agents: Vec::new(),
+        detected: None,
+        settings: Vec::new(),
+        uninstall: UninstallEffects {
+            package_files: true,
+            storage: false,
+            settings: Vec::new(),
+            secret_names: Vec::new(),
+            secrets_unscoped: false,
+            connections: Vec::new(),
+            cli_binaries: Vec::new(),
+            offered_agent_homes: Vec::new(),
+        },
+        problem: None,
+    }
+}
+
+/// What `extensions.inspect` answers for the package; a vendor installer is listed when `runs_installer`.
+fn review(runs_installer: bool) -> ExtensionReview {
+    ExtensionReview {
+        id: "acme.notes".to_owned(),
+        name: "Notes".to_owned(),
+        version: "1.0.0".to_owned(),
+        publisher: "acme".to_owned(),
+        description: "Keeps notes beside the workspace.".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        permissions: vec![Permission {
+            kind: "files:read".to_owned(),
+            reason: "Reads the notes.".to_owned(),
+            scope: None,
+        }],
+        risk: Risk {
+            level: RiskLevel::Medium,
+            reasons: Vec::new(),
+        },
+        listing: catalogue_package().listing,
+        kinds: Vec::new(),
+        mcp_servers: Vec::new(),
+        cli: if runs_installer {
+            vec![CliPlan {
+                agent: "notes".to_owned(),
+                binary: Some("notes".to_owned()),
+                verify: None,
+                uninstall: None,
+                state: CliPlanState::WillRun {
+                    command: vec![
+                        "npm".to_owned(),
+                        "install".to_owned(),
+                        "-g".to_owned(),
+                        "notes".to_owned(),
+                    ],
+                    runs_package_scripts: true,
+                },
+            }]
+        } else {
+            Vec::new()
+        },
+        runs_installer,
+        consent: CONSENT.to_owned(),
+    }
+}
+
+/// A connected shell whose lists hold these packages, with the page of the catalogue's first one open.
+fn open_listed(
+    cx: &mut TestAppContext,
+    installed: Vec<ExtensionItem>,
+    catalogue: Vec<ExtensionItem>,
+) -> (Rig, &mut VisualTestContext, MarketplaceItemId) {
+    let (rig, cx) = rig(cx, &[]);
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 1,
+            installed: Ok(installed),
+            catalogue: Ok(catalogue),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let id = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .model()
+                .marketplace()
+                .items
+                .iter()
+                .find(|item| item.name == "Notes")
+                .map(|item| item.id)
+        })
+        .expect("the package is listed");
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Item(id), cx)
+    });
+    draw(cx);
+    (rig, cx, id)
+}
+
+/// A connected shell with the catalogue listing one available package, and its page open.
+fn open_page(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext, MarketplaceItemId) {
+    open_listed(cx, Vec::new(), vec![catalogue_package()])
+}
+
+/// The package as the service lists it once installed, on or off.
+fn installed_package(enabled: bool) -> ExtensionItem {
+    let mut item = catalogue_package();
+    item.state = if enabled {
+        ExtensionState::Enabled
+    } else {
+        ExtensionState::Disabled
+    };
+    item.installed = Some(InstalledInfo {
+        version: "1.0.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        installed_at_ms: 0,
+        cli: Vec::new(),
+    });
+    item
+}
+
+fn item_state(rig: &Rig, cx: &mut VisualTestContext, id: MarketplaceItemId) -> Option<ItemState> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .marketplace()
+            .item(id)
+            .map(|item| item.state.clone())
+    })
+}
+
+/// Takes the inspect the review sent and returns its reply.
+fn next_inspect(rig: &mut Rig) -> oneshot::Sender<Result<ExtensionReview, Refusal>> {
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, "catalogue:acme.notes");
+            reply
+        }
+        _ => panic!("the review asks the service what installing does"),
+    }
+}
+
+fn installed() -> ExtensionInstalled {
+    ExtensionInstalled {
+        id: "acme.notes".to_owned(),
+        version: "1.0.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        enabled: true,
+        installed_at_ms: 0,
+        cli: Vec::new(),
+    }
+}
+
+fn review_on_screen(rig: &Rig, cx: &mut VisualTestContext) -> Option<InstallReview> {
+    rig.shell
+        .read_with(cx, |shell, _| shell.marketplace_review.clone())
+}
+
+#[gpui::test]
+fn the_review_holds_what_inspect_returned_and_install_is_sent_only_after_the_press(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_page(cx);
+    click(cx, "button:marketplace-install");
+    let reply = next_inspect(&mut rig);
+    assert!(
+        rig.script.next().is_none(),
+        "nothing installs before the press"
+    );
+    let answer = review(false);
+    let _ = reply.send(Ok(answer.clone()));
+    cx.run_until_parked();
+    draw(cx);
+
+    let held = review_on_screen(&rig, cx).expect("the review is on screen");
+    assert_eq!(held.review.as_ref(), Some(&answer));
+    assert!(
+        rig.script.next().is_none(),
+        "reading the review sends nothing else"
+    );
+
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { params, reply })) => {
+            assert_eq!(params.source, "catalogue:acme.notes");
+            assert_eq!(params.consent.as_deref(), Some(CONSENT));
+            assert!(
+                !params.run_installer,
+                "no vendor installer is run without its tick"
+            );
+            let _ = reply.send(Ok(installed()));
+        }
+        _ => panic!("the press sends the install with the reviewed consent"),
+    }
+    cx.run_until_parked();
+    assert!(
+        review_on_screen(&rig, cx).is_none(),
+        "an install that worked closes the review"
+    );
+}
+
+#[gpui::test]
+fn a_review_that_runs_a_vendor_installer_needs_its_own_tick_before_install(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_page(cx);
+    click(cx, "button:marketplace-install");
+    let reply = next_inspect(&mut rig);
+    let _ = reply.send(Ok(review(true)));
+    cx.run_until_parked();
+    draw(cx);
+
+    click(cx, "dialog-action");
+    assert!(
+        rig.script.next().is_none(),
+        "Install is off until the installer is ticked"
+    );
+
+    click(cx, "marketplace-install-run-installer");
+    assert!(review_on_screen(&rig, cx).is_some_and(|held| held.run_installer));
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { params, reply })) => {
+            assert!(params.run_installer, "the ticked installer is accepted");
+            assert_eq!(params.consent.as_deref(), Some(CONSENT));
+            let _ = reply.send(Ok(installed()));
+        }
+        _ => panic!("the ticked review sends the install"),
+    }
+}
+
+#[gpui::test]
+fn a_package_changed_after_its_review_says_so_and_keeps_the_review_open(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_page(cx);
+    click(cx, "button:marketplace-install");
+    let reply = next_inspect(&mut rig);
+    let _ = reply.send(Ok(review(false)));
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.consent_mismatch".to_owned(),
+                message: "the package or its install plan changed since the review".to_owned(),
+            }));
+        }
+        _ => panic!("the press sends the install"),
+    }
+    cx.run_until_parked();
+    let held = review_on_screen(&rig, cx).expect("the review stays open");
+    assert_eq!(
+        held.error.as_deref(),
+        Some("The package changed after you reviewed it. Review it again before installing.")
+    );
+    assert!(!held.sending);
+}
+
+#[gpui::test]
+fn the_enabled_switch_sends_the_change_and_shows_only_what_the_service_then_reports(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "marketplace-enabled-switch");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::SetEnabled { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert!(
+                !params.enabled,
+                "the switch sends the state it was turned to"
+            );
+            reply
+        }
+        _ => panic!("the switch sends the change to the service"),
+    };
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: None
+        }),
+        "nothing moves before the service answers"
+    );
+
+    let _ = reply.send(Ok(ExtensionEnabled {
+        id: "acme.notes".to_owned(),
+        enabled: false,
+        changed: true,
+    }));
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![installed_package(false)]),
+            catalogue: Ok(vec![installed_package(false)]),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: false,
+            update: None
+        })
+    );
+}
+
+#[gpui::test]
+fn a_refused_switch_says_why_under_the_item(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "marketplace-enabled-switch");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::SetEnabled { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.busy".to_owned(),
+                message: "extension acme.notes is busy".to_owned(),
+            }));
+        }
+        _ => panic!("the switch sends the change to the service"),
+    }
+    cx.run_until_parked();
+    let shown = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone());
+    assert_eq!(
+        shown,
+        Some((
+            id,
+            "This package is busy. Wait for its install or removal to finish.".to_owned()
+        ))
+    );
+}
+
+#[gpui::test]
+fn uninstall_sends_the_removal_and_closes_the_confirm_when_the_service_answers(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert!(!params.delete_agent_homes && !params.uninstall_cli);
+            assert_eq!(params.uninstall_consent, None);
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(Vec::new()),
+            catalogue: Ok(vec![catalogue_package()]),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_uninstall.is_none()),
+        "a removal that worked closes the confirm"
+    );
+    assert_eq!(item_state(&rig, cx, id), Some(ItemState::NotInstalled));
+}
+
+#[gpui::test]
+fn a_refused_removal_keeps_the_confirm_open_with_the_reason(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "agent.busy".to_owned(),
+                message: "a session uses this agent".to_owned(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+    cx.run_until_parked();
+    let confirm = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_uninstall.clone())
+        .expect("the confirm stays open");
+    assert!(!confirm.sending);
+    assert_eq!(confirm.error.as_deref(), Some("A session uses this agent"));
+}
+
+/// An installed package whose files the service found changed (`extension.tampered`).
+fn tampered_package() -> ExtensionItem {
+    let mut item = installed_package(true);
+    item.problem = Some(ItemProblem {
+        code: "extension.tampered".to_owned(),
+        message: "the files changed".to_owned(),
+    });
+    item
+}
+
+fn shown(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    draw(cx);
+    cx.debug_bounds(selector).is_some()
+}
+
+#[gpui::test]
+fn a_tampered_package_shows_its_problem_on_its_page_and_on_its_catalogue_card(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx, id) = open_listed(cx, vec![tampered_package()], vec![tampered_package()]);
+    assert!(
+        shown(cx, "marketplace-problem"),
+        "the item page shows the alert"
+    );
+    let tone = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .marketplace()
+            .item(id)
+            .and_then(problem_alert)
+            .map(|alert| alert.tone)
+    });
+    assert_eq!(tone, Some(ProblemTone::Danger));
+
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Discover, cx)
+    });
+    assert!(
+        shown(cx, "marketplace-problem"),
+        "the catalogue card shows the alert too"
+    );
+}
+
+#[gpui::test]
+fn a_tampered_package_refuses_enable_and_can_still_be_uninstalled(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![tampered_package()], vec![tampered_package()]);
+    click(cx, "marketplace-enabled-switch");
+    assert!(
+        rig.script.next().is_none(),
+        "the refused switch sends nothing to the service"
+    );
+    let refused = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone());
+    assert_eq!(
+        refused
+            .as_ref()
+            .map(|(item, text)| (*item, text.contains("cannot be turned on"))),
+        Some((id, true))
+    );
+
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("uninstall is still sent for a tampered package"),
+    }
+}

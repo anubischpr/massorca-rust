@@ -26,7 +26,8 @@ use crate::icon::IconName;
 use crate::tokens::{SIZE_COMPOSER_MAX_HEIGHT, SIZE_COMPOSER_MIN_HEIGHT};
 
 use self::policy::{
-    EnterAction, EscapeAction, SentHistory, Situation, enter_action, escape_action,
+    EnterAction, EscapeAction, PrimaryAction, SentHistory, Situation, enter_action, escape_action,
+    primary_action,
 };
 
 actions!(composer, [OpenModelPicker]);
@@ -68,9 +69,9 @@ pub struct Attachment {
 /// What the composer reports to its owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ComposerEvent {
-    /// The text is sent now; the composer has cleared itself.
+    /// The user sent the text. The draft stays until the owner clears it, once it is accepted.
     Send(String),
-    /// The text waits behind the running turn; the composer has cleared itself.
+    /// The user queued the text behind the running turn. The draft stays until the owner clears it.
     Queue(String),
     /// The user stopped the running turn.
     Stop,
@@ -86,6 +87,8 @@ pub enum ComposerEvent {
     RetrySend,
     /// The user pressed "Sign in" on a signed-out composer.
     SignIn,
+    /// The user pressed "Resume" on the composer of an ended session.
+    Resume,
     /// Files dropped on the composer.
     DroppedFiles(Vec<PathBuf>),
 }
@@ -101,6 +104,12 @@ pub struct Composer {
     access_index: usize,
     agent_name: SharedString,
     voice: bool,
+    /// Whether the attach button, its menu and dropped files are offered.
+    attach_offered: bool,
+    /// Whether the model picker chip is offered.
+    model_picker_offered: bool,
+    /// Whether a message sent while the agent runs queues behind its turn.
+    queueing_offered: bool,
     primary_focus: FocusHandle,
     access_focus: FocusHandle,
     agent_busy: bool,
@@ -108,6 +117,8 @@ pub struct Composer {
     disabled_reason: Option<SharedString>,
     /// The disabled composer offers "Sign in" beside its reason.
     sign_in: bool,
+    /// The disabled composer offers "Resume" beside its reason.
+    resume: bool,
     error: Option<SharedString>,
     enter_inserts_newline: bool,
     /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
@@ -166,12 +177,16 @@ impl Composer {
             access_index: 0,
             agent_name: "Claude".into(),
             voice: true,
+            attach_offered: true,
+            model_picker_offered: true,
+            queueing_offered: true,
             primary_focus: cx.focus_handle().tab_stop(true),
             access_focus: cx.focus_handle().tab_stop(true),
             agent_busy: false,
             host_confirmed: true,
             disabled_reason: None,
             sign_in: false,
+            resume: false,
             error: None,
             enter_inserts_newline: false,
             leading: None,
@@ -211,6 +226,9 @@ impl Composer {
     }
 
     pub fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
+        if self.agent_busy == busy {
+            return;
+        }
         self.agent_busy = busy;
         if !busy {
             self.clear_hint();
@@ -226,12 +244,32 @@ impl Composer {
 
     /// Why the composer cannot take input (archived, or sign-in needed); `None` when it can.
     pub fn set_disabled_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.disabled_reason == reason && !self.sign_in {
+            return;
+        }
         let disabled = reason.is_some();
         self.disabled_reason = reason;
         self.sign_in = false;
+        if !disabled {
+            self.resume = false;
+        }
         self.text
             .update(cx, |area, cx| area.set_disabled(disabled, cx));
         cx.notify();
+    }
+
+    /// Offers Resume beside the reason of a disabled composer; pressing it emits `Resume`.
+    pub fn set_resume_offered(&mut self, offered: bool, cx: &mut Context<Self>) {
+        let offered = offered && self.disabled_reason.is_some();
+        if self.resume != offered {
+            self.resume = offered;
+            cx.notify();
+        }
+    }
+
+    /// Whether Resume is offered beside the reason.
+    pub fn resume_offered(&self) -> bool {
+        self.resume
     }
     /// The agent account needs sign-in: the composer is disabled with "Sign in to <agent> to
     /// continue" and a "Sign in" action (Composer.md States, disabled).
@@ -259,6 +297,11 @@ impl Composer {
     /// The reason the last send failed, shown above the text.
     pub fn error_reason(&self) -> Option<&SharedString> {
         self.error.as_ref()
+    }
+
+    /// Why the composer cannot take input right now, or `None` when it can.
+    pub fn disabled_reason(&self) -> Option<&SharedString> {
+        self.disabled_reason.as_ref()
     }
 
     /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
@@ -297,7 +340,13 @@ impl Composer {
             disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
             text_empty: area.text().is_empty(),
             composing: area.is_composing(),
+            queueing: self.queueing_offered,
         }
+    }
+
+    /// What the primary button does now.
+    pub fn primary_action(&self, cx: &App) -> PrimaryAction {
+        primary_action(self.situation(cx))
     }
 
     fn on_text_event(&mut self, event: TextAreaEvent, cx: &mut Context<Self>) {
@@ -342,7 +391,6 @@ impl Composer {
         self.history.push(&text);
         self.error = None;
         self.clear_hint();
-        self.text.update(cx, |area, cx| area.clear(cx));
         let event = if queue {
             ComposerEvent::Queue(text)
         } else {
@@ -477,6 +525,57 @@ mod tests {
     }
 
     #[gpui::test]
+    fn an_ended_session_offers_resume_beside_its_reason(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_disabled_reason(Some("This session has ended.".into()), cx);
+            composer.set_resume_offered(true, cx);
+        });
+        cx.run_until_parked();
+        let button = cx
+            .debug_bounds("composer-resume")
+            .expect("Resume is drawn")
+            .center();
+        cx.simulate_click(button, gpui::Modifiers::none());
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Resume]);
+    }
+
+    #[gpui::test]
+    fn resume_is_offered_only_while_the_composer_is_disabled_for_a_reason(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let offered = |cx: &mut VisualTestContext| {
+            composer.read_with(cx, |composer, _| composer.resume_offered())
+        };
+        composer.update(cx, |composer, cx| composer.set_resume_offered(true, cx));
+        assert!(!offered(cx), "no reason, nothing to resume beside");
+        composer.update(cx, |composer, cx| {
+            composer.set_disabled_reason(Some("This session has ended.".into()), cx);
+            composer.set_resume_offered(true, cx);
+        });
+        assert!(offered(cx));
+        composer.update(cx, |composer, cx| composer.set_disabled_reason(None, cx));
+        assert!(!offered(cx), "the offer ends with its reason");
+    }
+
+    #[gpui::test]
+    fn a_composer_that_cannot_queue_stops_the_run_even_with_text_typed(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), access(), cx).queueing(false));
+        composer.update(cx, |composer, cx| composer.set_busy(true, cx));
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("later");
+        cx.simulate_keystrokes("enter");
+        assert!(events.borrow().is_empty(), "Enter neither sends nor queues");
+        assert_eq!(
+            composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+            PrimaryAction::Stop
+        );
+    }
+
+    #[gpui::test]
     fn the_send_failed_line_sits_above_the_text(cx: &mut TestAppContext) {
         let (composer, cx) = composer_in(cx);
         composer.update(cx, |composer, cx| {
@@ -491,13 +590,17 @@ mod tests {
     }
 
     #[gpui::test]
-    fn typing_then_enter_sends_the_text_and_clears_the_draft(cx: &mut TestAppContext) {
+    fn typing_then_enter_sends_the_text_and_keeps_the_draft_until_the_owner_clears_it(
+        cx: &mut TestAppContext,
+    ) {
         let (composer, cx) = composer_in(cx);
         let events = record(&composer, cx);
         focus_and_draw(&composer, cx);
         cx.simulate_input("hello");
         cx.simulate_keystrokes("enter");
         assert_eq!(*events.borrow(), vec![ComposerEvent::Send("hello".into())]);
+        assert_eq!(draft_of(&composer, cx), "hello", "not accepted yet");
+        composer.update(cx, |composer, cx| composer.set_draft("", cx));
         assert_eq!(draft_of(&composer, cx), "");
     }
 
@@ -577,6 +680,7 @@ mod tests {
         focus_and_draw(&composer, cx);
         cx.simulate_input("first");
         cx.simulate_keystrokes("enter");
+        composer.update(cx, |composer, cx| composer.set_draft("", cx));
         cx.simulate_keystrokes("up");
         assert_eq!(draft_of(&composer, cx), "first");
     }
