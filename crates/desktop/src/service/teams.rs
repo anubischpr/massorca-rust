@@ -1,6 +1,6 @@
 //! The Bot Teams reads the bridge runs (capability `teams/1`): every team the service lists, each with its
-//! Board. A read takes a number when it starts, and the store applies only the newest answer, so a slow read
-//! never replaces a newer one.
+//! Board and bots. A read takes a number when it starts, and the store applies only the newest answer, so a
+//! slow read never replaces a newer one.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -11,17 +11,28 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams,
+    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamProject,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
 
-/// A team as the service reports it, with its Board: every task of the team, in four columns.
+/// A team as the service reports it: its Board, every task of the team in four columns, its bots in creation
+/// order, and its projects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamRecord {
     pub team: Team,
+    pub board: Board,
+    pub bots: Vec<Bot>,
+    pub projects: Vec<ProjectRecord>,
+}
+
+/// A project of a team as the service reports it, with its own Board: the cards of that project only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectRecord {
+    pub project: TeamProject,
     pub board: Board,
 }
 
@@ -66,18 +77,46 @@ pub(super) async fn read(client: &Client, sequence: &Sequence) -> Result<TeamsRe
 async fn fetch(client: &Client) -> Result<Vec<TeamRecord>, ClientError> {
     let mut records = Vec::new();
     for team in client.team_list().await?.teams {
-        let params = BoardParams {
-            team: team.id.clone(),
-            project: None,
-        };
-        match client.team_board(&params).await {
-            Ok(board) => records.push(TeamRecord { team, board }),
+        match team_record(client, team).await {
+            Ok(record) => records.push(record),
             // Removed while the list was read: it is simply not in this read.
             Err(ClientError::Remote(body)) if body.code == codes::TEAM_NOT_FOUND => {}
             Err(error) => return Err(error),
         }
     }
     Ok(records)
+}
+
+async fn team_record(client: &Client, team: Team) -> Result<TeamRecord, ClientError> {
+    let team_ref = TeamRef {
+        team: team.id.clone(),
+    };
+    let board = client
+        .team_board(&BoardParams {
+            team: team.id.clone(),
+            project: None,
+        })
+        .await?;
+    let bots = client.team_bot_list(&team_ref).await?.bots;
+    let mut projects = Vec::new();
+    for project in client.team_project_list(&team_ref).await?.projects {
+        let params = BoardParams {
+            team: team.id.clone(),
+            project: Some(project.id.clone()),
+        };
+        match client.team_board(&params).await {
+            Ok(board) => projects.push(ProjectRecord { project, board }),
+            // Removed while the team was read: it is simply not in this read.
+            Err(ClientError::Remote(body)) if body.code == codes::TEAM_PROJECT_NOT_FOUND => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(TeamRecord {
+        team,
+        board,
+        bots,
+        projects,
+    })
 }
 
 /// A Bot Teams write the pages ask the bridge to send. Each one answers through its oneshot.
@@ -97,6 +136,17 @@ pub(crate) enum TeamCommand {
     TaskReopen {
         task: String,
         reply: oneshot::Sender<Result<Task, Refusal>>,
+    },
+    SaveBrief {
+        team: String,
+        project: String,
+        brief: String,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
+    },
+    DeleteProject {
+        team: String,
+        project: String,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
     },
 }
 
@@ -124,18 +174,38 @@ pub(super) fn spawn_call(
                 client.task_reopen(&TaskRef { task }).await
             });
         }
+        TeamCommand::SaveBrief {
+            team,
+            project,
+            brief,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_project_update(&TeamProjectUpdateParams {
+                        team,
+                        project,
+                        name: None,
+                        goal: None,
+                        brief: Some(brief),
+                    })
+                    .await
+            });
+        }
+        TeamCommand::DeleteProject {
+            team,
+            project,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_project_remove(&TeamProjectRemoveParams { team, project })
+                    .await
+            });
+        }
         TeamCommand::AddBot { params, reply } => {
-            let client = client.clone();
-            let updates = updates.clone();
-            let sequence = sequence.clone();
-            tokio::spawn(async move {
-                let answer = client.team_bot_add(&params).await;
-                // The bot is kept before the answer goes back, so the read that follows lists it.
-                if let Ok(bot) = &answer {
-                    let _ = updates.send(StoreUpdate::TeamBot(bot.clone()));
-                }
-                let _ = reply.send(answer.map_err(|error| teams_refusal(&error)));
-                refresh(&client, &updates, &sequence).await;
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_bot_add(&params).await
             });
         }
     }
@@ -151,6 +221,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::TaskDone { reply, .. } | TeamCommand::TaskReopen { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::SaveBrief { reply, .. } | TeamCommand::DeleteProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -199,7 +272,9 @@ fn teams_refusal(error: &ClientError) -> Refusal {
             }
         }
         ClientError::Remote(body)
-            if body.code == codes::TEAM_NOT_FOUND || body.code == codes::BOT_NOT_FOUND =>
+            if body.code == codes::TEAM_NOT_FOUND
+                || body.code == codes::BOT_NOT_FOUND
+                || body.code == codes::TEAM_PROJECT_NOT_FOUND =>
         {
             Refusal::Failed {
                 code: body.code.clone(),
@@ -218,10 +293,22 @@ pub struct TeamIds {
 }
 
 impl TeamIds {
-    /// Numbers every id a team names: the team, its cards and the bots on them.
+    /// Numbers every id a team names: the team, its bots, its cards and the bots on them, and each project with
+    /// the cards of its Board.
     pub fn register(&mut self, record: &TeamRecord) {
         self.number(&record.team.id);
-        for column in &record.board.columns {
+        for bot in &record.bots {
+            self.number(&bot.id);
+        }
+        self.register_board(&record.board);
+        for project in &record.projects {
+            self.number(&project.project.id);
+            self.register_board(&project.board);
+        }
+    }
+
+    fn register_board(&mut self, board: &Board) {
+        for column in &board.columns {
             for card in &column.cards {
                 self.number(&card.id);
                 if let Some(bot) = &card.bot_id {
@@ -229,11 +316,6 @@ impl TeamIds {
                 }
             }
         }
-    }
-
-    /// Numbers the id of a bot this desktop added.
-    pub fn register_bot(&mut self, bot: &Bot) {
-        self.number(&bot.id);
     }
 
     /// The protocol id numbered `number`, if one is.

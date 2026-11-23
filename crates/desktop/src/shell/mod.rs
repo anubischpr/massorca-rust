@@ -77,6 +77,8 @@ mod debug_focus_tests;
 #[cfg(test)]
 mod debug_page_tests;
 #[cfg(test)]
+mod marketplace_accounts_tests;
+#[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
@@ -110,6 +112,9 @@ pub struct Shell {
     /// The Settings search field; the text it settles on becomes `settings.query`.
     settings_search: Entity<SearchField>,
     _settings_search_changes: Subscription,
+    /// The vault page's search over names; the text it settles on becomes `settings.vault_query`.
+    vault_search: Entity<SearchField>,
+    _vault_search_changes: Subscription,
     /// The workspace folder's text field, shown on the Settings page.
     settings_folder: Entity<TextField>,
     /// The disabled state the field was last set to, so a frame does not notify it again.
@@ -176,6 +181,8 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// What the Connection part knows beyond the service's account lists.
+    marketplace_accounts: marketplace::AccountsUi,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -268,6 +275,7 @@ impl Shell {
                 shell
                     .marketplace
                     .follow_agent_kinds(&store.read(cx).state().agent_kinds);
+                shell.follow_service_accounts(store.read(cx).state());
                 shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();
@@ -303,6 +311,13 @@ impl Shell {
                 .placeholder("Code from the sign-in page")
         });
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let vault_search = cx.new(|cx| SearchField::new("Search names", cx));
+        let vault_search_changes =
+            cx.subscribe(&vault_search, |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.set_vault_query(query.as_ref(), cx);
+                }
+            });
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
@@ -353,6 +368,8 @@ impl Shell {
             settings: SettingsModel::default(),
             settings_search,
             _settings_search_changes: settings_search_changes,
+            vault_search,
+            _vault_search_changes: vault_search_changes,
             settings_folder,
             settings_folder_disabled: false,
             settings_hosts_asked: false,
@@ -390,6 +407,7 @@ impl Shell {
             marketplace_code,
             marketplace_error: None,
             marketplace_uninstall: None,
+            marketplace_accounts: marketplace::AccountsUi::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
@@ -579,6 +597,7 @@ impl Render for Shell {
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
+            vault_search: &self.vault_search,
             connection,
             hosts,
             shell: shell.clone(),
@@ -619,7 +638,7 @@ impl Render for Shell {
             .then(|| project_sidebar::project_body(self, &shell, cx));
         let marketplace = match self.model.canvas() {
             Canvas::Page(Page::Marketplace(page)) => {
-                Some(marketplace::frame(self, page, shell.clone()))
+                Some(marketplace::frame(self, page, shell.clone(), cx))
             }
             _ => None,
         };

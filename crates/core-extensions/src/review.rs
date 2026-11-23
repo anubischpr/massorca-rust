@@ -58,7 +58,12 @@ pub enum PlanState {
     /// The program already resolves: the install only registers it.
     Detected { path: PathBuf },
     /// The vendor's command for this OS runs, exactly this argv.
-    WillRun { command: Vec<String> },
+    WillRun {
+        command: Vec<String>,
+        /// npm also runs the install scripts of the package and its dependencies, which the review cannot show.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        runs_package_scripts: bool,
+    },
     /// No `cli` block, or no command for this OS: the package registers, and the CLI stays missing.
     Unsupported,
 }
@@ -100,7 +105,16 @@ fn plan_one(cli: &AgentCli, resolver: &dyn ProgramResolver, os: Option<CliOs>) -
         .find(|step| Some(step.os) == os)
         .map_or(PlanState::Unsupported, |step| PlanState::WillRun {
             command: step.command.clone(),
+            runs_package_scripts: runs_package_scripts(&step.command),
         })
+}
+
+/// `npm install` runs the lifecycle scripts of the package and its dependencies unless scripts are turned off.
+fn runs_package_scripts(command: &[String]) -> bool {
+    command.first().is_some_and(|program| program == "npm")
+        && command
+            .get(1)
+            .is_some_and(|verb| matches!(verb.as_str(), "install" | "i"))
 }
 
 /// The consent fingerprint: SHA-256 over the id, the version, the package hash, the sorted permissions, the planned
@@ -128,7 +142,7 @@ pub fn fingerprint(
     let installers: Vec<Value> = plan
         .iter()
         .filter_map(|entry| match &entry.state {
-            PlanState::WillRun { command } => Some(json!([entry.agent, command])),
+            PlanState::WillRun { command, .. } => Some(json!([entry.agent, command])),
             _ => None,
         })
         .collect();

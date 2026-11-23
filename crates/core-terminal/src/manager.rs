@@ -109,6 +109,9 @@ pub struct CreateSpec {
     pub title: Option<String>,
     /// A repeated id returns the first terminal instead of starting another.
     pub request_id: Option<String>,
+    /// The program got vault secrets (decision 0071). Kept for the terminal's whole life in the registry, exited
+    /// included: its scrollback may hold what was printed.
+    pub holds_secrets: bool,
 }
 
 // Environment values can be secrets, so `Debug` shows the names only.
@@ -122,6 +125,7 @@ impl fmt::Debug for CreateSpec {
             .field("size", &self.size)
             .field("title", &self.title)
             .field("request_id", &self.request_id)
+            .field("holds_secrets", &self.holds_secrets)
             .finish()
     }
 }
@@ -169,6 +173,8 @@ pub struct TerminalInfo {
     pub cwd: String,
     pub created_at_ms: i64,
     pub exit: Option<ExitRecord>,
+    /// Set at creation for a run that got vault secrets, and never cleared.
+    pub holds_secrets: bool,
 }
 
 /// One terminal's process memory (`TerminalManager::memory`).
@@ -384,6 +390,7 @@ impl TerminalManager {
             seq,
             title: spec.title,
             request_id: spec.request_id.clone(),
+            holds_secrets: spec.holds_secrets,
             pid: spawned.master.pid(),
             master: Arc::new(spawned.master),
             tree: spawned.tree,
@@ -911,6 +918,7 @@ pub(crate) struct Terminal {
     seq: u64,
     title: Option<String>,
     request_id: Option<String>,
+    holds_secrets: bool,
     pid: Option<u32>,
     master: Arc<PtyMaster>,
     tree: ProcessTree,
@@ -956,6 +964,7 @@ impl Terminal {
             cwd: self.cwd.clone(),
             created_at_ms: self.created_at_ms,
             exit,
+            holds_secrets: self.holds_secrets,
         }
     }
 
@@ -1249,6 +1258,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
         let size = PtySize {
@@ -1304,6 +1314,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
 
@@ -1352,6 +1363,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
         let terminal = super::lock(&manager.inner.registry)
