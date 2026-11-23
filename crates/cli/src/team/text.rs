@@ -1,7 +1,8 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
 use massorca_protocol::methods::teams::{
-    Board, Bot, MemorySource, Team, TeamCharacter, TeamMemoryLine, TeamProject,
+    Board, Bot, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday, Team,
+    TeamCharacter, TeamMemoryLine, TeamProject,
 };
 
 /// `created team alpha (id)`, or the verb the command used.
@@ -139,5 +140,95 @@ fn character_word(character: TeamCharacter) -> &'static str {
         TeamCharacter::Hexagon => "hexagon",
         TeamCharacter::Star => "star",
         TeamCharacter::Unknown => "unknown",
+    }
+}
+
+/// `added routine morning (id) in team alpha`, or the verb the command used.
+pub fn routine_line(routine: &Routine, verb: &str) -> String {
+    format!(
+        "{verb} routine {} ({}) in team {}",
+        routine.name, routine.id, routine.team_id
+    )
+}
+
+/// One line per routine: name, schedule, state and id.
+pub fn routine_table(routines: &[Routine]) -> Vec<String> {
+    routines
+        .iter()
+        .map(|routine| {
+            format!(
+                "{}\t{}\t{}\t{}",
+                routine.name,
+                schedule_text(routine),
+                state_text(routine),
+                routine.id
+            )
+        })
+        .collect()
+}
+
+/// One line per run, newest first: the occurrence it stands for, its task, its error and its id.
+pub fn run_table(runs: &[RoutineRun]) -> Vec<String> {
+    runs.iter()
+        .map(|run| {
+            format!(
+                "{}\t{}\t{}\t{}",
+                run.scheduled_for_ms,
+                run.task_id.as_deref().unwrap_or("-"),
+                run.error.as_deref().unwrap_or("-"),
+                run.id
+            )
+        })
+        .collect()
+}
+
+pub fn run_line(run: &RoutineRun) -> String {
+    let outcome = match (&run.task_id, &run.error) {
+        (Some(task), None) => format!("task {task}"),
+        (Some(task), Some(error)) => format!("task {task} did not start: {error}"),
+        (None, Some(error)) => format!("not started: {error}"),
+        (None, None) => "no task".to_owned(),
+    };
+    format!("run {} of routine {}: {outcome}", run.id, run.routine_id)
+}
+
+/// `daily 09:00 Europe/Madrid`, `weekly monday 09:00 host zone`, `monthly day 15 ...` or `once 2026-11-24 ...`.
+fn schedule_text(routine: &Routine) -> String {
+    let when = match routine.cadence {
+        RoutineCadence::Daily => "daily".to_owned(),
+        RoutineCadence::Weekly => format!("weekly {}", routine.weekday.map_or("?", weekday_word)),
+        RoutineCadence::Monthly => format!(
+            "monthly day {}",
+            routine
+                .month_day
+                .map_or_else(|| "?".to_owned(), |day| day.to_string())
+        ),
+        RoutineCadence::Once => format!("once {}", routine.run_date.as_deref().unwrap_or("?")),
+        RoutineCadence::Unknown => "unknown cadence".to_owned(),
+    };
+    let zone = routine.zone.as_deref().unwrap_or("host zone");
+    format!("{when} {} {zone}", routine.time)
+}
+
+fn state_text(routine: &Routine) -> String {
+    if routine.paused {
+        return "paused".to_owned();
+    }
+    match routine.next_run_at_ms {
+        Some(next) => format!("next run at {next} ms"),
+        None => "finished".to_owned(),
+    }
+}
+
+fn weekday_word(day: RoutineWeekday) -> &'static str {
+    match day {
+        RoutineWeekday::Monday => "monday",
+        RoutineWeekday::Tuesday => "tuesday",
+        RoutineWeekday::Wednesday => "wednesday",
+        RoutineWeekday::Thursday => "thursday",
+        RoutineWeekday::Friday => "friday",
+        RoutineWeekday::Saturday => "saturday",
+        RoutineWeekday::Sunday => "sunday",
+        RoutineWeekday::Unknown => "unknown",
     }
 }
