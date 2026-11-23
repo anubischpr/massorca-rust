@@ -1,11 +1,14 @@
 //! The session view on the Canvas (ws-session, D-AG-03): the open session's header, its live terminal, attached
 //! through the same view the Work panel uses, and the composer under it. The composer types the next message
-//! into the session, stops a running agent and resumes an ended session, all through the service.
+//! into the session, stops a running agent and resumes an ended session, all through the service. When the service
+//! keeps a prompt queue (decision 0084), Send while the agent is busy queues the text, and the dock above the
+//! composer draws the session's queue from the store.
 
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, div, px};
 use massorca_protocol::methods::agents::{
-    AgentKind, AgentModeSet, AgentPromptParams, AgentSession, AgentSetModeParams, PromptReceipt,
+    AgentKind, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueParams,
+    AgentSession, AgentSetModeParams, QueuedPrompt,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
@@ -14,13 +17,18 @@ use massorca_ui::components::agent_status::{
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::model_picker::{Choice, PickerState};
+use massorca_ui::components::queued_message::{QueuedMessages, QueuedMessagesEvent};
 use massorca_ui::components::terminal_surface::TerminalSurface;
-use massorca_ui::tokens::{SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_TITLE_SM};
+use massorca_ui::tokens::{
+    LAYOUT_CONVERSATION_READING, SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM,
+    TYPE_TITLE_SM,
+};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use super::sidebar_rows::glyph_state;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
+use crate::model::agent_queue::{prompt_id, queued_items};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
 use crate::model::permission_modes::{mode_to_set, session_modes};
@@ -33,20 +41,28 @@ use crate::service::{Refusal, ServiceHandle};
 pub(super) enum SessionCall {
     /// A prompt is being typed into the session.
     Sending,
+    /// A prompt is being queued behind the busy agent.
+    Queueing,
     /// The session's run is being stopped.
     Stopping,
     /// The ended session is starting a new run.
     Resuming,
 }
 
-/// A session's composer as the Shell keeps it, with the subscription that turns its events into calls.
+/// A session's composer and queue dock as the Shell keeps them, with the subscriptions that turn their events into
+/// calls.
 #[derive(Debug)]
 pub(super) struct SessionComposer {
     pub entity: Entity<Composer>,
+    pub dock: Entity<QueuedMessages>,
+    /// Whether the composer was built to queue; it is built again when the service's answer changes.
+    queueing: bool,
     _events: Subscription,
+    _dock_events: Subscription,
 }
 
 const SENDING: &str = "Sending…";
+const QUEUEING: &str = "Queueing…";
 const RESUMING: &str = "Resuming…";
 const ENDED: &str = "This session has ended.";
 const ENDED_NOT_RESUMABLE: &str = "This session has ended and cannot be resumed.";
@@ -82,6 +98,7 @@ pub(super) fn composer_terms(
     );
     let (reason, resume) = match call {
         Some(SessionCall::Sending) => (Some(SENDING), false),
+        Some(SessionCall::Queueing) => (Some(QUEUEING), false),
         Some(SessionCall::Resuming) => (Some(RESUMING), false),
         _ if !ended => (None, false),
         _ if resumable => (Some(ENDED), true),
@@ -111,6 +128,8 @@ pub(super) struct SessionFrame {
     /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
     pub stop_aside: Option<bool>,
     pub composer: Entity<Composer>,
+    /// The session's queue dock, while the service keeps a queue and it holds a prompt.
+    pub queue: Option<Entity<QueuedMessages>>,
     pub shell: WeakEntity<Shell>,
     /// The open session's id, for the header's Delegate and Stop.
     pub session: String,
@@ -210,6 +229,22 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                     .child(notice),
             )
         })
+        .when_some(frame.queue, |page, dock| {
+            page.child(
+                div()
+                    .debug_selector(|| "session-queue".to_owned())
+                    .flex_none()
+                    .px(px(SPACE_4))
+                    .pb(px(SPACE_2))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(LAYOUT_CONVERSATION_READING))
+                            .mx_auto()
+                            .child(dock),
+                    ),
+            )
+        })
         .child(div().flex_none().pb(px(SPACE_3)).child(frame.composer))
         .into_any_element()
 }
@@ -222,14 +257,18 @@ impl Shell {
             return None;
         }
         let id = self.model.snapshot().active_session.clone()?;
-        let (session, kinds) = {
+        let (session, kinds, queue) = {
             let state = self.store.read(cx).state();
             let session = state
                 .agents
                 .iter()
                 .find(|session| session.id == id)?
                 .clone();
-            (session, state.agent_kinds.clone())
+            let queue = state
+                .agent_queues
+                .as_ref()
+                .and_then(|queues| queues.get(&id).cloned());
+            (session, state.agent_kinds.clone(), queue)
         };
         if let Some(terminal) = session.terminal_id.as_deref()
             && !self.terminal_views.contains_key(terminal)
@@ -274,6 +313,15 @@ impl Shell {
                 }
             }
         });
+        let queue = queue.and_then(|prompts| {
+            let dock = self.session_composers.get(&id)?.dock.clone();
+            let runs = session.execution.state != TerminalState::Exited;
+            dock.update(cx, |dock, cx| {
+                dock.set_items(queued_items(&prompts), cx);
+                dock.set_send_now_enabled(runs, cx);
+            });
+            Some(dock)
+        });
         Some(SessionFrame {
             stop_aside: terms.stop_aside.then_some(call.is_some()),
             title: session_title(&session, &kinds),
@@ -285,6 +333,7 @@ impl Shell {
             failure,
             notice: self.session_notices.get(&id).cloned(),
             composer,
+            queue,
             shell: cx.entity().downgrade(),
             session: id.clone(),
             can_delegate: self.service.is_some()
@@ -292,56 +341,84 @@ impl Shell {
         })
     }
 
-    /// The composer of a session, created on first use and then kept, so its draft survives redraws and switches.
+    /// The composer of a session, created on first use and then kept, so its draft survives redraws and switches. It
+    /// queues while the agent is busy only when the service keeps a queue; when that changes it is built again,
+    /// keeping its draft.
     pub(super) fn session_composer(
         &mut self,
         session: &str,
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
-        self.session_composers
-            .entry(session.to_owned())
-            .or_insert_with(|| {
-                let id = session.to_owned();
-                let picker = PickerState::new(
-                    Vec::new(),
-                    Choice {
-                        model: SharedString::default(),
-                        effort: None,
-                        fast: false,
-                    },
-                );
-                let entity = cx.new(|cx| {
-                    Composer::new(picker, Vec::new(), cx)
-                        .voice_unavailable(VOICE_LATER)
-                        .attach(false)
-                        .model_picker(false)
-                        .queueing(false)
-                });
-                let events = cx.subscribe(
-                    &entity,
-                    move |shell, composer, event: &ComposerEvent, cx| match event {
-                        ComposerEvent::Send(text) => {
-                            shell.send_prompt(&id, text.clone(), composer.clone(), cx);
-                        }
-                        ComposerEvent::RetrySend => {
-                            let text = composer.read(cx).draft(cx);
-                            shell.send_prompt(&id, text, composer.clone(), cx);
-                        }
-                        ComposerEvent::Stop => shell.stop_session(&id, cx),
-                        ComposerEvent::Resume => shell.resume_session(&id, cx),
-                        ComposerEvent::AccessChanged(index) => {
-                            shell.set_session_mode(&id, *index, cx)
-                        }
-                        _ => {}
-                    },
-                );
-                SessionComposer {
-                    entity,
-                    _events: events,
+        let queueing = self.store.read(cx).state().agent_queues.is_some();
+        let draft = match self.session_composers.get(session) {
+            Some(kept) if kept.queueing == queueing => return kept.entity.clone(),
+            Some(kept) => Some(kept.entity.read(cx).draft(cx)),
+            None => None,
+        };
+        let built = self.build_session_composer(session, queueing, cx);
+        if let Some(draft) = draft {
+            built
+                .entity
+                .update(cx, |composer, cx| composer.set_draft(&draft, cx));
+        }
+        let entity = built.entity.clone();
+        self.session_composers.insert(session.to_owned(), built);
+        entity
+    }
+
+    fn build_session_composer(
+        &mut self,
+        session: &str,
+        queueing: bool,
+        cx: &mut Context<Self>,
+    ) -> SessionComposer {
+        let id = session.to_owned();
+        let picker = PickerState::new(
+            Vec::new(),
+            Choice {
+                model: SharedString::default(),
+                effort: None,
+                fast: false,
+            },
+        );
+        let entity = cx.new(|cx| {
+            Composer::new(picker, Vec::new(), cx)
+                .voice_unavailable(VOICE_LATER)
+                .attach(false)
+                .model_picker(false)
+                .queueing(queueing)
+        });
+        let events = cx.subscribe(
+            &entity,
+            move |shell, composer, event: &ComposerEvent, cx| match event {
+                ComposerEvent::Send(text) => {
+                    shell.send_prompt(&id, text.clone(), composer.clone(), cx);
                 }
-            })
-            .entity
-            .clone()
+                ComposerEvent::Queue(text) => {
+                    shell.queue_prompt(&id, text.clone(), composer.clone(), cx);
+                }
+                ComposerEvent::RetrySend => {
+                    let text = composer.read(cx).draft(cx);
+                    shell.send_prompt(&id, text, composer.clone(), cx);
+                }
+                ComposerEvent::Stop => shell.stop_session(&id, cx),
+                ComposerEvent::Resume => shell.resume_session(&id, cx),
+                ComposerEvent::AccessChanged(index) => shell.set_session_mode(&id, *index, cx),
+                _ => {}
+            },
+        );
+        let dock = cx.new(|_| QueuedMessages::new());
+        let id = session.to_owned();
+        let dock_events = cx.subscribe(&dock, move |shell, _, event: &QueuedMessagesEvent, cx| {
+            shell.on_queue_event(&id, event, cx);
+        });
+        SessionComposer {
+            entity,
+            dock,
+            queueing,
+            _events: events,
+            _dock_events: dock_events,
+        }
     }
 
     /// Types the draft into the session. The draft stays, read-only, until the service accepts the prompt.
@@ -371,12 +448,13 @@ impl Shell {
         .detach();
     }
 
-    /// The service's answer to a prompt: an accepted one clears the draft; a refused one keeps it with the sentence.
-    fn finish_prompt(
+    /// The service's answer to a prompt or a queued prompt: an accepted one clears the draft; a refused one keeps it
+    /// with the sentence.
+    fn finish_prompt<T>(
         &mut self,
         session: &str,
         composer: Entity<Composer>,
-        answer: Result<PromptReceipt, Refusal>,
+        answer: Result<T, Refusal>,
         cx: &mut Context<Self>,
     ) {
         self.session_calls.remove(session);
@@ -388,6 +466,85 @@ impl Shell {
             }
             Err(refusal) => composer.set_error(Some(refusal.sentence().into()), cx),
         });
+        cx.notify();
+    }
+
+    /// Queues the draft behind the busy agent. As with a prompt, the draft stays until the service accepts it.
+    fn queue_prompt(
+        &mut self,
+        session: &str,
+        text: String,
+        composer: Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.begin_session_call(session, SessionCall::Queueing, cx) else {
+            return;
+        };
+        let params = AgentQueueParams {
+            session: session.to_owned(),
+            text,
+            request_id: None,
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_queue(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_prompt(&id, composer, answer, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Asks the service for what the person did in the dock. The dock changes only with the store's next read of the
+    /// queue; a refusal is kept above the composer.
+    fn on_queue_event(
+        &mut self,
+        session: &str,
+        event: &QueuedMessagesEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let prompts: Vec<QueuedPrompt> = self
+            .store
+            .read(cx)
+            .state()
+            .agent_queues
+            .as_ref()
+            .and_then(|queues| queues.get(session).cloned())
+            .unwrap_or_default();
+        let prompt = |row: u64| prompt_id(&prompts, row);
+        let call = match event {
+            QueuedMessagesEvent::Edited { id, text } => prompt(*id).map(|id| QueueCall::Edit {
+                id,
+                text: text.to_string(),
+            }),
+            QueuedMessagesEvent::Removed(id) => prompt(*id).map(QueueCall::Remove),
+            QueuedMessagesEvent::SendNow(id) | QueuedMessagesEvent::Retry(id) => {
+                prompt(*id).map(QueueCall::SendNow)
+            }
+            QueuedMessagesEvent::Resume => Some(QueueCall::Resume(session.to_owned())),
+        };
+        let Some(call) = call else {
+            return;
+        };
+        self.session_notices.remove(session);
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let (what, answer) = call.run(&service).await;
+            if let Err(refusal) = answer {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell
+                        .session_notices
+                        .insert(id, format!("{what}: {}", refusal.sentence()));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -527,6 +684,41 @@ impl Shell {
             );
         }
         cx.notify();
+    }
+}
+
+/// A queue call the dock asked for, by prompt id or, for Resume, by session id.
+enum QueueCall {
+    Edit { id: String, text: String },
+    Remove(String),
+    SendNow(String),
+    Resume(String),
+}
+
+impl QueueCall {
+    /// Runs the call; the answer names what failed, for the notice.
+    async fn run(self, service: &ServiceHandle) -> (&'static str, Result<(), Refusal>) {
+        match self {
+            Self::Edit { id, text } => (
+                "Could not edit the queued message",
+                service
+                    .agent_queue_edit(AgentQueueEditParams { id, text })
+                    .await
+                    .map(drop),
+            ),
+            Self::Remove(id) => (
+                "Could not remove the queued message",
+                service.agent_queue_remove(&id).await.map(drop),
+            ),
+            Self::SendNow(id) => (
+                "Could not send the queued message",
+                service.agent_queue_send_now(&id).await.map(drop),
+            ),
+            Self::Resume(session) => (
+                "Could not resume the queue",
+                service.agent_queue_resume(&session).await.map(drop),
+            ),
+        }
     }
 }
 
