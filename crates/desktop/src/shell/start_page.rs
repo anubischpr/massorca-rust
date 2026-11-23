@@ -11,7 +11,7 @@ use gpui::{
 use massorca_protocol::methods::agents::AgentSession;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
-use massorca_ui::components::composer::{Composer, ComposerEvent};
+use massorca_ui::components::composer::{AccessMode, Composer, ComposerEvent};
 use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::model_picker::{
     AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
@@ -33,6 +33,7 @@ use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
+use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
     GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart,
@@ -203,6 +204,22 @@ fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
         .text_style(TYPE_CAPTION)
         .text_color(theme.palette.text.tertiary)
         .child(status)
+}
+
+/// A kind's mode entries as the composer's chip shows them; a bypass mode carries the warning glyph.
+pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
+    choices
+        .iter()
+        .map(|choice| AccessMode {
+            name: choice.name.clone().into(),
+            icon: if choice.bypass {
+                IconName::TriangleAlert
+            } else {
+                IconName::Shield
+            },
+            bypass: choice.bypass,
+        })
+        .collect()
 }
 
 /// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
@@ -497,11 +514,12 @@ impl Shell {
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) {
-        let (choices, connected) = {
+        let (choices, connected, kinds) = {
             let state = self.store.read(cx).state();
             (
                 session_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
+                state.agent_kinds.clone(),
             )
         };
         composer.update(cx, |composer, cx| {
@@ -515,6 +533,20 @@ impl Shell {
             .choice()
             .model
             .clone();
+        // The mode chip follows the chosen kind; a pick stays while the kind does.
+        let modes = kinds
+            .iter()
+            .find(|kind| kind.id.as_str() == chosen.as_ref())
+            .map(|kind| access_modes(&start_choices(kind)))
+            .unwrap_or_default();
+        composer.update(cx, |composer, cx| {
+            let keep = if composer.access_modes() == modes.as_slice() {
+                composer.access_index()
+            } else {
+                0
+            };
+            composer.set_access_modes(modes, keep, cx);
+        });
         let kind_chosen = choices
             .iter()
             .any(|choice| choice.id.as_str() == chosen.as_ref());
@@ -550,7 +582,18 @@ impl Shell {
         let Some(kind) = choices.into_iter().find(|kind| kind.id == chosen) else {
             return;
         };
-        let params = start_params(workspace, &kind.id, prompt);
+        let permission_mode = self
+            .store
+            .read(cx)
+            .state()
+            .agent_kinds
+            .iter()
+            .find(|declared| declared.id == kind.id)
+            .and_then(|declared| {
+                let index = composer.read(cx).access_index();
+                start_choices(declared).get(index)?.id.clone()
+            });
+        let params = start_params(workspace, &kind.id, prompt, permission_mode);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
             workspace: workspace.to_owned(),
