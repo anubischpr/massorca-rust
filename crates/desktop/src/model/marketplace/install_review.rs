@@ -81,10 +81,18 @@ fn cli_lines(plan: &CliPlan) -> Vec<String> {
             "{}: its CLI is already on this computer; nothing is installed for it.",
             plan.agent
         ),
-        CliPlanState::WillRun { command } => format!(
-            "{}: this vendor command runs: {}. It installs the vendor's current release; the version is not pinned.",
+        CliPlanState::WillRun {
+            command,
+            runs_package_scripts,
+        } => format!(
+            "{}: this vendor command runs: {}. It installs the vendor's current release; the version is not pinned.{}",
             plan.agent,
-            command.join(" ")
+            command.join(" "),
+            if *runs_package_scripts {
+                " npm also runs the install scripts of the package and its dependencies, which this review cannot show."
+            } else {
+                ""
+            }
         ),
         CliPlanState::Unsupported => format!(
             "{}: no install command for this system; the agent is registered without its CLI.",
@@ -162,11 +170,35 @@ mod tests {
                         "install".to_owned(),
                         "Anthropic.ClaudeCode".to_owned(),
                     ],
+                    runs_package_scripts: false,
                 },
             }],
             runs_installer: true,
             consent: "fingerprint-1".to_owned(),
         }
+    }
+
+    #[test]
+    fn a_command_that_runs_package_scripts_says_so_and_one_that_does_not_stays_quiet() {
+        let mut plan = review().cli.remove(0);
+        let quiet = cli_lines(&plan);
+        assert!(!quiet[0].contains("install scripts"), "{quiet:?}");
+        plan.state = CliPlanState::WillRun {
+            command: vec![
+                "npm".to_owned(),
+                "install".to_owned(),
+                "-g".to_owned(),
+                "x".to_owned(),
+            ],
+            runs_package_scripts: true,
+        };
+        let told = cli_lines(&plan);
+        assert!(
+            told[0].ends_with(
+                "npm also runs the install scripts of the package and its dependencies, which this review cannot show."
+            ),
+            "{told:?}"
+        );
     }
 
     #[test]

@@ -94,6 +94,7 @@ fn review(runs_installer: bool) -> ExtensionReview {
                         "-g".to_owned(),
                         "notes".to_owned(),
                     ],
+                    runs_package_scripts: true,
                 },
             }]
         } else {
