@@ -5,8 +5,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use massorca_client::{
-    Backoff, Client, ClientError, Link, Reopen, Resilient, ResilientSubscription, StreamItem,
-    Subscription,
+    Backoff, Client, ClientError, Connect, Link, Reopen, Resilient, ResilientSubscription,
+    StreamItem, Subscription,
 };
 use serde_json::{Value, json};
 
@@ -22,24 +22,24 @@ pub type OpenStream<P> =
         &'a P,
     ) -> Pin<Box<dyn Future<Output = Result<Subscription, ClientError>> + Send + 'a>>;
 
-/// The first connection is the command's own; a reconnect never starts the service, which may have been stopped on
-/// purpose.
-pub struct Reconnect<P> {
+/// Connects for a resilient stream. The first connection is the command's own; a reconnect never starts the service,
+/// which may have been stopped on purpose.
+#[derive(Debug)]
+pub struct Reconnector {
     target: Target,
     first: Option<Client>,
-    open: OpenStream<P>,
-    params: P,
 }
 
-impl<P> std::fmt::Debug for Reconnect<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Reconnect")
-            .field("target", &self.target)
-            .finish_non_exhaustive()
+impl Reconnector {
+    pub fn new(target: &Target, client: &Client) -> Self {
+        Self {
+            target: target.clone(),
+            first: Some(client.clone()),
+        }
     }
 }
 
-impl<P: Clone + Send + Sync + 'static> Reopen for Reconnect<P> {
+impl Connect for Reconnector {
     fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send {
         let first = self.first.take();
         let target = self.target.clone();
@@ -49,6 +49,27 @@ impl<P: Clone + Send + Sync + 'static> Reopen for Reconnect<P> {
                 None => reconnect(&target).await,
             }
         }
+    }
+}
+
+/// A watch's stream, opened afresh on every connection.
+pub struct Reconnect<P> {
+    connector: Reconnector,
+    open: OpenStream<P>,
+    params: P,
+}
+
+impl<P> std::fmt::Debug for Reconnect<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reconnect")
+            .field("connector", &self.connector)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<P: Clone + Send + Sync + 'static> Reopen for Reconnect<P> {
+    fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send {
+        self.connector.connect()
     }
 
     fn open(
@@ -71,8 +92,7 @@ pub fn resilient<P: Clone + Send + Sync + 'static>(
 ) -> ResilientSubscription<Reconnect<P>> {
     ResilientSubscription::new(
         Reconnect {
-            target: target.clone(),
-            first: Some(client.clone()),
+            connector: Reconnector::new(target, client),
             open,
             params,
         },
@@ -80,8 +100,24 @@ pub fn resilient<P: Clone + Send + Sync + 'static>(
     )
 }
 
+/// The sentence for a link change.
+pub fn link_text(link: &Link) -> String {
+    match link {
+        Link::Unverifiable {
+            attempt,
+            retry_in,
+            reason,
+        } => format!(
+            "connection lost ({reason}); unverifiable until it returns, attempt {attempt} in {:.1} s",
+            retry_in.as_secs_f64()
+        ),
+        Link::Live => "connected again; live".to_owned(),
+    }
+}
+
 /// Prints a link change as its own line: text, or `{"ok":true,"result":{"link":...}}` with `--json`.
 pub fn print_link(link: &Link, output: Output) {
+    let text = link_text(link);
     match link {
         Link::Unverifiable {
             attempt,
@@ -94,15 +130,9 @@ pub fn print_link(link: &Link, output: Output) {
                 "retry_in_ms": u64::try_from(retry_in.as_millis()).unwrap_or(u64::MAX),
                 "reason": reason,
             }),
-            &[format!(
-                "connection lost ({reason}); unverifiable until it returns, attempt {attempt} in {:.1} s",
-                retry_in.as_secs_f64()
-            )],
+            &[text],
         ),
-        Link::Live => output.success(
-            &json!({ "link": "live" }),
-            &["connected again; live".to_owned()],
-        ),
+        Link::Live => output.success(&json!({ "link": "live" }), &[text]),
     }
 }
 

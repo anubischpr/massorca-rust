@@ -21,6 +21,7 @@ const STRIPPED: &str = "FAKE_AGENT_STRAY_KEY";
 /// Declares kind `fake` with `files` and strips [`STRIPPED`], and kind `bare`, which declares no files.
 fn declare_kinds(sandbox: &Sandbox, files: &[&str]) {
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&dir).expect("create the kinds directory");
     let fake = json!({
         "id": "fake",
