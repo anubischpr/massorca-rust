@@ -3722,6 +3722,7 @@ dependencies = [
  "uuid",
  "vt100",
  "win32job",
+ "zeroize",
 ]
 
 [[package]]
