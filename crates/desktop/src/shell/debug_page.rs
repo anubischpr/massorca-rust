@@ -26,6 +26,10 @@ struct Facts {
     teams_answered: bool,
     /// The vault status or list has answered, a refusal included.
     vault_answered: bool,
+    /// The newest agent session the store holds, which `--page session` opens.
+    session: Option<String>,
+    /// The agent session list has arrived (or the shell runs on sample data).
+    sessions_answered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +41,7 @@ struct OwnedSecret {
 
 enum Target {
     Workspace(String),
+    Session(String),
     Settings(SettingsSection),
     Pairing,
     AddHost,
@@ -79,6 +84,16 @@ fn plan(page: DebugPage, facts: &Facts) -> Step {
         DebugPage::Workspace => match &facts.workspace {
             Some(id) => Step::Open(Target::Workspace(id.clone())),
             None => answered(
+                facts.workspaces_answered,
+                Parent::Workspaces,
+                "the service lists no workspace",
+            ),
+        },
+        DebugPage::Session => match (&facts.session, &facts.workspace) {
+            (Some(session), _) => Step::Open(Target::Session(session.clone())),
+            _ if !facts.sessions_answered => Step::Wait,
+            (None, Some(workspace)) => Step::Open(Target::Workspace(workspace.clone())),
+            (None, None) => answered(
                 facts.workspaces_answered,
                 Parent::Workspaces,
                 "the service lists no workspace",
@@ -203,6 +218,12 @@ impl Shell {
                 .flatten(),
             teams_connected,
             owned_secret: owned_secret(state),
+            session: state
+                .agents
+                .iter()
+                .max_by_key(|session| session.created_at_ms)
+                .map(|session| session.id.clone()),
+            sessions_answered: sample || state.agents_answered,
             workspaces_answered: sample || state.loaded,
             teams_answered: sample || state.team_read > 0,
             vault_answered: sample
@@ -216,6 +237,10 @@ impl Shell {
             Target::Workspace(id) => {
                 self.go_home(Mode::Workspaces);
                 self.model.open_workspace(id);
+            }
+            Target::Session(id) => {
+                self.go_home(Mode::Workspaces);
+                self.model.open_session(&id);
             }
             Target::Settings(section) => self.open_debug_settings(section),
             Target::Pairing => self.model.open_page(Page::Pairing),

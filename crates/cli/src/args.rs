@@ -406,6 +406,9 @@ pub enum HostCommand {
     AddSsh(HostAddSshArgs),
     /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
     Memory,
+    /// Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them. Works
+    /// with --host.
+    Ports,
 }
 
 #[derive(Debug, Args)]
