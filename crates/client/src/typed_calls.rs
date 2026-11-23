@@ -5,10 +5,11 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
     AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, PromptReceipt,
+    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -247,6 +248,34 @@ impl Client {
         params: &AgentPromptParams,
     ) -> Result<PromptReceipt, ClientError> {
         self.call(agents::PROMPT, params).await
+    }
+
+    /// `agent.queue`: queues a prompt behind a busy agent; it is typed once the agent is idle or done (capability
+    /// `agent-queue/1`, decision 0084).
+    pub async fn agent_queue(
+        &self,
+        params: &AgentQueueParams,
+    ) -> Result<QueuedPrompt, ClientError> {
+        self.call(agents::QUEUE, params).await
+    }
+
+    /// `agent.queue.list`: the queued prompts of a session, head first (decision 0084).
+    pub async fn agent_queue_list(&self, session: &str) -> Result<AgentQueueList, ClientError> {
+        self.call(agents::QUEUE_LIST, &session_ref(session)).await
+    }
+
+    /// `agent.queue.edit`: replaces the text of a waiting or failed queued prompt (decision 0084).
+    pub async fn agent_queue_edit(
+        &self,
+        params: &AgentQueueEditParams,
+    ) -> Result<QueuedPrompt, ClientError> {
+        self.call(agents::QUEUE_EDIT, params).await
+    }
+
+    /// `agent.queue.remove`: removes a waiting or failed queued prompt (decision 0084).
+    pub async fn agent_queue_remove(&self, id: &str) -> Result<QueuedPrompt, ClientError> {
+        let params = AgentQueueItemRef { id: id.to_owned() };
+        self.call(agents::QUEUE_REMOVE, &params).await
     }
 
     /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
