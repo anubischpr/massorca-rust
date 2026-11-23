@@ -141,15 +141,55 @@ fn a_first_party_entry_from_another_source_is_not_refreshed() {
 }
 
 #[test]
-fn adoption_after_an_upgrade_refreshes_an_outdated_built_in_instead_of_resetting_it() {
+fn adoption_after_an_upgrade_leaves_an_outdated_built_in_to_the_refresh() {
     let s = setup(FakeHost::new().with_program("gentle-shell"));
     outdated_gentle_shell(&s, |entry| entry["enabled"] = json!(false));
+    let before = s.lock_json().expect("the lockfile")["packages"].clone();
 
     let used: BTreeSet<String> = ["gentle-shell".to_owned()].into();
     let adopted = s.service.adopt_builtin_agents(&used).expect("adopts");
     assert!(adopted.is_empty(), "it was already installed: {adopted:?}");
-    let lock = s.lock_json().expect("the lockfile");
-    assert_eq!(lock["packages"].as_array().expect("packages").len(), 1);
-    assert!(lock["packages"][0].get("adopted").is_none());
+    assert_eq!(s.lock_json().expect("the lockfile")["packages"], before);
+
+    s.service.refresh_builtins().expect("refreshes");
     assert_eq!(gentle_shell(&s).state, ItemState::Disabled);
+}
+
+#[test]
+fn only_the_first_entry_of_a_repeated_id_is_refreshed() {
+    let s = setup(FakeHost::new().with_program("gentle-shell"));
+    outdated_gentle_shell(&s, |_| {});
+    let mut lock = s.lock_json().expect("the lockfile");
+    let copy = lock["packages"][0].clone();
+    lock["packages"]
+        .as_array_mut()
+        .expect("packages")
+        .push(copy);
+    write_lock(&s, &lock);
+
+    let refreshed = s.service.refresh_builtins().expect("refreshes");
+    assert_eq!(refreshed, ["massorca.gentle-shell"]);
+    assert_eq!(gentle_shell(&s).state, ItemState::Enabled);
+}
+
+#[test]
+fn an_outdated_install_in_the_folder_the_refresh_would_use_is_left_as_it_is() {
+    let s = setup(FakeHost::new().with_program("gentle-shell"));
+    s.install(
+        &Source::Catalogue("massorca.gentle-shell".to_owned()),
+        false,
+    )
+    .expect("installs");
+    let mut lock = s.lock_json().expect("the lockfile");
+    let folder = s
+        .service
+        .layout()
+        .resolve(lock["packages"][0]["path"].as_str().expect("a path"));
+    lock["packages"][0]["sha256"] = json!(OLD_HASH);
+    lock["packages"][0]["files_sha256"] = json!(OLD_HASH);
+    write_lock(&s, &lock);
+
+    assert!(s.service.refresh_builtins().expect("refreshes").is_empty());
+    assert_eq!(s.lock_json().expect("the lockfile"), lock);
+    assert!(folder.exists(), "the only copy is kept");
 }

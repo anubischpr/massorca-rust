@@ -93,8 +93,9 @@ a kind declaration gaining fields, would otherwise turn every existing install o
 it into an unvouched first-party entry. That entry is hidden, and its kinds stop
 running.
 
-`Extensions::refresh_builtins` prevents that. The server calls it at every
-start, before adoption, and adoption also runs it first.
+`Extensions::refresh_builtins` prevents that. The server wiring change calls it
+at every start, beside adoption. Adoption counts an outdated built-in as
+installed, so it never resets one, and a failed refresh never blocks it.
 
 - **Which entries.** It looks for catalogue-sourced entries of a catalogue id
   whose hash differs from the embedded package.
@@ -106,7 +107,12 @@ start, before adoption, and adoption also runs it first.
   asks for no consent, because the build vouches for the files.
 - **Writes and cleanup.** One lockfile write covers every refreshed entry; the
   old folders are deleted after it.
-- **Failure.** A failure leaves the lockfile unchanged.
+- **Failure.** A package that fails to stage stays as it was, and the error is
+  returned after the others are written; the next start tries again. A failed
+  lockfile write leaves the lockfile unchanged.
+- **Edge cases.** An install already in the folder the refresh would use is left
+  alone, because unpacking replaces that folder and it holds the only copy. Only
+  the first entry of a repeated id is refreshed, since only it is ever read.
 - **Other sources.** An entry under a first-party id from any other source is
   left alone; it stays unvouched.
 
