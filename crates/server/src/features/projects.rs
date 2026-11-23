@@ -17,6 +17,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{AppState, Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
+use crate::features::config::workspace_layout;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
 use crate::owner::Owner;
 use crate::permission::Permission;
@@ -66,7 +67,8 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 async fn add(ctx: RequestCtx, params: ProjectAddParams) -> Result<Project, ErrorBody> {
-    let domain = for_mutation(&ctx).await?;
+    let layout = workspace_layout(&ctx).await?;
+    let domain = for_mutation(&ctx).await?.with_layout(layout);
     let project = blocking(move || domain.add_project(params)).await?;
     publish(&ctx, TOPIC_PROJECT_ADDED, &project.id);
     Ok(project)

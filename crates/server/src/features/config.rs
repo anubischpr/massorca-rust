@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use massorca_core_store::{Store, StoreError};
+use massorca_core_workspace::WorkspaceLayout;
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -19,6 +20,10 @@ use crate::store_blocking;
 
 /// Where new workspaces go when a project does not set a root of its own.
 pub(crate) const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
+/// Where a new project's workspaces go under the default root: `nested` or `flat` (ADR 0008).
+pub(crate) const WORKSPACES_LAYOUT: &str = "workspaces.layout";
+const LAYOUT_NESTED: &str = "nested";
+const LAYOUT_FLAT: &str = "flat";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = Vec::new();
@@ -35,6 +40,15 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             kind: SettingKind::Path,
             default: Value::String(default_workspace_root()?),
             description: "Folder for new workspaces when a project does not set its own root."
+                .to_owned(),
+            aliases: Vec::new(),
+        })?,
+        registries.settings.register(SettingDecl {
+            owner: Owner::Core,
+            key: WORKSPACES_LAYOUT.to_owned(),
+            kind: SettingKind::Choice(&[LAYOUT_NESTED, LAYOUT_FLAT]),
+            default: Value::String(LAYOUT_NESTED.to_owned()),
+            description: "Where a new project's workspaces go: in a folder named after the project, or directly in the default root."
                 .to_owned(),
             aliases: Vec::new(),
         })?,
@@ -73,6 +87,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 /// `<user home>/massorca/workspaces`, as a string the protocol can carry.
 pub(crate) fn default_workspace_root() -> Result<String, ServiceError> {
     home_path(&["massorca", "workspaces"])
+}
+
+/// The layout a project added now gets under the default root: the stored `workspaces.layout`, else nested.
+pub(crate) async fn workspace_layout(ctx: &RequestCtx) -> Result<WorkspaceLayout, ErrorBody> {
+    let stored = store_blocking::run(&ctx.state, |store| {
+        store.get_setting(config::DEFAULT_OWNER, WORKSPACES_LAYOUT)
+    })
+    .await?;
+    let value = stored
+        .as_deref()
+        .map(stored_json)
+        .transpose()?
+        .unwrap_or_else(|| Value::String(LAYOUT_NESTED.to_owned()));
+    match value.as_str() {
+        Some(LAYOUT_NESTED) => Ok(WorkspaceLayout::Nested),
+        Some(LAYOUT_FLAT) => Ok(WorkspaceLayout::Flat),
+        _ => Err(ErrorBody::new(
+            codes::CONFIG_INVALID_VALUE,
+            "workspaces.layout must be nested or flat",
+        )),
+    }
 }
 
 /// `parts` joined under the user's home directory, as a string the protocol can carry.
