@@ -28,6 +28,9 @@ pub struct Removal {
     pub device: DeviceOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uninstalled_from: Option<String>,
+    /// Where the host's old files wait when they could not be deleted at once; the next host change deletes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leftover: Option<String>,
 }
 
 /// What became of this device on its server.
@@ -86,11 +89,12 @@ pub async fn remove(
         }
         _ => None,
     };
-    hosts.remove(&args.name)?;
+    let removed = hosts.remove(&args.name)?;
     let removal = Removal {
         host: args.name.clone(),
         device,
         uninstalled_from,
+        leftover: removed.leftover.map(|path| path.display().to_string()),
     };
     let lines = removal_lines(&removal);
     output.success(&removal, &lines);
@@ -148,6 +152,11 @@ fn removal_lines(removal: &Removal) -> Vec<String> {
     });
     if let Some(target) = &removal.uninstalled_from {
         lines.push(format!("service uninstalled over ssh: {target}"));
+    }
+    if let Some(leftover) = &removal.leftover {
+        lines.push(format!(
+            "its old files could not be deleted yet; they were moved to {leftover}, which the next host change deletes"
+        ));
     }
     lines
 }

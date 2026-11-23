@@ -215,6 +215,7 @@ async fn each_owner_reads_its_own_value_for_a_shared_key() {
             kind: SettingKind::String,
             default: Value::String("from demo".to_owned()),
             description: "declared by the demo extension".to_owned(),
+            aliases: Vec::new(),
         })
         .expect("the extension declares the key");
     let client = connect(home.path(), "default").await;
@@ -244,6 +245,7 @@ fn owner_ids_and_keys_outside_the_name_rule_are_refused_at_declaration() {
     let declare = |owner: Owner, key: &str| {
         settings.register(SettingDecl {
             owner,
+            aliases: Vec::new(),
             key: key.to_owned(),
             kind: SettingKind::String,
             default: json!("x"),
