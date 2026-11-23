@@ -520,6 +520,13 @@ pub struct AgentSession {
     /// The last turn's result text, at most [`MAX_RESULT_BYTES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    /// The current or last run received vault secrets, or descends from one that did (decision 0071): its terminal,
+    /// prompts, resume and delegation need host-admin scope. Never their names.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holds_secrets: bool,
+    /// Set in the reply to a start, resume or delegation whose run got no vault variables, saying why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets_withheld: Option<String>,
 }
 
 /// The state of an account (decision 0059). A value this build does not know reads as `unknown`.

@@ -29,6 +29,7 @@ fn declare_fake(sandbox: &Sandbox) {
         }
     });
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
     std::fs::create_dir_all(&dir).expect("create the kinds directory");
     std::fs::write(dir.join("fake.json"), kind.to_string()).expect("write a kind file");
 }

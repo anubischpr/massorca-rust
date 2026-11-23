@@ -266,6 +266,13 @@ END;
 "#,
         foreign_keys_off: false,
     },
+    // Whether an agent session's current or last run received vault secrets (decision 0071); never their names.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 CHECK(holds_secrets IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
     // Only a kept account counts as one the kind had (decision 0059): a row is recorded when it is inserted already decided
     // (an import or a migrated home) or when its pending sign-in is cleared. A sign-in deleted while still pending was
     // never kept and leaves no record. Rows recorded by the earlier trigger cannot tell a kept sign-in from a discarded

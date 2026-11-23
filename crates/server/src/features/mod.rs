@@ -1,5 +1,6 @@
 //! Core features. Each registers its capabilities, methods, commands and settings through the registries, and the service keeps the handles for its lifetime.
 
+mod agent_redaction;
 mod agents;
 mod config;
 mod config_keys;

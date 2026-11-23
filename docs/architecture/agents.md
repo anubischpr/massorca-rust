@@ -128,7 +128,12 @@ Event bus topic: `agent.changed` (id = session id).
 On top of the terminal environment (0032): `MASSORCA_AGENT_SESSION`,
 `MASSORCA_AGENT_TOKEN`, `MASSORCA_AGENT_KIND`, `MASSORCA_BIN`, the kind's
 home variable when the profile has a home for it (0056), minus the kind's
-`strip_env` in that case, then the caller's `env`.
+`strip_env` in that case, then the profile vault's secrets for the workspace's
+project (0071), then the caller's `env`. A vault secret named `MASSORCA_*` or
+like the home variable fails the launch with `agent.secrets_unavailable`; one
+named in `strip_env` is set, not emptied. Only a run whose caller holds HostAdmin gets
+vault variables; such a run and its children are marked `holds_secrets`, and
+their terminals, prompts, resume and delegation then need HostAdmin (0071).
 
 Limitation: a terminal's environment (0032) can add variables but not remove
 inherited ones, and `core-terminal` is not changed in this phase. Until it can,

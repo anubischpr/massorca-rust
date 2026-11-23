@@ -41,6 +41,7 @@ async fn attach(
         rows,
         answers_queries,
     } = params;
+    super::terminals::require_admin_for_terminal(&ctx, &terminal).await?;
     // Only a client that declares it answers queries can hold one (0036).
     let answers = if answers_queries == Some(true) {
         QueryAnswers::Client

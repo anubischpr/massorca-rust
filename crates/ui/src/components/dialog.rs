@@ -6,6 +6,7 @@
 
 use crate::a11y;
 use crate::components::button::{Button, ButtonVariant};
+use crate::components::icon_button::IconButton;
 use crate::components::popover::{DismissHandler, OpenEdge, OpenTracker, overlay_surface};
 use crate::components::switch::ease;
 use crate::icon::{Icon, IconName, IconSize};
@@ -127,13 +128,17 @@ pub struct Dialog {
     loss: Vec<SharedString>,
     error: Option<SharedString>,
     action_label: SharedString,
+    action_icon: Option<IconName>,
     cancel_label: SharedString,
+    cancel_variant: ButtonVariant,
+    leading: Option<AnyElement>,
     busy: bool,
     action_disabled: bool,
     field: Option<FocusHandle>,
     return_focus: Option<FocusHandle>,
     dismiss_on_scrim: bool,
     inline: bool,
+    closable: bool,
     on_action: Option<DismissHandler>,
     on_dismiss: Option<DismissHandler>,
 }
@@ -163,13 +168,17 @@ impl Dialog {
             loss: Vec::new(),
             error: None,
             action_label: "OK".into(),
+            action_icon: None,
             cancel_label: "Cancel".into(),
+            cancel_variant: ButtonVariant::Secondary,
+            leading: None,
             busy: false,
             action_disabled: false,
             field: None,
             return_focus: None,
             dismiss_on_scrim: false,
             inline: false,
+            closable: false,
             on_action: None,
             on_dismiss: None,
         }
@@ -177,6 +186,12 @@ impl Dialog {
 
     pub fn open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+
+    /// Shows a close button at the title's end, which dismisses the dialog as Escape does.
+    pub fn closable(mut self) -> Self {
+        self.closable = true;
         self
     }
 
@@ -216,6 +231,24 @@ impl Dialog {
 
     pub fn cancel_label(mut self, label: impl Into<SharedString>) -> Self {
         self.cancel_label = label.into();
+        self
+    }
+
+    /// The cancel button's style; secondary unless a design draws it quieter.
+    pub fn cancel_variant(mut self, variant: ButtonVariant) -> Self {
+        self.cancel_variant = variant;
+        self
+    }
+
+    /// An icon before the action's label.
+    pub fn action_icon(mut self, icon: IconName) -> Self {
+        self.action_icon = Some(icon);
+        self
+    }
+
+    /// A control at the footer's left edge, level with the actions; the actions stay on the right.
+    pub fn leading(mut self, control: impl IntoElement) -> Self {
+        self.leading = Some(control.into_any_element());
         self
     }
 
@@ -380,13 +413,34 @@ impl RenderOnce for Dialog {
                 }
             });
 
-        panel = panel.child(
-            div()
-                .min_w_0()
-                .text_style(TYPE_TITLE)
-                .text_color(p.text.primary)
-                .child(self.title.clone()),
-        );
+        let title = div()
+            .min_w_0()
+            .text_style(TYPE_TITLE)
+            .text_color(p.text.primary)
+            .child(self.title.clone());
+        if self.closable {
+            let dismiss = self.on_dismiss.clone();
+            let close = div().debug_selector(|| "dialog-close".into()).child(
+                IconButton::new((self.id.clone(), "close"), IconName::X, "Close").on_click(
+                    move |window, cx| {
+                        if let Some(dismiss) = &dismiss {
+                            dismiss(window, cx);
+                        }
+                    },
+                ),
+            );
+            panel = panel.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(SPACE_2))
+                    .child(title)
+                    .child(close),
+            );
+        } else {
+            panel = panel.child(title);
+        }
 
         let body_height = f32::from(window.viewport_size().height) * BODY_HEIGHT_SHARE;
         panel = panel.child(
@@ -443,7 +497,7 @@ impl RenderOnce for Dialog {
 
         let dismiss = self.on_dismiss.clone();
         let cancel_button = Button::new((self.id.clone(), "cancel"), self.cancel_label.clone())
-            .variant(ButtonVariant::Secondary)
+            .variant(self.cancel_variant)
             .focus_handle(cancel)
             .disabled(self.busy)
             .on_click(move |window, cx| {
@@ -452,7 +506,7 @@ impl RenderOnce for Dialog {
                 }
             });
         let on_action = self.on_action.clone();
-        let action_button = Button::new((self.id.clone(), "action"), self.action_label.clone())
+        let mut action_button = Button::new((self.id.clone(), "action"), self.action_label.clone())
             .variant(self.variant.action_style())
             .focus_handle(action)
             .disabled(self.busy || self.action_disabled)
@@ -462,22 +516,38 @@ impl RenderOnce for Dialog {
                     on_action(window, cx);
                 }
             });
-        panel = panel.child(
-            div()
+        if let Some(icon) = self.action_icon {
+            action_button = action_button.leading_icon(icon);
+        }
+        let actions = div()
+            .flex()
+            .justify_end()
+            .gap(px(SPACE_2))
+            .child(
+                div()
+                    .debug_selector(|| "dialog-cancel".into())
+                    .child(cancel_button),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "dialog-action".into())
+                    .child(action_button),
+            );
+        let footer = match self.leading {
+            Some(leading) => div()
                 .flex()
-                .justify_end()
+                .justify_between()
+                .items_center()
                 .gap(px(SPACE_2))
                 .child(
                     div()
-                        .debug_selector(|| "dialog-cancel".into())
-                        .child(cancel_button),
+                        .debug_selector(|| "dialog-leading".into())
+                        .child(leading),
                 )
-                .child(
-                    div()
-                        .debug_selector(|| "dialog-action".into())
-                        .child(action_button),
-                ),
-        );
+                .child(actions),
+            None => actions,
+        };
+        panel = panel.child(footer);
 
         // A busy dialog ignores the scrim as it ignores Escape: a save in flight is never dismissed.
         let scrim_closes =
@@ -859,6 +929,48 @@ mod element_tests {
             dismissals.get(),
             0,
             "a press on the menu does not dismiss the dialog"
+        );
+    }
+
+    /// Hosts a confirm whose footer has a control on its left edge, a ghost cancel and an action with an icon.
+    struct FooterHarness;
+
+    impl Render for FooterHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Dialog::new("footer-under-test", "Add host")
+                .open(true)
+                .cancel_variant(ButtonVariant::Ghost)
+                .leading(Button::new("footer-test", "Test again"))
+                .child(div().child("Body"))
+                .action("Add host")
+                .action_icon(IconName::Server)
+        }
+    }
+
+    #[gpui::test]
+    fn a_footer_control_sits_on_the_left_level_with_the_actions(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| FooterHarness);
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let leading = cx
+            .debug_bounds("dialog-leading")
+            .expect("the footer control is drawn");
+        let cancel = cx.debug_bounds("dialog-cancel").expect("cancel is drawn");
+        let action = cx
+            .debug_bounds("dialog-action")
+            .expect("the action is drawn");
+        assert!(
+            leading.origin.x < cancel.origin.x,
+            "the footer control is left of cancel"
+        );
+        assert!(
+            cancel.origin.x < action.origin.x,
+            "the action stays on the right"
+        );
+        let (leading_y, action_y) = (f32::from(leading.center().y), f32::from(action.center().y));
+        assert!(
+            (leading_y - action_y).abs() < 0.5,
+            "the footer control and the action share a row: {leading_y} vs {action_y}"
         );
     }
 }

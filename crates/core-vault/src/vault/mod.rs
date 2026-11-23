@@ -11,6 +11,7 @@ use massorca_core_store::{
 };
 
 use crate::cipher::{self, Aad};
+use crate::env_policy::is_dangerous_env_name;
 use crate::key::{KeyError, LockReason, MasterKey, Protection};
 use crate::names::{Scope, is_valid_name};
 use crate::value::SecretValue;
@@ -58,6 +59,10 @@ pub enum VaultError {
         "invalid secret name; use 1 to 64 letters, digits and underscores, not starting with a digit"
     )]
     InvalidName,
+    #[error(
+        "{name} loads code, redirects lookups or swaps an endpoint in the programs that receive it; use another name"
+    )]
+    ReservedName { name: String },
     #[error("invalid scope; use global, project:<id> or team:<id>")]
     InvalidScope,
     #[error("the value is longer than 64 KiB")]
@@ -348,12 +353,17 @@ impl Vault {
     }
 }
 
+/// A valid name that no run may receive as a secret: refused when set, linked or requested.
 pub(super) fn check_name(name: &str) -> Result<(), VaultError> {
-    if is_valid_name(name) {
-        Ok(())
-    } else {
-        Err(VaultError::InvalidName)
+    if !is_valid_name(name) {
+        return Err(VaultError::InvalidName);
     }
+    if is_dangerous_env_name(name) {
+        return Err(VaultError::ReservedName {
+            name: name.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn seal_row(

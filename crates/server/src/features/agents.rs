@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps};
+use massorca_core_agents::{AgentError, Agents, Change, MergeResult, RepoOps, SecretGrant};
 use massorca_core_git::{Git, GitError, MergeOutcome};
 use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
@@ -21,12 +21,13 @@ use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
+use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::{NoParams, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
-use crate::permission::{Permission, Principal};
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -200,36 +201,50 @@ async fn kinds(ctx: RequestCtx, _params: NoParams) -> Result<AgentKinds, ErrorBo
 }
 
 async fn start(ctx: RequestCtx, params: AgentStartParams) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.start(params)).await
+    let grant = secret_grant(&ctx);
+    let session = on_agents(&ctx, move |agents| agents.start(params, grant)).await?;
+    Ok(for_caller(&ctx, session))
 }
 
 async fn list(ctx: RequestCtx, params: AgentListParams) -> Result<AgentSessionList, ErrorBody> {
     let sessions = on_agents(&ctx, move |agents| agents.list(params.workspace.as_deref())).await?;
-    Ok(AgentSessionList { sessions })
+    Ok(AgentSessionList {
+        sessions: sessions
+            .into_iter()
+            .map(|session| for_caller(&ctx, session))
+            .collect(),
+    })
 }
 
 async fn show(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.show(&params.session)).await
+    let session = on_agents(&ctx, move |agents| agents.show(&params.session)).await?;
+    Ok(for_caller(&ctx, session))
 }
 
 async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let session = on_agents(&ctx, move |agents| {
         agents.stop(&params.session, params.force)
     })
-    .await
+    .await?;
+    Ok(for_caller(&ctx, session))
 }
 
 async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.forget(&params.session)).await
+    let session = on_agents(&ctx, move |agents| agents.forget(&params.session)).await?;
+    Ok(for_caller(&ctx, session))
 }
 
 /// Starts a new run of an exited session, which keeps its id (0054).
 async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.resume(&params.session)).await
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let grant = secret_grant(&ctx);
+    let session = on_agents(&ctx, move |agents| agents.resume(&params.session, grant)).await?;
+    Ok(for_caller(&ctx, session))
 }
 
 /// Types a prompt into a run's terminal (0054). The text is never logged.
 async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptReceipt, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
     on_agents(&ctx, move |agents| {
         agents.prompt(&params.session, &params.text, params.force)
     })
@@ -246,12 +261,24 @@ async fn delegate(
     ctx: RequestCtx,
     params: AgentDelegateParams,
 ) -> Result<AgentDelegated, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.delegate(params)).await
+    require_admin_for_session(&ctx, params.parent.clone()).await?;
+    let grant = secret_grant(&ctx);
+    let mut delegated = on_agents(&ctx, move |agents| agents.delegate(params, grant)).await?;
+    delegated.session = for_caller(&ctx, delegated.session);
+    Ok(delegated)
 }
 
 /// A session's delegation tree: its root and the root's children (0055).
 async fn tree(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentTree, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.tree(&params.session)).await
+    let tree = on_agents(&ctx, move |agents| agents.tree(&params.session)).await?;
+    Ok(AgentTree {
+        root: for_caller(&ctx, tree.root),
+        children: tree
+            .children
+            .into_iter()
+            .map(|child| for_caller(&ctx, child))
+            .collect(),
+    })
 }
 
 /// Brings a finished child back into its parent (0055). The parent workspace's git mutation lock is held for the whole
@@ -260,6 +287,17 @@ async fn bring_back(
     ctx: RequestCtx,
     params: AgentBringBackParams,
 ) -> Result<BringBackResult, ErrorBody> {
+    // A bring-back reads the child's result and types into the parent's run.
+    require_admin_for_session(&ctx, params.child.clone()).await?;
+    let parent = on_agents(&ctx, {
+        let child = params.child.clone();
+        move |agents| agents.show(&child)
+    })
+    .await?
+    .parent_id;
+    if let Some(parent) = parent {
+        require_admin_for_session(&ctx, parent).await?;
+    }
     let child = params.child.clone();
     let merge = params.merge;
     // The workspace a merge would go into: only a child with a workspace of its own is merged (0055).
@@ -279,7 +317,9 @@ async fn bring_back(
         None => None,
     };
     let git = WorktreeGit(ctx.state.workspaces.git().clone());
-    on_agents(&ctx, move |agents| agents.bring_back(&params, &git)).await
+    let mut result = on_agents(&ctx, move |agents| agents.bring_back(&params, &git)).await?;
+    result.child = for_caller(&ctx, result.child);
+    Ok(result)
 }
 
 /// The bring-back's git operations, through `core-git`.
@@ -377,10 +417,12 @@ async fn watch(ctx: RequestCtx, params: AgentWatchParams) -> Result<StreamSource
     .await?;
     let (items, source) = mpsc::channel(WATCH_QUEUE_CAPACITY);
     let agents = ctx.state.agents.clone();
+    let admin = is_host_admin(&ctx);
     tokio::spawn(async move {
         let mut next = Some(first);
         loop {
             if let Some(item) = next.take() {
+                let item = watch_item_for(admin, item);
                 let Ok(value) = encode(&item) else { break };
                 if items.send(value).await.is_err() {
                     break;
@@ -471,7 +513,7 @@ async fn accounts_list(
     Ok(AccountsList {
         accounts: accounts
             .into_iter()
-            .map(|account| for_caller(&ctx.principal, account))
+            .map(|account| account_for_caller(&ctx.principal, account))
             .collect(),
     })
 }
@@ -485,7 +527,7 @@ async fn accounts_add(
         agents.accounts_add(&params.kind, params.label)
     })
     .await?;
-    added.account = for_caller(&ctx.principal, added.account);
+    added.account = account_for_caller(&ctx.principal, added.account);
     Ok(added)
 }
 
@@ -500,7 +542,7 @@ async fn accounts_import(
     .await?;
     imported.account = imported
         .account
-        .map(|account| for_caller(&ctx.principal, account));
+        .map(|account| account_for_caller(&ctx.principal, account));
     Ok(imported)
 }
 
@@ -512,7 +554,7 @@ async fn accounts_activate(
         agents.accounts_activate(&params.kind, &params.account, params.project.as_deref())
     })
     .await?;
-    Ok(for_caller(&ctx.principal, account))
+    Ok(account_for_caller(&ctx.principal, account))
 }
 
 async fn accounts_remove(
@@ -533,12 +575,12 @@ async fn accounts_check(
         agents.accounts_check(&params.kind, params.account.as_deref())
     })
     .await?;
-    Ok(for_caller(&ctx.principal, account))
+    Ok(account_for_caller(&ctx.principal, account))
 }
 
 /// An account as `principal` may see it: without its identity below `workspace` ([`sees_account_details`]). Every
 /// `agent.accounts.*` answer that carries an account passes through here.
-fn for_caller(principal: &Principal, mut account: AccountSummary) -> AccountSummary {
+fn account_for_caller(principal: &Principal, mut account: AccountSummary) -> AccountSummary {
     if !sees_account_details(principal) {
         account.identity = None;
     }
@@ -569,6 +611,27 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 }
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
+/// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
+fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+    if is_host_admin(ctx) {
+        SecretGrant::Provide
+    } else {
+        SecretGrant::Withhold("vault secrets go only to runs started by a host-admin caller")
+    }
+}
+
+/// Refuses a caller below host-admin scope when `session`'s run holds vault secrets (decision 0071).
+async fn require_admin_for_session(ctx: &RequestCtx, session: String) -> Result<(), ErrorBody> {
+    if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
+        return Ok(());
+    }
+    let holds = on_agents(ctx, move |agents| Ok(agents.show(&session)?.holds_secrets)).await?;
+    if holds {
+        return authorize(&ctx.principal, Permission::HostAdmin);
+    }
+    Ok(())
+}
+
 async fn on_agents<T, F>(ctx: &RequestCtx, call: F) -> Result<T, ErrorBody>
 where
     T: Send + 'static,

@@ -99,6 +99,7 @@ impl Agents {
             },
             title: Some(format!("{} sign-in", decl.name)),
             request_id: None,
+            holds_secrets: false,
         };
         let terminal = match self.terminals().create(spec) {
             Ok(terminal) => terminal,
