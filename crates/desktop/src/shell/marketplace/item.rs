@@ -177,6 +177,16 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     )))
     .empty("No accounts yet. Add one to use this agent.")
     .add_account(add);
+    if frame.live_accounts {
+        let kind = item.agent_kind.clone().unwrap_or_default();
+        list = list.import(shell_button(
+            &frame.shell,
+            "marketplace-import-account",
+            "Import",
+            ButtonVariant::Ghost,
+            move |shell, cx| shell.open_account_import(&kind, cx),
+        ));
+    }
     let agent = item.agent_kind.clone().unwrap_or_default();
     let activity = AccountActivity {
         busy: Some(&frame.busy),

@@ -19,6 +19,9 @@ pub(in crate::shell) fn dialog(
     if let Some(dialog) = super::sign_in::dialog(shell, weak) {
         return Some(dialog);
     }
+    if let Some(dialog) = super::import::dialog(shell, weak, cx) {
+        return Some(dialog);
+    }
     let snapshot = shell.model().marketplace();
     if let Some(flow) = &snapshot.sign_in {
         return Some(sign_in(shell, weak, snapshot, flow));

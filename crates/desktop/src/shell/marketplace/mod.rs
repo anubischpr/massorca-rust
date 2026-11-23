@@ -4,6 +4,7 @@
 mod accounts;
 mod catalogue;
 mod dialogs;
+mod import;
 mod item;
 mod sign_in;
 #[cfg(test)]
@@ -47,6 +48,8 @@ pub(super) struct MarketplaceFrame {
     busy: BTreeSet<AccountId>,
     /// The account whose sign-in terminal runs in the dialog.
     signing_in: Option<AccountId>,
+    /// The accounts live in the connected service, so they can be imported.
+    live_accounts: bool,
     /// Why a kind's accounts could not be listed, by kind.
     list_refusals: Vec<(String, String)>,
     shell: WeakEntity<Shell>,
@@ -72,6 +75,7 @@ pub(super) fn frame(
             .sign_in
             .as_ref()
             .and_then(|sign_in| sign_in.running_account()),
+        live_accounts: shell.service.is_some(),
         list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
         shell: weak,
     }

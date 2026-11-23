@@ -11,7 +11,7 @@ use crate::service::{
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AccountState, AccountSummary, AccountsAdded, PackageState,
+    AccountState, AccountSummary, AccountsAdded, AccountsImported, ImportResult, PackageState,
 };
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -208,4 +208,83 @@ fn add_account_opens_the_sign_in_dialog_on_the_terminal_the_service_returns(
             "Done is pressed by the person"
         );
     });
+}
+
+fn import_error(rig: &Rig, cx: &mut VisualTestContext) -> Option<Option<String>> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .marketplace_accounts
+            .import
+            .as_ref()
+            .map(|dialog| dialog.error().map(str::to_owned))
+    })
+}
+
+#[gpui::test]
+fn import_sends_the_folder_and_keeps_the_dialog_open_with_the_reason_when_nothing_was_kept(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = on_claude(cx, Vec::new());
+    click(cx, "button:marketplace-import-account");
+    click(cx, "dialog-action");
+    assert!(rig.script.next().is_none(), "no import without a folder");
+    assert_eq!(
+        import_error(&rig, cx),
+        Some(Some(
+            "Enter the folder that holds the login files.".to_owned()
+        ))
+    );
+
+    rig.shell.update_in(cx, |shell, window, cx| {
+        let field = shell
+            .marketplace_accounts
+            .import
+            .as_ref()
+            .expect("the dialog is open")
+            .field()
+            .clone();
+        field.update(cx, |field, cx| {
+            field.set_text(" placeholder-folder ", window, cx)
+        });
+    });
+    click(cx, "dialog-action");
+    let Some(Command::Account(AccountCommand::Import { params, reply })) = rig.script.next() else {
+        panic!("an agent.accounts.import call was expected");
+    };
+    assert_eq!(
+        (params.kind.as_str(), params.from.as_str(), params.label),
+        ("claude", "placeholder-folder", None)
+    );
+    reply
+        .send(Ok(AccountsImported {
+            result: ImportResult::NotFound,
+            account: None,
+            reason: Some("none of the declared files is in the source".to_owned()),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    assert_eq!(
+        import_error(&rig, cx),
+        Some(Some(
+            "None of the declared files is in the source.".to_owned()
+        ))
+    );
+
+    click(cx, "dialog-action");
+    let Some(Command::Account(AccountCommand::Import { reply, .. })) = rig.script.next() else {
+        panic!("a second agent.accounts.import call was expected");
+    };
+    reply
+        .send(Ok(AccountsImported {
+            result: ImportResult::Imported,
+            account: Some(summary("acct-i", "Account", AccountState::SignedIn, true)),
+            reason: None,
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    assert_eq!(
+        import_error(&rig, cx),
+        None,
+        "an import that worked closes the dialog"
+    );
 }

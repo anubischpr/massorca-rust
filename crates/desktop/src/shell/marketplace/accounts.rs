@@ -7,6 +7,7 @@ use massorca_protocol::methods::agents::{
     AccountsActivateParams, AccountsCheckParams, AccountsRemoveParams,
 };
 
+use super::import::ImportDialog;
 use super::sign_in::SignIn;
 use crate::model::marketplace::{AccountId, busy_refusal};
 use crate::service::{Refusal, StoreState};
@@ -20,6 +21,8 @@ pub(in crate::shell) struct AccountsUi {
     pub busy: BTreeSet<AccountId>,
     /// The sign-in this desktop started, while its dialog is open.
     pub sign_in: Option<SignIn>,
+    /// The import dialog, while it is open.
+    pub import: Option<ImportDialog>,
 }
 
 impl std::fmt::Debug for AccountsUi {
@@ -27,6 +30,7 @@ impl std::fmt::Debug for AccountsUi {
         f.debug_struct("AccountsUi")
             .field("busy", &self.busy)
             .field("signing_in", &self.sign_in.is_some())
+            .field("importing", &self.import.is_some())
             .finish()
     }
 }

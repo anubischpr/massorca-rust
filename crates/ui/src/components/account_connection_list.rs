@@ -330,6 +330,7 @@ pub struct AccountConnectionList {
     accounts: Vec<AccountRow>,
     empty: Option<SharedString>,
     add_account: Option<Button>,
+    import: Option<Button>,
 }
 
 impl std::fmt::Debug for AccountConnectionList {
@@ -349,6 +350,7 @@ impl AccountConnectionList {
             accounts: Vec::new(),
             empty: None,
             add_account: None,
+            import: None,
         }
     }
 
@@ -369,6 +371,12 @@ impl AccountConnectionList {
         self.add_account = Some(button);
         self
     }
+
+    /// The Import button, beside Add account: it brings an existing login in from a folder.
+    pub fn import(mut self, button: Button) -> Self {
+        self.import = Some(button);
+        self
+    }
 }
 
 impl RenderOnce for AccountConnectionList {
@@ -376,8 +384,15 @@ impl RenderOnce for AccountConnectionList {
         let theme = *cx.theme();
         let p = &theme.palette;
         let mut footer = div().flex().flex_col().gap(px(SPACE_2)).min_w_0();
-        if let Some(button) = self.add_account {
-            footer = footer.child(div().flex().child(button));
+        if self.add_account.is_some() || self.import.is_some() {
+            footer = footer.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(SPACE_2))
+                    .children(self.add_account)
+                    .children(self.import),
+            );
         }
         footer = footer.child(
             div()

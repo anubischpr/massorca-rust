@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AccountsImported, ImportResult};
 
 use super::types::{AccountId, AccountState, MarketplaceSnapshot};
 use crate::service::Refusal;
@@ -106,6 +107,31 @@ pub fn terminal_sign_in(
         (true, Some(_)) => TerminalSignIn::Kept,
         (true, None) => TerminalSignIn::Discarded,
     }
+}
+
+/// What an import answered, for the import dialog: done, or the sentence that says why not. The import never
+/// answers a secret, so nothing here can show one.
+pub fn import_outcome(imported: &AccountsImported) -> Result<(), String> {
+    // The CLI's words when the service gives no reason.
+    let fallback = match imported.result {
+        ImportResult::Imported => return Ok(()),
+        ImportResult::NotFound => "none of the declared files is in the source",
+        ImportResult::Failed => "the import failed",
+    };
+    Err(as_sentence(imported.reason.as_deref().unwrap_or(fallback)))
+}
+
+/// The service's lower-case reason as a sentence: capitalised, with a full stop.
+fn as_sentence(reason: &str) -> String {
+    let mut chars = reason.trim().chars();
+    let mut text: String = chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
+    if !text.ends_with(['.', '!', '?']) {
+        text.push('.');
+    }
+    text
 }
 
 /// Where the account is signed in. The identity comes from the agent's own check, so it reads as
@@ -214,6 +240,44 @@ mod tests {
         );
         assert_eq!(terminal_sign_in(&kept, id, true), TerminalSignIn::Kept);
         assert_eq!(terminal_sign_in(&gone, id, true), TerminalSignIn::Discarded);
+    }
+
+    fn imported(result: ImportResult, reason: Option<&str>) -> AccountsImported {
+        AccountsImported {
+            result,
+            account: None,
+            reason: reason.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_import_that_kept_nothing_says_why_in_the_service_words() {
+        assert_eq!(
+            import_outcome(&imported(ImportResult::Imported, None)),
+            Ok(())
+        );
+        assert_eq!(
+            import_outcome(&imported(
+                ImportResult::NotFound,
+                Some("none of the declared files is in the source")
+            )),
+            Err("None of the declared files is in the source.".to_owned())
+        );
+        assert_eq!(
+            import_outcome(&imported(ImportResult::NotFound, None)),
+            Err("None of the declared files is in the source.".to_owned())
+        );
+        assert_eq!(
+            import_outcome(&imported(
+                ImportResult::Failed,
+                Some("the check reports the login is not signed in")
+            )),
+            Err("The check reports the login is not signed in.".to_owned())
+        );
+        assert_eq!(
+            import_outcome(&imported(ImportResult::Failed, None)),
+            Err("The import failed.".to_owned())
+        );
     }
 
     #[test]
