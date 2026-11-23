@@ -7,8 +7,9 @@ use std::future::Future;
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentPromptParams,
-    AgentSession, AgentStartParams, BringBackResult, PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentModeSet,
+    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
+    BringBackResult, PromptReceipt,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -78,10 +79,28 @@ impl ServiceHandle {
         .await
     }
 
-    /// `agent.resume`: starts a new run of an exited session. The store takes the session from the answer.
-    pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, Refusal> {
+    /// `agent.set_mode`: switches the session's permission mode now or at its next resume. The store takes the
+    /// session from the answer.
+    pub async fn agent_set_mode(
+        &self,
+        params: AgentSetModeParams,
+    ) -> Result<AgentModeSet, Refusal> {
+        self.ask(|reply| Command::AgentSetMode { params, reply })
+            .await
+    }
+
+    /// `agent.resume`: starts a new run of an exited session, in `permission_mode` when it names one. The store takes
+    /// the session from the answer.
+    pub async fn agent_resume(
+        &self,
+        session: &str,
+        permission_mode: Option<String>,
+    ) -> Result<AgentSession, Refusal> {
         self.ask(|reply| Command::AgentResume {
-            session: session.to_owned(),
+            params: AgentResumeParams {
+                session: session.to_owned(),
+                permission_mode,
+            },
             reply,
         })
         .await
@@ -187,13 +206,34 @@ pub(super) fn spawn_stop(
 /// Starts a new run of an exited session on its own task.
 pub(super) fn spawn_resume(
     client: &Client,
-    session: String,
+    params: AgentResumeParams,
     reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
 ) {
     let client = client.clone();
     spawn_session_answer(updates, reply, async move {
-        client.agent_resume(&session).await
+        client.agent_resume_with(&params).await
+    });
+}
+
+/// Sets a session's mode on its own task. The store hears of the session before the caller.
+pub(super) fn spawn_set_mode(
+    client: &Client,
+    params: AgentSetModeParams,
+    reply: oneshot::Sender<Result<AgentModeSet, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        let result = client
+            .agent_set_mode(&params)
+            .await
+            .map_err(|error| Refusal::from(&error));
+        if let Ok(set) = &result {
+            let _ = updates.send(StoreUpdate::AgentChanged(set.session.clone()));
+        }
+        let _ = reply.send(result);
     });
 }
 
