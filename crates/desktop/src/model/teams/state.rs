@@ -26,7 +26,12 @@ pub enum TeamError {
     NameTooLong,
     /// Another team on the same host has this name.
     NameTaken,
+    /// A project the service reads keeps no Workspaces link, so none can be chosen for it.
+    LinkNotSaved,
 }
+
+/// The sentence under a project's link control when the service keeps no link for the project.
+pub const LINK_NOT_SAVED: &str = "Linking to Workspaces is not saved by the service yet.";
 
 impl TeamError {
     pub fn message(self) -> &'static str {
@@ -38,6 +43,7 @@ impl TeamError {
             TeamError::NameRequired => "Name is required.",
             TeamError::NameTooLong => "Use up to 40 characters.",
             TeamError::NameTaken => "Name is already used in this host.",
+            TeamError::LinkNotSaved => LINK_NOT_SAVED,
         }
     }
 }
@@ -220,6 +226,7 @@ impl TeamsState {
             name,
             brief: String::new(),
             link: None,
+            link_saved: true,
             tasks: Vec::new(),
         });
         Ok(id)
@@ -244,7 +251,11 @@ impl TeamsState {
         link: Option<String>,
     ) -> Result<(), TeamError> {
         self.require_connected()?;
-        self.project_mut(team, project)?.link = link;
+        let project = self.project_mut(team, project)?;
+        if !project.link_saved {
+            return Err(TeamError::LinkNotSaved);
+        }
+        project.link = link;
         Ok(())
     }
 
@@ -569,6 +580,32 @@ mod tests {
         let gone = state.refreshed(TeamsState::unavailable());
         assert_eq!(gone.selected(), None);
         assert!(gone.pick().is_none());
+    }
+
+    #[test]
+    fn a_project_the_service_reads_refuses_a_link_and_keeps_none() {
+        let mut state = SampleTeamsSource.teams();
+        state.teams[0].projects[0].link_saved = false;
+        let before = state
+            .team(TeamId(1))
+            .unwrap()
+            .project(ProjectId(1))
+            .unwrap()
+            .link
+            .clone();
+        assert_eq!(
+            state.link_project(TeamId(1), ProjectId(1), Some("oppm".into())),
+            Err(TeamError::LinkNotSaved)
+        );
+        assert_eq!(
+            state
+                .team(TeamId(1))
+                .unwrap()
+                .project(ProjectId(1))
+                .unwrap()
+                .link,
+            before
+        );
     }
 
     #[test]

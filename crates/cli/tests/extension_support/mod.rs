@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::write::SimpleFileOptions;
 
-use crate::harness::{Sandbox, execute, single_document, with_json};
+use crate::harness::{Sandbox, single_document, with_json};
 
 /// The fake vendor program every test package runs. It is the example `massorca-fake-vendor`, not a shipped binary, so
 /// `cargo test` does not build it: the first call builds it into the same target folder as the test binaries
@@ -141,7 +141,7 @@ impl Host {
     pub fn run(&self, args: &[&str]) -> Assert {
         let mut command = self.sandbox.command("default");
         command.env("PATH", self.bin.path()).args(args);
-        execute(&mut command)
+        self.sandbox.run_prepared("default", args, &mut command)
     }
 
     /// The `result` of a command that must succeed, run with `--json`.
@@ -159,7 +159,12 @@ impl Host {
             .env("PATH", self.bin.path())
             .envs(env.iter().copied())
             .args(&args);
-        let document = single_document(&execute(&mut command).code(1));
+        let document = single_document(
+            &self
+                .sandbox
+                .run_prepared("default", &args, &mut command)
+                .code(1),
+        );
         assert_eq!(document["ok"], false, "{document}");
         document["error"].clone()
     }
