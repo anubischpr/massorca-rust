@@ -51,6 +51,8 @@ struct PendingSnapshot {
 pub struct TerminalAttachment {
     subscription: Subscription,
     next_offset: u64,
+    /// Output below this was already shown before a reconnect, so it is never passed on again.
+    floor: u64,
     snapshot: Option<PendingSnapshot>,
 }
 
@@ -59,8 +61,23 @@ impl TerminalAttachment {
         Self {
             subscription,
             next_offset: 0,
+            floor: 0,
             snapshot: None,
         }
+    }
+
+    /// An attachment that resumes after output up to `since` was already shown.
+    pub(crate) fn resumed(subscription: Subscription, since: u64) -> Self {
+        Self {
+            next_offset: since,
+            floor: since,
+            ..Self::new(subscription)
+        }
+    }
+
+    /// Whether the attachment ended because the connection did, rather than because the service ended it.
+    pub fn connection_lost(&self) -> bool {
+        self.subscription.connection_lost()
     }
 
     /// Where output continues after the items read so far. Pass it as `since` to resume after a reconnect.
@@ -168,12 +185,13 @@ impl TerminalAttachment {
 
     /// Skips bytes already read and trims an overlap. A chunk past `next_offset` is passed on at its own offset, so the gap shows.
     fn output(&mut self, offset: u64, bytes: &[u8]) -> Option<AttachUpdate> {
+        let read = self.next_offset.max(self.floor);
         let end = offset.saturating_add(bytes.len() as u64);
-        if bytes.is_empty() || end <= self.next_offset {
+        if bytes.is_empty() || end <= read {
             return None;
         }
-        let skip = usize::try_from(self.next_offset.saturating_sub(offset)).unwrap_or(usize::MAX);
-        let start = offset.max(self.next_offset);
+        let skip = usize::try_from(read.saturating_sub(offset)).unwrap_or(usize::MAX);
+        let start = offset.max(read);
         self.next_offset = end;
         Some(AttachUpdate::Output {
             offset: start,

@@ -87,7 +87,11 @@ mod source_control_tests;
 #[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
+mod status_bar_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod title_bar_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
@@ -129,6 +133,8 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The `.ssh` folder whose key files the Add host dialog lists.
+    ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -370,6 +376,7 @@ impl Shell {
             devices_asked: false,
             revoke: None,
             add_host: None,
+            ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -649,6 +656,7 @@ impl Render for Shell {
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
             self.model.status_items(),
+            self.model.navigation().mode,
             &shell,
             &theme,
         )
