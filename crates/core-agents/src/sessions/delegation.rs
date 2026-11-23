@@ -263,6 +263,8 @@ impl Agents {
                 ),
             }
         };
+        // The merge may have held the parent's queue; the parent's run takes its next prompt now if it is ready (0084).
+        self.drain_queue(&parent_id);
         Ok(BringBackResult {
             merged: merge_commit.is_some(),
             merge_commit,
@@ -751,6 +753,7 @@ then report"
                 account: None,
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
             },
         );
     }

@@ -245,6 +245,8 @@ pub(crate) struct LiveRun {
     /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
     /// two writes never interleave in the terminal.
     switching: bool,
+    /// A queued prompt is being typed into the run (decision 0084): no other input waits for it, `force` or not.
+    delivering: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -500,6 +502,7 @@ impl Agents {
                 pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: access.account.clone(),
             },
         );
@@ -665,6 +668,7 @@ impl Agents {
                 pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: access.account.clone(),
             },
         );
@@ -804,6 +808,8 @@ impl Agents {
             return Ok(());
         };
         let first_idle = report.activity.state == "idle";
+        // An idle or done agent takes the head of its queue (decision 0084, D3).
+        let ready = matches!(report.activity.state.as_str(), "idle" | "done");
         let mut row = self.reload(&params.session)?;
         let result = if report.activity.state == "done" {
             report.result
@@ -860,6 +866,9 @@ impl Agents {
         if let (Some((chunks, switching)), Some(terminal)) = (first, terminal) {
             self.deliver_first_input(&params.session, &terminal, chunks, switching);
         }
+        if ready {
+            self.drain_queue(&params.session);
+        }
         Ok(())
     }
 
@@ -907,6 +916,8 @@ impl Agents {
                 TerminalError::Exited | TerminalError::NotFound => not_live(&session_id),
                 other => AgentError::from(other),
             })?;
+        // An accepted prompt lifts the session's queue pauses (decision 0084, D5).
+        self.lift_pauses(&session_id);
         Ok(PromptReceipt {
             receipt: ReceiptKind::HandedToTerminal,
             bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -994,6 +1005,8 @@ impl Agents {
         let written =
             typed.map(|(terminal, bytes)| self.inner.config.terminals.input(&terminal, &bytes));
         self.end_switching(&row.id);
+        // The switch is typed and the agent is as ready as it was: the queue may go on (decision 0084, D3).
+        self.drain_queue(&row.id);
         let mut live = lock(&self.inner.status);
         if let Some(Err(error)) = written {
             return Err(match error {
@@ -1059,6 +1072,7 @@ impl Agents {
                 }
                 if switching {
                     agents.end_switching(&owner);
+                    agents.drain_queue(&owner);
                 }
             });
         if let Err(error) = spawned {
@@ -1147,6 +1161,8 @@ impl Agents {
                 Err(error) => return Err(error.into()),
             }
         }
+        // The person's stop pauses the queue (decision 0084, D5).
+        self.pause_queue_stopped(&row.id);
         let row = self.reload(&row.id)?;
         self.view(row)
     }
@@ -1192,6 +1208,8 @@ impl Agents {
                 )?;
             }
         }
+        // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
+        self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
     }
 
@@ -1409,6 +1427,12 @@ fn input_refusal(
     state: Option<ActivityState>,
     force: bool,
 ) -> Option<AgentError> {
+    if run.delivering {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!("session {session} is typing a queued prompt; try again once it is typed"),
+        ));
+    }
     if run.switching {
         return Some(AgentError::new(
             codes::AGENT_BUSY,
@@ -1776,6 +1800,7 @@ pub(crate) mod tests {
             pending_switch: None,
             typed_since_report: false,
             switching,
+            delivering: false,
             account: None,
         };
         let idle = Some(ActivityState::Idle);
@@ -1814,6 +1839,7 @@ pub(crate) mod tests {
             }),
             typed_since_report: false,
             switching: false,
+            delivering: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -1902,6 +1928,7 @@ pub(crate) mod tests {
                 pending_switch: None,
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: None,
             },
         );

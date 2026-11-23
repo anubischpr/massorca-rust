@@ -2,17 +2,22 @@
 //! they survive the client and reach the agent in order. The calls here queue, list, edit and remove; delivery follows
 //! the agent's activity, and every change is announced as `Change::Queue`.
 
-use massorca_core_store::{NewQueuedPrompt, QueuedPromptRow, QueuedState, new_id, now_ms};
+use massorca_core_store::{
+    NewQueuedPrompt, QueuedPromptRow, QueuedState, StoreError, new_id, now_ms,
+};
+use massorca_core_terminal::TerminalError;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     ActivityState, AgentQueueList, MAX_QUEUED_PROMPTS, QUEUE_REASON_ASKING,
-    QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY, QueueState, QueuedPrompt,
+    QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY, QUEUE_REASON_PAUSED_STOPPED, QueueState,
+    QueuedPrompt,
 };
 
-use super::{AgentError, Agents, Change, LiveRuns, lock};
+use super::{AgentError, Agents, Change, LiveRun, LiveRuns, input_refusal, lock, not_live};
 use crate::catalog::Catalog;
 use crate::kind::StatusMechanism;
 use crate::launch;
+use crate::prompt;
 
 impl Agents {
     /// Queues `text` at the end of the session's queue (decision 0084). A kind with no status mechanism has no queue and is
@@ -54,7 +59,11 @@ impl Agents {
             at: now_ms(),
         })?;
         self.notify(Change::Queue(row.id.clone()));
-        self.queued_item(&mut live, &row.id, &stored.id)
+        let shown = self.queued_item(&mut live, &row.id, &stored.id)?;
+        drop(live);
+        // An idle agent takes the new prompt at once; a busy one takes it at its next idle (decision 0084, D3).
+        self.drain_queue(&row.id);
+        Ok(shown)
     }
 
     /// The session's queue, head first (decision 0084).
@@ -99,6 +108,9 @@ impl Agents {
         let removed = self.queued_item(&mut live, &row.session_id, &row.id)?;
         self.store().delete_queued_prompt(&row.id)?;
         self.notify(Change::Queue(row.session_id.clone()));
+        drop(live);
+        // The prompt that waited behind it may be next now (decision 0084, D4).
+        self.drain_queue(&removed.session);
         Ok(removed)
     }
 
@@ -184,6 +196,200 @@ impl Agents {
     }
 }
 
+/// What a delivery types into a run: the queued prompt it sends, the run's terminal and the bytes of its text. It holds
+/// the prompt text, so it has no `Debug`.
+struct Delivery {
+    session: String,
+    item: String,
+    terminal: String,
+    bytes: Vec<u8>,
+}
+
+impl Agents {
+    /// Delivers the head of a session's queue if its agent is ready (decision 0084, D3). Called on every hook report that
+    /// turns idle or done, when a mode switch ends, after a bring-back, and when a queue call may have changed what waits.
+    pub(crate) fn drain_queue(&self, session: &str) {
+        if let Some(delivery) = self.prepare_drain(session) {
+            let _ = self.send_delivery(delivery);
+        }
+    }
+
+    /// The head of a session's queue, when it may be typed now: waiting and not paused, its run live and ready, the agent
+    /// not asking, no merge holding the workspace, and no other input being typed. Marks it sending under the status
+    /// lock; the caller types the bytes. A failed store write holds the prompt, so nothing is typed that is not recorded.
+    fn prepare_drain(&self, session: &str) -> Option<Delivery> {
+        let mut live = lock(&self.inner.status);
+        let rows = self.store().list_queued_prompts(session).ok()?;
+        let head = rows.first()?;
+        if head.state != QueuedState::Waiting || head.reason.is_some() {
+            return None;
+        }
+        let row = self.reload(session).ok()?;
+        let view = self.view_with(&mut live, row).ok()?;
+        let state = view.activity.as_ref().map(|activity| activity.state);
+        if state == Some(ActivityState::Waiting)
+            || self.refuse_while_merging(&view.workspace_id).is_err()
+        {
+            return None;
+        }
+        let terminal = view.terminal_id.clone()?;
+        let run = live.get_mut(session)?;
+        if run.delivering || input_refusal(run, session, state, false).is_some() {
+            return None;
+        }
+        self.start_sending(run, head, terminal).ok()
+    }
+
+    /// Records that `item` is being typed into `run` (decision 0084): the store marks it sending first, then the run is
+    /// marked as typing, so no other input interleaves. The text counts as typed, so the next prompt waits for a report
+    /// (decision 0058).
+    fn start_sending(
+        &self,
+        run: &mut LiveRun,
+        item: &QueuedPromptRow,
+        terminal: String,
+    ) -> Result<Delivery, StoreError> {
+        self.store()
+            .set_queued_prompt_state(&item.id, QueuedState::Sending, None, now_ms())?;
+        self.notify(Change::Queue(item.session_id.clone()));
+        run.typed_since_report = run.prompt.has_status;
+        run.delivering = true;
+        Ok(Delivery {
+            session: item.session_id.clone(),
+            item: item.id.clone(),
+            terminal,
+            bytes: prompt::input_bytes(&item.text, run.prompt.paste, &run.prompt.submit),
+        })
+    }
+
+    /// Types a delivery's bytes outside the status lock, as a prompt is typed, then records how it ended.
+    fn send_delivery(&self, delivery: Delivery) -> Result<(), AgentError> {
+        let written = self
+            .inner
+            .config
+            .terminals
+            .input(&delivery.terminal, &delivery.bytes)
+            .map_err(|error| match error {
+                TerminalError::Exited | TerminalError::NotFound => not_live(&delivery.session),
+                other => AgentError::from(other),
+            });
+        self.finish_delivery(&delivery.session, &delivery.item, written.clone());
+        written
+    }
+
+    /// Records how a delivery ended (decision 0084, D4): a typed prompt leaves the queue; one that could not be typed is
+    /// failed with its reason, and holds everything behind it until it is removed or sent. Announced either way.
+    fn finish_delivery(&self, session: &str, item: &str, written: Result<(), AgentError>) {
+        let mut live = lock(&self.inner.status);
+        if let Some(run) = live.get_mut(session) {
+            run.delivering = false;
+        }
+        let stored = match written {
+            Ok(()) => self.store().delete_queued_prompt(item).map(drop),
+            Err(error) => self
+                .store()
+                .set_queued_prompt_state(item, QueuedState::Failed, Some(&error.message), now_ms())
+                .map(drop),
+        };
+        if let Err(error) = stored {
+            tracing::warn!(session = %session, %error, "a queued prompt's delivery could not be recorded");
+        }
+        self.notify(Change::Queue(session.to_owned()));
+    }
+
+    /// Sends a queued prompt at once, with force, skipping the busy hold and FIFO (decision 0084, D6). It is refused while
+    /// the agent asks the person something (`agent.busy`), while another input is being typed, while a merge holds the
+    /// workspace, and when the run is not live. On success the prompt leaves the queue and the session's pauses lift.
+    pub fn queue_send_now(&self, id: &str) -> Result<QueuedPrompt, AgentError> {
+        let session = self.queue_session(id)?;
+        self.require_queue_kind_of(&session)?;
+        let (delivery, shown) = {
+            let mut live = lock(&self.inner.status);
+            let item = self.queue_row(id)?;
+            if item.state == QueuedState::Sending {
+                return Err(sending_refusal(id));
+            }
+            let view = self.view_with(&mut live, self.reload(&session)?)?;
+            self.refuse_while_merging(&view.workspace_id)?;
+            let state = view.activity.as_ref().map(|activity| activity.state);
+            if state == Some(ActivityState::Waiting) {
+                return Err(AgentError::new(
+                    codes::AGENT_BUSY,
+                    format!(
+                        "session {session} is asking the person something; the queued prompt waits for the answer"
+                    ),
+                ));
+            }
+            let shown = self.queued_item(&mut live, &session, id)?;
+            let terminal = view.terminal_id.clone().ok_or_else(|| not_live(&session))?;
+            let run = live.get_mut(&session).ok_or_else(|| not_live(&session))?;
+            if let Some(refusal) = input_refusal(run, &session, state, true) {
+                return Err(refusal);
+            }
+            if run.delivering {
+                return Err(AgentError::new(
+                    codes::AGENT_BUSY,
+                    format!(
+                        "session {session} is typing another queued prompt; try again once it is typed"
+                    ),
+                ));
+            }
+            let delivery = self.start_sending(run, &item, terminal)?;
+            (delivery, shown)
+        };
+        let outcome = self.send_delivery(delivery);
+        if outcome.is_ok() {
+            self.lift_pauses(&session);
+        }
+        outcome.map(|()| shown)
+    }
+
+    /// Lifts the pauses on a session's queue and delivers its head if the agent is ready (decision 0084, D5). Returns the
+    /// queue as it is then.
+    pub fn queue_resume(&self, selector: &str) -> Result<AgentQueueList, AgentError> {
+        let row = self.resolve(selector)?;
+        self.require_queue_kind(&row.kind)?;
+        self.lift_pauses(&row.id);
+        self.drain_queue(&row.id);
+        let mut live = lock(&self.inner.status);
+        let items = self.queue_items(&mut live, &row.id)?;
+        Ok(AgentQueueList {
+            session: row.id,
+            items,
+        })
+    }
+
+    /// The person's stop pauses the session's waiting prompts that no pause holds yet (decision 0084, D5).
+    pub(crate) fn pause_queue_stopped(&self, session: &str) {
+        self.pause_queue(session, QUEUE_REASON_PAUSED_STOPPED);
+    }
+
+    /// Pauses a session's waiting prompts with `reason`, announcing the change when one paused.
+    fn pause_queue(&self, session: &str, reason: &str) {
+        let _live = lock(&self.inner.status);
+        match self.store().pause_queued_prompts(session, reason, now_ms()) {
+            Ok(0) => {}
+            Ok(_) => self.notify(Change::Queue(session.to_owned())),
+            Err(error) => {
+                tracing::warn!(session = %session, %error, "the queue could not be paused");
+            }
+        }
+    }
+
+    /// Lifts the pauses on a session's queue, announcing the change when one lifted (decision 0084, D5). An accepted
+    /// prompt, a `send_now` or a resume lifts them.
+    pub(crate) fn lift_pauses(&self, session: &str) {
+        let _live = lock(&self.inner.status);
+        match self.store().unpause_queued_prompts(session, now_ms()) {
+            Ok(0) => {}
+            Ok(_) => self.notify(Change::Queue(session.to_owned())),
+            Err(error) => {
+                tracing::warn!(session = %session, %error, "the queue's pauses could not be lifted");
+            }
+        }
+    }
+}
+
 /// The refusal for a change to a prompt that is being typed into its run.
 fn sending_refusal(id: &str) -> AgentError {
     AgentError::new(
@@ -238,7 +444,7 @@ mod tests {
     };
 
     use crate::sessions::tests::service;
-    use crate::sessions::{Agents, Change};
+    use crate::sessions::{AgentError, Agents, Change};
 
     /// A session of the built-in `claude` kind, which reports its activity, with no terminal: it has no live run.
     fn claude_session(agents: &Agents, workspace_id: &str) -> String {
@@ -471,5 +677,62 @@ mod tests {
                 Change::Queue(session),
             ]
         );
+    }
+
+    #[test]
+    fn a_failed_delivery_marks_its_prompt_and_holds_the_rest() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let head = agents.queue_add(&session, "one", None).unwrap();
+        let next = agents.queue_add(&session, "two", None).unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&head.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+
+        agents.finish_delivery(
+            &session,
+            &head.id,
+            Err(AgentError::new(
+                codes::AGENT_NOT_LIVE,
+                "the run of session has exited",
+            )),
+        );
+
+        let held = agents.queue_list(&session).unwrap();
+        assert_eq!(held.items[0].state, QueueState::Failed);
+        assert_eq!(
+            held.items[0].reason.as_deref(),
+            Some("the run of session has exited")
+        );
+        assert_eq!(held.items[1].id, next.id);
+        assert_eq!(
+            held.items[1].reason.as_deref(),
+            Some(QUEUE_REASON_BEHIND_FAILED)
+        );
+        assert!(
+            agents.prepare_drain(&session).is_none(),
+            "nothing is delivered behind a failed prompt, with or without a run"
+        );
+    }
+
+    #[test]
+    fn a_delivered_prompt_leaves_the_queue_and_is_announced() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let head = agents.queue_add(&session, "one", None).unwrap();
+        agents.queue_add(&session, "two", None).unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&head.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
+
+        agents.finish_delivery(&session, &head.id, Ok(()));
+
+        assert_eq!(texts(&agents.queue_list(&session).unwrap()), ["two"]);
+        assert_eq!(*seen.lock().unwrap(), vec![Change::Queue(session)]);
     }
 }
