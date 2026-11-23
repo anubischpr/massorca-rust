@@ -21,6 +21,7 @@ massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
 massorca-core-vault.workspace = true
 massorca-core-workspace.workspace = true
+massorca-host-stats.workspace = true
 massorca-net.workspace = true
 massorca-profile.workspace = true
 massorca-process.workspace = true
@@ -33,6 +34,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tokio-rustls.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 
 # A vendor installer runs in its own process group on Unix, so a timeout ends everything it started (decision 0062).
 [target.'cfg(unix)'.dependencies]
