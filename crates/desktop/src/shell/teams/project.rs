@@ -6,7 +6,7 @@ use super::dialogs::TeamConfirm;
 use super::{board_columns, team_pill};
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{BoardOwner, ProjectId, TeamId};
+use crate::model::teams::{BoardOwner, LINK_NOT_SAVED, ProjectId, TeamId};
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, Window, div, prelude::*, px,
 };
@@ -35,7 +35,7 @@ pub(in crate::shell) fn project_page(
         return note("This project is gone.", &theme).into_any_element();
     };
     let links = link_choices(model, &team_data.host);
-    let linkable = matches!(team_data.reach, HostReach::Connected);
+    let (linkable, link_note) = link_state(team_data.reach, project_data.link_saved);
     let selected = project_data
         .link
         .as_ref()
@@ -45,11 +45,6 @@ pub(in crate::shell) fn project_page(
         "No brief yet.".to_owned()
     } else {
         project_data.brief.clone()
-    };
-    let link_note = if linkable {
-        "Links the Board to a Workspaces project's tasks. Optional."
-    } else {
-        "This host can't link projects. Connect it, or leave the link off."
     };
     let link_control = link_control(shell, team, project, &links, selected, linkable);
     let edit_brief = {
@@ -72,6 +67,7 @@ pub(in crate::shell) fn project_page(
                     team,
                     project,
                     name: name.clone(),
+                    error: None,
                 };
                 let _ = shell.update(cx, |shell, cx| shell.open_team_confirm(confirm, cx));
             })
@@ -160,6 +156,25 @@ fn link_control(
         })
 }
 
+/// Whether a project's link control can be used, and the sentence under it. A project the service reads keeps
+/// no link, so its control stays off on any host.
+fn link_state(reach: HostReach, link_saved: bool) -> (bool, &'static str) {
+    if !link_saved {
+        return (false, LINK_NOT_SAVED);
+    }
+    if matches!(reach, HostReach::Connected) {
+        (
+            true,
+            "Links the Board to a Workspaces project's tasks. Optional.",
+        )
+    } else {
+        (
+            false,
+            "This host can't link projects. Connect it, or leave the link off.",
+        )
+    }
+}
+
 fn section(title: &'static str, theme: &Theme) -> gpui::Div {
     div().flex().flex_col().gap(px(SPACE_2)).child(
         div()
@@ -245,6 +260,18 @@ mod tests {
         shell.read_with(cx, |shell, _| assert!(shell.team_dialog.is_none()));
     }
 
+    #[test]
+    fn a_project_the_service_reads_has_its_link_off_and_says_why() {
+        assert_eq!(
+            link_state(HostReach::Connected, false),
+            (
+                false,
+                "Linking to Workspaces is not saved by the service yet."
+            )
+        );
+        assert!(link_state(HostReach::Connected, true).0);
+    }
+
     #[gpui::test]
     fn deleting_the_project_returns_to_its_team_board(cx: &mut TestAppContext) {
         let (shell, cx) = shell(cx);
@@ -255,6 +282,7 @@ mod tests {
                     team: TeamId(1),
                     project: ProjectId(1),
                     name: "Desarrollo onboarding".into(),
+                    error: None,
                 },
                 cx,
             );

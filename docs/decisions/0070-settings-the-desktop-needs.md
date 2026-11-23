@@ -28,7 +28,7 @@ with a value the service can hold. All of them belong to the owner `core`.
 |---|---|---|---|
 | `conversations.folder` | path | `<home>/MassOrca/Conversations` | D-ST-01 |
 | `updates.channel` | choice `stable`, `preview` | `stable` | D-ST-01 |
-| `agents.default` | name | `claude` (assumed) | D-ST-02 |
+| `agents.default_kind` | name (alias `agents.default`) | `claude` (assumed) | D-ST-02 |
 | `agents.delegation_depth` | integer 1 to 5 | `3` | D-ST-02, decision 11 |
 | `agents.computer_use` | bool | `false` (assumed) | D-ST-02 |
 | `agents.browser_access` | bool | `false` (assumed) | D-ST-02 |

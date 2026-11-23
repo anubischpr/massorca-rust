@@ -7,6 +7,10 @@ use crate::settings::{SettingDecl, SettingKind};
 
 const STATUS_BAR_ITEMS: &[&str] = &["agent_status", "memory", "terminals", "ports", "hosts"];
 
+/// Old names of canonical keys, as `(canonical key, old name)`. Values stored under an old name still count until the
+/// canonical key is written.
+const LEGACY_NAMES: &[(&str, &str)] = &[("agents.default_kind", "agents.default")];
+
 /// Every core setting except `workspaces.default_root`, which `config` declares with its own home lookup.
 /// `conversations_root` is the absolute default for `conversations.folder`.
 pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
@@ -25,7 +29,7 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Release channel for updates.",
         ),
         (
-            "agents.default",
+            "agents.default_kind",
             String,
             json!("claude"),
             "Agent a new session starts with.",
@@ -210,6 +214,11 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             kind,
             default,
             description: description.to_owned(),
+            aliases: LEGACY_NAMES
+                .iter()
+                .filter(|(canonical, _)| *canonical == key)
+                .map(|(_, old)| (*old).to_owned())
+                .collect(),
         },
     )
     .collect()

@@ -143,12 +143,15 @@ owner then makes the home private once with `massorca profile secure`.
   and a folder only the accepted owners and Administrators can reach is
   given the owner-only DACL. Everything below it is made owner-only too,
   so a grant it used to pass on through an inherit-only entry is taken
-  away. That is done while the folder stays pinned, through a handle to
-  each entry opened with `FILE_FLAG_OPEN_REPARSE_POINT`; a reparse point
-  below is refused with `profile.unsafe_location` and an explicit grant to
-  others with `profile.readable_by_others`, both before anything changes,
-  so nothing outside the folder is ever touched. Every open also refuses
-  anything below the folder that others can reach. On Unix a folder others can only read (such as
+  away. That is done while the folder stays pinned: each folder below is
+  listed through its own handle and each entry opened by name relative to
+  it (`NtCreateFile` with a `RootDirectory`) with `FILE_OPEN_REPARSE_POINT`,
+  so no path is followed again. A reparse point below is refused with
+  `profile.unsafe_location` and an explicit grant to others with
+  `profile.readable_by_others`, both before anything changes, so nothing
+  outside the folder is ever touched. Every open walks the same way and
+  refuses a reparse point, or anything that others can reach, below the
+  folder. On Unix a folder others can only read (such as
   `0755` or `0750`) is set to `0700`. Files are written through a temporary
   file with a random name, created new and the owner's alone from the start
   (an owner-only descriptor passed to `CreateFileW` on Windows, `openat`
@@ -165,11 +168,21 @@ owner then makes the home private once with `massorca profile secure`.
   half host. A host folder without its host file, from an older build, is
   moved aside only when the host file is certainly absent, checked again
   while that folder is held open; when that cannot be read, the add is
-  refused with `host.unreadable` and nothing is deleted. Publishing never
+  refused with `host.unreadable` and nothing is deleted. Its message names
+  the host's folder and says what to do: check that the user can read it,
+  or remove that folder by hand when the host is no longer needed. Publishing never
   replaces a folder, so of two adds of one name, one wins and the other
   gets `host.exists`. `add` and `remove` hold an exclusive lock on
   `hosts/.lock` while they work, across processes, so a sweep never deletes
-  the staged folder of another write still in progress. `list` skips tombstones
+  the staged folder of another write still in progress. They wait at most
+  ten seconds for another writer (on Windows, about two for its hold on
+  `hosts`), then fail with `host.busy` and change nothing. `list` skips the
+  lock file. When `remove` has moved a host folder aside but cannot delete
+  it yet, the host is gone and `remove` succeeds, naming where the old files
+  wait; the next `add` or `remove` deletes them. On Unix the moved folder is
+  checked by device and inode and moved back if it is not the one that was
+  checked, and a tree deeper than 64 levels is refused before anything is
+  deleted. `list` skips tombstones
   and temporary files, and `add` and `remove` delete those a crash left,
   retrying each a few times. `Client::pair` checks before it uses
   the offer, which works only once. Autostart first checks the location
