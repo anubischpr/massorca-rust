@@ -64,6 +64,13 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - No keyboard shortcut for Back exists in `shell/actions.rs`, so none was added.
 - Owner decision: a page whose artboard draws Back keeps it. Full pages keep the Back that their artboards show, labelled or icon.
 
+**Superseded by owner ruling (branch `desktop/status-bar-memory`)**
+- A7 is superseded. The Memory label is restored: "Memory 1.22 GB" (`sh-empty-app`). The copy follows the artboards: "Agents: idle" with no agent running, "2 hosts", "1 of 2 hosts unreachable" (`sh-host-unreachable`), and in Bot Teams "Terminals 0", "Ports 0", "1 host unreachable" (`bt-board`).
+- Not changed in this branch: the grouping. `sh-empty-app` puts Memory, terminals and ports at the left with hosts at the right. `ws-start` and `ws-session` keep agents at the left and the rest at the right, as the code does. The code keeps the Workspaces grouping; the owner decides the start page grouping.
+- Artboard conflict for the owner: `ws-start`, `ws-session` and every `bt-*` status bar draw "1.22 GB" with no label. The label is applied in every mode.
+- The live status view has no memory source and reads "Memory -" until the service reports one.
+- Owner decision: the Memory label stays in every mode. The status bar keeps the grouping it has now.
+
 **Cannot match yet**
 - A1 start frame: sample data and "not listed by the service" heading. Open (L4).
 - A3 Conversation: page not built.
