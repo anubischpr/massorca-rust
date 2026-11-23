@@ -2,10 +2,14 @@
 //!
 //! Sampled when asked and shared for about a second; nothing is pushed. A client polls while it shows them.
 
+use std::net::IpAddr;
+
 use serde::{Deserialize, Serialize};
 
 /// Params: none. Result: [`HostMemory`].
 pub const MEMORY: &str = "host.memory";
+/// Params: none. Result: [`HostPorts`].
+pub const PORTS: &str = "host.ports";
 
 /// What the byte counts measure on the answering host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +66,123 @@ pub struct TerminalMemory {
     /// `total_bytes` with what it read. Never set together with `unverifiable`.
     #[serde(default)]
     pub partial: bool,
+}
+
+/// Result of `host.ports`: the TCP sockets in the LISTEN state that the processes of each live terminal hold (agent runs
+/// included), read on this host when asked (decision 0081). One entry per socket: a process listening on IPv4 and IPv6
+/// has two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostPorts {
+    pub ports: Vec<HostPort>,
+    /// Live terminals, by creation time.
+    pub terminals: Vec<PortTerminal>,
+    /// The socket table cannot be read on this host, so nothing is known about any port: `ports` is then empty and
+    /// every terminal is `unverifiable`. Never read as "no ports".
+    pub unverifiable: bool,
+    pub sampled_at_ms: i64,
+}
+
+/// One listening socket of a live terminal's processes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostPort {
+    pub port: u16,
+    /// The address the socket is bound to: a wildcard (`0.0.0.0`, `::`) or one interface's address.
+    pub address: IpAddr,
+    /// Where a client connects: `localhost` for a wildcard bind, otherwise the address.
+    pub connect_host: String,
+    pub pid: u32,
+    pub process_name: String,
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The agent session whose current run uses the terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// One live terminal's ports status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortTerminal {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The terminal's processes could not be listed, or none of their sockets could be read: its ports are unknown, not
+    /// none. Such a terminal lists no port.
+    #[serde(default)]
+    pub unverifiable: bool,
+    /// Some of the terminal's processes could not be read, or the process table was incomplete: its list may miss ports.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+#[cfg(test)]
+mod ports_tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::{HostPort, HostPorts, PortTerminal};
+    use serde_json::json;
+
+    #[test]
+    fn the_ports_answer_has_its_wire_names() {
+        let answer = HostPorts {
+            ports: vec![HostPort {
+                port: 3000,
+                address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                connect_host: "127.0.0.1".to_owned(),
+                pid: 42,
+                process_name: "node".to_owned(),
+                terminal_id: "t-1".to_owned(),
+                workspace_id: "w-1".to_owned(),
+                session_id: Some("s-1".to_owned()),
+            }],
+            terminals: vec![
+                PortTerminal {
+                    terminal_id: "t-1".to_owned(),
+                    workspace_id: "w-1".to_owned(),
+                    unverifiable: false,
+                    partial: false,
+                },
+                PortTerminal {
+                    terminal_id: "t-2".to_owned(),
+                    workspace_id: "w-1".to_owned(),
+                    unverifiable: true,
+                    partial: false,
+                },
+            ],
+            unverifiable: false,
+            sampled_at_ms: 1_700_000_000_000,
+        };
+        let value = serde_json::to_value(&answer).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "ports": [{
+                    "port": 3000, "address": "127.0.0.1", "connect_host": "127.0.0.1", "pid": 42,
+                    "process_name": "node", "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1"
+                }],
+                "terminals": [
+                    { "terminal_id": "t-1", "workspace_id": "w-1", "unverifiable": false, "partial": false },
+                    { "terminal_id": "t-2", "workspace_id": "w-1", "unverifiable": true, "partial": false }
+                ],
+                "unverifiable": false,
+                "sampled_at_ms": 1_700_000_000_000_i64
+            })
+        );
+        assert_eq!(serde_json::from_value::<HostPorts>(value).unwrap(), answer);
+
+        let bare = HostPort {
+            session_id: None,
+            ..answer.ports[0].clone()
+        };
+        assert!(
+            !serde_json::to_value(&bare)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("session_id")
+        );
+        let older: PortTerminal =
+            serde_json::from_value(json!({ "terminal_id": "t-3", "workspace_id": "w-1" })).unwrap();
+        assert!(!older.unverifiable && !older.partial);
+    }
 }
 
 #[cfg(test)]
