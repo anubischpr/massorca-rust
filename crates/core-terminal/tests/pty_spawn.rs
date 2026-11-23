@@ -57,7 +57,7 @@ fn the_environment_is_exactly_the_one_passed() {
     let dir = tempfile::tempdir().expect("temp dir");
     let env = vec![(
         "MASSORCA_TEST_MARKER".to_owned(),
-        "visible-marker".to_owned(),
+        massorca_core_terminal::EnvValue::new("visible-marker".to_owned()),
     )];
     let (program, args): (PathBuf, &[&str]) = if cfg!(windows) {
         (shell_program(), &["/d", "/c", "set"])

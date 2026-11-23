@@ -182,8 +182,18 @@ Events, ids only and never values:
 - Values live in a `SecretValue` type. It zeroes its buffer on drop.
 - Its `Debug` and `Display` print `[redacted]`, and it does not implement
   `Serialize`.
-- The only way to the bytes is one explicit method, which the injection path
-  uses.
+- The only way to the bytes is one explicit method, which the injection path,
+  sealing and the key check use.
+- On the way to a run, every environment value is an `EnvValue`
+  (`Zeroizing<String>`), zeroed on drop: the provided variables, the run's
+  plan, the terminal's create spec, the merged environment and the spawn spec.
+  The whole map is zeroed, not only the secret entries, so the run's hook
+  token and the caller's values are covered too.
+- What this side cannot zero: portable-pty copies each value into its own map
+  and then into the block it hands to the OS (UTF-16 on Windows, a C string
+  array on Unix); the child process holds its own environment; and freed heap
+  pages may keep old bytes. Removing the portable-pty copies would need a fork
+  of it, which is not planned.
 
 **On the wire.** The `secret.set` params are the one place a value travels.
 - A malformed `secret.set` is refused with a message that names the field and

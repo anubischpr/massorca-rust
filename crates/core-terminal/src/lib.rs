@@ -10,6 +10,9 @@ pub mod ring;
 pub mod screen;
 pub mod shell;
 
+/// An environment value of a run: zeroed when dropped, because it may be a vault secret (decision 0071).
+pub type EnvValue = zeroize::Zeroizing<String>;
+
 pub use attach::{AttachItem, AttachMode, Attachment, QueryAnswers};
 pub use manager::{
     CreateSpec, ExitReason, ExitRecord, ManagerConfig, ShellChoice, TerminalError, TerminalInfo,
