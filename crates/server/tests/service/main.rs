@@ -1,6 +1,7 @@
 //! Service integration tests: the service runs in-process and is driven through the client crate; raw frames cover
 //! the cases the client cannot produce.
 
+mod agent_packages;
 mod agents_redaction;
 mod capabilities;
 mod common;
@@ -24,6 +25,7 @@ mod git_watch;
 mod handshake;
 mod host_memory;
 mod host_ports;
+mod host_storage;
 mod lifecycle;
 mod network;
 mod network_account_masking;

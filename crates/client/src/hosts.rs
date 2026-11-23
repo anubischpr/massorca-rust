@@ -4,33 +4,14 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::error::ClientError;
+use crate::host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 use massorca_net::TlsIdentity;
 use massorca_profile::Profile;
-use serde::{Deserialize, Serialize};
-
-use crate::error::ClientError;
 
 const HOST_FILE: &str = "host.json";
 const KEY_FILE: &str = "device.key";
 const CERT_FILE: &str = "device.crt";
-
-/// What the client remembers about one paired host. Holds no secret; the device key is a separate file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostRecord {
-    pub name: String,
-    /// The server's own name, from the offer.
-    pub server: String,
-    /// Addresses to try in order, `host:port`.
-    pub addresses: Vec<String>,
-    /// `sha256:<base64url>` of the server's public key.
-    pub pin: String,
-    /// The id the server gave this device.
-    pub device_id: String,
-    /// The name this device has on the server.
-    pub device_name: String,
-    pub scopes: Vec<String>,
-    pub paired_at_ms: i64,
-}
 
 /// The hosts of one client profile.
 #[derive(Debug, Clone)]
@@ -192,30 +173,6 @@ impl Hosts {
     }
 }
 
-/// What `Hosts::remove` did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostRemoved {
-    /// Where the host's old files wait when they could not be deleted at once; the next add or remove deletes them.
-    pub leftover: Option<PathBuf>,
-}
-
-/// Host names follow the profile name rules: `[a-z0-9][a-z0-9_-]{0,31}`; `local` is reserved for the local service.
-pub fn validate_host_name(name: &str) -> Result<(), ClientError> {
-    let mut chars = name.chars();
-    let valid = name.len() <= 32
-        && chars
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        && name != "local"
-        && !is_windows_reserved(name);
-    if valid {
-        Ok(())
-    } else {
-        Err(ClientError::InvalidHostName(name.to_owned()))
-    }
-}
-
 /// Whether `path` exists; only "not found" means absent, and any other error is returned.
 fn present(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
@@ -242,17 +199,6 @@ fn busy(error: io::Error) -> ClientError {
     }
 }
 
-/// Whether Windows reserves `name` for a device, so no file or folder can have it: CON, PRN, AUX, NUL, COM1 to COM9 and
-/// LPT1 to LPT9, in any case, alone or before an extension. Trailing dots and spaces cannot appear in a host name.
-fn is_windows_reserved(name: &str) -> bool {
-    let base = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
-    match base.as_bytes() {
-        b"con" | b"prn" | b"aux" | b"nul" => true,
-        [b'c', b'o', b'm', digit] | [b'l', b'p', b't', digit] => (b'1'..=b'9').contains(digit),
-        _ => false,
-    }
-}
-
 fn read_record(path: &Path) -> Result<Option<HostRecord>, ClientError> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -260,6 +206,36 @@ fn read_record(path: &Path) -> Result<Option<HostRecord>, ClientError> {
             .map_err(|error| ClientError::Protocol(format!("{}: {error}", path.display()))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
+    }
+}
+
+impl HostStorage for Hosts {
+    fn list(&self) -> Result<Vec<HostRecord>, ClientError> {
+        Hosts::list(self)
+    }
+
+    fn get(&self, name: &str) -> Result<HostRecord, ClientError> {
+        Hosts::get(self, name)
+    }
+
+    fn identity(&self, name: &str) -> Result<TlsIdentity, ClientError> {
+        Hosts::identity(self, name)
+    }
+
+    fn exists(&self, name: &str) -> bool {
+        Hosts::exists(self, name)
+    }
+
+    fn ensure_writable(&self) -> Result<(), ClientError> {
+        Hosts::ensure_writable(self)
+    }
+
+    fn add(&self, record: &HostRecord, identity: &TlsIdentity) -> Result<(), ClientError> {
+        Hosts::add(self, record, identity)
+    }
+
+    fn remove(&self, name: &str) -> Result<HostRemoved, ClientError> {
+        Hosts::remove(self, name)
     }
 }
 

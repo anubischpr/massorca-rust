@@ -42,7 +42,10 @@ The catalog (`catalog.rs`) is read again on every call from two sources, in this
    `state` is the protocol's `PackageState` (`available`, `enabled`, `disabled`), and `decl` is the
    declaration's JSON text, or an error that names the package and the cause, never a path. The
    default, `BuiltInPackages`, returns the four compiled-in declarations as `enabled` packages
-   `massorca.<kind>` at the crate version; the extension runtime replaces it. A kind from a
+   `massorca.<kind>` at the crate version, for `core-agents`'s own tests. The service uses
+   `ExtensionKindPackages` (`crates/server/src/kind_packages.rs`), which reads the profile's
+   lockfile through `package_agent_kinds` on every load; an unreadable lockfile lists the built-ins
+   as `unknown` with a declaration error. A kind from a
    `massorca.*` package has owner `core`; any other package's kind has owner `ext:<package id>`.
    A declaration error, a declaration that does not parse, or one whose id is not the package's
    `kind_id` is listed in `problems`, so the kind is listed and never started.
