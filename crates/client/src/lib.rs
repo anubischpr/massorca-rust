@@ -10,6 +10,7 @@ mod extension_calls;
 mod git_calls;
 mod handshake;
 mod hosts;
+mod identity_mismatch;
 mod options;
 mod pump;
 mod reconnect;
@@ -29,6 +30,7 @@ pub use device_name::default_device_name;
 pub use error::{ClientError, profile_refusal};
 pub use handshake::Welcome;
 pub use hosts::{HostRecord, HostRemoved, Hosts, validate_host_name};
+pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
 pub use options::{Autostart, ConnectOptions};
 pub use reconnect::{
     AttachStep, Backoff, Connect, Link, RECONNECT_MAX, RECONNECT_RESET_AFTER, RECONNECT_START,

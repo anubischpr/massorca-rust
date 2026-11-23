@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
+use crate::tls::PresentedPin;
 use crate::{NetError, Pin, TlsIdentity, WS_PATH, client_tls_config};
 
 /// The server end of a network connection.
@@ -90,7 +91,7 @@ pub async fn connect(
         let attempt = tokio::time::timeout(connect_timeout, connect_one(address, &connector));
         match attempt.await {
             Ok(Ok(ws)) => return Ok((ws, address.clone())),
-            Ok(Err(NetError::ServerPinMismatch)) => return Err(NetError::ServerPinMismatch),
+            Ok(Err(mismatch @ NetError::ServerPinMismatch { .. })) => return Err(mismatch),
             Ok(Err(error)) => {
                 tracing::debug!(%address, %error, "network address failed");
                 last_error = error;
@@ -129,21 +130,22 @@ fn server_name(address: &str) -> Result<ServerName<'static>, NetError> {
 }
 
 fn pin_mismatch_or_io(error: std::io::Error) -> NetError {
-    let mismatch = error
+    let refused = error
         .get_ref()
-        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-        .is_some_and(|inner| {
-            matches!(
-                inner,
-                rustls::Error::InvalidCertificate(
-                    rustls::CertificateError::ApplicationVerificationFailure
-                )
-            )
-        });
-    if mismatch {
-        NetError::ServerPinMismatch
-    } else {
-        NetError::Io(error)
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>());
+    match refused {
+        Some(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::ApplicationVerificationFailure,
+        )) => NetError::ServerPinMismatch { actual: None },
+        Some(rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other))) => {
+            match other.0.downcast_ref::<PresentedPin>() {
+                Some(presented) => NetError::ServerPinMismatch {
+                    actual: Some(presented.0),
+                },
+                None => NetError::Io(error),
+            }
+        }
+        _ => NetError::Io(error),
     }
 }
 

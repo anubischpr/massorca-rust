@@ -2,6 +2,8 @@
 
 use std::io;
 
+use crate::identity_mismatch::IdentityMismatch;
+
 use massorca_profile::RootAccessError;
 use massorca_protocol::{ErrorBody, ProtocolRange, codes};
 use serde_json::json;
@@ -41,9 +43,9 @@ pub enum ClientError {
     /// No address of a remote host answered (decision 0046); nothing is known about the work on it.
     #[error("the host is unreachable: {0}")]
     HostUnreachable(String),
-    /// The server's key is not the one pinned at pairing. Never retried.
-    #[error("the host's identity does not match the one paired with; refusing to connect")]
-    ServerIdentityMismatch,
+    /// The server's key is not the one pinned at pairing, or the one its offer names (REM-04). Never retried.
+    #[error("{}", .0.message())]
+    ServerIdentityMismatch(Box<IdentityMismatch>),
     #[error("no host named {0:?}")]
     HostNotFound(String),
     #[error("a host named {0:?} already exists")]
@@ -133,7 +135,7 @@ impl ClientError {
             | Self::Handshake { .. }
             | Self::Disconnected
             | Self::HostUnreachable(_)
-            | Self::ServerIdentityMismatch => 4,
+            | Self::ServerIdentityMismatch(_) => 4,
         }
     }
 }

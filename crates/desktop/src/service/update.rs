@@ -856,8 +856,17 @@ mod tests {
             )
         );
         assert!(matches!(
-            HostLink::from_error(&ClientError::ServerIdentityMismatch),
-            HostLink::Failed(message) if message.starts_with("The host's identity")
+            HostLink::from_error(&ClientError::ServerIdentityMismatch(Box::new(
+                massorca_client::IdentityMismatch {
+                    host: "vps".into(),
+                    trusted_from: massorca_client::TrustedFrom::Pairing,
+                    expected: "sha256:old".into(),
+                    actual: Some("sha256:new".into()),
+                }
+            ))),
+            HostLink::Failed(message)
+                if message.starts_with("Vps presented a different server key")
+                    && message.contains("sha256:new")
         ));
     }
 
