@@ -3,9 +3,16 @@
 //! The extension runtime implements [`KindPackages`]; this crate never depends on it. Until it does, [`BuiltInPackages`]
 //! provides the four compiled-in declarations as enabled first-party packages.
 
+use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 
+use massorca_core_store::Store;
 pub use massorca_protocol::methods::agents::PackageState;
+
+use crate::kind::valid_id;
+use crate::paths;
 
 /// The package id prefix of first-party packages. Their kinds keep the owner `core`.
 pub const FIRST_PARTY_PREFIX: &str = "massorca.";
@@ -61,6 +68,36 @@ impl KindPackages for BuiltInPackages {
             })
             .collect()
     }
+}
+
+/// Every kind this profile has used (decision 0059): the kinds its store names (sessions, accounts with pending sign-ins,
+/// the account history and bots), and the kind directories under `<profile>/agents/accounts/` and the legacy
+/// `<profile>/agents/homes/`. A directory counts only when it is a real directory, never a link, named by a valid kind
+/// id. The extension runtime keeps a package whose kind is in it from being removed as unused.
+///
+/// A store that cannot be read is logged and leaves out what it names.
+pub fn used_kinds(store: &Store, profile_dir: &Path) -> BTreeSet<String> {
+    let mut kinds = store.used_agent_kinds().unwrap_or_else(|error| {
+        tracing::warn!(%error, "the kinds the store names could not be read");
+        BTreeSet::new()
+    });
+    let agents = paths::agents_dir(profile_dir);
+    for parent in ["accounts", "homes"] {
+        kinds.extend(kind_dirs(&agents.join(parent)));
+    }
+    kinds
+}
+
+/// The names of the real directories (never links) in `dir` that are valid kind ids. A missing directory has none.
+fn kind_dirs(dir: &Path) -> Vec<String> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    read.filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| valid_id(name))
+        .collect()
 }
 
 #[cfg(test)]
@@ -458,5 +495,91 @@ mod tests {
                 .join(&kept.id)
                 .exists()
         );
+    }
+
+    #[test]
+    fn used_kinds_cover_the_store_and_the_credential_directories() {
+        let (agents, workspace, profile) = service(Vec::new());
+        assert!(used_kinds(agents.store(), profile.path()).is_empty());
+
+        exited_session(&agents, &workspace, "from-session");
+        agents
+            .store()
+            .insert_pending_sign_in(&account("from-pending", "sign_in"))
+            .unwrap();
+        // A forgotten session whose account is gone too: the account history still names its kind.
+        let forgotten = exited_session(&agents, &workspace, "from-history");
+        let kept = account("from-history", "import");
+        agents.store().insert_agent_account(&kept).unwrap();
+        agents.store().delete_agent_account(&kept.id).unwrap();
+        agents.store().delete_agent_session(&forgotten.id).unwrap();
+        std::fs::create_dir_all(paths::accounts_dir(profile.path(), "from-accounts-dir")).unwrap();
+        std::fs::create_dir_all(paths::home_dir(profile.path(), "from-homes-dir")).unwrap();
+        // Not kind ids, or not directories: none counts.
+        std::fs::create_dir_all(paths::home_dir(profile.path(), ".import-x")).unwrap();
+        std::fs::create_dir_all(paths::accounts_dir(profile.path(), "Not A Kind")).unwrap();
+        std::fs::write(paths::home_dir(profile.path(), "a-file"), "").unwrap();
+
+        let used: Vec<String> = used_kinds(agents.store(), profile.path())
+            .into_iter()
+            .collect();
+        assert_eq!(
+            used,
+            [
+                "from-accounts-dir",
+                "from-history",
+                "from-homes-dir",
+                "from-pending",
+                "from-session"
+            ]
+        );
+    }
+
+    #[test]
+    fn used_kinds_include_a_bot_and_a_kept_account() {
+        let (agents, _, profile) = service(Vec::new());
+        agents
+            .store()
+            .insert_agent_account(&account("from-account", "import"))
+            .unwrap();
+        let team = massorca_core_store::TeamRow {
+            id: new_id(),
+            name: "parsers".to_owned(),
+            purpose: "Ships the parser".to_owned(),
+            character: "triangle".to_owned(),
+            access: "full".to_owned(),
+            workspaces: false,
+            created_at: now_ms(),
+        };
+        agents.store().insert_team(&team).unwrap();
+        agents
+            .store()
+            .insert_bot(&massorca_core_store::BotRow {
+                id: new_id(),
+                team_id: team.id.clone(),
+                name: "builder".to_owned(),
+                job: "Writes the parser".to_owned(),
+                kind: "from-bot".to_owned(),
+                model: None,
+                effort: None,
+                lead: false,
+                created_at: now_ms(),
+            })
+            .unwrap();
+        let used: Vec<String> = used_kinds(agents.store(), profile.path())
+            .into_iter()
+            .collect();
+        assert_eq!(used, ["from-account", "from-bot"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn used_kinds_never_follow_a_link() {
+        let (agents, _, profile) = service(Vec::new());
+        let target = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(paths::agents_dir(profile.path()).join("homes")).unwrap();
+        std::os::unix::fs::symlink(target.path(), paths::home_dir(profile.path(), "linked"))
+            .unwrap();
+        assert!(used_kinds(agents.store(), profile.path()).is_empty());
     }
 }

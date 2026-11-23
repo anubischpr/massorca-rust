@@ -24,7 +24,7 @@ pub mod status;
 pub use catalog::{Catalog, CatalogEntry, OWNER_CORE, OWNER_USER, built_ins};
 pub use event::{DoneOutcome, EventTarget};
 pub use kind::KindDecl;
-pub use packages::{BuiltInPackages, KindPackages, PackageKind, PackageState};
+pub use packages::{BuiltInPackages, KindPackages, PackageKind, PackageState, used_kinds};
 pub use provided_env::{EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, ProviderError, SecretGrant};
 pub use resolve::SearchEnv;
 pub use sessions::{AgentError, Agents, AgentsConfig, Change, Listener, MergeResult, RepoOps};
