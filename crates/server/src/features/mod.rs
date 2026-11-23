@@ -8,6 +8,7 @@ mod events;
 pub(crate) mod extension_process;
 mod extensions;
 mod git;
+mod host;
 mod projects;
 mod secret_params;
 mod secret_refusals;
@@ -38,6 +39,7 @@ pub(crate) fn register_core(
 ) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = service::register(registries)?;
     handles.extend(events::register(registries)?);
+    handles.extend(host::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
     handles.extend(devices::register(registries)?);

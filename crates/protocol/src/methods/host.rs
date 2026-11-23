@@ -1,0 +1,105 @@
+//! Host methods: figures read on the host that runs the service (capability `host/1`, decision 0081).
+//!
+//! Sampled when asked; nothing is pushed. A client polls while it shows them.
+
+use serde::{Deserialize, Serialize};
+
+/// Params: none. Result: [`HostMemory`].
+pub const MEMORY: &str = "host.memory";
+
+/// What the byte counts measure on the answering host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryMetric {
+    /// Windows: pages of the process now in physical memory, shared ones included.
+    WorkingSet,
+    /// Linux and macOS: the resident set size, shared pages included.
+    Resident,
+}
+
+/// Result of `host.memory`: the service process plus every process of each live terminal (agent runs included).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostMemory {
+    pub metric: MemoryMetric,
+    /// The service plus every terminal, as a plain sum: a page shared by two processes counts twice.
+    pub total_bytes: u64,
+    pub service: ProcessMemory,
+    /// Live terminals, by creation time.
+    pub terminals: Vec<TerminalMemory>,
+    /// Processes that were listed but could not be read (they exited, or access was denied). Not in any sum.
+    pub unreadable: u32,
+    pub sampled_at_ms: i64,
+}
+
+/// One process and its memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessMemory {
+    pub pid: u32,
+    pub bytes: u64,
+}
+
+/// One live terminal's processes and their memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalMemory {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The agent session whose current run uses this terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// How many of the terminal's processes were read.
+    pub processes: u32,
+    pub bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostMemory, MemoryMetric, ProcessMemory, TerminalMemory};
+    use serde_json::json;
+
+    #[test]
+    fn the_answer_has_its_wire_names() {
+        let memory = HostMemory {
+            metric: MemoryMetric::WorkingSet,
+            total_bytes: 30,
+            service: ProcessMemory { pid: 7, bytes: 10 },
+            terminals: vec![
+                TerminalMemory {
+                    terminal_id: "t-1".to_owned(),
+                    workspace_id: "w-1".to_owned(),
+                    session_id: Some("s-1".to_owned()),
+                    processes: 2,
+                    bytes: 20,
+                },
+                TerminalMemory {
+                    terminal_id: "t-2".to_owned(),
+                    workspace_id: "w-1".to_owned(),
+                    session_id: None,
+                    processes: 0,
+                    bytes: 0,
+                },
+            ],
+            unreadable: 1,
+            sampled_at_ms: 1_700_000_000_000,
+        };
+        let value = serde_json::to_value(&memory).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "metric": "working_set",
+                "total_bytes": 30,
+                "service": { "pid": 7, "bytes": 10 },
+                "terminals": [
+                    { "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1", "processes": 2, "bytes": 20 },
+                    { "terminal_id": "t-2", "workspace_id": "w-1", "processes": 0, "bytes": 0 }
+                ],
+                "unreadable": 1,
+                "sampled_at_ms": 1_700_000_000_000_i64
+            })
+        );
+        assert_eq!(serde_json::from_value::<HostMemory>(value).unwrap(), memory);
+        assert_eq!(
+            serde_json::to_value(MemoryMetric::Resident).unwrap(),
+            json!("resident")
+        );
+    }
+}
