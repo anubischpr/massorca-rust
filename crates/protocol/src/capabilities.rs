@@ -22,3 +22,5 @@ pub const SECRETS: &str = "secrets/1";
 pub const TEAMS: &str = "teams/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
+/// Figures read on the host that runs the service: `host.memory` (decision 0081).
+pub const HOST: &str = "host/1";

@@ -215,7 +215,7 @@ impl Shell {
     }
 
     /// Creates the view of `terminal` and starts following it through the bridge.
-    fn attach_view(&mut self, workspace: &str, terminal: &str, cx: &mut Context<Self>) {
+    pub(super) fn attach_view(&mut self, workspace: &str, terminal: &str, cx: &mut Context<Self>) {
         let Some(service) = self.service.clone() else {
             return;
         };
@@ -331,14 +331,72 @@ impl Shell {
         self.select_terminal(workspace, terminal, window, cx);
     }
 
+    /// Attaches again after a refused attach, from a Retry that leaves the Work panel's selection alone.
+    pub(super) fn retry_attach(&mut self, workspace: &str, terminal: &str, cx: &mut Context<Self>) {
+        self.terminal_views.remove(terminal);
+        self.attach_view(workspace, terminal, cx);
+        cx.notify();
+    }
+
     /// Drops the views of terminals the store no longer lists, and a stop question about one.
     pub(super) fn prune_terminal_views(&mut self, state: &StoreState) {
-        let listed = |id: &str| state.terminals.iter().any(|terminal| terminal.id == id);
+        // A session's terminal stays listed for its view, which the session answer can come before the store.
+        let listed = |id: &str| {
+            state.terminals.iter().any(|terminal| terminal.id == id)
+                || state
+                    .agents
+                    .iter()
+                    .any(|session| session.terminal_id.as_deref() == Some(id))
+        };
         self.terminal_views.retain(|id, _| listed(id));
         if self.stop_prompt.as_deref().is_some_and(|id| !listed(id)) {
             self.stop_prompt = None;
         }
     }
+}
+
+/// The element ids of a refused attach's banner, so each pane's banner keeps its own test ids.
+#[derive(Clone, Copy)]
+pub(super) struct AttachFailedIds {
+    pub(super) selector: &'static str,
+    pub(super) banner: &'static str,
+    pub(super) retry: &'static str,
+}
+
+pub(super) const WORK_ATTACH_FAILED: AttachFailedIds = AttachFailedIds {
+    selector: "work-attach-failed",
+    banner: "work-attach-failed-banner",
+    retry: "work-retry-attach",
+};
+
+pub(super) const SESSION_ATTACH_FAILED: AttachFailedIds = AttachFailedIds {
+    selector: "session-attach-failed",
+    banner: "session-attach-failed-banner",
+    retry: "session-retry-attach",
+};
+
+/// The banner of a terminal whose attach was refused, with Retry; `retry` runs when the user asks again.
+pub(super) fn attach_failed_banner(
+    ids: AttachFailedIds,
+    detail: String,
+    retry: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    div()
+        .debug_selector(move || ids.selector.to_owned())
+        .child(
+            Banner::new(
+                ids.banner,
+                BannerVariant::Danger,
+                "This terminal could not be shown.",
+            )
+            .detail(detail)
+            .action(
+                Button::new(ids.retry, "Retry")
+                    .variant(ButtonVariant::Secondary)
+                    .on_click(move |window, cx| retry(window, cx)),
+            ),
+        )
+        .into_any_element()
 }
 
 /// A pane for `terminal`: keys and resizes go to the service, and the Restart of its exit row
@@ -599,29 +657,15 @@ fn body_element(body: WorkBody, shell: &WeakEntity<Shell>, theme: &Theme) -> Any
             });
             match failure {
                 Some(detail) => pane
-                    .child(
-                        div()
-                            .debug_selector(|| "work-attach-failed".to_owned())
-                            .child(
-                                Banner::new(
-                                    "work-attach-failed-banner",
-                                    BannerVariant::Danger,
-                                    "This terminal could not be shown.",
-                                )
-                                .detail(detail)
-                                .action(
-                                    Button::new("work-retry-attach", "Retry")
-                                        .variant(ButtonVariant::Secondary)
-                                        .on_click(move |window, cx| {
-                                            let _ = retry.update(cx, |shell, cx| {
-                                                shell.retry_terminal(
-                                                    &workspace, &terminal, window, cx,
-                                                );
-                                            });
-                                        }),
-                                ),
-                            ),
-                    )
+                    .child(attach_failed_banner(
+                        WORK_ATTACH_FAILED,
+                        detail,
+                        move |window, cx| {
+                            let _ = retry.update(cx, |shell, cx| {
+                                shell.retry_terminal(&workspace, &terminal, window, cx);
+                            });
+                        },
+                    ))
                     .into_any_element(),
                 None => pane
                     .child(div().flex_1().min_h_0().child(surface))

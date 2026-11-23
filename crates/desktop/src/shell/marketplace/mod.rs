@@ -4,8 +4,12 @@
 mod accounts;
 mod catalogue;
 mod dialogs;
+#[cfg(test)]
+mod extension_tests;
 mod import;
 mod item;
+mod package;
+mod review;
 mod sign_in;
 #[cfg(test)]
 mod tests;
@@ -21,6 +25,7 @@ use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
     prelude::*, px,
 };
+use massorca_protocol::methods::extensions::ExtensionReview;
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::tokens::SPACE_6;
 
@@ -33,6 +38,24 @@ pub(super) use dialogs::dialog;
 pub(super) struct UninstallConfirm {
     pub item: MarketplaceItemId,
     pub error: Option<String>,
+    /// The removal is with the service; the confirm waits for its answer.
+    pub sending: bool,
+}
+
+/// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
+/// is sent to install until the person presses Install, and a vendor installer also needs its own tick (decision
+/// 0062).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct InstallReview {
+    pub item: MarketplaceItemId,
+    /// The `catalogue:<id>` source the review and the install both name.
+    pub source: String,
+    /// What `extensions.inspect` reported; `None` while it runs or after it was refused.
+    pub review: Option<ExtensionReview>,
+    /// The person's tick for running the vendor installer the review lists.
+    pub run_installer: bool,
+    pub sending: bool,
+    pub error: Option<String>,
 }
 
 /// What the Marketplace pages draw for one frame, gathered by the shell.
@@ -44,6 +67,8 @@ pub(super) struct MarketplaceFrame {
     advanced_open: bool,
     /// A refused change, with the account it concerns (None for the whole Connection part).
     error: Option<(Option<AccountId>, String)>,
+    /// A refused change to an installed package, with the item it concerns.
+    item_error: Option<(MarketplaceItemId, String)>,
     /// The accounts the service refused as busy.
     busy: BTreeSet<AccountId>,
     /// The account whose sign-in terminal runs in the dialog.
@@ -69,6 +94,7 @@ pub(super) fn frame(
         search: shell.marketplace_search.clone(),
         advanced_open: shell.model.marketplace_advanced_open(),
         error: shell.marketplace_error.clone(),
+        item_error: shell.marketplace_item_error.clone(),
         busy: shell.marketplace_accounts.busy.clone(),
         signing_in: shell
             .marketplace_accounts
@@ -152,13 +178,17 @@ impl Shell {
         cx.notify();
     }
 
-    /// The Switch of an installed item. Only the sample changes; the service is not connected.
+    /// The Switch of an installed item. A service package is changed through the service; the sample changes itself.
     pub(super) fn set_marketplace_enabled(
         &mut self,
         item: MarketplaceItemId,
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(package) = self.package_of(item) {
+            self.set_package_enabled(item, package, enabled, cx);
+            return;
+        }
         let _ = self.change_marketplace(cx, |source| source.set_enabled(item, enabled));
     }
 
@@ -235,7 +265,11 @@ impl Shell {
         item: MarketplaceItemId,
         cx: &mut Context<Self>,
     ) {
-        self.marketplace_uninstall = Some(UninstallConfirm { item, error: None });
+        self.marketplace_uninstall = Some(UninstallConfirm {
+            item,
+            error: None,
+            sending: false,
+        });
         cx.notify();
     }
 
@@ -249,6 +283,13 @@ impl Shell {
         let Some(confirm) = self.marketplace_uninstall.clone() else {
             return;
         };
+        if confirm.sending {
+            return;
+        }
+        if let Some(package) = self.package_of(confirm.item) {
+            self.remove_package(confirm.item, package, cx);
+            return;
+        }
         match self.change_marketplace(cx, |source| source.uninstall(confirm.item)) {
             Ok(()) => self.marketplace_uninstall = None,
             Err(error) => {

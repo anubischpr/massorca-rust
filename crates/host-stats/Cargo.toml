@@ -1,0 +1,33 @@
+[package]
+name = "massorca-host-stats"
+description = "Reads process memory, names and parent ids on the executing host with native calls, never a spawned program"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
+# A terminal's job is borrowed as a `win32job::Job`, so a read can never use a closed job handle.
+[target.'cfg(windows)'.dependencies]
+win32job.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+massorca-process.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+win32job.workspace = true
+
+[lints]
+workspace = true

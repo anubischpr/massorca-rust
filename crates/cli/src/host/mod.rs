@@ -2,6 +2,8 @@
 
 pub mod add_ssh;
 pub mod discover;
+pub mod memory;
+pub mod ports;
 pub mod records;
 pub mod status;
 
@@ -10,6 +12,15 @@ use massorca_profile::Profile;
 use crate::args::HostCommand;
 use crate::error::CliError;
 use crate::output::Output;
+
+/// The failures that mean the service could not be reached or was lost mid-call. A host figure is then unknown, never
+/// zero: `memory.unverifiable` and `ports.unverifiable` keep the original code in their data.
+pub(crate) const LOST_CONTACT: [&str; 4] = [
+    "service.unavailable",
+    "service.disconnected",
+    "host.unreachable",
+    "client.io",
+];
 
 /// The command path a host subcommand is named by, for the `--host` refusal.
 pub fn command_path(command: &HostCommand) -> &'static str {
@@ -20,10 +31,13 @@ pub fn command_path(command: &HostCommand) -> &'static str {
         HostCommand::Status { .. } => "host status",
         HostCommand::Discover => "host discover",
         HostCommand::AddSsh(_) => "host add-ssh",
+        HostCommand::Memory => "host memory",
+        HostCommand::Ports => "host ports",
     }
 }
 
-/// Runs one `host` subcommand against the hosts of `profile`.
+/// Runs one `host` subcommand against the hosts of `profile`. `host memory` addresses a service instead; the caller
+/// runs it through [`memory::execute`].
 pub async fn execute(
     profile: &Profile,
     command: HostCommand,
@@ -36,5 +50,15 @@ pub async fn execute(
         HostCommand::Status { name } => status::execute(profile, name.as_deref(), output).await,
         HostCommand::Discover => discover::execute(profile, output).await,
         HostCommand::AddSsh(args) => add_ssh::execute(profile, &args, output).await,
+        HostCommand::Memory => Err(CliError::new(
+            "internal",
+            "host memory addresses a service; it does not run on the hosts list",
+            crate::error::exit::ERROR,
+        )),
+        HostCommand::Ports => Err(CliError::new(
+            "internal",
+            "host ports addresses a service; it does not run on the hosts list",
+            crate::error::exit::ERROR,
+        )),
     }
 }

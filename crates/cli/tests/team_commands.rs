@@ -497,3 +497,157 @@ fn a_teams_bots_and_projects_are_listed_in_json_and_text() {
         .failure()
         .code(1);
 }
+
+#[test]
+fn team_memory_lines_are_added_listed_and_removed_in_json_and_text() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    let mara = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "bot",
+            "add",
+            "alpha",
+            "mara",
+            "--agent",
+            "claude",
+            "--job",
+            "Writes the parser",
+        ],
+    );
+    let task = sandbox.json_ok(
+        "default",
+        &[
+            "task",
+            "create",
+            "alpha",
+            "Parse the config",
+            "--bot",
+            "mara",
+        ],
+    );
+    let task_id = task["id"].as_str().expect("the task id");
+
+    let rule = sandbox.json_ok(
+        "default",
+        &["team", "memory", "add", "alpha", "Keep the parser small."],
+    );
+    assert_eq!(rule["source"], "person");
+    assert!(rule.get("bot_id").is_none());
+    let rule_id = rule["id"].as_str().expect("the line id").to_owned();
+
+    let note = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "memory",
+            "add",
+            "alpha",
+            "Mara checks the tables.",
+            "--bot",
+            "mara",
+        ],
+    );
+    assert_eq!(note["bot_id"], mara["id"]);
+
+    let from_task = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "memory",
+            "add",
+            "alpha",
+            "The config keeps its keys.",
+            "--bot",
+            "mara",
+            "--task",
+            task_id,
+        ],
+    );
+    assert_eq!(from_task["source"], "task");
+    assert_eq!(from_task["task_id"], task["id"]);
+
+    let listed = sandbox.json_ok("default", &["team", "memory", "list", "alpha"]);
+    let texts: Vec<&str> = listed["lines"]
+        .as_array()
+        .expect("the lines")
+        .iter()
+        .map(|line| line["text"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "The config keeps its keys.",
+            "Mara checks the tables.",
+            "Keep the parser small."
+        ]
+    );
+    let bot_only = sandbox.json_ok(
+        "default",
+        &["team", "memory", "list", "alpha", "--bot", "mara"],
+    );
+    assert_eq!(bot_only["lines"].as_array().map(Vec::len), Some(2));
+
+    let text = sandbox
+        .run("default", &["team", "memory", "list", "alpha"])
+        .success();
+    assert!(stdout_text(&text).contains("Keep the parser small."));
+    let added_text = sandbox
+        .run(
+            "default",
+            &["team", "memory", "add", "alpha", "Short line."],
+        )
+        .success();
+    assert!(stdout_text(&added_text).starts_with("added memory line"));
+
+    let removed = sandbox.json_ok("default", &["team", "memory", "rm", "alpha", &rule_id]);
+    assert_eq!(removed["id"], rule["id"]);
+    let gone = sandbox
+        .run("default", &["team", "memory", "rm", "alpha", &rule_id])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&gone).contains("team.memory_not_found"));
+}
+
+#[test]
+fn team_memory_refusals_exit_with_code_one_and_name_their_code() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+
+    let too_long = "a".repeat(501);
+    let refused_long = sandbox
+        .run(
+            "default",
+            &["team", "memory", "add", "alpha", too_long.as_str()],
+        )
+        .failure()
+        .code(1);
+    assert!(stderr_text(&refused_long).contains("request.invalid_params"));
+    let refused_blank = sandbox
+        .run("default", &["team", "memory", "add", "alpha", "   "])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&refused_blank).contains("request.invalid_params"));
+
+    let unknown = sandbox
+        .run("default", &["team", "memory", "list", "nowhere"])
+        .failure()
+        .code(1);
+    assert!(stderr_text(&unknown).contains("team.not_found"));
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&["team", "memory", "list", "nowhere"]),
+        )
+        .failure()
+        .code(1);
+    let document = single_document(&refused);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "team.not_found");
+}

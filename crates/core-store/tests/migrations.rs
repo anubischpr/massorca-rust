@@ -257,3 +257,34 @@ fn every_step_is_plain_sql_and_a_fresh_file_has_the_account_and_vault_columns() 
         .unwrap();
     assert_eq!(found, latest());
 }
+
+#[test]
+fn the_kept_account_step_keeps_the_history_recorded_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = store_path(&dir);
+    // The step that records kept sign-ins, found by its SQL so later steps do not move it.
+    let before = MIGRATIONS
+        .iter()
+        .position(|step| step.sql.contains("agent_accounts_record_kept_sign_in"))
+        .expect("the kept-account step");
+    {
+        let connection = Connection::open(&path).unwrap();
+        for step in &MIGRATIONS[..before] {
+            connection.execute_batch(step.sql).unwrap();
+        }
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO agent_account_history (kind) VALUES ('fake');
+                 PRAGMA user_version = {before};"
+            ))
+            .unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+    assert!(
+        store.kind_has_had_account("fake").unwrap(),
+        "a record from before the step cannot tell kept from discarded, so it stays"
+    );
+    drop(store);
+    assert_eq!(user_version(&path), latest());
+}
