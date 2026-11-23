@@ -51,7 +51,6 @@ pub(crate) fn is_running(session: &Session) -> bool {
 
 /// The standing of a task: its own latched outcome decides first, then its session.
 pub(crate) fn standing(task: &TaskRow, session: &Session) -> Standing {
-    // Later slice: the agent.changed listener latches a Done outcome into `task.outcome`.
     if let Some(outcome) = task.outcome {
         return of_outcome(outcome_of(outcome));
     }
@@ -74,6 +73,33 @@ pub(crate) fn outcome_of(outcome: TaskOutcome) -> Outcome {
         TaskOutcome::Cancelled => Outcome::Cancelled,
         TaskOutcome::Interrupted => Outcome::Interrupted,
     }
+}
+
+/// The latched form of a protocol outcome. `Unknown` latches nothing: an outcome never observed is no result.
+pub(crate) fn latched_outcome(outcome: Outcome) -> Option<TaskOutcome> {
+    match outcome {
+        Outcome::Success => Some(TaskOutcome::Success),
+        Outcome::Failure => Some(TaskOutcome::Failure),
+        Outcome::Cancelled => Some(TaskOutcome::Cancelled),
+        Outcome::Interrupted => Some(TaskOutcome::Interrupted),
+        Outcome::Unknown => None,
+    }
+}
+
+/// The outcome a session latches into its task: a Done with a known outcome, from a run the host can see. Loss of
+/// contact latches nothing, because an unverifiable run is not observed.
+pub(crate) fn observed_outcome(session: &AgentSession) -> Option<TaskOutcome> {
+    if !matches!(
+        session.execution.state,
+        TerminalState::Live | TerminalState::Exited
+    ) {
+        return None;
+    }
+    let activity = session.activity.as_ref()?;
+    if activity.state != ActivityState::Done {
+        return None;
+    }
+    latched_outcome(activity.outcome?)
 }
 
 fn of_session(session: &AgentSession) -> Standing {
@@ -129,7 +155,7 @@ mod tests {
     use massorca_protocol::methods::tasks::{CardState, Column};
     use massorca_protocol::methods::terminals::TerminalState;
 
-    use super::{Session, Standing, is_running, standing};
+    use super::{Session, Standing, is_running, observed_outcome, standing};
 
     fn task(outcome: Option<TaskOutcome>) -> TaskRow {
         TaskRow {
@@ -153,7 +179,14 @@ mod tests {
         execution: TerminalState,
         activity: Option<(ActivityState, Option<Outcome>)>,
     ) -> Session {
-        Session::Known(Box::new(AgentSession {
+        Session::Known(Box::new(record(execution, activity)))
+    }
+
+    fn record(
+        execution: TerminalState,
+        activity: Option<(ActivityState, Option<Outcome>)>,
+    ) -> AgentSession {
+        AgentSession {
             id: "s1".to_owned(),
             kind: "claude".to_owned(),
             workspace_id: "w1".to_owned(),
@@ -177,7 +210,7 @@ mod tests {
             result: None,
             holds_secrets: false,
             secrets_withheld: None,
-        }))
+        }
     }
 
     fn at(task: &TaskRow, session: &Session) -> (CardState, Column, bool) {
@@ -304,5 +337,57 @@ mod tests {
         assert!(!is_running(&exited));
         assert!(!is_running(&Session::Forgotten));
         assert!(!is_running(&Session::Unstarted));
+    }
+
+    #[test]
+    fn a_done_with_an_outcome_from_a_run_the_host_can_see_latches_that_outcome() {
+        let done = |execution: TerminalState, outcome: Outcome| {
+            observed_outcome(&record(
+                execution,
+                Some((ActivityState::Done, Some(outcome))),
+            ))
+        };
+        assert_eq!(
+            done(TerminalState::Live, Outcome::Success),
+            Some(TaskOutcome::Success)
+        );
+        assert_eq!(
+            done(TerminalState::Live, Outcome::Failure),
+            Some(TaskOutcome::Failure)
+        );
+        assert_eq!(
+            done(TerminalState::Live, Outcome::Cancelled),
+            Some(TaskOutcome::Cancelled)
+        );
+        assert_eq!(
+            done(TerminalState::Exited, Outcome::Interrupted),
+            Some(TaskOutcome::Interrupted)
+        );
+    }
+
+    #[test]
+    fn loss_of_contact_latches_nothing_even_when_the_last_report_was_done() {
+        let unverifiable = record(
+            TerminalState::Unverifiable,
+            Some((ActivityState::Done, Some(Outcome::Failure))),
+        );
+        assert_eq!(observed_outcome(&unverifiable), None);
+        let working = record(
+            TerminalState::Unverifiable,
+            Some((ActivityState::Working, None)),
+        );
+        assert_eq!(observed_outcome(&working), None);
+    }
+
+    #[test]
+    fn a_done_without_a_known_outcome_or_a_turn_that_is_not_done_latches_nothing() {
+        let live = |activity| observed_outcome(&record(TerminalState::Live, activity));
+        assert_eq!(live(Some((ActivityState::Done, None))), None);
+        assert_eq!(
+            live(Some((ActivityState::Done, Some(Outcome::Unknown)))),
+            None
+        );
+        assert_eq!(live(Some((ActivityState::Working, None))), None);
+        assert_eq!(live(None), None);
     }
 }

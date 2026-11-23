@@ -272,6 +272,74 @@ fn a_start_error_is_recorded_and_a_session_link_clears_it_once() {
 }
 
 #[test]
+fn a_session_finds_its_task_and_latches_its_outcome_once() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = TaskRow {
+        session_id: Some("session-1".to_owned()),
+        ..task_row(&team.id, "parse", 10)
+    };
+    store.insert_task(&row).unwrap();
+
+    assert_eq!(
+        store.find_task_by_session("session-1").unwrap(),
+        Some(row.clone())
+    );
+    assert_eq!(store.find_task_by_session("session-9").unwrap(), None);
+
+    // Only the session the task is linked to can latch it.
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-9", TaskOutcome::Failure, 20)
+            .unwrap()
+    );
+    assert!(
+        store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Success, 30)
+            .unwrap()
+    );
+    let latched = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(latched.outcome, Some(TaskOutcome::Success));
+    assert_eq!(latched.updated_at, 30);
+
+    // The first latch stands: a later one, of any outcome, changes nothing.
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Failure, 40)
+            .unwrap()
+    );
+    assert_eq!(store.get_task(&row.id).unwrap(), Some(latched));
+}
+
+#[test]
+fn a_reopened_task_is_not_latched_by_the_session_it_let_go() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = TaskRow {
+        session_id: Some("session-1".to_owned()),
+        ..task_row(&team.id, "parse", 10)
+    };
+    store.insert_task(&row).unwrap();
+    // What task.reopen writes: the session link and the outcome are cleared.
+    assert!(store.reopen_task(&row.id, Some("session-1"), 20).unwrap());
+    let reopened = TaskRow {
+        session_id: None,
+        updated_at: 20,
+        ..row.clone()
+    };
+
+    assert_eq!(store.find_task_by_session("session-1").unwrap(), None);
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Success, 30)
+            .unwrap()
+    );
+    assert_eq!(store.get_task(&row.id).unwrap(), Some(reopened));
+}
+
+#[test]
 fn a_details_update_never_touches_the_session_outcome_or_error() {
     let store = store();
     let team = team_row("alpha");

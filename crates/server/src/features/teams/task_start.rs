@@ -27,6 +27,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::task::{removed, view_of};
+use super::task_outcome::latch_at_link;
 use super::task_state::{self, Session};
 use super::{blocking, selectors, store_error};
 
@@ -150,8 +151,13 @@ fn start_task(
     };
     settle(store, stop, &row, &attempt, &session, changes)?;
     // Read after the link: a failure here is an error to the caller, never a reason to stop the linked run.
-    let current = selectors::task(store, &row.id)?;
-    Ok(view_of(&current, &task_state::load(agents, &current)?))
+    let mut current = selectors::task(store, &row.id)?;
+    let shown = task_state::load(agents, &current)?;
+    // The agent may have finished before the link, when the listener could not find the task yet.
+    if latch_at_link(store, &current.id, &shown).map_err(store_error)? {
+        current = selectors::task(store, &current.id)?;
+    }
+    Ok(view_of(&current, &shown))
 }
 
 /// The agent request a start attempt is keyed by.

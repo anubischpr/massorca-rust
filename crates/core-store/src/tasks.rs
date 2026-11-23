@@ -323,6 +323,31 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// The task linked to `session_id`, if one is.
+    pub fn find_task_by_session(&self, session_id: &str) -> Result<Option<TaskRow>, StoreError> {
+        self.query_optional(
+            &format!("{SELECT_TASKS} WHERE session_id = ?1"),
+            [session_id],
+            task_from_row,
+        )
+    }
+
+    /// Latches a task's outcome, but only while the task is still linked to `session_id` and has none, so a reopened
+    /// task or an earlier latch is never touched. Returns whether it latched.
+    pub fn latch_task_outcome(
+        &self,
+        id: &str,
+        session_id: &str,
+        outcome: TaskOutcome,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET outcome = ?3, updated_at = ?4 WHERE id = ?1 AND session_id = ?2 AND outcome IS NULL",
+            params![id, session_id, outcome, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Deletes a task. Returns whether a row was removed.
     pub fn delete_task(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self
