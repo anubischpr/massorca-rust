@@ -40,6 +40,7 @@ fn folder_project(name: &str) -> ProjectRow {
         path_key: format!("key-{name}"),
         name: name.to_owned(),
         workspaces_root: format!("/work/{name}-workspaces"),
+        base_ref: None,
         added_at: now_ms(),
     }
 }

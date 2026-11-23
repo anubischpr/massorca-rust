@@ -123,6 +123,19 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.set-base",
+            "Set or clear a project's base branch",
+            "project.set_base",
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": { "type": "string" },
+                    "base": { "type": ["string", "null"] }
+                }
+            }),
+        ),
+        command(
             "workspace.create",
             "Create a workspace",
             "workspace.create",
@@ -135,6 +148,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "branch": { "type": "string" },
                     "base": { "type": "string" },
                     "existing_branch": { "type": "boolean" },
+                    "refresh_base": { "type": "boolean" },
                     "path": { "type": "string" },
                     "request_id": { "type": "string" }
                 }

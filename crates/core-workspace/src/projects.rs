@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use massorca_core_store::{ProjectKind as StoreKind, ProjectRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
-    Project, ProjectAddParams, ProjectInspection, ProjectKind,
+    Project, ProjectAddParams, ProjectInspection, ProjectKind, ProjectSetBaseParams,
 };
 
 use crate::error::DomainError;
+use crate::layout::WorkspaceLayout;
 use crate::names;
 use crate::paths;
 use crate::views;
@@ -66,7 +67,11 @@ impl Workspaces {
                         "the default workspaces root must be an absolute path",
                     ));
                 }
-                paths::path_text(&self.default_root.join(&name))?
+                let root = match self.layout {
+                    WorkspaceLayout::Nested => self.default_root.join(&name),
+                    WorkspaceLayout::Flat => self.default_root.clone(),
+                };
+                paths::path_text(&root)?
             }
         };
         let row = ProjectRow {
@@ -77,6 +82,7 @@ impl Workspaces {
             name,
             workspaces_root,
             added_at: now_ms(),
+            base_ref: None,
         };
         self.store
             .insert_project(&row)
@@ -183,6 +189,45 @@ impl Workspaces {
         Ok(self
             .store
             .find_project_by_path_key(&paths::path_key(root))?)
+    }
+
+    /// Sets the base a project's new workspaces start from, or clears it with `None`. A folder
+    /// project has none, and a base must resolve to a commit, as a workspace's base does.
+    pub fn set_project_base(&self, params: ProjectSetBaseParams) -> Result<Project, DomainError> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_project(&params.project)?;
+        if row.kind == StoreKind::Folder {
+            return Err(DomainError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!(
+                    "project {:?} is a folder; only a git project has a base",
+                    row.name
+                ),
+            ));
+        }
+        if let Some(name) = params.base.as_deref() {
+            let repo = Path::new(&row.path);
+            let base = self.git.qualify_base(repo, name)?;
+            if !self.git.ref_exists(repo, &base.revision)? {
+                return Err(DomainError::new(
+                    codes::BASE_NOT_FOUND,
+                    format!("base {name:?} does not resolve to a commit"),
+                ));
+            }
+        }
+        if !self
+            .store
+            .set_project_base(&row.id, params.base.as_deref())?
+        {
+            return Err(DomainError::new(
+                codes::PROJECT_NOT_FOUND,
+                format!("no project named {:?}", row.name),
+            ));
+        }
+        Ok(views::project(&ProjectRow {
+            base_ref: params.base,
+            ..row
+        }))
     }
 
     /// The canonical main worktree of the repository containing `dir`, or `None` outside one. A linked

@@ -56,6 +56,7 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         branch: None,
         base: None,
         existing_branch: false,
+        refresh_base: false,
         path: None,
         request_id: None,
     }
@@ -160,6 +161,86 @@ async fn a_worktree_is_created_listed_shown_and_removed_with_its_events_in_order
         }
     );
     assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+/// The full id of `HEAD` in `dir`.
+fn head_of(dir: &Path) -> String {
+    let output = massorca_process::command("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("spawn git");
+    String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned()
+}
+
+/// Pushes one commit to the branch `origin` holds, from a second clone of it.
+fn push_new_commit(home: &Path, origin: &Path) {
+    let other = home.join("other");
+    git(
+        home,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().expect("utf-8"),
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    std::fs::write(other.join("next.txt"), "next\n").expect("write file");
+    git(&other, &["add", "next.txt"]);
+    git(&other, &["commit", "-q", "-m", "next"]);
+    git(&other, &["push", "-q", "origin", "HEAD"]);
+}
+
+#[tokio::test]
+async fn a_refresh_base_create_starts_from_the_remote_branch_and_a_plain_one_from_the_local_copy() {
+    let home = temp_home();
+    let seed = home.path().join("seed");
+    git_repo(&seed);
+    let origin = home.path().join("origin.git");
+    git(
+        home.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            seed.to_str().expect("utf-8"),
+            origin.to_str().expect("utf-8"),
+        ],
+    );
+    let repo = home.path().join("repo");
+    git(
+        home.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().expect("utf-8"),
+            repo.to_str().expect("utf-8"),
+        ],
+    );
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let local = head_of(&repo);
+    push_new_commit(home.path(), &origin);
+    let remote = head_of(&origin);
+
+    let plain: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "plain"))
+        .await
+        .expect("plain create");
+    assert_eq!(head_of(Path::new(&plain.path)), local);
+
+    let mut refresh = create_params(&project.name, "fresh");
+    refresh.refresh_base = true;
+    let fresh: Workspace = client
+        .call(workspaces::CREATE, &refresh)
+        .await
+        .expect("refreshing create");
+    assert_eq!(head_of(Path::new(&fresh.path)), remote);
     stop(running).await;
 }
 
