@@ -6,6 +6,10 @@ mod bot;
 mod memory;
 mod selectors;
 mod task;
+mod task_outcome;
+mod task_start;
+
+pub(crate) use task_start::start_gate;
 mod task_state;
 mod team;
 mod team_project;
@@ -14,10 +18,12 @@ use massorca_core_agents::Agents;
 use massorca_core_store::{Store, StoreError};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
-use crate::context::{Registries, RequestCtx};
+use crate::context::{AppState, Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::owner::Owner;
 use crate::registry::RegistrationHandle;
+
+pub(crate) use task_outcome::follow_task_outcomes;
 
 /// Registers the Bot Teams capability and its methods.
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -31,6 +37,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(team_project::register(registries)?);
     handles.extend(memory::register(registries)?);
     handles.extend(task::register(registries)?);
+    handles.extend(task_start::register(registries)?);
     handles.extend(board::register(registries)?);
     Ok(handles)
 }
@@ -41,9 +48,18 @@ where
     T: Send + 'static,
     F: FnOnce(&Store, &Agents) -> Result<T, ErrorBody> + Send + 'static,
 {
-    let store = ctx.state.store.clone();
-    let agents = ctx.state.agents.clone();
-    let work = ctx.state.activity.enter();
+    blocking_state(&ctx.state, call).await
+}
+
+/// The same for a caller without a request, such as the task outcome listener.
+pub(crate) async fn blocking_state<T, F>(state: &AppState, call: F) -> Result<T, ErrorBody>
+where
+    T: Send + 'static,
+    F: FnOnce(&Store, &Agents) -> Result<T, ErrorBody> + Send + 'static,
+{
+    let store = state.store.clone();
+    let agents = state.agents.clone();
+    let work = state.activity.enter();
     match tokio::task::spawn_blocking(move || {
         let _work = work;
         call(&store, &agents)

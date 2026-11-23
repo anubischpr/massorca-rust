@@ -85,6 +85,30 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// The team's folder workspace, once its first task started. `None` for an unknown team.
+    pub fn team_workspace(&self, team_id: &str) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT workspace_id FROM teams WHERE id = ?1",
+                [team_id],
+                |row| row.get::<_, Option<String>>("workspace_id"),
+            )?
+            .flatten())
+    }
+
+    /// Records the team's folder workspace. Returns whether the team exists.
+    pub fn set_team_workspace(
+        &self,
+        team_id: &str,
+        workspace_id: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE teams SET workspace_id = ?2 WHERE id = ?1",
+            params![team_id, workspace_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Deletes a team with its bots, projects and tasks. Returns whether a row was removed.
     pub fn delete_team(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::methods::projects::ProjectKind;
 use crate::methods::tasks::{CardState, Column};
 
 /// Params: [`TeamCreateParams`]. Result: [`Team`].
@@ -205,7 +206,7 @@ pub struct BotRemoveParams {
     pub unassign: bool,
 }
 
-/// A project of a team, with its own Board and Brief. Its code source is not recorded yet.
+/// A project of a team, with its own Board and Brief, and the Workspaces project its code comes from when linked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamProject {
     pub id: String,
@@ -214,6 +215,15 @@ pub struct TeamProject {
     pub goal: String,
     pub brief: String,
     pub created_at_ms: i64,
+    /// The Workspaces project the code comes from, by id. Unset when no project is linked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
+    /// The name of the linked project. Unset when the link is absent or the project is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project_name: Option<String>,
+    /// Whether the linked project is a git repository or a folder. Unset like `source_project_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<ProjectKind>,
 }
 
 /// Params of `team.project_add`.
@@ -225,6 +235,9 @@ pub struct TeamProjectAddParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// A Workspaces project (id, exact name or path) the code comes from. Unset or blank links none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 
 /// Params of `team.project_update`. Only the fields given change.
@@ -238,6 +251,9 @@ pub struct TeamProjectUpdateParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// The Workspaces project (id, exact name or path) the code comes from. An empty value clears the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 
 /// Params of `team.project_rm`. The project's tasks stay on the team's Board without a project.
@@ -288,6 +304,15 @@ pub struct BoardCard {
     pub last_known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The workspace the last start ran in: the task's own worktree, a linked folder, or the team folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// The branch of the task's own worktree, where its result is; set only for a linked git project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// When the task last changed, Unix milliseconds.
     pub at_ms: i64,
 }

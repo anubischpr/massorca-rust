@@ -52,11 +52,17 @@ pub fn bot_table(bots: &[Bot]) -> Vec<String> {
         .collect()
 }
 
-/// One project per line: name, goal, id.
+/// One project per line: name, goal, id, and the name of its linked Workspaces project or `-`.
 pub fn project_table(projects: &[TeamProject]) -> Vec<String> {
     projects
         .iter()
-        .map(|project| format!("{}	{}	{}", project.name, project.goal, project.id))
+        .map(|project| {
+            let source = project.source_project_name.as_deref().unwrap_or("-");
+            format!(
+                "{}\t{}\t{}\t{source}",
+                project.name, project.goal, project.id
+            )
+        })
         .collect()
 }
 

@@ -8,6 +8,8 @@ pub const LIST: &str = "device.list";
 pub const REVOKE: &str = "device.revoke";
 /// Removes a revoked device from the list (host-admin). An active device is refused.
 pub const FORGET: &str = "device.forget";
+/// Raises an active device to full access, every scope (host-admin).
+pub const GRANT: &str = "device.grant";
 pub const WHOAMI: &str = "device.whoami";
 pub const PAIRING_CREATE: &str = "pairing.create";
 pub const NETWORK_STATUS: &str = "network.status";
@@ -92,9 +94,19 @@ pub struct PairingCreateParams {
     /// Lifetime in seconds; 600 when absent, at most 3600.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_secs: Option<u32>,
-    /// Adds `host-admin` and `device-admin` to the default `read` and `workspace`.
+    /// Asks for full access. Services before the full-access default read only this field, so clients send `true`
+    /// unless they ask for a reduced offer.
     #[serde(default)]
     pub admin: bool,
+    /// Advanced: a reduced offer, `read` and `workspace` only. Without it the new device gets every scope.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub standard: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceGrantParams {
+    /// The device id, or its name when that is unique.
+    pub device: String,
 }
 
 /// A pairing offer. `offer` is the credential to hand to the new device.

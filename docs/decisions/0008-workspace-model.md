@@ -23,6 +23,10 @@ lineage) comes later; the model must not block it.
 - **Git is the truth for which worktrees exist.** The store keeps identity and
   metadata. `show` and `list` report a workspace whose directory is gone as
   `missing` instead of hiding it.
+- **Lock and prune state.** `show`, `list` and unregistered worktrees carry git's
+  optional `locked` (its reason, `""` when none) and `prunable` (git's reason)
+  fields; `prunable` needs Git 2.31 and stays absent on older git, and `missing`
+  still comes from the directory.
 - **Create a worktree.** Branch defaults to the sanitized name; base defaults
   to the repository's `HEAD`. An existing local branch is used only with
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
@@ -74,6 +78,15 @@ lineage) comes later; the model must not block it.
   `unregistered` (path, branch) and is never removed. It exists after a create that
   stopped between `worktree add` and the row insert. Listing takes the mutation
   lock, so a create in progress is not reported.
+- **Project removal.** `project.remove` is refused with `project.has_workspaces`
+  while the project has workspaces. With `forget_workspaces` it deletes the project
+  row and every workspace row in one transaction, and publishes `project.removed`
+  and one `workspace.removed` per row. No file, folder, worktree or branch is
+  touched, and git does not run. It is refused with `workspace.busy` while a
+  workspace has a live terminal or agent run, or is `removing`, because forgetting
+  the records would orphan those runs. Ended agent sessions of the workspaces are
+  deleted with their rows (`ON DELETE CASCADE`), as `workspace.remove` already
+  does; their run folders and exited terminal records stay in the profile.
 - **Selectors.** An id or an exact name selects a workspace or project. A selector
   that is a path must be absolute; a relative one is refused with
   `request.invalid_params`, because it would resolve against the service's own

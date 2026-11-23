@@ -64,7 +64,11 @@ pub(crate) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Of
     let created: PairingCreated = owner
         .call(
             devices::PAIRING_CREATE,
-            &PairingCreateParams { ttl_secs, admin },
+            &PairingCreateParams {
+                ttl_secs,
+                admin,
+                standard: !admin,
+            },
         )
         .await
         .expect("an offer");
@@ -291,6 +295,56 @@ async fn a_revoked_device_is_forgotten_by_a_host_admin_and_leaves_the_list() {
         matches!(refused, ClientError::Handshake { .. }),
         "{refused:?}"
     );
+    stop(running).await;
+}
+
+/// An offer that asks for nothing in particular grants every scope, as an older client's `admin: false` does;
+/// only `standard` reduces it. `device.grant` raises a reduced device from its next connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_default_offer_is_full_access_and_grant_raises_a_reduced_device() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let owner = connect(home.path(), "server").await;
+    let all = vec!["read", "workspace", "host-admin", "device-admin"];
+
+    for params in [
+        PairingCreateParams::default(),
+        PairingCreateParams {
+            ttl_secs: None,
+            admin: true,
+            standard: false,
+        },
+    ] {
+        let created: PairingCreated = owner
+            .call(devices::PAIRING_CREATE, &params)
+            .await
+            .expect("an offer");
+        let offer = Offer::decode(created.offer.expose()).expect("the offer decodes");
+        assert_eq!(offer.scopes, all, "{params:?}");
+    }
+
+    let reduced = offer(home.path(), false, None).await;
+    assert_eq!(reduced.scopes, vec!["read", "workspace"]);
+    let (_, record) = pair(&hosts, &reduced, "small").await.unwrap();
+    let granted: DeviceInfo = owner
+        .call(
+            devices::GRANT,
+            &devices::DeviceGrantParams {
+                device: record.device_id.clone(),
+            },
+        )
+        .await
+        .expect("granted");
+    assert_eq!(granted.scopes, all);
+    let again = Client::connect_host(&hosts, "small", &peer())
+        .await
+        .unwrap();
+    let list: DeviceList = again
+        .call(devices::LIST, &())
+        .await
+        .expect("full access from the next connection");
+    assert!(!list.devices.is_empty());
     stop(running).await;
 }
 
