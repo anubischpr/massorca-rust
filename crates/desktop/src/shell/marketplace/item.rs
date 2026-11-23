@@ -97,16 +97,30 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
     .copy_link(copy)
     .host(host_selector(frame, item, cx));
     if !item.state.is_installed() {
-        header = header.action(
-            Button::new("marketplace-install", "Review and install")
-                .disabled(true)
-                .tooltip(NOT_AVAILABLE),
-        );
+        header = header.action(install_action(frame, item));
     }
     div()
         .debug_selector(|| "marketplace-part-logo".to_owned())
         .child(header)
         .into_any_element()
+}
+
+/// Review and install of a catalogue package opens its review. Sample items and agent kinds, which the service
+/// installs another way, show the action unavailable.
+fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
+    if item.extension.is_none() {
+        return Button::new("marketplace-install", "Review and install")
+            .disabled(true)
+            .tooltip(NOT_AVAILABLE);
+    }
+    let id = item.id;
+    shell_button(
+        &frame.shell,
+        "marketplace-install",
+        "Review and install",
+        ButtonVariant::Primary,
+        move |shell, cx| shell.open_extension_review(id, cx),
+    )
 }
 
 /// The host the item runs on, drawn as a selector. Choosing another host needs the service, so

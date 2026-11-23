@@ -170,6 +170,8 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// The install review of a catalogue package on screen, if any (decision 0062).
+    marketplace_review: Option<marketplace::InstallReview>,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -384,6 +386,7 @@ impl Shell {
             marketplace_code,
             marketplace_error: None,
             marketplace_uninstall: None,
+            marketplace_review: None,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,

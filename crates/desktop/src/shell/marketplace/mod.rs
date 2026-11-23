@@ -3,7 +3,10 @@
 
 mod catalogue;
 mod dialogs;
+#[cfg(test)]
+mod extension_tests;
 mod item;
+mod review;
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +19,7 @@ use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
     prelude::*, px,
 };
+use massorca_protocol::methods::extensions::ExtensionReview;
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::tokens::SPACE_6;
 
@@ -25,6 +29,22 @@ pub(super) use dialogs::dialog;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UninstallConfirm {
     pub item: MarketplaceItemId,
+    pub error: Option<String>,
+}
+
+/// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
+/// is sent to install until the person presses Install, and a vendor installer also needs its own tick (decision
+/// 0062).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct InstallReview {
+    pub item: MarketplaceItemId,
+    /// The `catalogue:<id>` source the review and the install both name.
+    pub source: String,
+    /// What `extensions.inspect` reported; `None` while it runs or after it was refused.
+    pub review: Option<ExtensionReview>,
+    /// The person's tick for running the vendor installer the review lists.
+    pub run_installer: bool,
+    pub sending: bool,
     pub error: Option<String>,
 }
 
