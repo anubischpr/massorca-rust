@@ -24,7 +24,7 @@ use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, RootAccess, ensure_dir, local_socket_name, secure_root};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
 };
 use massorca_protocol::methods::service::ServiceInfo;
 use tokio::sync::broadcast;
@@ -270,6 +270,14 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
                 events.publish(ChangeEvent {
                     topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
                     id: account.kind.clone(),
+                });
+                return;
+            }
+            // A queue change is announced under its session; no session record changed, so no watcher gets it (0084).
+            Change::Queue(session) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_AGENT_QUEUE_CHANGED.to_owned(),
+                    id: session.clone(),
                 });
                 return;
             }

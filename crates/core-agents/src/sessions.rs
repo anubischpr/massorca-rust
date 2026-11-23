@@ -50,6 +50,7 @@ use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
 mod delegation;
+mod queue;
 
 pub use delegation::{MergeResult, RepoOps};
 
@@ -69,6 +70,8 @@ pub enum Change {
     Forgotten(String),
     /// An account of a kind changed, or its state did (decision 0059). Not a session change, so watchers do not get it.
     Account(AccountsChanged),
+    /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
+    Queue(String),
 }
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
