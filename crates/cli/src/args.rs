@@ -224,10 +224,13 @@ pub enum ProjectCommand {
         /// Project id, name or path.
         project: String,
     },
-    /// Unregisters a project that has no workspaces. Its files stay.
+    /// Unregisters a project. Refused while it has workspaces, unless their records are forgotten. Its files stay.
     Rm {
         /// Project id, name or path.
         project: String,
+        /// Also forgets the project's workspace records. No file, folder, worktree or branch is touched.
+        #[arg(long)]
+        forget_workspaces: bool,
     },
 }
 

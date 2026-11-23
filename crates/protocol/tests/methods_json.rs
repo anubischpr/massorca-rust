@@ -201,6 +201,24 @@ fn project_and_project_list_have_the_documented_shape() {
 }
 
 #[test]
+fn project_remove_params_keep_the_refusal_unless_forget_workspaces_is_sent() {
+    assert_wire(
+        &projects::ProjectRemoveParams {
+            project: "app".to_owned(),
+            forget_workspaces: false,
+        },
+        &json!({ "project": "app" }),
+    );
+    assert_wire(
+        &projects::ProjectRemoveParams {
+            project: "app".to_owned(),
+            forget_workspaces: true,
+        },
+        &json!({ "project": "app", "forget_workspaces": true }),
+    );
+}
+
+#[test]
 fn project_ref_uses_the_project_key() {
     assert_wire(
         &projects::ProjectRef {

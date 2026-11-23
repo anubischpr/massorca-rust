@@ -6,34 +6,14 @@ use std::time::{Duration, Instant};
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::host::{self, HostMemory, MemoryMetric};
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
-use massorca_protocol::methods::terminals::{
-    self, ShellSpec, Terminal, TerminalCreateParams, TerminalRef,
-};
+use massorca_protocol::methods::terminals::{self, Terminal, TerminalCreateParams, TerminalRef};
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
 
-use crate::common::{connect, start, stop, temp_home};
+use crate::common::{connect, shell_with_a_child, start, stop, temp_home};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A shell that starts a child and waits for it.
-fn shell_with_a_child() -> ShellSpec {
-    if cfg!(windows) {
-        ShellSpec {
-            program: "cmd.exe".to_owned(),
-            args: vec![
-                "/d".to_owned(),
-                "/c".to_owned(),
-                "ping -n 120 127.0.0.1 >nul".to_owned(),
-            ],
-        }
-    } else {
-        ShellSpec {
-            program: "sh".to_owned(),
-            args: vec!["-c".to_owned(), "sleep 120; true".to_owned()],
-        }
-    }
-}
-
 fn utf8(path: &std::path::Path) -> String {
     path.to_str().expect("utf-8 path").to_owned()
 }

@@ -33,6 +33,8 @@ pub const WORKSPACE_LOCKED: &str = "workspace.locked";
 pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
+/// A workspace has a live terminal or agent run, or is being removed, so its project cannot be forgotten.
+pub const WORKSPACE_BUSY: &str = "workspace.busy";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";

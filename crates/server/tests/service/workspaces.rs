@@ -10,7 +10,7 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectRef,
+    self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceList, WorkspaceListParams,
@@ -242,8 +242,9 @@ async fn a_dirty_worktree_is_refused_and_a_project_with_workspaces_cannot_be_rem
     let blocked = client
         .call::<_, Project>(
             projects::REMOVE,
-            &ProjectRef {
+            &ProjectRemoveParams {
                 project: project.id.clone(),
+                forget_workspaces: false,
             },
         )
         .await
