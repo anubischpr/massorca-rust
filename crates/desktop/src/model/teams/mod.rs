@@ -16,7 +16,7 @@ pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
 pub use sidebar::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamRow, TeamsSidebar, teams_sidebar,
 };
-pub use state::{NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
+pub use state::{LINK_NOT_SAVED, NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
 pub use types::{
     AddressId, BoardOwner, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId,
     MemoryTab, Pick, Project, ProjectId, Routine, RoutineId, RunOutcome, Task, TaskId, Team,
