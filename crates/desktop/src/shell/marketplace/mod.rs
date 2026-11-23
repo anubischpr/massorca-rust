@@ -6,6 +6,7 @@ mod dialogs;
 #[cfg(test)]
 mod extension_tests;
 mod item;
+mod package;
 mod review;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,8 @@ pub(super) struct MarketplaceFrame {
     advanced_open: bool,
     /// A refused change, with the account it concerns (None for the whole Connection part).
     error: Option<(Option<AccountId>, String)>,
+    /// A refused change to an installed package, with the item it concerns.
+    item_error: Option<(MarketplaceItemId, String)>,
     shell: WeakEntity<Shell>,
 }
 
@@ -73,6 +76,7 @@ pub(super) fn frame(
         search: shell.marketplace_search.clone(),
         advanced_open: shell.model.marketplace_advanced_open(),
         error: shell.marketplace_error.clone(),
+        item_error: shell.marketplace_item_error.clone(),
         shell: weak,
     }
 }
@@ -148,13 +152,17 @@ impl Shell {
         cx.notify();
     }
 
-    /// The Switch of an installed item. Only the sample changes; the service is not connected.
+    /// The Switch of an installed item. A service package is changed through the service; the sample changes itself.
     pub(super) fn set_marketplace_enabled(
         &mut self,
         item: MarketplaceItemId,
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(package) = self.package_of(item) {
+            self.set_package_enabled(item, package, enabled, cx);
+            return;
+        }
         let _ = self.change_marketplace(cx, |source| source.set_enabled(item, enabled));
     }
 

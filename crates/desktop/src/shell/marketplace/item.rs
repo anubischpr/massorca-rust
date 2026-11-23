@@ -4,7 +4,7 @@
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
 use crate::model::marketplace::{
-    AccountState, AccountView, MarketplaceItem, MarketplaceItemId, Part, account_views,
+    AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId, Part, account_views,
     advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
@@ -22,6 +22,7 @@ use massorca_ui::components::danger_zone::DangerZone;
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::invocation_banner::InvocationBanner;
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
+use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
     RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
     TYPE_BODY_STRONG, TYPE_TITLE_SM,
@@ -52,7 +53,7 @@ pub(super) fn item_page(
             Part::Banner => banner(item),
             Part::Connection => connection(frame, item, cx),
             Part::Information => information_section(item, cx),
-            Part::Settings => settings_section(item, cx),
+            Part::Settings => settings_section(frame, item, cx),
             Part::AdvancedOptions => advanced_section(frame, item, cx),
             Part::DangerZone => danger_section(frame, item),
         };
@@ -321,12 +322,19 @@ fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
 
 /// Part 7: the item's settings, or the reason there are none yet. The default agent is not
 /// available yet, so its control shows that instead of a value.
-fn settings_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
+fn settings_section(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
     let theme = *cx.theme();
     let p = &theme.palette;
     let rows = settings_rows(item);
     let mut body = div().flex().flex_col().gap(px(SPACE_2));
-    if rows.is_empty() {
+    let switch = match (&item.extension, &item.state) {
+        (Some(_), ItemState::Installed { enabled, .. }) => Some(*enabled),
+        _ => None,
+    };
+    if let Some(enabled) = switch {
+        body = body.child(enabled_row(frame, item, enabled, cx));
+    }
+    if rows.is_empty() && switch.is_none() {
         let text = if item.state.is_installed() {
             "This item has no settings."
         } else {
@@ -369,7 +377,65 @@ fn settings_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
                 .child(Badge::text(NOT_AVAILABLE).tone(BadgeTone::Neutral)),
         );
     }
+    if let Some((id, text)) = &frame.item_error {
+        if *id == item.id {
+            body = body.child(alert(text, cx));
+        }
+    }
     part_section("marketplace-part-settings", "Settings", body, cx)
+}
+
+/// The Enabled switch of an installed package: it shows the state the service reports, and sends the change.
+fn enabled_row(
+    frame: &MarketplaceFrame,
+    item: &MarketplaceItem,
+    enabled: bool,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let id = item.id;
+    let shell = frame.shell.clone();
+    let switch = Switch::new(
+        SharedString::from(format!("marketplace-enabled-{}", item.id.0)),
+        enabled,
+    )
+    .on_change(move |checked, _, cx| {
+        let _ = shell.update(cx, |shell, cx| {
+            shell.set_marketplace_enabled(id, checked, cx)
+        });
+    });
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(SPACE_4))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_1))
+                .child(
+                    div()
+                        .text_style(TYPE_BODY_STRONG)
+                        .text_color(p.text.primary)
+                        .child("Enabled"),
+                )
+                .child(
+                    div()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(p.text.secondary)
+                        .child("Off, the package stops running on this computer. Its files and data stay."),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "marketplace-enabled-switch".to_owned())
+                .child(switch),
+        )
+        .into_any_element()
 }
 
 /// Part 8: the versions, the source and who can use the item, collapsed until it is opened.

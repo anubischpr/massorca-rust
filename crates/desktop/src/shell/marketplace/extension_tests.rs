@@ -2,14 +2,15 @@
 //! only from the person's press, with the consent of the review they read. A scripted service answers each call.
 
 use super::InstallReview;
-use crate::model::marketplace::MarketplaceItemId;
+use crate::model::marketplace::{ItemState, MarketplaceItemId};
 use crate::model::navigation::MarketplacePage;
 use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate};
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::extensions::{
-    CliPlan, CliPlanState, ExtensionInstalled, ExtensionItem, ExtensionReview, ExtensionState,
-    Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef, UninstallEffects,
+    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionReview,
+    ExtensionState, InstalledInfo, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
+    UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -103,14 +104,18 @@ fn review(runs_installer: bool) -> ExtensionReview {
     }
 }
 
-/// A connected shell with the catalogue listing one available package, and its page open.
-fn open_page(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext, MarketplaceItemId) {
+/// A connected shell whose lists hold these packages, with the page of the catalogue's first one open.
+fn open_listed(
+    cx: &mut TestAppContext,
+    installed: Vec<ExtensionItem>,
+    catalogue: Vec<ExtensionItem>,
+) -> (Rig, &mut VisualTestContext, MarketplaceItemId) {
     let (rig, cx) = rig(cx, &[]);
     rig.updates
         .send(StoreUpdate::Extensions(ExtensionsRead {
             number: 1,
-            installed: Ok(Vec::new()),
-            catalogue: Ok(vec![catalogue_package()]),
+            installed: Ok(installed),
+            catalogue: Ok(catalogue),
         }))
         .expect("the store listens");
     cx.run_until_parked();
@@ -131,6 +136,42 @@ fn open_page(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext, Marketpla
     });
     draw(cx);
     (rig, cx, id)
+}
+
+/// A connected shell with the catalogue listing one available package, and its page open.
+fn open_page(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext, MarketplaceItemId) {
+    open_listed(cx, Vec::new(), vec![catalogue_package()])
+}
+
+/// The package as the service lists it once installed, on or off.
+fn installed_package(enabled: bool) -> ExtensionItem {
+    let mut item = catalogue_package();
+    item.state = if enabled {
+        ExtensionState::Enabled
+    } else {
+        ExtensionState::Disabled
+    };
+    item.installed = Some(InstalledInfo {
+        version: "1.0.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: "acme.notes".to_owned(),
+        },
+        sha256: "0123abcd".to_owned(),
+        installed_at_ms: 0,
+        cli: Vec::new(),
+    });
+    item
+}
+
+fn item_state(rig: &Rig, cx: &mut VisualTestContext, id: MarketplaceItemId) -> Option<ItemState> {
+    rig.shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .marketplace()
+            .item(id)
+            .map(|item| item.state.clone())
+    })
 }
 
 /// Takes the inspect the review sent and returns its reply.
@@ -262,4 +303,87 @@ fn a_package_changed_after_its_review_says_so_and_keeps_the_review_open(cx: &mut
         Some("The package changed after you reviewed it. Review it again before installing.")
     );
     assert!(!held.sending);
+}
+
+#[gpui::test]
+fn the_enabled_switch_sends_the_change_and_shows_only_what_the_service_then_reports(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "marketplace-enabled-switch");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::SetEnabled { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert!(
+                !params.enabled,
+                "the switch sends the state it was turned to"
+            );
+            reply
+        }
+        _ => panic!("the switch sends the change to the service"),
+    };
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: true,
+            update: None
+        }),
+        "nothing moves before the service answers"
+    );
+
+    let _ = reply.send(Ok(ExtensionEnabled {
+        id: "acme.notes".to_owned(),
+        enabled: false,
+        changed: true,
+    }));
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(vec![installed_package(false)]),
+            catalogue: Ok(vec![installed_package(false)]),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert_eq!(
+        item_state(&rig, cx, id),
+        Some(ItemState::Installed {
+            enabled: false,
+            update: None
+        })
+    );
+}
+
+#[gpui::test]
+fn a_refused_switch_says_why_under_the_item(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "marketplace-enabled-switch");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::SetEnabled { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.busy".to_owned(),
+                message: "extension acme.notes is busy".to_owned(),
+            }));
+        }
+        _ => panic!("the switch sends the change to the service"),
+    }
+    cx.run_until_parked();
+    let shown = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone());
+    assert_eq!(
+        shown,
+        Some((
+            id,
+            "This package is busy. Wait for its install or removal to finish.".to_owned()
+        ))
+    );
 }
