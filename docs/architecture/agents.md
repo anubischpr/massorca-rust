@@ -302,6 +302,27 @@ no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
 
+## Prompt queue (decision 0084)
+
+A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
+`agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
+
+- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
+  returns the prompt it queued then.
+- `agent.queue.list {session}` returns `{session, items}`, head first.
+- `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
+  A prompt being sent is refused with `agent.busy`.
+
+A `QueuedPrompt` has `id`, `session`, `position` (from 1), `text`, `state` (`waiting`, `sending`, `failed`), `reason`
+and `created_at_ms` / `updated_at_ms`. The reason of a waiting prompt is `busy`, `asking`, `paused_stopped`,
+`paused_restarted` or `behind_failed`; the reason of a failed prompt is why its delivery failed. Constants:
+`QUEUE_REASON_*` in `massorca_protocol::methods::agents`.
+
+Refusals: `agent.queue_unavailable` for a kind that declares no status mechanism (or is not declared), so it has no
+queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unknown prompt id; `agent.prompt_invalid` for
+a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
+session id; `agent.watch` streams do not carry queue items.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
