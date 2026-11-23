@@ -6,15 +6,17 @@ use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
-use crate::service::fixtures::{project, workspace};
-use crate::service::{ConnectionState, Script, StoreUpdate};
+use crate::service::fixtures::{agent, agent_kind, project, workspace};
+use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
+use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 
 struct Rig {
     shell: Entity<Shell>,
@@ -307,4 +309,173 @@ fn a_long_path_truncates_in_its_fact_row_and_the_page_stays_in_the_window(cx: &m
         tail_right <= row_right + EDGE_TOLERANCE,
         "the path's last segment ends at {tail_right} px, past the row at {row_right} px"
     );
+}
+
+/// The start page of workspace w1 on a connected service that declares these agent kinds.
+fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut VisualTestContext) {
+    let (rig, cx) = rig(
+        cx,
+        vec![project("p1", "alpha")],
+        vec![workspace("w1", "p1", "fix-login", 1)],
+    );
+    rig._updates
+        .send(StoreUpdate::AgentKindsResync(kinds))
+        .expect("the store listens");
+    rig.shell.update(cx, |shell, _| {
+        shell.model.select_workspace(Some("w1".to_owned()))
+    });
+    cx.run_until_parked();
+    draw(cx);
+    (rig, cx)
+}
+
+fn composer_of(rig: &Rig, cx: &mut VisualTestContext) -> Entity<Composer> {
+    rig.shell
+        .update(cx, |shell, cx| shell.start_composer("w1", cx))
+}
+
+/// Types `text` into the start page's composer and presses Enter.
+fn type_and_send(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
+    let composer = composer_of(rig, cx);
+    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_input(text);
+    cx.simulate_keystrokes("enter");
+}
+
+/// The next `agent.start` the shell sends, with the reply that answers it.
+fn start_call(
+    script: &mut Script,
+) -> Option<(
+    AgentStartParams,
+    oneshot::Sender<Result<AgentSession, Refusal>>,
+)> {
+    while let Some(command) = script.next() {
+        if let Command::AgentStart { params, reply } = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn the_start_page_offers_the_on_and_detected_kinds_and_starts_on_the_first(
+    cx: &mut TestAppContext,
+) {
+    let mut cursor = agent_kind("cursor", "Cursor", PackageState::Enabled);
+    cursor.detected = false;
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Disabled),
+            cursor,
+        ],
+    );
+    let composer = composer_of(&rig, cx);
+    let (offered, chosen) = composer.read_with(cx, |composer, cx| {
+        let state = composer.picker().read(cx).state();
+        (
+            state
+                .agents()
+                .iter()
+                .map(|agent| agent.models[0].id.to_string())
+                .collect::<Vec<_>>(),
+            state.choice().model.to_string(),
+        )
+    });
+    assert_eq!(offered, ["claude"]);
+    assert_eq!(chosen, "claude");
+}
+
+#[gpui::test]
+fn sending_the_prompt_asks_the_service_to_start_the_chosen_kind_in_the_workspace(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.workspace, "w1");
+    assert_eq!(params.kind, "claude");
+    assert_eq!(params.prompt.as_deref(), Some("fix the login"));
+}
+
+#[gpui::test]
+fn a_refused_start_shows_the_services_sentence_and_keeps_the_prompt(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let refusal = Refusal::Failed {
+        code: "agent.not_signed_in".to_owned(),
+        message: "the agent is not signed in".to_owned(),
+    };
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell is waiting for the answer");
+    cx.run_until_parked();
+    draw(cx);
+    let composer = composer_of(&rig, cx);
+    let (error, draft) = composer.read_with(cx, |composer, cx| {
+        (
+            composer.error_reason().map(|reason| reason.to_string()),
+            composer.draft(cx),
+        )
+    });
+    assert_eq!(error, Some(refusal.sentence()));
+    assert_eq!(draft, "fix the login");
+}
+
+#[gpui::test]
+fn nothing_shows_as_started_until_the_service_answers(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, pending) = rig.shell.read_with(cx, |shell, _| {
+        (shell.model.canvas(), shell.start_pending.clone())
+    });
+    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()));
+    let status = pending.map(|pending| pending.status());
+    assert_eq!(status.as_deref(), Some("Starting Claude on This PC"));
+}
+
+#[gpui::test]
+fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session.clone()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, active) = rig.shell.read_with(cx, |shell, _| {
+        (
+            shell.model.canvas(),
+            shell.model.snapshot().active_session.clone(),
+        )
+    });
+    assert!(matches!(canvas, Canvas::Session(_)), "{canvas:?}");
+    assert_eq!(active.as_deref(), Some(session.id.as_str()));
 }

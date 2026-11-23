@@ -8,11 +8,14 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, Window, div, px,
 };
+use massorca_protocol::methods::agents::AgentSession;
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::composer::{Composer, ComposerEvent};
 use massorca_ui::components::kbd::Kbd;
-use massorca_ui::components::model_picker::{Choice, PickerState};
+use massorca_ui::components::model_picker::{
+    AgentAvailability, AgentOption, Choice, ModelList, ModelOption, PickerState,
+};
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
@@ -28,9 +31,14 @@ use std::io::Write;
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
-use crate::model::start_page::{GIT_LATER, KEY_HINTS, SESSIONS_LATER, VOICE_LATER, WorkspaceStart};
+use crate::model::agent_kinds::{KindChoice, session_kind_choices};
+use crate::model::agent_sessions::agent_of_kind;
+use crate::model::start_page::{
+    GIT_LATER, KEY_HINTS, StartingSession, VOICE_LATER, WorkspaceStart, send_reason, start_params,
+};
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
+use crate::service::Refusal;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
@@ -39,13 +47,16 @@ pub(super) struct StartFrame {
     pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
     pub connected: bool,
+    /// The start in flight for this workspace, shown under the composer.
+    pub starting: Option<String>,
 }
 
-/// A workspace's start page composer, with the subscription that logs its drafts in a debug launch.
+/// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
+/// starts a session when the user sends.
 #[derive(Debug)]
 pub(super) struct StartComposer {
     pub entity: Entity<Composer>,
-    _draft_log: Subscription,
+    _events: Subscription,
 }
 
 /// The start page for one workspace, centred in the Canvas.
@@ -117,7 +128,10 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .flex_col()
         .gap(px(SPACE_2))
         .child(frame.composer.clone())
-        .child(key_hints(&theme));
+        .child(key_hints(&theme))
+        .when_some(frame.starting.clone(), |column, status| {
+            column.child(starting_line(status, &theme))
+        });
 
     let facts = SettingsSection::new("start-facts", "Workspace")
         .row(fact_row("start-name", "Name", page.name.clone()))
@@ -167,6 +181,35 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .p(px(SPACE_8))
         .child(column)
         .into_any_element()
+}
+
+/// The start in flight, under the composer until the service answers (D-AG-01 States).
+fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
+    div()
+        .debug_selector(|| "start-status".to_owned())
+        .text_style(TYPE_CAPTION)
+        .text_color(theme.palette.text.tertiary)
+        .child(status)
+}
+
+/// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
+/// service declares no models yet.
+fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
+    choices
+        .iter()
+        .map(|choice| AgentOption {
+            kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
+            availability: AgentAvailability::Ready,
+            list: ModelList::Loaded,
+            models: vec![ModelOption {
+                id: choice.id.clone().into(),
+                name: choice.name.clone().into(),
+                efforts: Vec::new(),
+                default_effort: 0,
+                fast: false,
+            }],
+        })
+        .collect()
 }
 
 /// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
@@ -335,16 +378,19 @@ impl Shell {
     }
 
     /// The composer of a workspace's start page, created on first use and then kept, so the
-    /// draft stays while the page redraws or the workspace is shown again.
+    /// draft stays while the page redraws or the workspace is shown again. Each frame keeps its
+    /// agents and Send in step with the store and the start in flight.
     pub(super) fn start_composer(
         &mut self,
         workspace_id: &str,
         cx: &mut Context<Self>,
     ) -> Entity<Composer> {
         let log_drafts = self.debug_focus == Some(DebugFocus::Composer);
-        self.start_composers
+        let entity = self
+            .start_composers
             .entry(workspace_id.to_owned())
             .or_insert_with(|| {
+                let workspace = workspace_id.to_owned();
                 let picker = PickerState::new(
                     Vec::new(),
                     Choice {
@@ -356,26 +402,133 @@ impl Shell {
                 let entity = cx.new(|cx| {
                     Composer::new(picker, Vec::new(), cx)
                         .leading_control(start_mode_switch())
-                        .send_unavailable(SESSIONS_LATER)
                         .voice_unavailable(VOICE_LATER)
                 });
-                let draft_log =
-                    cx.subscribe(&entity, move |_, composer, event: &ComposerEvent, cx| {
-                        if log_drafts && *event == ComposerEvent::DraftChanged {
+                let events = cx.subscribe(
+                    &entity,
+                    move |shell, composer, event: &ComposerEvent, cx| match event {
+                        ComposerEvent::DraftChanged if log_drafts => {
                             let draft = composer.read(cx).draft(cx);
                             let _ = writeln!(
                                 std::io::stderr(),
                                 "massorca-desktop: debug composer draft={draft:?}"
                             );
                         }
-                    });
+                        ComposerEvent::Send(prompt) => {
+                            shell.start_session(&workspace, prompt, composer.clone(), cx);
+                        }
+                        _ => {}
+                    },
+                );
                 StartComposer {
                     entity,
-                    _draft_log: draft_log,
+                    _events: events,
                 }
             })
             .entity
-            .clone()
+            .clone();
+        self.refresh_start_composer(&entity, workspace_id, cx);
+        entity
+    }
+
+    /// Keeps a start composer in step with the store: the kinds it offers, and why Send is off.
+    fn refresh_start_composer(
+        &self,
+        composer: &Entity<Composer>,
+        workspace_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let (choices, connected) = {
+            let state = self.store.read(cx).state();
+            (
+                session_kind_choices(&state.agent_kinds),
+                state.connection.is_connected(),
+            )
+        };
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_agents(picker_agents(&choices), cx);
+        });
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .clone();
+        let kind_chosen = choices
+            .iter()
+            .any(|choice| choice.id.as_str() == chosen.as_ref());
+        let starting = self
+            .start_pending
+            .as_ref()
+            .filter(|pending| pending.workspace == workspace_id);
+        let reason = send_reason(connected, kind_chosen, starting).map(SharedString::from);
+        composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
+    }
+
+    /// Sends the first prompt of a new session with the chosen kind. Nothing shows as started until the
+    /// service answers.
+    fn start_session(
+        &mut self,
+        workspace: &str,
+        prompt: &str,
+        composer: Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let choices = session_kind_choices(&self.store.read(cx).state().agent_kinds);
+        let Some(kind) = choices.into_iter().find(|kind| kind.id == chosen) else {
+            return;
+        };
+        let params = start_params(workspace, &kind.id, prompt);
+        self.start_pending = Some(StartingSession {
+            workspace: workspace.to_owned(),
+            kind_name: kind.name,
+        });
+        let prompt = prompt.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_start(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_start(&prompt, composer, answer, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The service's answer to a start: the session opens once the Sidebar lists it, and a refusal
+    /// gives the prompt back to the composer with its sentence.
+    fn finish_start(
+        &mut self,
+        prompt: &str,
+        composer: Entity<Composer>,
+        answer: Result<AgentSession, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_pending = None;
+        match answer {
+            Ok(session) => {
+                composer.update(cx, |composer, cx| composer.set_error(None, cx));
+                self.model.open_started_session(session.id);
+            }
+            Err(refusal) => composer.update(cx, |composer, cx| {
+                composer.set_draft(prompt, cx);
+                composer.set_error(Some(refusal.sentence().into()), cx);
+            }),
+        }
+        cx.notify();
     }
 
     /// Puts the focus in the selected workspace's start page composer (the debug focus).

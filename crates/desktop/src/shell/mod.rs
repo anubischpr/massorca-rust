@@ -159,6 +159,8 @@ pub struct Shell {
     debug_page: Option<DebugPage>,
     /// Each workspace's start page composer, kept so its draft survives redraws.
     start_composers: HashMap<String, start_page::StartComposer>,
+    /// The session a start is asking the service for, until the service answers.
+    start_pending: Option<crate::model::start_page::StartingSession>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -395,6 +397,7 @@ impl Shell {
             debug_focus: None,
             debug_page: None,
             start_composers: HashMap::new(),
+            start_pending: None,
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
@@ -573,11 +576,17 @@ impl Render for Shell {
         });
         let start = start.map(|page| {
             let composer = self.start_composer(&page.id, cx);
+            let starting = self
+                .start_pending
+                .as_ref()
+                .filter(|pending| pending.workspace == page.id)
+                .map(|pending| pending.status());
             start_page::StartFrame {
                 page,
                 composer,
                 shell: shell.clone(),
                 connected,
+                starting,
             }
         });
         let connection = self.store.read(cx).state().connection.clone();
