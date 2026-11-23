@@ -127,7 +127,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),
@@ -143,7 +144,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "project": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),

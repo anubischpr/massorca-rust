@@ -1,10 +1,14 @@
 //! Teams, bots and team projects over the wire: their CRUD, name and lead rules, refusals and events.
 
+use std::path::Path;
 use std::time::Duration;
 
-use massorca_client::Subscription;
+use massorca_client::{Client, Subscription};
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_TEAM_CHANGED};
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectKind, ProjectRef,
+};
 use massorca_protocol::methods::teams::{
     self, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
     TeamCharacter, TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
@@ -14,6 +18,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 
 use super::common::{connect, remote_code, start, stop, temp_home};
+use super::git_fixture::git;
 
 fn create_params(name: &str) -> TeamCreateParams {
     TeamCreateParams {
@@ -409,6 +414,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 name: "parser".to_owned(),
                 goal: Some("Parse the config".to_owned()),
                 brief: None,
+                source_project: None,
             },
         )
         .await
@@ -424,6 +430,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 name: "parser".to_owned(),
                 goal: None,
                 brief: None,
+                source_project: None,
             },
         )
         .await
@@ -439,6 +446,7 @@ async fn team_projects_are_added_updated_and_removed_within_their_team() {
                 name: None,
                 goal: None,
                 brief: Some("Keep it small.".to_owned()),
+                source_project: None,
             },
         )
         .await
@@ -522,6 +530,7 @@ async fn unknown_teams_bots_and_projects_are_refused_with_typed_codes() {
                 name: Some("renamed".to_owned()),
                 goal: None,
                 brief: None,
+                source_project: None,
             },
         )
         .await
@@ -563,6 +572,7 @@ async fn team_changes_publish_team_changed_with_the_team_id() {
                 name: "parser".to_owned(),
                 goal: None,
                 brief: None,
+                source_project: None,
             },
         )
         .await
@@ -637,6 +647,7 @@ async fn a_teams_bots_and_projects_are_listed_in_creation_order_and_only_its_own
                     name: name.to_owned(),
                     goal: Some(format!("Ships the {name}")),
                     brief: None,
+                    source_project: None,
                 },
             )
             .await
@@ -674,5 +685,228 @@ async fn a_teams_bots_and_projects_are_listed_in_creation_order_and_only_its_own
         .await
         .expect_err("an unknown team");
     assert_eq!(remote_code(&missing), codes::TEAM_NOT_FOUND);
+    stop(running).await;
+}
+
+/// A git repository with one commit at `dir`, so `project.add` registers it as a git project.
+fn git_repo(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("create repository dir");
+    git(dir, &["init", "-q"]);
+    std::fs::write(dir.join("README.md"), "hello\n").expect("write readme");
+    git(dir, &["add", "README.md"]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+}
+
+/// Registers `path` as a Workspaces project: git, unless `kind` says folder.
+async fn register_project(client: &Client, path: &Path, kind: Option<ProjectKind>) -> Project {
+    let params = ProjectAddParams {
+        path: path.to_str().expect("utf-8 path").to_owned(),
+        name: None,
+        kind,
+        workspaces_root: None,
+    };
+    client
+        .call(projects::ADD, &params)
+        .await
+        .expect("project.add")
+}
+
+/// Adds `name` to team "alpha", linked to the Workspaces project `source` when given.
+fn project_add(name: &str, source: Option<&str>) -> TeamProjectAddParams {
+    TeamProjectAddParams {
+        team: "alpha".to_owned(),
+        name: name.to_owned(),
+        goal: None,
+        brief: None,
+        source_project: source.map(str::to_owned),
+    }
+}
+
+/// Changes the source of `project` in team "alpha": `Some("")` clears it, `None` leaves it as it is.
+fn project_update_source(project: &str, source: Option<&str>) -> TeamProjectUpdateParams {
+    TeamProjectUpdateParams {
+        team: "alpha".to_owned(),
+        project: project.to_owned(),
+        name: None,
+        goal: None,
+        brief: None,
+        source_project: source.map(str::to_owned),
+    }
+}
+
+fn alpha_team() -> TeamRef {
+    TeamRef {
+        team: "alpha".to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn a_team_project_links_a_git_or_a_folder_workspaces_project_as_its_source() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    let folder = home.path().join("notes");
+    git_repo(&repo);
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let repo_project = register_project(&client, &repo, None).await;
+    let folder_project = register_project(&client, &folder, Some(ProjectKind::Folder)).await;
+
+    let parser: TeamProject = client
+        .call(
+            teams::PROJECT_ADD,
+            &project_add("parser", Some(&repo_project.name)),
+        )
+        .await
+        .expect("linked by name");
+    assert_eq!(
+        parser.source_project.as_deref(),
+        Some(repo_project.id.as_str())
+    );
+    assert_eq!(parser.source_project_name.as_deref(), Some("repo"));
+    assert_eq!(parser.source_kind, Some(ProjectKind::Git));
+
+    let folder_path = folder.to_str().expect("utf-8 path");
+    let lexer: TeamProject = client
+        .call(teams::PROJECT_ADD, &project_add("lexer", Some(folder_path)))
+        .await
+        .expect("linked by path");
+    assert_eq!(
+        lexer.source_project.as_deref(),
+        Some(folder_project.id.as_str())
+    );
+    assert_eq!(lexer.source_kind, Some(ProjectKind::Folder));
+
+    let listed: TeamProjectList = client
+        .call(teams::PROJECT_LIST, &alpha_team())
+        .await
+        .expect("team.project_list");
+    let listed_parser = listed
+        .projects
+        .iter()
+        .find(|project| project.id == parser.id)
+        .expect("parser is listed");
+    assert_eq!(listed_parser.source_project_name.as_deref(), Some("repo"));
+    assert_eq!(listed_parser.source_kind, Some(ProjectKind::Git));
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn updating_the_source_moves_it_and_an_empty_one_clears_it() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    let folder = home.path().join("notes");
+    git_repo(&repo);
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let repo_project = register_project(&client, &repo, None).await;
+    let folder_project = register_project(&client, &folder, Some(ProjectKind::Folder)).await;
+    let parser: TeamProject = client
+        .call(
+            teams::PROJECT_ADD,
+            &project_add("parser", Some(&repo_project.id)),
+        )
+        .await
+        .expect("linked by id");
+
+    let moved: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some(&folder_project.id)),
+        )
+        .await
+        .expect("moved to the folder");
+    assert_eq!(
+        moved.source_project.as_deref(),
+        Some(folder_project.id.as_str())
+    );
+    assert_eq!(moved.source_project_name.as_deref(), Some("notes"));
+    assert_eq!(moved.source_kind, Some(ProjectKind::Folder));
+
+    let cleared: TeamProject = client
+        .call(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some("")),
+        )
+        .await
+        .expect("an empty source clears the link");
+    assert_eq!(cleared.id, parser.id);
+    assert_eq!(cleared.name, "parser");
+    assert_eq!(cleared.source_project, None);
+    assert_eq!(cleared.source_project_name, None);
+    assert_eq!(cleared.source_kind, None);
+
+    let unknown = client
+        .call::<_, TeamProject>(
+            teams::PROJECT_UPDATE,
+            &project_update_source("parser", Some("nothing")),
+        )
+        .await
+        .expect_err("an unknown source project");
+    assert_eq!(remote_code(&unknown), codes::PROJECT_NOT_FOUND);
+    let unknown_on_add = client
+        .call::<_, TeamProject>(teams::PROJECT_ADD, &project_add("lexer", Some("nothing")))
+        .await
+        .expect_err("an unknown source project on add");
+    assert_eq!(remote_code(&unknown_on_add), codes::PROJECT_NOT_FOUND);
+    let listed: TeamProjectList = client
+        .call(teams::PROJECT_LIST, &alpha_team())
+        .await
+        .expect("team.project_list");
+    assert_eq!(listed.projects.len(), 1, "a refused add creates no project");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn removing_the_workspaces_project_clears_the_link_and_keeps_the_team_project() {
+    let home = temp_home();
+    let folder = home.path().join("notes");
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .call::<_, Team>(teams::CREATE, &create_params("alpha"))
+        .await
+        .expect("alpha");
+    let folder_project = register_project(&client, &folder, Some(ProjectKind::Folder)).await;
+    let parser: TeamProject = client
+        .call(
+            teams::PROJECT_ADD,
+            &project_add("parser", Some(&folder_project.id)),
+        )
+        .await
+        .expect("linked");
+
+    let removed: Project = client
+        .call(
+            projects::REMOVE,
+            &ProjectRef {
+                project: folder_project.id.clone(),
+            },
+        )
+        .await
+        .expect("project.remove");
+    assert_eq!(removed.id, folder_project.id);
+
+    let listed: TeamProjectList = client
+        .call(teams::PROJECT_LIST, &alpha_team())
+        .await
+        .expect("team.project_list");
+    assert_eq!(listed.projects.len(), 1);
+    let kept = &listed.projects[0];
+    assert_eq!(kept.id, parser.id);
+    assert_eq!(kept.name, "parser");
+    assert_eq!(kept.source_project, None);
+    assert_eq!(kept.source_project_name, None);
+    assert_eq!(kept.source_kind, None);
     stop(running).await;
 }
