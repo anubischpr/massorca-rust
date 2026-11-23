@@ -5,7 +5,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, div, px};
 use massorca_protocol::methods::agents::{
-    AgentKind, AgentPromptParams, AgentSession, PromptReceipt,
+    AgentKind, AgentModeSet, AgentPromptParams, AgentSession, AgentSetModeParams, PromptReceipt,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
@@ -23,6 +23,7 @@ use super::sidebar_rows::glyph_state;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
+use crate::model::permission_modes::{mode_to_set, session_modes};
 use crate::model::shell::AgentState;
 use crate::model::start_page::VOICE_LATER;
 use crate::service::{Refusal, ServiceHandle};
@@ -248,11 +249,30 @@ impl Shell {
             .any(|kind| kind.id == session.kind && kind.resumable);
         let call = self.session_calls.get(&id).copied();
         let terms = composer_terms(&session, resumable, call);
+        let modes = kinds
+            .iter()
+            .find(|kind| kind.id == session.kind)
+            .and_then(|kind| session_modes(kind, &session));
         let composer = self.session_composer(&id, cx);
         composer.update(cx, |composer, cx| {
             composer.set_busy(terms.busy, cx);
             composer.set_disabled_reason(terms.reason.map(SharedString::from), cx);
             composer.set_resume_offered(terms.resume, cx);
+            // The chip always shows the service's mode; a pick only asks for a change.
+            match modes {
+                Some(modes) => {
+                    composer.set_access_modes(
+                        super::start_page::access_modes(&modes.choices),
+                        modes.selected,
+                        cx,
+                    );
+                    composer.set_access_note(modes.note.map(SharedString::from), cx);
+                }
+                None => {
+                    composer.set_access_modes(Vec::new(), 0, cx);
+                    composer.set_access_note(None, cx);
+                }
+            }
         });
         Some(SessionFrame {
             stop_aside: terms.stop_aside.then_some(call.is_some()),
@@ -309,6 +329,9 @@ impl Shell {
                         }
                         ComposerEvent::Stop => shell.stop_session(&id, cx),
                         ComposerEvent::Resume => shell.resume_session(&id, cx),
+                        ComposerEvent::AccessChanged(index) => {
+                            shell.set_session_mode(&id, *index, cx)
+                        }
                         _ => {}
                     },
                 );
@@ -389,15 +412,86 @@ impl Shell {
         let Some(service) = self.begin_session_call(session, SessionCall::Resuming, cx) else {
             return;
         };
+        let mode = self.pending_bypass(session, cx);
         let id = session.to_owned();
         let shell = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let answer = service.agent_resume(&id).await;
+            let answer = service.agent_resume(&id, mode).await;
             let _ = shell.update(cx, |shell, cx| {
                 shell.finish_session_call(&id, "Could not resume the session", answer, cx);
             });
         })
         .detach();
+    }
+
+    /// Asks the service to switch the session to the mode of the chip's entry `index`: at once where the kind has a
+    /// live switch, else at the next resume. Picking the running mode, or the CLI's default, changes nothing.
+    fn set_session_mode(&mut self, session: &str, index: usize, cx: &mut Context<Self>) {
+        let mode = {
+            let state = self.store.read(cx).state();
+            state
+                .agents
+                .iter()
+                .find(|record| record.id == session)
+                .and_then(|record| {
+                    let kind = state
+                        .agent_kinds
+                        .iter()
+                        .find(|kind| kind.id == record.kind)?;
+                    mode_to_set(&session_modes(kind, record)?, record, index)
+                })
+        };
+        let (Some(mode), Some(service)) = (mode, self.service.clone()) else {
+            cx.notify();
+            return;
+        };
+        self.session_notices.remove(session);
+        let params = AgentSetModeParams {
+            session: session.to_owned(),
+            permission_mode: mode,
+            force: false,
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_set_mode(params).await;
+            let _ = shell.update(cx, |shell, cx| shell.finish_set_mode(&id, answer, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The service's answer to a mode switch: the chip follows the session the store holds, and a refusal is kept
+    /// above the composer with its reason.
+    fn finish_set_mode(
+        &mut self,
+        session: &str,
+        answer: Result<AgentModeSet, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(refusal) = answer {
+            self.session_notices.insert(
+                session.to_owned(),
+                format!("Could not change the mode: {}", refusal.sentence()),
+            );
+        }
+        cx.notify();
+    }
+
+    /// A bypass mode the person picked for the next resume. The service carries a bypass mode into a run only when
+    /// the resume names it, so Resume names it; any other pending mode the service applies by itself.
+    fn pending_bypass(&self, session: &str, cx: &App) -> Option<String> {
+        let state = self.store.read(cx).state();
+        let record = state.agents.iter().find(|record| record.id == session)?;
+        let pending = record.pending_permission_mode.as_deref()?;
+        state
+            .agent_kinds
+            .iter()
+            .find(|kind| kind.id == record.kind)?
+            .permission_modes
+            .iter()
+            .any(|mode| mode.id == pending && mode.bypass)
+            .then(|| pending.to_owned())
     }
 
     /// Marks a call in flight for `session`. None when one is already in flight or there is no service to ask.

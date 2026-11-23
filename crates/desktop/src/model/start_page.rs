@@ -108,8 +108,14 @@ pub fn send_reason(
     }
 }
 
-/// The `agent.start` call that opens a session in `workspace` with `prompt`, at the Work panel's terminal size.
-pub fn start_params(workspace: &str, kind: &str, prompt: &str) -> AgentStartParams {
+/// The `agent.start` call that opens a session in `workspace` with `prompt`, at the Work panel's terminal size. A
+/// `permission_mode` is sent only when the person picked one; without it the vendor CLI starts in its own default.
+pub fn start_params(
+    workspace: &str,
+    kind: &str,
+    prompt: &str,
+    permission_mode: Option<String>,
+) -> AgentStartParams {
     AgentStartParams {
         workspace: workspace.to_owned(),
         kind: kind.to_owned(),
@@ -121,7 +127,7 @@ pub fn start_params(workspace: &str, kind: &str, prompt: &str) -> AgentStartPara
         cols: Some(NEW_TERMINAL_COLS),
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
-        permission_mode: None,
+        permission_mode,
     }
 }
 
@@ -274,8 +280,9 @@ mod tests {
 
     #[test]
     fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
-        let params = start_params("w1", "claude", "fix the login");
+        let params = start_params("w1", "claude", "fix the login", None);
         assert_eq!(params.workspace, "w1");
+        assert_eq!(params.permission_mode, None);
         assert_eq!(params.kind, "claude");
         assert_eq!(params.prompt.as_deref(), Some("fix the login"));
         assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
