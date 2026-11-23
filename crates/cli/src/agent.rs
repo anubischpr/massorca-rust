@@ -264,6 +264,17 @@ pub enum QueueCommand {
         #[arg(allow_hyphen_values = true)]
         text: String,
     },
+    /// Sends a queued prompt at once, with force, ahead of the queue's order; it leaves the queue. Refused while the
+    /// agent asks the person something.
+    SendNow {
+        /// Queued prompt id.
+        id: String,
+    },
+    /// Lifts the session's queue pauses, after a stop or a service restart, and types its head once the agent is ready.
+    Resume {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Removes a waiting or failed queued prompt.
     Remove {
         /// Queued prompt id.
@@ -499,6 +510,14 @@ async fn queue_command(
                 .agent_queue_edit(&AgentQueueEditParams { id, text })
                 .await?;
             output.success(&edited, &agent_text::queued_lines(&edited));
+        }
+        QueueCommand::SendNow { id } => {
+            let sent = client.agent_queue_send_now(&id).await?;
+            output.success(&sent, &agent_text::queued_lines(&sent));
+        }
+        QueueCommand::Resume { session } => {
+            let list = client.agent_queue_resume(&session).await?;
+            output.success(&list, &agent_text::queue_lines(&list));
         }
         QueueCommand::Remove { id } => {
             let removed = client.agent_queue_remove(&id).await?;

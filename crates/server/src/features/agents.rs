@@ -165,6 +165,20 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             queue_remove,
         )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_SEND_NOW,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_send_now,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_RESUME,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_resume,
+        )?,
         methods.register_stream(
             Owner::Core,
             agents::WATCH,
@@ -354,6 +368,27 @@ async fn queue_remove(
     let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
     require_admin_for_session(&ctx, session).await?;
     on_agents(&ctx, move |agents| agents.queue_remove(&params.id)).await
+}
+
+/// Sends a queued prompt at once, with force, skipping the busy hold and the queue's order (decision 0084). The admin
+/// check follows the prompt's session.
+async fn queue_send_now(
+    ctx: RequestCtx,
+    params: AgentQueueItemRef,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    on_agents(&ctx, move |agents| agents.queue_send_now(&params.id)).await
+}
+
+/// Lifts a session's queue pauses and delivers its head if the agent is ready (decision 0084).
+async fn queue_resume(
+    ctx: RequestCtx,
+    params: AgentSessionRef,
+) -> Result<AgentQueueList, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.queue_resume(&params.session)).await
 }
 
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.

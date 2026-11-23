@@ -402,6 +402,22 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.queue.send-now",
+            "Send a queued prompt at once, ahead of the queue",
+            "agent.queue.send_now",
+            json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": { "id": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.queue.resume",
+            "Lift a session's queue pauses and deliver its head once the agent is ready",
+            "agent.queue.resume",
+            selector("session"),
+        ),
+        command(
             "agent.resume",
             "Start a new run of an exited agent session",
             "agent.resume",

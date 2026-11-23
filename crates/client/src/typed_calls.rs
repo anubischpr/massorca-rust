@@ -272,6 +272,17 @@ impl Client {
         self.call(agents::QUEUE_EDIT, params).await
     }
 
+    /// `agent.queue.send_now`: sends a queued prompt at once, with force; it leaves the queue (decision 0084).
+    pub async fn agent_queue_send_now(&self, id: &str) -> Result<QueuedPrompt, ClientError> {
+        let params = AgentQueueItemRef { id: id.to_owned() };
+        self.call(agents::QUEUE_SEND_NOW, &params).await
+    }
+
+    /// `agent.queue.resume`: lifts a session's queue pauses and delivers its head if the agent is ready (decision 0084).
+    pub async fn agent_queue_resume(&self, session: &str) -> Result<AgentQueueList, ClientError> {
+        self.call(agents::QUEUE_RESUME, &session_ref(session)).await
+    }
+
     /// `agent.queue.remove`: removes a waiting or failed queued prompt (decision 0084).
     pub async fn agent_queue_remove(&self, id: &str) -> Result<QueuedPrompt, ClientError> {
         let params = AgentQueueItemRef { id: id.to_owned() };
