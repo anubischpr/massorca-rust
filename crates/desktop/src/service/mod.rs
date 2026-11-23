@@ -5,6 +5,7 @@
 mod agents;
 mod bridge;
 mod connection;
+mod extensions;
 mod git;
 mod hosts;
 mod launch;
@@ -26,6 +27,7 @@ pub use connection::{
     BACKOFF_MAX, BACKOFF_START, Backoff, ConnectionState, after_failed_attempt, after_loss,
     reason_text,
 };
+pub use extensions::ExtensionsRead;
 pub use hosts::{SshAdded, SshFailed, SshHost, bundled_program};
 pub(crate) use launch::truthy;
 pub use launch::{LaunchOptions, autostart_next_to};

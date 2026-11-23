@@ -17,6 +17,7 @@ use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
+use super::extensions::ExtensionsRead;
 use super::refusal::Refusal;
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
@@ -52,6 +53,8 @@ pub enum StoreUpdate {
     Teams(TeamsRead),
     /// A bot this desktop added, as the service answered it; its team lists it from now on.
     TeamBot(Bot),
+    /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
+    Extensions(ExtensionsRead),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
     /// What a probe or a call learned about one paired host's connection.
@@ -198,6 +201,10 @@ pub struct StoreState {
     pub network: Option<Result<NetworkStatus, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
+    /// The number of the newest extension read applied; an older late answer changes nothing.
+    pub extension_read: u64,
+    /// The installed packages and the catalogue, once read; `None` while the service cannot be asked.
+    pub extensions: Option<ExtensionsRead>,
 }
 
 impl Default for StoreState {
@@ -220,6 +227,8 @@ impl Default for StoreState {
             devices: None,
             network: None,
             secrets: SecretsState::default(),
+            extension_read: 0,
+            extensions: None,
         }
     }
 }
@@ -236,6 +245,7 @@ impl StoreState {
                 }
                 if !state.is_connected() {
                     self.teams = None;
+                    self.extensions = None;
                 }
                 self.connection = state;
             }
@@ -290,6 +300,7 @@ impl StoreState {
                 self.team_bots.retain(|known| known.id != bot.id);
                 self.team_bots.push(bot);
             }
+            StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
                 if let Some(entry) = self
@@ -324,6 +335,15 @@ impl StoreState {
         for record in self.teams.iter().flatten() {
             self.team_ids.register(record);
         }
+    }
+
+    /// Keeps the newest extension read, as `apply_teams` does for Bot Teams.
+    fn apply_extensions(&mut self, read: ExtensionsRead) {
+        if read.number <= self.extension_read {
+            return;
+        }
+        self.extension_read = read.number;
+        self.extensions = Some(read);
     }
 
     /// Replaces the host records, keeping what each host's last check found. A host no longer listed is dropped.

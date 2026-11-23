@@ -115,7 +115,7 @@ pub enum ExtensionState {
 }
 
 /// One Marketplace item: the data of the nine-part item page.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionItem {
     pub id: String,
     pub name: String,
@@ -153,7 +153,7 @@ pub struct ItemProblem {
 }
 
 /// What the lockfile records about an installed package.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledInfo {
     pub version: String,
     pub source: SourceRef,
@@ -331,7 +331,7 @@ pub struct CliStep {
     pub command: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingItem {
     pub key: String,
     pub title: String,
