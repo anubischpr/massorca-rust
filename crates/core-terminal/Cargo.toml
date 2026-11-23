@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Reads each terminal's processes for host memory (decision 0081).
+massorca-host-stats.workspace = true
 portable-pty.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

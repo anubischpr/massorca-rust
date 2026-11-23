@@ -32,6 +32,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "host.memory",
+            "Show the memory of the service and its terminals",
+            "host.memory",
+            no_args(),
+        ),
+        command(
             "events.subscribe",
             "Stream change events",
             "events.subscribe",
