@@ -1,6 +1,6 @@
 # 0008: Projects and workspaces in Phase 1
 
-Status: accepted, 2026-11-20.
+Status: accepted, 2026-11-20; the layout setting was added 2026-11-23 (WS-12).
 
 ## Context
 
@@ -18,6 +18,15 @@ lineage) comes later; the model must not block it.
   its main repository (found with `--git-common-dir`). `workspaces_root` defaults
   to `<user home>/massorca/workspaces/<project name>` and is a project property,
   so a test profile never writes into the real home.
+- **Layout.** `workspaces.layout` chooses where a project's default workspaces
+  go under `workspaces.default_root`. `nested` (the default, as first decided
+  above) gives `<default root>/<project name>`; `flat` gives `<default root>`, so
+  a workspace is `<default root>/<name>` beside every other flat project's. The
+  layout is read when a project is added, as the default root is, so it applies
+  to projects added after the change. A project keeps the root it was added with,
+  and existing workspaces never move. Two flat projects cannot take the same
+  workspace name: the second create is refused with `workspace.path_taken`, and
+  no suffix is added.
 - **Workspace.** `{id, project_id, kind: worktree | folder, path, name,
   branch?, base_ref?, created_branch, state: ready | removing, created_at}`.
   Names are unique within a project.
@@ -112,7 +121,7 @@ lineage) comes later; the model must not block it.
 
 ## Deferred (recorded so it is not forgotten)
 
-Branch prefixes, generated names and their retirement, nested layout options, setup scripts, terminal and agent guards on
+Branch prefixes, generated names and their retirement, setup scripts, terminal and agent guards on
 removal, squash-merge detection, id aliases after a folder rename, remote
 hosts. Each lands with its phase and its own tests.
 
@@ -121,3 +130,5 @@ hosts. Each lands with its phase and its own tests.
 - Removal is resumable: running `rm` again on a `removing` workspace finishes
   the job.
 - Adding the deferred behaviour adds columns and options, not a new model.
+- A layout that moves existing projects would need each project to store its own
+  layout, which is a store change and is not part of this decision.
