@@ -13,7 +13,8 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentSession, AgentStartParams, BringBackResult,
+    AgentBringBackParams, AgentPromptParams, AgentSession, AgentStartParams, BringBackResult,
+    PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -93,6 +94,21 @@ pub(crate) enum Command {
     /// `agent.start`, answered on its oneshot once the service has started the session.
     AgentStart {
         params: AgentStartParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.prompt`, answered on its oneshot once the service has typed the text into the session.
+    AgentPrompt {
+        params: AgentPromptParams,
+        reply: oneshot::Sender<Result<PromptReceipt, Refusal>>,
+    },
+    /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
+    AgentStop {
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
+    AgentResume {
+        session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     GitDiffFile {
@@ -848,6 +864,15 @@ fn spawn_call(
         Command::AgentStart { params, reply } => {
             agents::spawn_start(&client, params, reply, updates);
         }
+        Command::AgentPrompt { params, reply } => {
+            agents::spawn_prompt(&client, params, reply);
+        }
+        Command::AgentStop { session, reply } => {
+            agents::spawn_stop(&client, session, reply, updates);
+        }
+        Command::AgentResume { session, reply } => {
+            agents::spawn_resume(&client, session, reply, updates);
+        }
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -908,6 +933,12 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::AgentStart { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentPrompt { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
