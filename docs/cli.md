@@ -22,9 +22,10 @@ letters, digits, `-` or `_`.
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
-`service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands work on
-this computer only: with `--host` they exit 2 with `cli.host_not_supported`. `service unit` reads
-the `--home` flag but never `MASSORCA_HOME`, because its unit is for another machine.
+`service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands except
+`host memory` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
+`service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
+machine.
 
 ## Commands
 
@@ -68,6 +69,7 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `host remove <NAME> [--keep-device] [--uninstall --ssh <TARGET>]` | Forgets a host. Unless `--keep-device`, revokes this device on the server when the host answers. `--uninstall` also stops and removes the service over SSH; if that fails the host is kept, so the command can be run again. |
 | `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
 | `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
+| `host memory` | Shows the memory of the service and of each live terminal's processes (agent runs included), read on the host that runs them: the total, the service, then one row per terminal with its workspace, agent session, process count and memory. Working set on Windows, resident set on Linux and macOS (decision 0081). Sizes use binary units: `N KB` under 1 MiB, `x.y MB` under 1 GiB, `x.yz GB` above. A size that rounds up to the next unit is shown in it (`1.0 MB`, not `1024 KB`). Processes that could not be read are counted, not added. A terminal whose processes cannot be listed or read shows `-` and `unverifiable` instead of a size and is not in the total. Works with `--host`. A service that cannot be reached or is lost mid-call (`service.unavailable`, `service.disconnected`, `host.unreachable`, `client.io`) prints `unverifiable` (`memory.unverifiable`) and exits 4, never a size; other failures, such as `host.identity_mismatch` or a refused handshake, keep their own code. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
@@ -333,7 +335,7 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 | 1 | The service answered with an error, or local data could not be used. The code is printed. |
 | 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
-| 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. |
+| 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable`, with the original code in `data.cause`; identity mismatches and refusals keep their code. |
 
 ## Logs and files
 

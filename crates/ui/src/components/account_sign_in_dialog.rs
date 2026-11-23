@@ -6,9 +6,12 @@ use crate::theme::{ActiveTheme, TextStyled};
 use crate::tokens::TYPE_MONO_SM;
 use gpui::{
     AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
-    Window, div,
+    Window, div, px,
 };
 use std::rc::Rc;
+
+/// The height of the sign-in terminal inside the dialog.
+const TERMINAL_HEIGHT: f32 = 320.0;
 
 /// A press handler of the dialog.
 type Listener = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -22,6 +25,10 @@ pub enum SignInStage {
     WaitingBrowser { url: SharedString },
     /// The sign-in page shows a code that the user pastes here.
     WaitingCode,
+    /// The sign-in runs in the service's terminal, shown in the dialog.
+    InTerminal,
+    /// The terminal has ended; the service is deciding whether to keep the account.
+    Checking,
     /// The account was added and is ready to use.
     Done,
     /// The flow failed; `reason` says why.
@@ -33,6 +40,10 @@ pub enum SignInStage {
 enum Next {
     /// The sign-in page is still being prepared, so there is nothing to open yet.
     Wait,
+    /// The sign-in runs in the terminal, so the dialog waits for it to end.
+    Signing,
+    /// The service is deciding the account.
+    Deciding,
     OpenPage,
     Submit,
     Retry,
@@ -44,6 +55,8 @@ impl Next {
     fn label(self) -> &'static str {
         match self {
             Self::Wait => "Starting...",
+            Self::Signing => "Signing in...",
+            Self::Deciding => "Checking...",
             Self::OpenPage => "Open sign-in page",
             Self::Submit => "Continue",
             Self::Retry => "Try again",
@@ -58,6 +71,8 @@ fn primary(stage: &SignInStage) -> (Next, bool) {
         SignInStage::Starting => (Next::Wait, false),
         SignInStage::WaitingBrowser { .. } => (Next::OpenPage, true),
         SignInStage::WaitingCode => (Next::Submit, true),
+        SignInStage::InTerminal => (Next::Signing, false),
+        SignInStage::Checking => (Next::Deciding, false),
         SignInStage::Done => (Next::Finish, true),
         SignInStage::Failed { .. } => (Next::Retry, true),
     }
@@ -71,6 +86,10 @@ fn body_copy(stage: &SignInStage) -> Option<&'static str> {
             Some("Sign in on the page that opens. This window waits until you finish.")
         }
         SignInStage::WaitingCode => Some("Paste the code the sign-in page shows."),
+        SignInStage::InTerminal => {
+            Some("Finish the sign-in in the terminal below. The account is kept once it signs in.")
+        }
+        SignInStage::Checking => Some("Checking the sign-in..."),
         SignInStage::Done => Some("Signed in. The account is ready to use."),
         SignInStage::Failed { .. } => None,
     }
@@ -112,6 +131,7 @@ pub struct AccountSignInDialog {
     agent: SharedString,
     stage: SignInStage,
     code_field: Option<AnyElement>,
+    terminal: Option<AnyElement>,
     on_open_page: Option<Listener>,
     on_submit: Option<Listener>,
     on_retry: Option<Listener>,
@@ -141,6 +161,7 @@ impl AccountSignInDialog {
             agent: agent.into(),
             stage,
             code_field: None,
+            terminal: None,
             on_open_page: None,
             on_submit: None,
             on_retry: None,
@@ -152,6 +173,12 @@ impl AccountSignInDialog {
     /// The caller's text field for the code, shown at the code stage.
     pub fn code_field(mut self, field: impl IntoElement) -> Self {
         self.code_field = Some(field.into_any_element());
+        self
+    }
+
+    /// The caller's terminal surface where the sign-in runs, shown while it runs and while it is checked.
+    pub fn terminal(mut self, surface: impl IntoElement) -> Self {
+        self.terminal = Some(surface.into_any_element());
         self
     }
 
@@ -205,7 +232,7 @@ impl RenderOnce for AccountSignInDialog {
         let theme = *cx.theme();
         let (next, enabled) = primary(&self.stage);
         let press = match (enabled, next) {
-            (false, _) | (true, Next::Wait) => None,
+            (false, _) | (true, Next::Wait | Next::Signing | Next::Deciding) => None,
             (true, Next::OpenPage) => open_page_press(&self.stage, self.on_open_page.clone()),
             (true, Next::Submit) => self.on_submit.clone(),
             (true, Next::Retry) => self.on_retry.clone(),
@@ -245,6 +272,11 @@ impl RenderOnce for AccountSignInDialog {
         if let (SignInStage::WaitingCode, Some(field)) = (&self.stage, self.code_field) {
             dialog = dialog.child(field);
         }
+        if let (SignInStage::InTerminal | SignInStage::Checking, Some(surface)) =
+            (&self.stage, self.terminal)
+        {
+            dialog = dialog.child(div().w_full().h(px(TERMINAL_HEIGHT)).child(surface));
+        }
         if let SignInStage::Failed { reason } = &self.stage {
             dialog = dialog.child(failed_state(
                 self.id.clone(),
@@ -278,6 +310,10 @@ mod tests {
         assert_eq!(primary(&SignInStage::WaitingCode), (Next::Submit, true));
         assert_eq!(primary(&SignInStage::Done), (Next::Finish, true));
         assert_eq!(primary(&failed), (Next::Retry, true));
+        assert_eq!(primary(&SignInStage::InTerminal), (Next::Signing, false));
+        assert_eq!(primary(&SignInStage::Checking), (Next::Deciding, false));
+        assert_eq!(Next::Signing.label(), "Signing in...");
+        assert_eq!(Next::Deciding.label(), "Checking...");
         assert_eq!(Next::Wait.label(), "Starting...");
         assert_eq!(Next::OpenPage.label(), "Open sign-in page");
         assert_eq!(Next::Submit.label(), "Continue");
@@ -309,6 +345,14 @@ mod tests {
             reason: "The code expired.".into(),
         };
         assert_eq!(body_copy(&failed), None);
+        assert_eq!(
+            body_copy(&SignInStage::InTerminal),
+            Some("Finish the sign-in in the terminal below. The account is kept once it signs in.")
+        );
+        assert_eq!(
+            body_copy(&SignInStage::Checking),
+            Some("Checking the sign-in...")
+        );
         assert_eq!(title("Claude"), "Add account to Claude");
     }
 

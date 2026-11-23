@@ -28,7 +28,7 @@ pub use client::Client;
 pub use device_name::default_device_name;
 pub use error::{ClientError, profile_refusal};
 pub use handshake::Welcome;
-pub use hosts::{HostRecord, Hosts, validate_host_name};
+pub use hosts::{HostRecord, HostRemoved, Hosts, validate_host_name};
 pub use options::{Autostart, ConnectOptions};
 pub use reconnect::{
     AttachStep, Backoff, Connect, Link, RECONNECT_MAX, RECONNECT_RESET_AFTER, RECONNECT_START,

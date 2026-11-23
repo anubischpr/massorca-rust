@@ -16,6 +16,7 @@ use massorca_protocol::methods::devices::{
 use massorca_protocol::methods::extensions::{
     ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams,
 };
+use massorca_protocol::methods::host::{self, HostMemory};
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
@@ -477,6 +478,40 @@ async fn a_hello_without_auth_gets_no_service() {
         .await
         .unwrap();
     assert!(closed.is_none(), "{closed:?}");
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_may_read_host_memory() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let standard_set = Scopes::STANDARD.names();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|device| device.scopes == standard_set)
+        .expect("the paired device holds the standard scopes");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("the narrowed device reconnects");
+
+    let memory: HostMemory = reader
+        .call(host::MEMORY, &())
+        .await
+        .expect("host.memory needs only Read");
+    assert!(memory.service.bytes > 0, "{memory:?}");
+    assert!(memory.total_bytes >= memory.service.bytes, "{memory:?}");
     stop(running).await;
 }
 

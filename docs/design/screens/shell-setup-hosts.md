@@ -220,7 +220,7 @@ The wizard is a full Canvas page. The Sidebar is hidden, the Title bar reads "Se
 - States: idle; showing QR; path choice; waiting for device (ProgressBar indeterminate with "Waiting for your phone"); paired (the device appears in D-PR-02); firewall warning.
 - Relay is not in the first version (D-PR-04 dropped).
 
-**D-PR-02 Paired devices.** Keep. Desktop only. A ListRow per phone (name, paired date, state word "Active" or "Revoked"), with one action "Revoke" (secondary). Revoke opens X-DLG-01 (destructive, "Revoke access for Pixel 8?", the loss list "The phone loses access to every host on this PC." and "Revoke" as the danger action). Revocation is one clear action.
+**D-PR-02 Paired devices.** Keep. Desktop only. A ListRow per phone (name, paired date, last seen when the service reports it, state word "Active" or "Revoked"), with one action "Revoke" (secondary). Revoke opens X-DLG-01 (destructive, "Revoke access for Pixel 8?", the loss list "The phone loses access to every host on this PC." and "Revoke" as the danger action). Revocation is one clear action. A paired device is the owner with full access: pairing offers no role or scope picker (the desktop asks for full access), and a row shows a "Limited: <scopes>" label only for a device holding less than full access.
 
 **D-PR-03 Mobile page (view).** Merged into D-PR-01 (a Settings section and the Sidebar entry are enough).
 
