@@ -1,0 +1,32 @@
+[package]
+name = "massorca-client-ffi"
+description = "The MassOrca client for the phone app: a UniFFI binding over the network path of massorca-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+base64.workspace = true
+massorca-client = { path = "../client", default-features = false }
+massorca-net.workspace = true
+massorca-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+uniffi.workspace = true
+
+[dev-dependencies]
+massorca-client.workspace = true
+massorca-profile.workspace = true
+massorca-server.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
