@@ -352,12 +352,13 @@ own:
 | `--page <NAME>` | Open one page or dialog once the data it shows has arrived. An unknown name exits with status 2 before the window opens, and the error lists the valid names. |
 
 The page names are `workspace`, `settings-general`, `settings-hosts`, `settings-vault`, `pairing`,
-`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team` and `add-bot`.
+`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team`, `add-bot` and `session`.
 
 A page waits while the service is still answering. When the service has answered without the data
 a page or dialog needs, it opens its parent page instead, and stderr says why. `replace-secret` and
 `remove-secret` need an owned secret (parent: Settings, Vault). `board` and `add-bot` need a team, and
-`new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home).
+`new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home). `session` opens the newest agent
+session, or the first workspace's start page when there is none.
 
 `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused, so a page can be checked
 without showing it:
