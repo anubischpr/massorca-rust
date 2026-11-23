@@ -22,6 +22,7 @@ mod git_remote;
 mod git_status;
 mod git_watch;
 mod handshake;
+mod host_memory;
 mod lifecycle;
 mod network;
 mod projects;

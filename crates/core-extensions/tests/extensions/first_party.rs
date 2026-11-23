@@ -48,11 +48,12 @@ fn codex_installer_exit_zero_with_no_binary_fails_because_nothing_verifies_it() 
 }
 
 #[test]
-fn gentle_shell_only_detects_and_registers_without_running_anything() {
-    let s = setup(FakeHost::new());
+fn gentle_shell_on_this_host_registers_without_running_anything() {
+    let s = setup(FakeHost::new().with_program("gentle-shell"));
     let source = Source::Catalogue("massorca.gentle-shell".to_owned());
 
-    s.install(&source, false).expect("registers without a CLI");
+    s.install(&source, false)
+        .expect("registers the detected CLI");
 
     assert!(s.host.runs().is_empty(), "nothing runs");
     let lock = s.lock_json().expect("the lockfile");
@@ -60,12 +61,48 @@ fn gentle_shell_only_detects_and_registers_without_running_anything() {
 }
 
 #[test]
-fn no_first_party_file_names_the_unconfirmed_npm_package() {
-    for entry in entries() {
-        for (path, bytes) in entry.files {
-            let text = String::from_utf8_lossy(bytes);
-            assert!(!text.contains("gentle-pi"), "{} names it", path);
-        }
+fn gentle_shell_installs_with_npm_and_is_verified_by_its_version() {
+    let s = setup(FakeHost::new());
+    let source = Source::Catalogue("massorca.gentle-shell".to_owned());
+
+    s.install(&source, true).expect("installs and verifies");
+
+    assert_eq!(
+        s.host.runs(),
+        [
+            vec!["npm", "install", "-g", "gentle-pi"],
+            vec!["gentle-shell", "--version"],
+        ]
+    );
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["packages"][0]["cli"][0]["installed_by_package"], true);
+}
+
+#[test]
+fn gentle_shell_that_fails_its_version_check_is_not_registered() {
+    // A host without the Pi runtime the package needs installs it but cannot run it.
+    let s = setup(FakeHost::new().exit_for("--version", 1));
+    let source = Source::Catalogue("massorca.gentle-shell".to_owned());
+
+    let error = s.install(&source, true).expect_err("verify is the gate");
+
+    assert_eq!(error.code(), codes::VERIFY_FAILED);
+    assert!(s.lock_json().is_none(), "nothing is registered");
+}
+
+#[test]
+fn the_gentle_shell_npm_name_appears_only_in_its_install_command() {
+    let entry = entries()
+        .iter()
+        .find(|entry| entry.id == "massorca.gentle-shell")
+        .expect("the built-in");
+    for (path, bytes) in entry.files {
+        let text = String::from_utf8_lossy(bytes);
+        let outside_commands = text
+            .lines()
+            .filter(|line| !line.contains("\"command\""))
+            .any(|line| line.contains("gentle-pi"));
+        assert!(!outside_commands, "{path} names it outside a command");
     }
 }
 
