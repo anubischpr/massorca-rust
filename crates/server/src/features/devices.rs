@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use massorca_core_store::{DeviceRow, now_ms};
 use massorca_protocol::methods::devices::{
-    self, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams,
-    PairingCreated, WhoAmI,
+    self, DeviceForgetParams, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus,
+    PairingCreateParams, PairingCreated, WhoAmI,
 };
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -42,6 +42,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::DEVICES,
             Permission::Read,
             revoke,
+        )?,
+        methods.register(
+            Owner::Core,
+            devices::FORGET,
+            capabilities::DEVICES,
+            Permission::HostAdmin,
+            forget,
         )?,
         methods.register(
             Owner::Core,
@@ -86,6 +93,59 @@ async fn list(ctx: RequestCtx, _params: NoParams) -> Result<DeviceList, ErrorBod
     Ok(DeviceList {
         devices: rows.into_iter().map(|row| info(row, current)).collect(),
     })
+}
+
+/// Removes a revoked device from the list. The id may name any device; a name is looked up among revoked devices only,
+/// since an active one cannot be forgotten.
+async fn forget(ctx: RequestCtx, params: DeviceForgetParams) -> Result<DeviceInfo, ErrorBody> {
+    let rows = store_blocking::run(&ctx.state, |store| store.list_devices()).await?;
+    let by_id = rows.iter().find(|row| row.id == params.device);
+    let named: Vec<_> = rows
+        .iter()
+        .filter(|row| row.name == params.device && row.revoked_at.is_some())
+        .collect();
+    let row = match (by_id, named.as_slice()) {
+        (Some(row), _) => row.clone(),
+        (None, [row]) => (*row).clone(),
+        (None, []) if rows.iter().any(|row| row.name == params.device) => {
+            return Err(not_revoked(&params.device));
+        }
+        (None, []) => {
+            return Err(ErrorBody::new(
+                codes::DEVICE_NOT_FOUND,
+                format!("no device {:?}", params.device),
+            ));
+        }
+        (None, _) => {
+            return Err(ErrorBody::new(
+                codes::SELECTOR_AMBIGUOUS,
+                format!(
+                    "several revoked devices are named {:?}; use the id",
+                    params.device
+                ),
+            ));
+        }
+    };
+    if row.revoked_at.is_none() {
+        return Err(not_revoked(&row.name));
+    }
+    let id = row.id.clone();
+    let forgotten = store_blocking::run(&ctx.state, move |store| store.forget_device(&id)).await?;
+    if !forgotten {
+        return Err(ErrorBody::new(
+            codes::DEVICE_NOT_FOUND,
+            format!("no device {:?}", params.device),
+        ));
+    }
+    tracing::info!(device = %row.id, "a revoked device was forgotten");
+    Ok(info(row, None))
+}
+
+fn not_revoked(device: &str) -> ErrorBody {
+    ErrorBody::new(
+        codes::DEVICE_NOT_REVOKED,
+        format!("device {device:?} is still active; revoke it before forgetting it"),
+    )
 }
 
 async fn revoke(ctx: RequestCtx, params: DeviceRevokeParams) -> Result<DeviceInfo, ErrorBody> {

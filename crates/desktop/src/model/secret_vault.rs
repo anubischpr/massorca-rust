@@ -204,6 +204,75 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// The scope kinds the page filters by, in the order its segments are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VaultScopeFilter {
+    #[default]
+    All,
+    Project,
+    Team,
+    Global,
+}
+
+impl VaultScopeFilter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Project, Self::Team, Self::Global];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Project => "Project",
+            Self::Team => "Team",
+            Self::Global => "Global",
+        }
+    }
+
+    pub fn keeps(self, scope: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Project => scope.starts_with("project:"),
+            Self::Team => scope.starts_with("team:"),
+            Self::Global => scope == "global",
+        }
+    }
+}
+
+/// The groups the page draws for a search and a filter: the rows whose name holds the query in any case, in
+/// the kept scopes, with the groups left empty dropped. A blank query matches every name.
+pub fn filtered_groups(
+    groups: &[ScopeGroup],
+    query: &str,
+    filter: VaultScopeFilter,
+) -> Vec<ScopeGroup> {
+    let needle = query.trim().to_lowercase();
+    groups
+        .iter()
+        .filter(|group| filter.keeps(&group.scope))
+        .filter_map(|group| {
+            let rows: Vec<SecretRow> = group
+                .rows
+                .iter()
+                .filter(|row| needle.is_empty() || row.name.to_lowercase().contains(&needle))
+                .cloned()
+                .collect();
+            (!rows.is_empty()).then(|| ScopeGroup {
+                scope: group.scope.clone(),
+                title: group.title.clone(),
+                rows,
+            })
+        })
+        .collect()
+}
+
+/// The count after a group's title: "2 secrets", or "1 secret, linked" when every name in it is a link.
+pub fn group_count_line(group: &ScopeGroup) -> String {
+    let count = count_of(group.rows.len() as u64, "secret", "secrets");
+    if group.rows.iter().all(|row| row.linked_from.is_some()) {
+        format!("{count}, linked")
+    } else {
+        count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use massorca_protocol::methods::projects::ProjectKind;
@@ -393,5 +462,107 @@ mod tests {
         assert_eq!(day(11_017 * DAY_MS), "1 Mar 2000", "2000 is a leap year");
         assert_eq!(day(20_769 * DAY_MS + DAY_MS - 1), "12 Nov 2026");
         assert_eq!(day(-1), "31 Dec 1969", "a time before the epoch");
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    fn row(scope: &str, name: &str, linked_from: Option<&str>) -> SecretRow {
+        SecretRow {
+            scope: scope.into(),
+            name: name.into(),
+            linked_from: linked_from.map(str::to_owned),
+            linked_scopes: Vec::new(),
+            detail: String::new(),
+        }
+    }
+
+    fn group(scope: &str, title: &str, rows: Vec<SecretRow>) -> ScopeGroup {
+        ScopeGroup {
+            scope: scope.into(),
+            title: title.into(),
+            rows,
+        }
+    }
+
+    fn page() -> Vec<ScopeGroup> {
+        vec![
+            group(
+                "project:p1",
+                "Project oppm",
+                vec![
+                    row("project:p1", "OPENAI_API_KEY", None),
+                    row("project:p1", "DATABASE_URL", None),
+                ],
+            ),
+            group(
+                "team:t1",
+                "Team Desarrollo",
+                vec![row("team:t1", "OPENAI_API_KEY", Some("Project oppm"))],
+            ),
+            group(
+                "global",
+                "Global",
+                vec![row("global", "GITHUB_TOKEN", None)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_search_matches_names_in_any_case_and_drops_the_groups_without_a_match() {
+        let found = filtered_groups(&page(), "openai", VaultScopeFilter::All);
+        let shown: Vec<(&str, &str)> = found
+            .iter()
+            .flat_map(|group| {
+                group
+                    .rows
+                    .iter()
+                    .map(|row| (group.scope.as_str(), row.name.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("project:p1", "OPENAI_API_KEY"),
+                ("team:t1", "OPENAI_API_KEY")
+            ]
+        );
+        assert_eq!(
+            found.len(),
+            2,
+            "the Global group has no match, so it is left out"
+        );
+        assert_eq!(
+            filtered_groups(&page(), "  ", VaultScopeFilter::All).len(),
+            3,
+            "a blank search filters nothing"
+        );
+    }
+
+    #[test]
+    fn the_scope_filter_keeps_one_kind_of_scope_and_drops_the_groups_left_empty() {
+        let titles = |filter| {
+            filtered_groups(&page(), "", filter)
+                .into_iter()
+                .map(|group| group.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(VaultScopeFilter::All),
+            ["Project oppm", "Team Desarrollo", "Global"]
+        );
+        assert_eq!(titles(VaultScopeFilter::Project), ["Project oppm"]);
+        assert_eq!(titles(VaultScopeFilter::Team), ["Team Desarrollo"]);
+        assert_eq!(titles(VaultScopeFilter::Global), ["Global"]);
+    }
+
+    #[test]
+    fn a_group_counts_its_names_and_says_linked_when_every_name_in_it_is_a_link() {
+        let groups = page();
+        assert_eq!(group_count_line(&groups[0]), "2 secrets");
+        assert_eq!(group_count_line(&groups[1]), "1 secret, linked");
+        assert_eq!(group_count_line(&groups[2]), "1 secret");
     }
 }

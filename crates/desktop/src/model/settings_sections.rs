@@ -74,7 +74,9 @@ impl SettingsSection {
             Self::Sources => {
                 Some("Connecting a provider needs your grant on the provider's own page.")
             }
-            Self::Vault => Some("Values never go into a chat, a prompt or a log."),
+            Self::Vault => Some(
+                "Values never go into a chat, a prompt or a log. Sharing creates a link, not a copy: rotate the owner's value once and every linked scope uses it.",
+            ),
             _ => None,
         }
     }
@@ -138,8 +140,6 @@ pub enum RowBody {
     PairingLink,
     /// Opens the Add host dialog, its SSH path (D-HO-02).
     AddHost,
-    /// The secret vault's key and count, read through the service (decision 0071).
-    SecretVault,
     Planned(Planned),
 }
 
@@ -494,12 +494,6 @@ const EXTENSIONS: &[RowSpec] = &[RowSpec {
     body: RowBody::Planned(Planned::Link),
 }];
 
-const VAULT: &[RowSpec] = &[RowSpec {
-    label: "Vault status",
-    helper: "Names and times only. Values are never shown.",
-    body: RowBody::SecretVault,
-}];
-
 const PRIVACY: &[RowSpec] = &[
     RowSpec {
         label: "Crash reports",
@@ -578,7 +572,7 @@ pub fn rows(section: SettingsSection) -> &'static [RowSpec] {
         SettingsSection::Hosts => HOSTS,
         SettingsSection::Notifications => NOTIFICATIONS,
         SettingsSection::Extensions => EXTENSIONS,
-        SettingsSection::Vault => VAULT,
+        SettingsSection::Vault => &[],
         SettingsSection::Privacy => PRIVACY,
         SettingsSection::Routing => ROUTING,
     }
@@ -663,7 +657,10 @@ mod tests {
     #[test]
     fn every_section_lists_at_least_one_row_and_only_general_holds_the_folder_setting() {
         for section in SettingsSection::ALL {
-            assert!(!rows(section).is_empty(), "{section:?}");
+            // The vault page draws its own header, search and scope cards instead of rows.
+            if section != SettingsSection::Vault {
+                assert!(!rows(section).is_empty(), "{section:?}");
+            }
         }
         let folders: Vec<_> = SettingsSection::ALL
             .into_iter()
@@ -783,6 +780,20 @@ mod tests {
         assert!(
             bodies(SettingsSection::Routing)
                 .contains(&RowBody::Planned(Planned::Action("Clear history")))
+        );
+    }
+
+    #[test]
+    fn the_vault_page_says_sharing_is_a_link_and_has_no_status_card() {
+        assert_eq!(
+            SettingsSection::Vault.note(),
+            Some(
+                "Values never go into a chat, a prompt or a log. Sharing creates a link, not a copy: rotate the owner's value once and every linked scope uses it."
+            )
+        );
+        assert!(
+            rows(SettingsSection::Vault).is_empty(),
+            "the vault page draws its own header and no Vault status card"
         );
     }
 

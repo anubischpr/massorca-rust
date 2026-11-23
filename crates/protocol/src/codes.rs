@@ -127,6 +127,8 @@ pub const PAIRING_RATE_LIMITED: &str = "pairing.rate_limited";
 pub const PAIRING_UNAVAILABLE: &str = "pairing.unavailable";
 pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
+/// `device.forget` on a device that is still active; revoke it first.
+pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";

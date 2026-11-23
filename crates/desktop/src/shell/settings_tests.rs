@@ -7,6 +7,7 @@ use super::*;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_form::FormStatus;
+use crate::model::secret_vault::VaultScopeFilter;
 use crate::model::settings::FolderStatus;
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
@@ -16,11 +17,13 @@ use crate::service::{
 };
 use gpui::{
     AppContext, ClipboardItem, Entity, Modifiers, TestAppContext, VisualTestContext, point, px,
+    size,
 };
 use massorca_client::HostRecord;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretSet, SecretStatus};
+use massorca_ui::components::select::SelectEvent;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -367,6 +370,224 @@ fn the_vault_section_draws_each_name_under_its_scope(cx: &mut TestAppContext) {
             .is_some(),
         "the name is drawn under its project"
     );
+}
+
+/// The panel's centre sits on the window's centre on both axes, whichever row opened the dialog.
+fn assert_centred_in_the_window(cx: &mut VisualTestContext, what: &str) {
+    draw(cx);
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let panel = cx
+        .debug_bounds("dialog-panel")
+        .unwrap_or_else(|| panic!("{what}: the dialog is not drawn"));
+    let centre = panel.center();
+    let off_x = f32::from(centre.x) - f32::from(viewport.width) / 2.0;
+    let off_y = f32::from(centre.y) - f32::from(viewport.height) / 2.0;
+    assert!(
+        off_x.abs() <= 1.0 && off_y.abs() <= 1.0,
+        "{what}: its centre is {off_x:+.1}, {off_y:+.1} px from the window's centre"
+    );
+}
+
+#[gpui::test]
+fn the_vault_dialogs_are_centred_in_the_window_whichever_row_opened_them(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
+            SecretStatus {
+                protection: "file".into(),
+                state: "ready".into(),
+                count: 3,
+                name_clashes: Vec::new(),
+            },
+        ))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("global", "GITHUB_TOKEN"),
+            owned_secret("project:p1", "OPENAI_API_KEY"),
+            owned_secret("project:p1", "DATABASE_URL"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+
+    click(cx, "button:settings-vault-add");
+    assert_centred_in_the_window(cx, "Add secret");
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+
+    click(cx, "button:settings-vault-rotate-project:p1-DATABASE_URL");
+    assert_centred_in_the_window(cx, "Rotate secret");
+    rig.shell.update_in(cx, |shell, window, cx| {
+        shell.close_secret_dialog(window, cx)
+    });
+
+    click(cx, "settings-vault-delete-project:p1-DATABASE_URL");
+    assert_centred_in_the_window(cx, "Delete secret");
+}
+
+/// Seeds four owned names in a project, a team and Global, and opens the vault page.
+fn open_vault_with_three_scopes(rig: &Rig, cx: &mut VisualTestContext) {
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::Status(Ok(
+            SecretStatus {
+                protection: "file".into(),
+                state: "ready".into(),
+                count: 4,
+                name_clashes: Vec::new(),
+            },
+        ))))
+        .expect("the store listens");
+    rig._updates
+        .send(StoreUpdate::Secrets(SecretsUpdate::List(Ok(vec![
+            owned_secret("global", "GITHUB_TOKEN"),
+            owned_secret("project:p1", "OPENAI_API_KEY"),
+            owned_secret("project:p1", "DATABASE_URL"),
+            owned_secret("team:t1", "SLACK_TOKEN"),
+        ]))))
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+}
+
+#[gpui::test]
+fn add_secret_is_a_header_button_and_no_longer_a_row(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    cx.simulate_resize(size(px(1440.), px(900.)));
+    open_vault_with_three_scopes(&rig, cx);
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-add-row").is_none(),
+        "Add secret is not a row of the page any more"
+    );
+    let add = cx
+        .debug_bounds("button:settings-vault-add")
+        .expect("Add secret is drawn");
+    let first_name = cx
+        .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+        .expect("the Global name is drawn");
+    assert!(
+        add.origin.y < first_name.origin.y && add.origin.x > px(720.),
+        "Add secret sits top right, above every scope"
+    );
+}
+
+#[gpui::test]
+fn the_vault_search_draws_only_the_names_that_match(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    rig.shell
+        .update(cx, |shell, cx| shell.set_vault_query("openai", cx));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-OPENAI_API_KEY")
+            .is_some(),
+        "a matching name is drawn"
+    );
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-DATABASE_URL")
+            .is_none()
+            && cx
+                .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+                .is_none(),
+        "names that do not match are not drawn"
+    );
+}
+
+#[gpui::test]
+fn the_vault_scope_filter_keeps_one_kind_of_scope_on_the_page(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    rig.shell.update(cx, |shell, cx| {
+        shell.set_vault_scope(VaultScopeFilter::Team, cx)
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("settings-vault-team:t1-SLACK_TOKEN")
+            .is_some(),
+        "the team's name is drawn"
+    );
+    assert!(
+        cx.debug_bounds("settings-vault-project:p1-DATABASE_URL")
+            .is_none()
+            && cx
+                .debug_bounds("settings-vault-global-GITHUB_TOKEN")
+                .is_none(),
+        "projects and Global are left out under the Team filter"
+    );
+}
+
+#[gpui::test]
+fn the_add_dialog_closes_from_its_close_button_and_stores_nothing(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    click(cx, "button:settings-vault-add");
+    click(cx, "dialog-close");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the close button closes Add secret"
+    );
+}
+
+#[gpui::test]
+fn a_second_project_can_be_chosen_in_the_add_dialog_and_is_sent_as_the_scope(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig._updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha"), project("p2", "beta")],
+            workspaces: vec![workspace("w1", "p1", "fix-login", 1)],
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+    click(cx, "button:settings-vault-add");
+    let select = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .vault_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.project_select.clone())
+        })
+        .expect("the project select is open");
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_index()),
+        Some(0),
+        "the first project is chosen when the add opens"
+    );
+    // A row picked in the select: the value moves to it and the owner hears the change, as the menu does.
+    select.update(cx, |select, cx| {
+        select.set_selected(Some(1), cx);
+        cx.emit(SelectEvent::Changed(1));
+    });
+    cx.run_until_parked();
+    let name_field = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .vault_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.name_field.clone())
+        })
+        .expect("the name field is open");
+    name_field.update_in(cx, |field, window, cx| {
+        field.set_text("BETA_KEY", window, cx)
+    });
+    type_value(&rig, cx, "FAKE-VALUE-0002");
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    let (params, _reply) = next_set(&mut rig);
+    assert_eq!(
+        params.scope, "project:p2",
+        "the second project is the scope that is sent"
+    );
+    assert_eq!(params.name, "BETA_KEY");
 }
 
 /// Opens Add and types `name` into the name field.
