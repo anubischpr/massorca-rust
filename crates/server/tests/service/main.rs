@@ -25,6 +25,7 @@ mod handshake;
 mod host_memory;
 mod lifecycle;
 mod network;
+mod network_account_masking;
 mod projects;
 mod reconnect;
 mod registries;
