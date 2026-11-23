@@ -87,7 +87,11 @@ mod source_control_tests;
 #[cfg(test)]
 mod start_page_tests;
 #[cfg(test)]
+mod status_bar_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod title_bar_tests;
 #[cfg(test)]
 mod work_panel_tests;
 
@@ -106,6 +110,9 @@ pub struct Shell {
     /// The Settings search field; the text it settles on becomes `settings.query`.
     settings_search: Entity<SearchField>,
     _settings_search_changes: Subscription,
+    /// The vault page's search over names; the text it settles on becomes `settings.vault_query`.
+    vault_search: Entity<SearchField>,
+    _vault_search_changes: Subscription,
     /// The workspace folder's text field, shown on the Settings page.
     settings_folder: Entity<TextField>,
     /// The disabled state the field was last set to, so a frame does not notify it again.
@@ -126,6 +133,8 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The `.ssh` folder whose key files the Add host dialog lists.
+    ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -297,6 +306,13 @@ impl Shell {
                 .placeholder("Code from the sign-in page")
         });
         let settings_search = cx.new(|cx| SearchField::new("Search settings", cx));
+        let vault_search = cx.new(|cx| SearchField::new("Search names", cx));
+        let vault_search_changes =
+            cx.subscribe(&vault_search, |shell, _, event: &SearchFieldEvent, cx| {
+                if let SearchFieldEvent::Search(query) = event {
+                    shell.set_vault_query(query.as_ref(), cx);
+                }
+            });
         let settings_folder =
             cx.new(|cx| TextField::new(cx).placeholder("Full folder path").mono());
         let pairing_offer = cx.new(|cx| TextField::new(cx).placeholder("Paste the offer").mono());
@@ -347,6 +363,8 @@ impl Shell {
             settings: SettingsModel::default(),
             settings_search,
             _settings_search_changes: settings_search_changes,
+            vault_search,
+            _vault_search_changes: vault_search_changes,
             settings_folder,
             settings_folder_disabled: false,
             settings_hosts_asked: false,
@@ -358,6 +376,7 @@ impl Shell {
             devices_asked: false,
             revoke: None,
             add_host: None,
+            ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -572,6 +591,7 @@ impl Render for Shell {
         let settings = settings::SettingsFrame {
             model: &self.settings,
             search: &self.settings_search,
+            vault_search: &self.vault_search,
             connection,
             hosts,
             shell: shell.clone(),
@@ -636,6 +656,7 @@ impl Render for Shell {
             &self.model.snapshot().status,
             self.model.snapshot().service_status.as_ref(),
             self.model.status_items(),
+            self.model.navigation().mode,
             &shell,
             &theme,
         )

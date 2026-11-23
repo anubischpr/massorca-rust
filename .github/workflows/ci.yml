@@ -83,7 +83,7 @@ jobs:
         with:
           key: core
       - run: cargo clippy --workspace --exclude massorca-ui --exclude massorca-desktop --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --exclude massorca-ui --exclude massorca-desktop --locked
+      - run: cargo test --workspace --exclude massorca-ui --exclude massorca-desktop --locked ${{ matrix.os == 'windows-latest' && '--no-fail-fast' || '' }}
 
   core-git-baseline:
     name: core-git on Git 2.25.5

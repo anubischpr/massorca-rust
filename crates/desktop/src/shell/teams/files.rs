@@ -34,7 +34,7 @@ pub(in crate::shell) fn files_page(team: &Team, cx: &mut App) -> AnyElement {
                 .text_color(theme.palette.text.primary)
                 .child("Files"),
         )
-        .child(team_pill(&team.name, team.id, &theme));
+        .child(team_pill(&team.name, team.character, &theme));
     let tree = div()
         .flex()
         .flex_col()

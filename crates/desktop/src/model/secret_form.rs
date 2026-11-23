@@ -39,6 +39,26 @@ pub fn scope_choices(projects: &[Project]) -> Vec<String> {
         .collect()
 }
 
+/// The scope control's segment for a stored scope: 0 Project, 1 Team, 2 Global.
+pub fn scope_segment(scope: &str) -> usize {
+    if scope.starts_with("project:") {
+        0
+    } else if scope.starts_with("team:") {
+        1
+    } else {
+        2
+    }
+}
+
+/// What the scope control says under it, for the scope the form holds. A project names itself.
+pub fn scope_caption(scope: &str, project_name: &str) -> String {
+    match scope_segment(scope) {
+        0 => format!("Only agents working in {project_name} can use it."),
+        1 => "Every project and bot of the team can use it.".to_owned(),
+        _ => "Every project on This PC can use it.".to_owned(),
+    }
+}
+
 /// Whether the form adds a new name or rotates an owned one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormMode {
@@ -437,5 +457,29 @@ mod tests {
             "the service says no",
         )));
         assert!(matches!(refusal, Refusal::Failed { .. }));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn a_scope_sits_under_project_team_or_global_in_that_order() {
+        assert_eq!(scope_segment("project:p1"), 0);
+        assert_eq!(scope_segment("team:t1"), 1);
+        assert_eq!(scope_segment("global"), 2);
+    }
+
+    #[test]
+    fn the_caption_names_the_project_or_says_who_can_use_the_secret() {
+        assert_eq!(
+            scope_caption("project:p1", "oppm"),
+            "Only agents working in oppm can use it."
+        );
+        assert_eq!(
+            scope_caption("global", ""),
+            "Every project on This PC can use it."
+        );
     }
 }

@@ -48,6 +48,7 @@ fn declare(sandbox: &Sandbox, id: &str, prompt: Value, status: Value, resume: bo
         kind["resume"] = json!(["--resume", "{ref}"]);
     }
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
     std::fs::create_dir_all(&dir).expect("create the kinds directory");
     std::fs::write(dir.join(format!("{id}.json")), kind.to_string()).expect("write a kind file");
 }
