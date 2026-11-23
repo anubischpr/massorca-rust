@@ -51,6 +51,8 @@ pub struct ShellModel {
     selected_workspace: Option<String>,
     /// The terminal each workspace's Work panel shows selected.
     terminal_selection: TerminalSelection,
+    /// A session a start has begun; it opens once the Sidebar lists it.
+    pending_session: Option<String>,
 }
 
 impl ShellModel {
@@ -72,6 +74,7 @@ impl ShellModel {
             recent: RecentActions::default(),
             selected_workspace: None,
             terminal_selection: TerminalSelection::default(),
+            pending_session: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl ShellModel {
             snapshot.active_session = Some(id);
         }
         self.snapshot = snapshot;
+        self.open_pending_session();
     }
 
     pub fn navigation(&self) -> &Navigation {
@@ -280,6 +284,7 @@ impl ShellModel {
 
     /// Makes a session the open one: the title bar and the Sidebar selection follow it.
     pub fn open_session(&mut self, id: &str) {
+        self.pending_session = None;
         let found = find_session(&self.snapshot.projects, id)
             .map(|session| (session.title.clone(), session.id.clone()));
         if let Some((title, id)) = found {
@@ -288,8 +293,28 @@ impl ShellModel {
         }
     }
 
+    /// Opens a session the service has just started. It opens as soon as the Sidebar lists it.
+    pub fn open_started_session(&mut self, id: String) {
+        self.pending_session = Some(id);
+        self.open_pending_session();
+    }
+
+    fn open_pending_session(&mut self) {
+        let Some(id) = self.pending_session.clone() else {
+            return;
+        };
+        let found = find_session(&self.snapshot.projects, &id)
+            .map(|session| (session.title.clone(), session.id.clone()));
+        if let Some((title, id)) = found {
+            self.snapshot.session_title = Some(title);
+            self.snapshot.active_session = Some(id);
+            self.pending_session = None;
+        }
+    }
+
     /// Closes the open session, so a selected workspace shows its start page again.
     pub fn close_session(&mut self) {
+        self.pending_session = None;
         self.snapshot.session_title = None;
         self.snapshot.active_session = None;
     }
@@ -577,6 +602,25 @@ mod tests {
         );
         model.navigation.open(Page::Tasks);
         assert_eq!(model.canvas(), Canvas::Page(Page::Tasks));
+    }
+
+    #[test]
+    fn a_started_session_opens_at_once_when_the_snapshot_lists_it() {
+        let mut model = shell(1440.0);
+        model.close_session();
+        model.open_started_session("s1a".to_owned());
+        assert_eq!(model.snapshot().active_session.as_deref(), Some("s1a"));
+        assert!(matches!(model.canvas(), Canvas::Session(_)));
+    }
+
+    #[test]
+    fn a_started_session_the_snapshot_does_not_list_yet_stays_pending() {
+        let mut model = shell(1440.0);
+        model.close_session();
+        model.open_started_session("not-listed-yet".to_owned());
+        assert_eq!(model.snapshot().active_session, None);
+        model.set_snapshot(SampleDataSource.snapshot());
+        assert_eq!(model.pending_session.as_deref(), Some("not-listed-yet"));
     }
 
     #[test]
