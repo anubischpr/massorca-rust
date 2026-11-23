@@ -38,6 +38,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "host.ports",
+            "Show the listening ports of the terminals' processes",
+            "host.ports",
+            no_args(),
+        ),
+        command(
             "events.subscribe",
             "Stream change events",
             "events.subscribe",
