@@ -51,6 +51,93 @@ pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
 
+/// Params: [`AgentQueueParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE: &str = "agent.queue";
+/// Params: [`AgentSessionRef`]. Result: [`AgentQueueList`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_LIST: &str = "agent.queue.list";
+/// Params: [`AgentQueueEditParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_EDIT: &str = "agent.queue.edit";
+/// Params: [`AgentQueueItemRef`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_REMOVE: &str = "agent.queue.remove";
+/// Params: [`AgentQueueItemRef`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_SEND_NOW: &str = "agent.queue.send_now";
+/// Params: [`AgentSessionRef`]. Result: [`AgentQueueList`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_RESUME: &str = "agent.queue.resume";
+
+/// Most prompts one session's queue holds (decision 0084).
+pub const MAX_QUEUED_PROMPTS: usize = 100;
+
+/// `reason` of a waiting prompt held because its agent is busy.
+pub const QUEUE_REASON_BUSY: &str = "busy";
+/// `reason` of a waiting prompt held because its agent is asking the person something.
+pub const QUEUE_REASON_ASKING: &str = "asking";
+/// `reason` of a waiting prompt paused by the person's stop.
+pub const QUEUE_REASON_PAUSED_STOPPED: &str = "paused_stopped";
+/// `reason` of a waiting prompt paused by a service restart.
+pub const QUEUE_REASON_PAUSED_RESTARTED: &str = "paused_restarted";
+/// `reason` of a waiting prompt held behind a failed delivery.
+pub const QUEUE_REASON_BEHIND_FAILED: &str = "behind_failed";
+
+/// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueParams {
+    pub session: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+/// Params of `agent.queue.edit`. Only a waiting or failed prompt can be edited.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueEditParams {
+    pub id: String,
+    pub text: String,
+}
+
+/// Params of `agent.queue.remove` and `agent.queue.send_now`: a queued prompt's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueItemRef {
+    pub id: String,
+}
+
+/// Where a queued prompt is in its delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueState {
+    /// Not delivered yet; `reason` says what holds it.
+    Waiting,
+    /// Its text is being typed into the run.
+    Sending,
+    /// Its delivery failed; `reason` says why. Nothing behind it is delivered until it is removed or sent.
+    Failed,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One prompt waiting in a session's queue (decision 0084).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedPrompt {
+    pub id: String,
+    pub session: String,
+    /// Its place in the queue, from 1; the lowest is delivered first.
+    pub position: u64,
+    pub text: String,
+    pub state: QueueState,
+    /// For a waiting prompt, one of the `QUEUE_REASON_*` values; for a failed prompt, why its delivery failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Result of `agent.queue.list` and `agent.queue.resume`: a session's queue, head first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueList {
+    pub session: String,
+    pub items: Vec<QueuedPrompt>,
+}
+
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;
 /// Most bytes of a session's result text (0052).
