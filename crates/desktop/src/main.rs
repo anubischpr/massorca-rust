@@ -52,7 +52,8 @@ fn main() {
                     }
                 }
             };
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let window_size = size(px(1440.), px(900.));
+            let bounds = Bounds::centered(None, window_size, cx);
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -93,7 +94,10 @@ fn main() {
                 },
             );
             match opened {
-                Ok(_) if launch.background => {}
+                // GPUI applies the requested size only when it activates a window; a hidden one never is.
+                Ok(window) if launch.background => {
+                    let _ = window.update(cx, |_, window, _| window.resize(window_size));
+                }
                 Ok(_) => cx.activate(true),
                 Err(error) => {
                     report(&format!("{error:#}"));

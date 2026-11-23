@@ -212,6 +212,9 @@ pub struct Terminal {
     pub created_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit: Option<TerminalExit>,
+    /// The terminal's program got vault secrets (decision 0071): attaching, input and resize need host-admin scope.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holds_secrets: bool,
 }
 
 /// How an attach starts: output resumes from `since`, or a snapshot redraws the screen first.

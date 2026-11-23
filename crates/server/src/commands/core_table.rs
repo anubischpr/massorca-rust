@@ -32,6 +32,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "host.memory",
+            "Show the memory of the service and its terminals",
+            "host.memory",
+            no_args(),
+        ),
+        command(
             "events.subscribe",
             "Stream change events",
             "events.subscribe",
@@ -130,6 +136,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "device.revoke",
             "Revoke a paired device",
             "device.revoke",
+            selector("device"),
+        ),
+        command(
+            "device.forget",
+            "Remove a revoked device from the list",
+            "device.forget",
             selector("device"),
         ),
         command(
