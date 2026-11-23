@@ -8,6 +8,7 @@ mod fixture;
 mod interrupted_create;
 mod names;
 mod names_and_paths;
+mod project_base;
 mod projects;
 mod read;
 mod removal_edges;

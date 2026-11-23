@@ -66,6 +66,14 @@ pub fn project_line(project: &Project, verb: &str) -> String {
     )
 }
 
+/// One line for a project whose base was set or cleared.
+pub fn project_base_line(project: &Project) -> String {
+    match &project.base_ref {
+        Some(base) => format!("project {} base is {base}", project.name),
+        None => format!("project {} has no base", project.name),
+    }
+}
+
 /// What `project rm --forget-workspaces` dropped. No file, folder, worktree or branch is touched.
 pub fn forgotten_line(count: usize) -> String {
     let noun = if count == 1 { "record" } else { "records" };
@@ -74,15 +82,19 @@ pub fn forgotten_line(count: usize) -> String {
     )
 }
 
-/// The fields of one project, one per line.
+/// The fields of one project, one per line; the base only when one is set.
 pub fn project_details(project: &Project) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("id: {}", project.id),
         format!("name: {}", project.name),
         format!("kind: {}", project_kind(project.kind)),
         format!("path: {}", project.path),
         format!("workspaces root: {}", project.workspaces_root),
-    ]
+    ];
+    if let Some(base) = &project.base_ref {
+        lines.push(format!("base: {base}"));
+    }
+    lines
 }
 
 pub fn project_table(projects: &[Project]) -> Vec<String> {
@@ -93,11 +105,12 @@ pub fn project_table(projects: &[Project]) -> Vec<String> {
                 project.id.clone(),
                 project.name.clone(),
                 project_kind(project.kind).to_owned(),
+                project.base_ref.clone().unwrap_or_else(|| "-".to_owned()),
                 project.path.clone(),
             ]
         })
         .collect();
-    table(&["ID", "NAME", "KIND", "PATH"], rows)
+    table(&["ID", "NAME", "KIND", "BASE", "PATH"], rows)
 }
 
 /// One line for a workspace that was just created.

@@ -232,6 +232,17 @@ pub enum ProjectCommand {
         #[arg(long)]
         forget_workspaces: bool,
     },
+    /// Sets the base that a project's new workspaces start from, or clears it with --clear.
+    SetBase {
+        /// Project id, name or path.
+        project: String,
+        /// A branch, remote branch or commit that resolves to a commit, such as `origin/develop`.
+        #[arg(required_unless_present = "clear")]
+        base: Option<String>,
+        /// Clears the base, so new workspaces start from the repository's default branch.
+        #[arg(long, conflicts_with = "base")]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Args)]

@@ -847,6 +847,7 @@ mod tests {
             path_key: new_id(),
             name: new_id(),
             workspaces_root: "/work/root".to_owned(),
+            base_ref: None,
             added_at: 1,
         };
         store.insert_project(&project).expect("project");

@@ -475,7 +475,7 @@ has two values, as in pv96, and there is no per-bot mode.
   print "Full access: bots run without asking for permission", with the one
   command that turns it off. `team create --access default` makes a team without
   it.
-- **Existing teams become `default`** (migration step 23). They were made when
+- **Existing teams become `default`** (migration step 24). They were made when
   `full` changed nothing, so they must not gain bypass silently. `massorca team
   update TEAM --access full` turns it on.
 - `team.create` without `access` still makes a `full` team, so an older client

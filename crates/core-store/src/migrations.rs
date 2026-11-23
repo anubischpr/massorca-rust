@@ -428,6 +428,13 @@ CREATE TABLE agent_prompt_delivered (
 "#,
         foreign_keys_off: false,
     },
+    // A project's base branch, which a new workspace starts from when it names none (WS-04).
+    Migration {
+        sql: r#"
+ALTER TABLE projects ADD COLUMN base_ref TEXT;
+"#,
+        foreign_keys_off: false,
+    },
     // Team access (decision 0072, amendment "team access"): `full` now runs bots in a bypass mode. Teams made when it
     // changed nothing keep running without one, so they become `default`; only a later change turns bypass on.
     Migration {
