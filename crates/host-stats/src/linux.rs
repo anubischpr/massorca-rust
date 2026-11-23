@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::proc_mounts;
 use crate::proc_net::{self, Family};
 use crate::{Listening, ListeningSocket, ProcessInfo, ProcessTable};
 
@@ -150,9 +151,13 @@ pub(crate) fn process_table() -> ProcessTable {
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
         .filter_map(current)
         .collect();
+    // `hidepid` keeps other users' processes out of `/proc`, so the listing is then not every process (decision 0081).
+    // A mountinfo that cannot be read is taken as no hiding.
+    let hidden = fs::read_to_string("/proc/self/mountinfo")
+        .is_ok_and(|mounts| proc_mounts::hides_processes(&mounts));
     ProcessTable {
         processes,
-        complete: true,
+        complete: !hidden,
     }
 }
 

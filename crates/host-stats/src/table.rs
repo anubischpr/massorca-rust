@@ -19,8 +19,9 @@ pub struct ProcessInfo {
 }
 
 /// The process table and whether it lists every live process. `complete` is `false` when the platform could not list
-/// them all, or could not list any: a process missing from the table may belong to a terminal, so the answers built
-/// from it are partial (decision 0081). A short table is never passed on as a whole one.
+/// them all, or could not list any, or when `/proc` hides other users' processes (`hidepid`). A process missing from the
+/// table may belong to a terminal, so the answers built from it are partial (decision 0081). A short table is never
+/// passed on as a whole one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessTable {
     pub processes: Vec<ProcessInfo>,

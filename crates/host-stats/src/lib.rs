@@ -19,6 +19,8 @@ mod macos;
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod other;
 #[cfg(any(target_os = "linux", test))]
+mod proc_mounts;
+#[cfg(any(target_os = "linux", test))]
 mod proc_net;
 #[cfg(windows)]
 mod windows;
