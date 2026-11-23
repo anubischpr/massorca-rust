@@ -1,7 +1,6 @@
 //! The delegate form under a running session (X-CH-06): a prompt, the agent the child starts on, an optional
 //! workspace name and title, and read only. Sending calls `agent.delegate` with this submit's id, so a retry sends
-//! the same id and the service answers with the child it already made. A refusal keeps the form and its input; a
-//! started child closes it, and the session tree lists the child once the refetch after the answer has run.
+//! the same id and the service answers with the child it already made. A refusal keeps the form and its input.
 
 use gpui::{
     AnyElement, App, Context, Entity, Focusable, Subscription, WeakEntity, Window, div, prelude::*,
@@ -13,7 +12,8 @@ use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::switch::Switch;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
-use massorca_ui::tokens::SPACE_3;
+use massorca_ui::tokens::{SPACE_1, SPACE_3, TYPE_BODY_SM};
+use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
 use crate::model::agent_delegate::{
@@ -39,17 +39,30 @@ pub(super) struct DelegateForm {
     pub(super) request: Option<String>,
     pub(super) sending: bool,
     pub(super) error: Option<String>,
+    /// The child the service started, once it did; the form then offers to open it.
+    pub(super) started: Option<StartedChild>,
     _subscriptions: Vec<Subscription>,
 }
 
-/// The dialog on screen, if any: the delegate form.
+/// The child a delegate call started: its id, its title and the note the service attached to the answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StartedChild {
+    pub(super) id: String,
+    pub(super) title: String,
+    pub(super) note: Option<String>,
+}
+
+/// The dialog on screen, if any: the form until its call is answered, then the child it started.
 pub(in crate::shell) fn dialog(
     shell: &Shell,
     weak: &WeakEntity<Shell>,
     cx: &App,
 ) -> Option<AnyElement> {
     let form = shell.delegate.as_ref()?;
-    Some(form_view(form, weak, cx))
+    Some(match &form.started {
+        Some(started) => started_view(started, weak, cx),
+        None => form_view(form, weak, cx),
+    })
 }
 
 /// A text field of the form. Its edits clear the last refusal, and Enter sends the form.
@@ -129,6 +142,7 @@ impl Shell {
             request: None,
             sending: false,
             error: None,
+            started: None,
             _subscriptions: vec![prompt_events, name_events, title_events, kind_events],
         });
         cx.notify();
@@ -148,7 +162,7 @@ impl Shell {
         let Some(form) = self.delegate.as_mut() else {
             return;
         };
-        if form.sending {
+        if form.sending || form.started.is_some() {
             return;
         }
         let draft = DelegateDraft {
@@ -182,8 +196,8 @@ impl Shell {
         .detach();
     }
 
-    /// Shows what the service answered to the submit that holds `request`: a refusal keeps the form and its reason,
-    /// and a started child closes it. An answer for a form that has moved on is dropped.
+    /// Shows what the service answered to the submit that holds `request`; an answer for a form that has moved on
+    /// is dropped.
     fn finish_delegate(
         &mut self,
         request: &str,
@@ -196,12 +210,16 @@ impl Shell {
         if form.request.as_deref() != Some(request) {
             return;
         }
+        form.sending = false;
         match answer {
-            Ok(_) => self.delegate = None,
-            Err(refusal) => {
-                form.sending = false;
-                form.error = Some(refusal.message());
+            Ok(delegated) => {
+                form.started = Some(StartedChild {
+                    id: delegated.session.id,
+                    title: delegated.session.title.unwrap_or_default(),
+                    note: delegated.note,
+                });
             }
+            Err(refusal) => form.error = Some(refusal.message()),
         }
         cx.notify();
     }
@@ -233,6 +251,13 @@ impl Shell {
         form.read_only = on;
         form.name.update(cx, |field, cx| field.set_disabled(on, cx));
         self.delegate_edited(cx);
+    }
+
+    /// Opens the child the form started in the session view, and closes the form.
+    fn open_delegated_child(&mut self, child: &str, cx: &mut Context<Self>) {
+        self.delegate = None;
+        self.model.open_session(child);
+        cx.notify();
     }
 }
 
@@ -279,4 +304,42 @@ fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElem
         dialog = dialog.error(error.clone());
     }
     dialog.into_any_element()
+}
+
+/// The dialog once the service started the child: its title, the service's note, and the way to open the child.
+fn started_view(started: &StartedChild, weak: &WeakEntity<Shell>, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let title = if started.title.is_empty() {
+        "The child session".to_owned()
+    } else {
+        started.title.clone()
+    };
+    let mut body = div().flex().flex_col().gap(px(SPACE_1)).child(
+        div()
+            .text_style(TYPE_BODY_SM)
+            .text_color(theme.palette.text.primary)
+            .child(title),
+    );
+    if let Some(note) = &started.note {
+        body = body.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(note.clone()),
+        );
+    }
+    let (open, done) = (weak.clone(), weak.clone());
+    let child = started.id.clone();
+    Dialog::new("delegate", "Delegated")
+        .open(true)
+        .child(body)
+        .action("Open child")
+        .cancel_label("Done")
+        .on_action(move |_, cx| {
+            let _ = open.update(cx, |shell, cx| shell.open_delegated_child(&child, cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = done.update(cx, |shell, cx| shell.close_delegate(cx));
+        })
+        .into_any_element()
 }

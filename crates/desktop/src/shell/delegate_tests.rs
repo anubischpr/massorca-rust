@@ -65,7 +65,7 @@ fn started_child() -> AgentDelegated {
 }
 
 #[gpui::test]
-fn a_submit_sends_its_fields_with_a_new_request_id_and_closes_on_the_answer(
+fn a_submit_sends_its_fields_with_a_new_request_id_and_then_offers_the_child(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = with_running_session(cx);
@@ -108,9 +108,18 @@ fn a_submit_sends_its_fields_with_a_new_request_id_and_closes_on_the_answer(
     reply.send(Ok(started_child())).expect("the shell waits");
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, _| {
+        let started = shell
+            .delegate
+            .as_ref()
+            .and_then(|form| form.started.as_ref());
+        assert_eq!(started.map(|child| child.id.as_str()), Some("c"));
+    });
+
+    click(cx, "dialog-action");
+    rig.shell.read_with(cx, |shell, _| {
         assert!(
             shell.delegate.is_none(),
-            "the form closes once the child is started"
+            "the form closes when its child opens"
         );
     });
 }
@@ -158,7 +167,12 @@ fn a_refused_submit_keeps_its_input_and_a_retry_sends_the_same_request_id(cx: &m
     reply.send(Ok(started_child())).expect("the shell waits");
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, _| {
-        assert!(shell.delegate.is_none(), "a started child closes the form");
+        assert!(
+            shell
+                .delegate
+                .as_ref()
+                .is_some_and(|form| form.started.is_some())
+        );
     });
 }
 

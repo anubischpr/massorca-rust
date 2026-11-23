@@ -196,7 +196,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 ## Delegate (X-CH-06)
 
 **Matches**
-- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. A retry sends the same request id. The form closes once the service starts the child, and the child appears in the session tree after the refetch.
+- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. A retry sends the same request id. The child appears in the session tree after the refetch, and "Open child" opens it.
 - The agents offered are the ones turned on and detected on this host, as the start page offers them.
 
 **Cannot match yet**
