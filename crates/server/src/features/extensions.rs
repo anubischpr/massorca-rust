@@ -251,13 +251,7 @@ where
 {
     let extensions = Arc::clone(&ctx.state.extensions);
     // Counted until it returns, so the profile lock outlives an install and the next start's sweep never sees it.
-    let work = ctx.state.activity.enter();
-    match tokio::task::spawn_blocking(move || {
-        let _work = work;
-        call(&extensions)
-    })
-    .await
-    {
+    match ctx.state.activity.blocking(move || call(&extensions)).await {
         Ok(result) => result.map_err(error_body),
         Err(error) => Err(ErrorBody::new(
             codes::INTERNAL,
