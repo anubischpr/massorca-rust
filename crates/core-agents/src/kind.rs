@@ -70,6 +70,10 @@ pub struct PermissionModeDecl {
     /// The mode lifts the vendor's permission prompts or sandbox: never the default, and never kept without being named.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+    /// The vendor documents that a run asked for this mode may start in another one without failing, so launch
+    /// arguments never confirm it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_fall_back: bool,
 }
 
 /// How a live switch reaches the agent.
@@ -1018,6 +1022,20 @@ mod tests {
             placeholder.iter().any(|p| p.contains("args")),
             "{placeholder:?}"
         );
+    }
+
+    #[test]
+    fn a_mode_may_say_that_the_vendor_falls_back_from_it() {
+        let mut value = minimal();
+        value["permission_modes"] = serde_json::json!([
+            { "id": "auto", "label": "Auto", "args": ["--auto"], "may_fall_back": true },
+            { "id": "plan", "label": "Plan", "args": ["--plan"] }
+        ]);
+        value["default_permission_mode"] = serde_json::json!("auto");
+        let kind = parse(value);
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+        assert!(kind.permission_mode("auto").unwrap().may_fall_back);
+        assert!(!kind.permission_mode("plan").unwrap().may_fall_back);
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
     lines
 }
 
-/// `id (Label, default, bypass, live)` for each mode, in declared order (decision 0083).
+/// `id (Label, default, bypass, live, may fall back)` for each mode, in declared order (decision 0083).
 fn modes_text(kind: &AgentKind) -> String {
     kind.permission_modes
         .iter()
@@ -59,6 +59,9 @@ fn modes_text(kind: &AgentKind) -> String {
             }
             if mode.live_switch {
                 marks.push("live");
+            }
+            if mode.may_fall_back {
+                marks.push("may fall back");
             }
             format!("{} ({})", mode.id, marks.join(", "))
         })

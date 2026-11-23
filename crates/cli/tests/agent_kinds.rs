@@ -207,13 +207,16 @@ fn kinds_list_their_permission_modes_with_the_default_and_bypass_marked() {
     assert_eq!(
         listed["permission_modes"],
         json!([
-            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false },
-            { "id": "wild", "label": "Wild", "bypass": true, "live_switch": true }
+            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false, "may_fall_back": false },
+            { "id": "wild", "label": "Wild", "bypass": true, "live_switch": true, "may_fall_back": false }
         ]),
         "the modes are listed without their arguments"
     );
     let claude = kind(&kinds, "claude", "core");
-    assert_eq!(claude["default_permission_mode"], "default");
+    assert_eq!(
+        claude["default_permission_mode"], "auto",
+        "the vendor's own default"
+    );
 
     let text = stdout_text(&sandbox.run("default", &["agent", "kinds"]).success());
     assert!(
@@ -222,6 +225,10 @@ fn kinds_list_their_permission_modes_with_the_default_and_bypass_marked() {
     );
     assert!(
         text.contains("bypassPermissions (Bypass permissions, bypass)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("auto (Auto, default, may fall back)"),
         "{text}"
     );
 }

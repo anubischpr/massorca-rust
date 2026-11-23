@@ -220,6 +220,7 @@ fn mode_view(mode: &PermissionModeDecl) -> wire::PermissionMode {
         description: mode.description.clone(),
         bypass: mode.bypass,
         live_switch: mode.live_switch.is_some(),
+        may_fall_back: mode.may_fall_back,
     }
 }
 
@@ -526,7 +527,8 @@ mod tests {
     fn built_in_permission_modes_match_decision_0083() {
         let kinds = built_ins();
         let claude = &kinds[0];
-        assert_eq!(claude.default_permission_mode.as_deref(), Some("default"));
+        // The vendor's own default (decision 0083): `auto` from 2.1.283, `default` before.
+        assert_eq!(claude.default_permission_mode.as_deref(), Some("auto"));
         assert_eq!(
             modes_of(claude),
             [
@@ -691,10 +693,39 @@ mod tests {
                 description: super_yolo.description.clone(),
                 bypass: true,
                 live_switch: true,
+                may_fall_back: false,
             }
         );
         let claude = views.iter().find(|kind| kind.id == "claude").unwrap();
         assert_eq!(claude.permission_modes.len(), 6);
         assert!(claude.permission_modes.iter().all(|mode| !mode.live_switch));
+    }
+
+    #[test]
+    fn only_the_auto_modes_that_the_vendors_say_fall_back_are_marked() {
+        let marked: Vec<(String, String)> = built_ins()
+            .iter()
+            .flat_map(|kind| {
+                kind.permission_modes
+                    .iter()
+                    .filter(|mode| mode.may_fall_back)
+                    .map(|mode| (kind.id.clone(), mode.id.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                ("claude".to_owned(), "auto".to_owned()),
+                ("antigravity".to_owned(), "auto".to_owned())
+            ]
+        );
+        let profile = tempfile::tempdir().unwrap();
+        let views = Catalog::load(profile.path()).views(profile.path(), &SearchEnv::default());
+        let antigravity = views.iter().find(|kind| kind.id == "antigravity").unwrap();
+        assert!(
+            antigravity.permission_modes[0].may_fall_back,
+            "listed on the wire"
+        );
     }
 }

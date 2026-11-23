@@ -413,6 +413,7 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
             description: None,
             bypass: false,
             live_switch: false,
+            may_fall_back: true,
         },
         PermissionMode {
             id: "wild".to_owned(),
@@ -420,6 +421,7 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
             description: Some("No prompts.".to_owned()),
             bypass: true,
             live_switch: true,
+            may_fall_back: false,
         },
     ];
     kind.default_permission_mode = Some("careful".to_owned());
@@ -427,8 +429,8 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
     assert_eq!(
         value["permission_modes"],
         json!([
-            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false },
-            { "id": "wild", "label": "Wild", "description": "No prompts.", "bypass": true, "live_switch": true }
+            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false, "may_fall_back": true },
+            { "id": "wild", "label": "Wild", "description": "No prompts.", "bypass": true, "live_switch": true, "may_fall_back": false }
         ])
     );
     assert_eq!(value["default_permission_mode"], "careful");
@@ -436,7 +438,7 @@ fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
     assert_eq!(decoded, kind);
     let bare: PermissionMode = serde_json::from_value(json!({ "id": "x", "label": "X" })).unwrap();
     assert!(
-        !bare.bypass && !bare.live_switch,
+        !bare.bypass && !bare.live_switch && !bare.may_fall_back,
         "absent flags read as false"
     );
 }

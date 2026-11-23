@@ -129,6 +129,9 @@ pub struct PermissionMode {
     /// the next resume.
     #[serde(default)]
     pub live_switch: bool,
+    /// The vendor may start a run asked for this mode in another one without failing, so it is never confirmed.
+    #[serde(default)]
+    pub may_fall_back: bool,
 }
 
 /// The decoded form of [`AgentKind`]. Only the fallback for an absent `detected` lives here: an `agents/1` peer

@@ -70,8 +70,9 @@
     {
       "id": "auto",
       "label": "Auto",
-      "description": "Everything runs, with background safety checks.",
-      "args": ["--permission-mode", "auto"]
+      "description": "Everything runs, with background safety checks. Where auto mode is not available, Claude Code starts in Manual.",
+      "args": ["--permission-mode", "auto"],
+      "may_fall_back": true
     },
     {
       "id": "dontAsk",
@@ -87,5 +88,5 @@
       "bypass": true
     }
   ],
-  "default_permission_mode": "default"
+  "default_permission_mode": "auto"
 }

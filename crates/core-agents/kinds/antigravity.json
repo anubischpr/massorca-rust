@@ -12,7 +12,8 @@
       "id": "auto",
       "label": "auto",
       "description": "Approves workspace edits and runs commands in the sandbox; where the account or platform cannot, agy runs in default.",
-      "args": ["--mode=auto"]
+      "args": ["--mode=auto"],
+      "may_fall_back": true
     },
     {
       "id": "accept-edits",
