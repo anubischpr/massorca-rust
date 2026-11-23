@@ -349,3 +349,55 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
     assert!(!Path::new(&created.path).exists());
     stop(running).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_workspace_stops_its_terminals_first() {
+    use massorca_protocol::methods::terminals::{
+        self, Terminal, TerminalCreateParams, TerminalList, TerminalListParams, TerminalState,
+    };
+
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "busy"))
+        .await
+        .expect("create");
+    let terminal: Terminal = client
+        .call(
+            terminals::CREATE,
+            &TerminalCreateParams {
+                workspace: created.id.clone(),
+                shell: None,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                cols: None,
+                rows: None,
+                title: None,
+                request_id: None,
+            },
+        )
+        .await
+        .expect("a terminal starts in the workspace");
+    assert_eq!(terminal.state, TerminalState::Live);
+
+    let _: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, false))
+        .await
+        .expect("the removal stops the terminal, then removes the worktree");
+    assert!(!Path::new(&created.path).exists());
+    let listed: TerminalList = client
+        .call(terminals::LIST, &TerminalListParams { workspace: None })
+        .await
+        .expect("list");
+    let after = listed
+        .terminals
+        .iter()
+        .find(|listed| listed.id == terminal.id)
+        .expect("the stopped terminal stays listed as exited");
+    assert_eq!(after.state, TerminalState::Exited);
+    stop(running).await;
+}

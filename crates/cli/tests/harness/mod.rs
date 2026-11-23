@@ -183,8 +183,21 @@ impl Sandbox {
         massorca_profile::create_root(&resolved).expect("the profile root");
     }
 
+    /// Panics when the folder of `profile` exists but was not created private to its owner: a test wrote into it
+    /// before its first command or [`Sandbox::prepare_profile`], so every later start would repair its access (ADR 0073).
+    fn assert_profile_private(&self, profile: &str) {
+        let dir = self.profile_dir(profile);
+        if dir.exists() && !is_private_dir(&dir) {
+            panic!(
+                "profile folder {} was written before it was created private: call `Sandbox::prepare_profile` first (ADR 0073)",
+                dir.display()
+            );
+        }
+    }
+
     /// `massorca --profile <profile>` on this home.
     pub fn command(&self, profile: &str) -> Command {
+        self.assert_profile_private(profile);
         self.track(profile);
         let mut command = massorca_in(self.home());
         command.arg("--profile").arg(profile);
@@ -318,6 +331,7 @@ impl Sandbox {
         stdout: Stdio,
         stderr: Stdio,
     ) -> ChildGuard {
+        self.assert_profile_private(profile);
         self.track(profile);
         let mut command = massorca_in(self.home());
         let child = command
@@ -410,6 +424,21 @@ impl Drop for Sandbox {
         }
         self.release(&profiles, Instant::now() + RELEASE_TIMEOUT);
     }
+}
+
+/// Whether `dir` is private to its owner the way the service makes a profile folder: owner-only access on Windows,
+/// mode `0700` on Unix.
+#[cfg(windows)]
+fn is_private_dir(dir: &Path) -> bool {
+    massorca_profile::has_owner_only_dacl(dir)
+        .unwrap_or_else(|error| panic!("the access of {} cannot be read: {error}", dir.display()))
+}
+
+#[cfg(unix)]
+fn is_private_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(dir).is_ok_and(|metadata| metadata.permissions().mode() & 0o777 == 0o700)
 }
 
 /// `true` while a process holds the service lock of the profile in `dir`.
