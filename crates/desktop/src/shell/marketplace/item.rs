@@ -180,7 +180,7 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     let agent = item.agent_kind.clone().unwrap_or_default();
     let activity = AccountActivity {
         busy: Some(&frame.busy),
-        signing_in: None,
+        signing_in: frame.signing_in,
     };
     for view in connection_rows(&frame.snapshot, &agent, activity) {
         list = list.account(account_row(frame, view));

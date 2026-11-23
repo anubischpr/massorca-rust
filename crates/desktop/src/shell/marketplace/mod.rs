@@ -5,6 +5,7 @@ mod accounts;
 mod catalogue;
 mod dialogs;
 mod item;
+mod sign_in;
 #[cfg(test)]
 mod tests;
 
@@ -44,6 +45,8 @@ pub(super) struct MarketplaceFrame {
     error: Option<(Option<AccountId>, String)>,
     /// The accounts the service refused as busy.
     busy: BTreeSet<AccountId>,
+    /// The account whose sign-in terminal runs in the dialog.
+    signing_in: Option<AccountId>,
     /// Why a kind's accounts could not be listed, by kind.
     list_refusals: Vec<(String, String)>,
     shell: WeakEntity<Shell>,
@@ -64,6 +67,11 @@ pub(super) fn frame(
         advanced_open: shell.model.marketplace_advanced_open(),
         error: shell.marketplace_error.clone(),
         busy: shell.marketplace_accounts.busy.clone(),
+        signing_in: shell
+            .marketplace_accounts
+            .sign_in
+            .as_ref()
+            .and_then(|sign_in| sign_in.running_account()),
         list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
         shell: weak,
     }
@@ -150,7 +158,13 @@ impl Shell {
         let _ = self.change_marketplace(cx, |source| source.set_enabled(item, enabled));
     }
 
+    /// Add account: on a connected service the sign-in runs in a service terminal inside the dialog.
     pub(super) fn add_marketplace_account(&mut self, agent_kind: &str, cx: &mut Context<Self>) {
+        if self.service.is_some() {
+            self.marketplace_error = None;
+            self.start_service_sign_in(agent_kind, cx);
+            return;
+        }
         self.marketplace_error =
             match self.change_marketplace(cx, |source| source.add_account(agent_kind)) {
                 Ok(()) => None,

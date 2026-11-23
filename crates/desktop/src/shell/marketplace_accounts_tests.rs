@@ -5,10 +5,15 @@ use super::service_tests::{Rig, click, draw, rig};
 use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
-use crate::service::{AccountCommand, Command, Refusal, StoreUpdate};
+use crate::service::{
+    AccountCommand, Command, Refusal, StoreUpdate, StreamEnd, TerminalCommand, TerminalStreamItem,
+};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AccountState, AccountSummary, PackageState};
+use massorca_protocol::methods::agents::{
+    AccountState, AccountSummary, AccountsAdded, PackageState,
+};
+use tokio::sync::mpsc::unbounded_channel;
 
 fn summary(id: &str, label: &str, state: AccountState, active: bool) -> AccountSummary {
     AccountSummary {
@@ -138,4 +143,69 @@ fn the_rows_follow_the_service_list_and_a_refused_list_is_said(cx: &mut TestAppC
         shown(cx, "marketplace-connection-alert"),
         "the refusal of the list is said"
     );
+}
+
+#[gpui::test]
+fn add_account_opens_the_sign_in_dialog_on_the_terminal_the_service_returns(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = on_claude(cx, Vec::new());
+    click(cx, "button:marketplace-add-account");
+    let Some(Command::Account(AccountCommand::Add { params, reply })) = rig.script.next() else {
+        panic!("an agent.accounts.add call was expected");
+    };
+    assert_eq!(params.kind, "claude");
+    assert!(
+        !shown(cx, "marketplace-sign-in-terminal"),
+        "no terminal before the service answers"
+    );
+    reply
+        .send(Ok(AccountsAdded {
+            account: summary("acct-new", "Account", AccountState::NeedsSignIn, false),
+            terminal_id: "term-sign-in".to_owned(),
+        }))
+        .expect("the shell waits");
+    cx.run_until_parked();
+    assert!(
+        shown(cx, "marketplace-sign-in-terminal"),
+        "the dialog shows the sign-in terminal"
+    );
+
+    // The surface attaches to the terminal the service returned, and answers the program's queries.
+    let attach = std::iter::from_fn(|| rig.script.next()).find_map(|command| match command {
+        Command::Terminal(TerminalCommand::Attach { params, reply }) => Some((params, reply)),
+        _ => None,
+    });
+    let (params, reply) = attach.expect("the sign-in terminal is attached");
+    assert_eq!(params.terminal, "term-sign-in");
+    assert_eq!(params.answers_queries, Some(true));
+
+    // The terminal ends and the service keeps the account: the dialog says it is done.
+    let (items, stream) = unbounded_channel();
+    reply.send(Ok(stream)).expect("the surface waits");
+    items
+        .send(TerminalStreamItem::Ended(StreamEnd::Finished))
+        .expect("the surface listens");
+    rig.updates
+        .send(StoreUpdate::Accounts {
+            kind: "claude".to_owned(),
+            result: Ok(vec![summary(
+                "acct-new",
+                "Account",
+                AccountState::SignedIn,
+                true,
+            )]),
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert!(
+        !shown(cx, "marketplace-sign-in-terminal"),
+        "a kept account closes the terminal part"
+    );
+    rig.shell.read_with(cx, |shell, _| {
+        assert!(
+            shell.marketplace_accounts.sign_in.is_some(),
+            "Done is pressed by the person"
+        );
+    });
 }

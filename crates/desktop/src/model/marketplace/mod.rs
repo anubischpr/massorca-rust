@@ -11,7 +11,10 @@ mod service_source;
 mod source;
 mod types;
 
-pub use accounts::{AccountActivity, AccountView, account_views, busy_refusal, connection_rows};
+pub use accounts::{
+    AccountActivity, AccountView, TerminalSignIn, account_views, busy_refusal, connection_rows,
+    terminal_sign_in,
+};
 pub use agent_links::{AgentLink, installed_agent_links};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use item_page::{

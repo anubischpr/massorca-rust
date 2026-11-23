@@ -7,16 +7,28 @@ use massorca_protocol::methods::agents::{
     AccountsActivateParams, AccountsCheckParams, AccountsRemoveParams,
 };
 
+use super::sign_in::SignIn;
 use crate::model::marketplace::{AccountId, busy_refusal};
 use crate::service::{Refusal, StoreState};
 use crate::shell::Shell;
 use gpui::Context;
 
 /// What the Connection part knows beyond the service's lists.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(in crate::shell) struct AccountsUi {
     /// The accounts the service refused as busy, until a change of theirs works or they are no longer listed.
     pub busy: BTreeSet<AccountId>,
+    /// The sign-in this desktop started, while its dialog is open.
+    pub sign_in: Option<SignIn>,
+}
+
+impl std::fmt::Debug for AccountsUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountsUi")
+            .field("busy", &self.busy)
+            .field("signing_in", &self.sign_in.is_some())
+            .finish()
+    }
 }
 
 /// An account change the service makes.

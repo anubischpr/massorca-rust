@@ -79,6 +79,35 @@ pub fn connection_rows(
         .collect()
 }
 
+/// Where a sign-in in the service's terminal stands, from the dialog's point of view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalSignIn {
+    /// The terminal runs; the person signs in there.
+    Running,
+    /// The terminal has ended and the service is deciding the account.
+    Checking,
+    /// The service kept the account.
+    Kept,
+    /// The service discarded the account.
+    Discarded,
+}
+
+/// The stage of the sign-in of `account`, from whether its terminal has ended and what the service lists. The
+/// service lists a sign-in as needing a sign-in until it decides it, and drops it when it discards it.
+pub fn terminal_sign_in(
+    snapshot: &MarketplaceSnapshot,
+    account: AccountId,
+    ended: bool,
+) -> TerminalSignIn {
+    let listed = snapshot.accounts.iter().find(|row| row.id == account);
+    match (ended, listed) {
+        (false, _) => TerminalSignIn::Running,
+        (true, Some(row)) if row.state == AccountState::NeedsSignIn => TerminalSignIn::Checking,
+        (true, Some(_)) => TerminalSignIn::Kept,
+        (true, None) => TerminalSignIn::Discarded,
+    }
+}
+
 /// Where the account is signed in. The identity comes from the agent's own check, so it reads as
 /// "last signed in" when the account is not signed in now.
 pub fn signed_in_line(state: AccountState, identity: Option<&str>) -> String {
@@ -166,6 +195,25 @@ mod tests {
         assert!(rows[1].busy);
         assert!(!rows[1].can_make_active && !rows[1].can_remove);
         assert!(rows[1].can_check);
+    }
+
+    #[test]
+    fn a_terminal_sign_in_runs_then_is_checked_then_kept_or_discarded() {
+        let pending = listed(&[(AccountState::NeedsSignIn, false, None)]);
+        let kept = listed(&[(AccountState::SignedIn, true, None)]);
+        let gone = listed(&[]);
+        let id = AccountId(1);
+        assert_eq!(
+            terminal_sign_in(&pending, id, false),
+            TerminalSignIn::Running
+        );
+        assert_eq!(terminal_sign_in(&gone, id, false), TerminalSignIn::Running);
+        assert_eq!(
+            terminal_sign_in(&pending, id, true),
+            TerminalSignIn::Checking
+        );
+        assert_eq!(terminal_sign_in(&kept, id, true), TerminalSignIn::Kept);
+        assert_eq!(terminal_sign_in(&gone, id, true), TerminalSignIn::Discarded);
     }
 
     #[test]
