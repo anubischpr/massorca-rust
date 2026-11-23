@@ -93,9 +93,12 @@ a kind declaration gaining fields, would otherwise turn every existing install o
 it into an unvouched first-party entry. That entry is hidden, and its kinds stop
 running.
 
-`Extensions::refresh_builtins` prevents that. The server wiring change calls it
-at every start, beside adoption. Adoption counts an outdated built-in as
-installed, so it never resets one, and a failed refresh never blocks it.
+`Extensions::refresh_builtins` prevents that. The service calls it at every
+start, before requests are served, and then adoption with the profile's used
+kinds. Adoption counts an outdated built-in as installed, so it never resets
+one, and a failed refresh never blocks it. A failure of either, or used kinds
+that cannot be read, is logged and retried at the next start; meanwhile a kind
+whose package is not enabled is refused, never started silently.
 
 - **Which entries.** It looks for catalogue-sourced entries of a catalogue id
   whose hash differs from the embedded package.

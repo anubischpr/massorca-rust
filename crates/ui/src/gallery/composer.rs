@@ -38,10 +38,17 @@ fn access_modes() -> Vec<AccessMode> {
         AccessMode {
             name: "Ask for approval".into(),
             icon: IconName::Lock,
+            bypass: false,
         },
         AccessMode {
             name: "Workspace write".into(),
             icon: IconName::Shield,
+            bypass: false,
+        },
+        AccessMode {
+            name: "Full access".into(),
+            icon: IconName::TriangleAlert,
+            bypass: true,
         },
     ]
 }

@@ -291,6 +291,7 @@ fn task_worktree(
         branch: None,
         base: None,
         existing_branch: false,
+        refresh_base: false,
         path: None,
         request_id: Some(format!("task.worktree:{}:{attempt}", task.id)),
     })?;
@@ -318,6 +319,7 @@ fn linked_folder(
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: Some(format!("team.linked_folder:{project}")),
             })?;
@@ -554,6 +556,7 @@ fn team_folder(
         branch: None,
         base: None,
         existing_branch: false,
+        refresh_base: false,
         path: Some(path_text(&folder)?),
         request_id: Some(format!("team.folder:{}", team.id)),
     })?;
@@ -782,6 +785,7 @@ mod tests {
             path_key: new_id(),
             name: new_id(),
             workspaces_root: "/work/root".to_owned(),
+            base_ref: None,
             added_at: 1,
         };
         store.insert_project(&project).expect("project");

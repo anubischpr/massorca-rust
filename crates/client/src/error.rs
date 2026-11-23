@@ -2,8 +2,12 @@
 
 use std::io;
 
+#[cfg(feature = "local")]
 use massorca_profile::RootAccessError;
-use massorca_protocol::{ErrorBody, ProtocolRange, codes};
+#[cfg(feature = "local")]
+use massorca_protocol::codes;
+use massorca_protocol::{ErrorBody, ProtocolRange};
+#[cfg(feature = "local")]
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +71,7 @@ pub enum ClientError {
     InvalidHostName(String),
 }
 
+#[cfg(feature = "local")]
 impl From<RootAccessError> for ClientError {
     fn from(error: RootAccessError) -> Self {
         match profile_refusal(&error) {
@@ -79,6 +84,7 @@ impl From<RootAccessError> for ClientError {
     }
 }
 
+#[cfg(feature = "local")]
 /// The code, message and paths of a refused profile, as the CLI and the desktop show them; `None` for an I/O error.
 pub fn profile_refusal(error: &RootAccessError) -> Option<ErrorBody> {
     let shown = |paths: &[std::path::PathBuf]| -> Vec<String> {
