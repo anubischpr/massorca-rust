@@ -4,6 +4,7 @@
 use massorca_protocol::methods::host::{HostMemory, MemoryMetric};
 use serde_json::json;
 
+use super::LOST_CONTACT;
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::output::Output;
@@ -24,14 +25,6 @@ pub async fn execute(target: &Target, autostart: bool, output: Output) -> Result
 async fn read(target: &Target, autostart: bool) -> Result<HostMemory, CliError> {
     Ok(connect(target, autostart).await?.host_memory().await?)
 }
-
-/// The failures that mean the service could not be reached or was lost mid-call.
-const LOST_CONTACT: [&str; 4] = [
-    "service.unavailable",
-    "service.disconnected",
-    "host.unreachable",
-    "client.io",
-];
 
 /// Losing contact with the service leaves the figure unknown: it becomes `memory.unverifiable` with exit 4. Anything
 /// else keeps its own code: an answer the service gave (a refusal, an unknown method), an identity that does not match,
