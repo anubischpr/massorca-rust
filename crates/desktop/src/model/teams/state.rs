@@ -122,8 +122,8 @@ impl TeamsState {
         }
     }
 
-    /// The state after a service read: `fresh`'s teams, with the team, the memory tab and the picked card
-    /// kept where they still exist.
+    /// The state after a service read: `fresh`'s teams, with the team, the memory tab and the picked card kept
+    /// where they still exist. A project's Workspaces link is kept too: the service does not record it.
     pub fn refreshed(&self, mut fresh: TeamsState) -> TeamsState {
         let selected = self.selected.filter(|team| fresh.team(*team).is_some());
         let pick = self.pick.clone().filter(|pick| {
@@ -131,6 +131,16 @@ impl TeamsState {
                 .tasks(pick.board)
                 .is_some_and(|tasks| tasks.iter().any(|task| task.id == pick.task))
         });
+        for team in &mut fresh.teams {
+            for project in &mut team.projects {
+                if project.link.is_none() {
+                    project.link = self
+                        .team(team.id)
+                        .and_then(|known| known.project(project.id))
+                        .and_then(|known| known.link.clone());
+                }
+            }
+        }
         fresh.selected = selected;
         fresh.pick = pick;
         fresh.memory_tab = self.memory_tab;
@@ -565,6 +575,19 @@ mod tests {
         let gone = state.refreshed(TeamsState::unavailable());
         assert_eq!(gone.selected(), None);
         assert!(gone.pick().is_none());
+    }
+
+    #[test]
+    fn a_workspaces_link_is_kept_by_a_read_that_still_lists_its_project() {
+        let mut state = SampleTeamsSource.teams();
+        state
+            .link_project(TeamId(1), ProjectId(1), Some("oppm".into()))
+            .unwrap();
+        let mut fresh = SampleTeamsSource.teams();
+        fresh.link_project(TeamId(1), ProjectId(1), None).unwrap();
+        let kept = state.refreshed(fresh);
+        let project = kept.team(TeamId(1)).unwrap().project(ProjectId(1)).unwrap();
+        assert_eq!(project.link.as_deref(), Some("oppm"));
     }
 
     #[test]
