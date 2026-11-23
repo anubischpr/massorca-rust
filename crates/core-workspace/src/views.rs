@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use massorca_core_git::WorktreeEntry;
 use massorca_core_store::{ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState};
 use massorca_protocol::methods::projects::{self, Project};
 use massorca_protocol::methods::workspaces::{self, Workspace};
@@ -40,5 +41,14 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         },
         missing: !Path::new(&row.path).is_dir(),
         created_at_ms: row.created_at,
+        locked: None,
+        prunable: None,
     }
+}
+
+/// The workspace with git's lock and prune state of its worktree.
+pub(crate) fn with_worktree_state(mut workspace: Workspace, entry: &WorktreeEntry) -> Workspace {
+    workspace.locked = entry.locked.clone();
+    workspace.prunable = entry.prunable.clone();
+    workspace
 }

@@ -9,6 +9,7 @@ use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::traits::tokio::Stream as _;
 use massorca_client::{Client, ClientError, ConnectOptions};
 use massorca_profile::{Profile, local_socket_name};
+use massorca_protocol::methods::terminals::ShellSpec;
 use massorca_protocol::{
     ErrorBody, MAX_FRAME_LEN_LOCAL, MIN_PROTOCOL_VERSION, Message, PROTOCOL_VERSION, PeerInfo,
     ProtocolRange, read_message, write_message,
@@ -246,5 +247,24 @@ impl Raw {
             .await
             .expect("the service answers within the limit");
         frame.ok().flatten()
+    }
+}
+
+/// A shell that stays alive for the test: a long sleep, one per platform.
+pub fn shell_with_a_child() -> ShellSpec {
+    if cfg!(windows) {
+        ShellSpec {
+            program: "cmd.exe".to_owned(),
+            args: vec![
+                "/d".to_owned(),
+                "/c".to_owned(),
+                "ping -n 120 127.0.0.1 >nul".to_owned(),
+            ],
+        }
+    } else {
+        ShellSpec {
+            program: "sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 120; true".to_owned()],
+        }
     }
 }

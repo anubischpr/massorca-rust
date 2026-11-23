@@ -106,7 +106,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "project.rm",
             "Remove a project",
             "project.remove",
-            selector("project"),
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": { "project": { "type": "string" }, "forget_workspaces": { "type": "boolean" } }
+            }),
         ),
         command(
             "workspace.create",

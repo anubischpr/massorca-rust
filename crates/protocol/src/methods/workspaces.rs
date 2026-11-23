@@ -73,6 +73,12 @@ pub struct UnregisteredWorktree {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Git's lock reason; `Some("")` when locked without one. Absent when unlocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<String>,
+    /// Git's prunable reason. Absent when git does not prune it, and always on Git before 2.31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prunable: Option<String>,
 }
 
 /// Selector for `workspace.show`: id, then exact name, then path.
@@ -125,4 +131,12 @@ pub struct Workspace {
     pub state: WorkspaceState,
     pub missing: bool,
     pub created_at_ms: i64,
+    /// Git's lock reason for the worktree; `Some("")` when locked without one. Absent when
+    /// unlocked; create and remove results do not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<String>,
+    /// Git's prunable reason for the worktree. Absent when git does not prune it, and always on
+    /// Git before 2.31. `missing` is still answered by the directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prunable: Option<String>,
 }
