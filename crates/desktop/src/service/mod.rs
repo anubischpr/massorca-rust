@@ -2,6 +2,7 @@
 //! runtime, the connection states, the updates the UI folds into its store, and the typed
 //! refusals that pick a dialog.
 
+mod accounts;
 mod agents;
 mod bridge;
 mod connection;

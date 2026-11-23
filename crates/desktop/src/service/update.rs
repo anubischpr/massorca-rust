@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use massorca_protocol::methods::agents::{AccountSummary, AgentKind, AgentSession};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
@@ -65,6 +65,11 @@ pub enum StoreUpdate {
     Network(Result<NetworkStatus, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
+    /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
+    Accounts {
+        kind: String,
+        result: Result<Vec<AccountSummary>, Refusal>,
+    },
 }
 
 /// How a paired host's connection stands, as the last probe or call found it.
@@ -198,6 +203,8 @@ pub struct StoreState {
     pub network: Option<Result<NetworkStatus, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
+    /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
+    pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
 }
 
 impl Default for StoreState {
@@ -220,6 +227,7 @@ impl Default for StoreState {
             devices: None,
             network: None,
             secrets: SecretsState::default(),
+            accounts: BTreeMap::new(),
         }
     }
 }
@@ -310,6 +318,9 @@ impl StoreState {
             }
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
+            }
+            StoreUpdate::Accounts { kind, result } => {
+                self.accounts.insert(kind, result);
             }
         }
     }
