@@ -25,6 +25,7 @@ pub mod codes {
     pub const RESERVED_PUBLISHER: &str = "extension.reserved_publisher";
     pub const BUSY: &str = "extension.busy";
     pub const VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
+    pub const UP_TO_DATE: &str = "extension.up_to_date";
 }
 
 /// What a remove guard or cleanup returns when it refuses or fails, such as `agent.busy`.
@@ -62,6 +63,8 @@ pub enum Error {
     Busy(String),
     #[error("extension {0} is already installed")]
     AlreadyInstalled(String),
+    #[error("extension {0} is already up to date")]
+    UpToDate(String),
     #[error("agent kind {kind} is already installed by {installed_by}")]
     KindConflict { kind: String, installed_by: String },
     #[error("a package archive needs its SHA-256")]
@@ -119,6 +122,7 @@ impl Error {
             Self::NotFound(_) => codes::NOT_FOUND,
             Self::NotInstalled(_) => codes::NOT_INSTALLED,
             Self::AlreadyInstalled(_) => codes::ALREADY_INSTALLED,
+            Self::UpToDate(_) => codes::UP_TO_DATE,
             Self::Busy(_) => codes::BUSY,
             Self::VendorCommandRefused { .. } => codes::VENDOR_COMMAND_REFUSED,
             Self::KindConflict { .. } => codes::KIND_CONFLICT,
@@ -184,5 +188,13 @@ mod tests {
         };
         assert_eq!(error.code(), "agent.busy");
         assert_eq!(Error::ConsentRequired.code(), codes::CONSENT_REQUIRED);
+    }
+
+    #[test]
+    fn an_update_with_nothing_new_has_its_own_code() {
+        assert_eq!(
+            Error::UpToDate("acme.kit".to_owned()).code(),
+            codes::UP_TO_DATE
+        );
     }
 }
