@@ -25,7 +25,9 @@ pub async fn offer(
     let client = connect(target, autostart).await?;
     let params = PairingCreateParams {
         ttl_secs: args.ttl,
-        admin: args.admin,
+        // `admin` asks older services for full access too; they do not read `standard`.
+        admin: !args.standard,
+        standard: args.standard,
     };
     let created: PairingCreated = client.call(devices::PAIRING_CREATE, &params).await?;
     let lines = offer_lines(&created);

@@ -7,6 +7,7 @@ mod first_party;
 mod fixture;
 mod install;
 mod item;
+mod kind_packages;
 mod remove;
 mod reserved;
 mod review;

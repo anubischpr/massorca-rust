@@ -61,6 +61,7 @@ impl Shell {
                 ttl_secs: None,
                 // A paired device is the owner with full access; older servers default to read and workspace.
                 admin: true,
+                standard: false,
             };
             let result = service.create_offer(params).await;
             let _ = this.update(cx, |shell, cx| {
