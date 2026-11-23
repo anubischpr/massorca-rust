@@ -261,13 +261,101 @@ impl Extensions {
         Ok(entries.into_iter().map(|entry| entry.id).collect())
     }
 
+    /// Brings every built-in install whose files predate this build's embedded package up to date, in place
+    /// (decision 0063). Its enabled state, consent, CLI registrations, install time and adoption mark are kept, and no
+    /// vendor command or program lookup runs. One lockfile write records every package that staged; a package that
+    /// fails to stage stays as it was, and its first error is returned after that write. Returns the refreshed
+    /// package ids in lockfile order.
+    pub fn refresh_builtins(&self) -> Result<Vec<String>, Error> {
+        let _changes = self.lock_changes();
+        let mut lockfile = self.read_lockfile()?;
+        let mut outdated: Vec<LockEntry> = Vec::new();
+        for entry in &lockfile.packages {
+            // Only the first entry of an id is ever read, so only it is refreshed.
+            if catalogue::is_outdated_builtin_install(entry)
+                && !outdated.iter().any(|old| old.id == entry.id)
+            {
+                outdated.push(entry.clone());
+            }
+        }
+        let mut staged: Vec<(LockEntry, Staged)> = Vec::new();
+        let mut failed: Option<Error> = None;
+        for old in outdated {
+            match self.stage_refresh(&lockfile, &old) {
+                Ok(Some(next)) => staged.push((old, next)),
+                Ok(None) => {}
+                Err(error) => {
+                    failed.get_or_insert(error);
+                }
+            }
+        }
+        if staged.is_empty() {
+            return failed.map_or(Ok(Vec::new()), Err);
+        }
+        for (old, next) in &staged {
+            let fresh = LockEntry {
+                enabled: old.enabled,
+                consent: old.consent.clone(),
+                installed_at_ms: old.installed_at_ms,
+                extra: old.extra.clone(),
+                ..next.entry(old.cli.clone(), old.adopted)
+            };
+            if let Some(slot) = lockfile
+                .packages
+                .iter_mut()
+                .find(|entry| entry.id == old.id)
+            {
+                *slot = fresh;
+            }
+        }
+        if let Err(error) = lockfile.write(&self.layout.lock_path()) {
+            for (_, next) in &staged {
+                self.remove_unpacked(&next.manifest.id, &next.dir);
+            }
+            return Err(error);
+        }
+        for (old, _) in &staged {
+            // The outdated files left the lockfile with this write, so their folder is only litter now.
+            let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+        }
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(staged.into_iter().map(|(old, _)| old.id).collect()),
+        }
+    }
+
+    /// Unpacks the embedded package that replaces an outdated built-in install. `None` when the new folder would be the
+    /// old one: unpacking replaces the target folder, which here is the install's only copy.
+    fn stage_refresh(&self, lockfile: &Lockfile, old: &LockEntry) -> Result<Option<Staged>, Error> {
+        let package = source::load(&Source::Catalogue(old.id.clone()), None)?;
+        let rel = Layout::package_rel_path(
+            &package.manifest.id,
+            &package.manifest.version.to_string(),
+            &package.sha256,
+        );
+        if rel == old.path {
+            return Ok(None);
+        }
+        self.stage_loaded_built_in(lockfile, package).map(Some)
+    }
+
     /// Checks and unpacks one built-in package for adoption. Callers hold the change lock.
     fn stage_built_in(&self, lockfile: &Lockfile, id: &str) -> Result<Staged, Error> {
         let package = source::load(&Source::Catalogue(id.to_owned()), None)?;
+        self.stage_loaded_built_in(lockfile, package)
+    }
+
+    /// Checks and unpacks a loaded built-in package. Callers hold the change lock.
+    fn stage_loaded_built_in(
+        &self,
+        lockfile: &Lockfile,
+        package: LoadedPackage,
+    ) -> Result<Staged, Error> {
         self.check_kind_conflicts(lockfile, &package.manifest, true)?;
         let kinds = agent_kind_ids(&package.manifest);
-        self.check_installing_kinds(id, &kinds)?;
-        let busy = self.mark_busy(id, kinds)?;
+        let id = package.manifest.id.clone();
+        self.check_installing_kinds(&id, &kinds)?;
+        let busy = self.mark_busy(&id, kinds)?;
         self.unpack_staged(package, busy, Vec::new(), String::new(), true)
     }
 
@@ -548,7 +636,11 @@ fn adoption_ids(used_kinds: &BTreeSet<String>, lockfile: &Lockfile) -> Vec<Strin
     for kind in catalogue_agent_kinds() {
         let installed = lockfile
             .get(&kind.package_id)
-            .is_some_and(catalogue::is_builtin_install);
+            // An outdated built-in is still the person's install: refresh_builtins updates it, adoption must not reset it.
+            .is_some_and(|entry| {
+                catalogue::is_builtin_install(entry)
+                    || catalogue::is_outdated_builtin_install(entry)
+            });
         if used_kinds.contains(&kind.kind_id) && !installed && !ids.contains(&kind.package_id) {
             ids.push(kind.package_id);
         }
