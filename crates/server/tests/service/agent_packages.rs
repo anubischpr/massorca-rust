@@ -60,3 +60,33 @@ async fn a_kind_the_profile_used_is_adopted_at_start_and_follows_its_package() {
     drop(client);
     stop(running).await;
 }
+
+#[tokio::test]
+async fn adoption_runs_once_so_a_disabled_built_in_stays_disabled_after_a_restart() {
+    let home = temp_home();
+    let accounts = profile(home.path(), "default")
+        .dir()
+        .join("agents")
+        .join("accounts")
+        .join("claude");
+    std::fs::create_dir_all(&accounts).expect("a claude account folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    client
+        .extension_set_enabled(&ExtensionSetEnabledParams {
+            id: "massorca.claude".to_owned(),
+            enabled: false,
+        })
+        .await
+        .expect("disables");
+    drop(client);
+    stop(running).await;
+
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let kinds = client.agent_kinds().await.expect("the kinds");
+    assert_eq!(state(&kinds, "claude"), PackageState::Disabled);
+
+    drop(client);
+    stop(running).await;
+}
