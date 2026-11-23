@@ -9,6 +9,7 @@ mod error;
 mod extension_calls;
 mod git_calls;
 mod handshake;
+mod host_storage;
 mod hosts;
 mod identity_mismatch;
 mod options;
@@ -29,7 +30,8 @@ pub use client::Client;
 pub use device_name::default_device_name;
 pub use error::{ClientError, profile_refusal};
 pub use handshake::Welcome;
-pub use hosts::{HostRecord, HostRemoved, Hosts, validate_host_name};
+pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
+pub use hosts::Hosts;
 pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
 pub use options::{Autostart, ConnectOptions};
 pub use reconnect::{
