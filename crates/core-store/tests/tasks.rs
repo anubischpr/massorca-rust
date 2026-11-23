@@ -323,12 +323,12 @@ fn a_reopened_task_is_not_latched_by_the_session_it_let_go() {
     };
     store.insert_task(&row).unwrap();
     // What task.reopen writes: the session link and the outcome are cleared.
+    assert!(store.reopen_task(&row.id, Some("session-1"), 20).unwrap());
     let reopened = TaskRow {
         session_id: None,
         updated_at: 20,
         ..row.clone()
     };
-    assert!(store.update_task(&reopened).unwrap());
 
     assert_eq!(store.find_task_by_session("session-1").unwrap(), None);
     assert!(
