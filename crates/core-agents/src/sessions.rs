@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use crate::credentials;
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
+    now_ms,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
@@ -24,8 +25,9 @@ use massorca_core_terminal::{
 };
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
-    AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentSession,
-    AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeSource, PromptReceipt, ReceiptKind,
+    AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
+    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
+    PromptReceipt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -897,6 +899,108 @@ impl Agents {
         })
     }
 
+    /// Switches a session's permission mode (decision 0083). When the session's run is live and the mode declares a live
+    /// switch, the switch is typed into the run's terminal and the mode is recorded as chosen but unconfirmed: nothing
+    /// confirms the agent took it (`ModeApplied::Live`). Otherwise the mode waits as `pending_permission_mode` for the next
+    /// resume, and the running mode is left as it is (`ModeApplied::NextResume`); a pending bypass mode is used only by a
+    /// resume that names it. A live switch waits for the run to be ready, as a prompt does (`agent.busy`). A mode a resume
+    /// could not apply is refused with `agent.mode_unavailable`, a session its kind cannot resume with
+    /// `agent.resume_unavailable`, and an unknown mode with `agent.mode_unknown`.
+    ///
+    /// A kind with no status mechanism cannot say when its agent is between prompts, so a live switch into it needs
+    /// `force` (R8); without it the call is refused with `agent.mode_unavailable`. While the switch is typed the run is
+    /// marked as switching, and every other prompt or switch is refused with `agent.busy` (R7).
+    pub fn set_mode(
+        &self,
+        selector: &str,
+        mode: &str,
+        force: bool,
+    ) -> Result<AgentModeSet, AgentError> {
+        let row = self.resolve(selector)?;
+        let decl = self.declared_kind(&row.kind)?;
+        let declared = modes::declared(&decl, mode)?;
+        let live_text = declared
+            .live_switch
+            .as_ref()
+            .map(|switch| switch.text.clone());
+        let typed = {
+            let mut live = lock(&self.inner.status);
+            let row = self.reload(&row.id)?;
+            let session = self.view_with(&mut live, row)?;
+            let switchable = live.contains_key(&session.id) && session.terminal_id.is_some();
+            match (switchable, live_text) {
+                (true, Some(text)) => {
+                    let terminal = session.terminal_id.clone().unwrap_or_default();
+                    let Some(run) = live.get_mut(&session.id) else {
+                        return Err(not_live(&session.id));
+                    };
+                    let state = session.activity.as_ref().map(|activity| activity.state);
+                    if let Some(refusal) = input_refusal(run, &session.id, state, false) {
+                        return Err(refusal);
+                    }
+                    if !run.prompt.has_status && !force {
+                        return Err(AgentError::new(
+                            codes::AGENT_MODE_UNAVAILABLE,
+                            format!(
+                                "kind {} reports no activity, so MassOrca cannot tell whether session {} is in the middle of a prompt, and typing {mode}'s switch now could land inside it; switch with force (agent mode --force) once you know the agent is waiting for input",
+                                decl.id, session.id
+                            ),
+                        ));
+                    }
+                    run.switching = true;
+                    // A mode switch starts no turn, so no report answers it: it leaves the typed-since-report flag
+                    // alone, or the next prompt would wait for a report that never comes.
+                    let bytes = prompt::input_bytes(&text, PasteMode::Plain, &run.prompt.submit);
+                    Some((terminal, bytes))
+                }
+                _ => {
+                    modes::applies_at_resume(&decl, declared)?;
+                    if !decl.resumable() {
+                        return Err(resume_unavailable(
+                            &session.id,
+                            &format!(
+                                "kind {} cannot resume it and has no live switch to mode {mode} for this run",
+                                decl.id
+                            ),
+                        ));
+                    }
+                    self.store()
+                        .set_agent_session_pending_mode(&session.id, Some(mode))?;
+                    let session = self.view_with(&mut live, self.reload(&session.id)?)?;
+                    self.notify(Change::Updated(Box::new(session.clone())));
+                    return Ok(AgentModeSet {
+                        applied: ModeApplied::NextResume,
+                        session,
+                    });
+                }
+            }
+        };
+        // Typed outside the status lock, as a prompt is: the write can wait for the agent to read. The run stays marked as
+        // switching until the write is done, whatever its outcome.
+        let written =
+            typed.map(|(terminal, bytes)| self.inner.config.terminals.input(&terminal, &bytes));
+        self.end_switching(&row.id);
+        let mut live = lock(&self.inner.status);
+        if let Some(Err(error)) = written {
+            return Err(match error {
+                TerminalError::Exited | TerminalError::NotFound => not_live(&row.id),
+                other => AgentError::from(other),
+            });
+        }
+        let switched = RunMode {
+            permission_mode: Some(mode.to_owned()),
+            source: Some(modes::SOURCE_CHOSEN.to_owned()),
+            confirmed: false,
+        };
+        self.store().set_agent_session_mode(&row.id, &switched)?;
+        let session = self.view_with(&mut live, self.reload(&row.id)?)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(AgentModeSet {
+            applied: ModeApplied::Live,
+            session,
+        })
+    }
+
     /// The declaration of `id`: declared and valid, whether or not its program is installed now.
     fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
         let catalog = Catalog::load(self.profile_dir());
@@ -1459,7 +1563,6 @@ pub(crate) mod tests {
     use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 
     use super::*;
-    use massorca_core_store::RunMode;
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
     pub(crate) fn service() -> (Agents, String, tempfile::TempDir) {

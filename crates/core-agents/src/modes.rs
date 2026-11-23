@@ -123,6 +123,14 @@ pub(crate) fn plan(decl: &KindDecl, mode: &PermissionModeDecl) -> Result<ModePla
     }
 }
 
+/// Whether a resume could apply `mode`: it has launch arguments, or a live switch the first `idle` can carry (R9).
+pub(crate) fn applies_at_resume(
+    decl: &KindDecl,
+    mode: &PermissionModeDecl,
+) -> Result<(), AgentError> {
+    plan(decl, mode).map(drop)
+}
+
 fn unappliable(decl: &KindDecl, mode: &PermissionModeDecl) -> AgentError {
     AgentError::new(
         codes::AGENT_MODE_UNAVAILABLE,

@@ -1,8 +1,8 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, BringBackResult,
-    Execution, ModeSource, Outcome, PackageState,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentSession, AgentTree,
+    BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
 };
 
 use crate::terminal;
@@ -129,6 +129,28 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if session.brought_back_at_ms.is_some() {
         lines.push("brought back: yes".to_owned());
     }
+    lines
+}
+
+/// What `agent mode` did: when the mode applies, then the session.
+pub fn mode_set_lines(set: &AgentModeSet) -> Vec<String> {
+    let session = &set.session;
+    let applied = match set.applied {
+        ModeApplied::Live => format!(
+            "switched to {} in the running session (requested: no hook confirms it)",
+            session.permission_mode.as_deref().unwrap_or_default()
+        ),
+        ModeApplied::NextResume => format!(
+            "{} applies at the next resume",
+            session
+                .pending_permission_mode
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        ModeApplied::Unknown => "mode set".to_owned(),
+    };
+    let mut lines = vec![applied];
+    lines.extend(session_details(session));
     lines
 }
 

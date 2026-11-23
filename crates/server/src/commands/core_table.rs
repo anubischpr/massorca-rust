@@ -373,6 +373,20 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.mode",
+            "Switch an agent session's permission mode, live or at its next resume",
+            "agent.set_mode",
+            json!({
+                "type": "object",
+                "required": ["session", "permission_mode"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "permission_mode": { "type": "string" },
+                    "force": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
             "agent.forget",
             "Forget an agent session whose run has ended",
             "agent.forget",

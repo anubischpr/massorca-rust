@@ -10,7 +10,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
     ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
+    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
@@ -53,6 +54,16 @@ pub enum AgentCommand {
         /// mode, else the kind's default.
         #[arg(long, value_name = "MODE")]
         mode: Option<String>,
+    },
+    /// Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
+    Mode {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// One of the kind's permission modes, as `agent kinds` lists them.
+        mode: String,
+        /// Type the switch into an agent whose kind reports no activity, so it may be in the middle of a prompt.
+        #[arg(long)]
+        force: bool,
     },
     /// Forgets a session whose run has ended.
     Forget {
@@ -329,6 +340,20 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&resumed, &agent_text::session_details(&resumed));
+        }
+        AgentCommand::Mode {
+            session,
+            mode,
+            force,
+        } => {
+            let set = client
+                .agent_set_mode(&AgentSetModeParams {
+                    session,
+                    permission_mode: mode,
+                    force,
+                })
+                .await?;
+            output.success(&set, &agent_text::mode_set_lines(&set));
         }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;
