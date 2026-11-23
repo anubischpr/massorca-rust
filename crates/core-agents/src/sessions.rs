@@ -30,6 +30,7 @@ use massorca_protocol::methods::agents::{
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
@@ -386,6 +387,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&params.workspace)?;
+        refuse_removing(&workspace)?;
         self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
@@ -537,6 +539,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&row.workspace_id)?;
+        refuse_removing(&workspace)?;
         self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
@@ -1295,6 +1298,17 @@ fn activity_of(stored: &StoredActivity) -> Option<Activity> {
         value["outcome"] = json!(outcome);
     }
     serde_json::from_value(value).ok()
+}
+
+/// No run starts in a workspace being removed: its removal stops the runs it finds, and must find them all.
+fn refuse_removing(workspace: &Workspace) -> Result<(), AgentError> {
+    if workspace.state == WorkspaceState::Removing {
+        return Err(AgentError::new(
+            codes::WORKSPACE_NOT_FOUND,
+            format!("workspace `{}` is being removed", workspace.name),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
