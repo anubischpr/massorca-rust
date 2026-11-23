@@ -23,6 +23,7 @@ fn summary(id: &str, label: &str, state: AccountState, active: bool) -> AccountS
         identity: None,
         active,
         projects: Vec::new(),
+        origin: massorca_protocol::methods::agents::AccountOrigin::Unknown,
     }
 }
 

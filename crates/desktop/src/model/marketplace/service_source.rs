@@ -286,6 +286,7 @@ mod tests {
             identity: None,
             active: true,
             projects: Vec::new(),
+            origin: massorca_protocol::methods::agents::AccountOrigin::Unknown,
         };
         source.follow_accounts(&BTreeMap::from([("claude".to_owned(), Ok(vec![summary]))]));
         source.follow_agent_kinds(&service_kinds());
