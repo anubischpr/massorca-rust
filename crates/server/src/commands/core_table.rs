@@ -38,6 +38,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "host.ports",
+            "Show the listening ports of the terminals' processes",
+            "host.ports",
+            no_args(),
+        ),
+        command(
             "events.subscribe",
             "Stream change events",
             "events.subscribe",
@@ -100,7 +106,11 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "project.rm",
             "Remove a project",
             "project.remove",
-            selector("project"),
+            json!({
+                "type": "object",
+                "required": ["project"],
+                "properties": { "project": { "type": "string" }, "forget_workspaces": { "type": "boolean" } }
+            }),
         ),
         command(
             "workspace.create",

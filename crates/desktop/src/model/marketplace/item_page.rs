@@ -1,6 +1,9 @@
 //! The nine parts of a Marketplace item page in the owner's order (teams-extensions-settings.md 7.2,
 //! decision 0059): which parts an item has, and the rows each part shows.
 
+use massorca_protocol::methods::extensions::ExtensionItem;
+
+use super::extension_items::{risk_word, source_word};
 use super::types::{AccountState, ItemState, MarketplaceItem, MarketplaceSnapshot};
 
 /// One part of the item page, from the top down.
@@ -90,6 +93,9 @@ pub fn information(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
     if let Some(permissions) = &item.permissions {
         rows.push(("Permissions", permissions.clone()));
     }
+    if let Some(extension) = &item.extension {
+        rows.push(("Risk", risk_word(extension.risk.level).to_owned()));
+    }
     if let Some(found) = &item.found_on_this_pc {
         rows.push(("Found on this PC", found.clone()));
     }
@@ -124,13 +130,27 @@ pub fn advanced_rows(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
         rows.push(("Previous version", previous.clone()));
     }
     rows.push(("Source", item.source_url.clone()));
+    if let Some(installed) = item.extension.as_deref().and_then(|e| e.installed.as_ref()) {
+        rows.push((
+            "Installed from",
+            format!(
+                "{} {}",
+                source_word(installed.source.kind),
+                installed.source.reference
+            ),
+        ));
+        rows.push(("Checksum", installed.sha256.clone()));
+    }
     rows.push(("Who can use it", "Only you".to_owned()));
     rows
 }
 
 /// The body of the uninstall confirm. An agent's accounts stay on this computer until the person
-/// removes them (decision 0059).
+/// removes them (decision 0059). A package names what its removal deletes, and what it leaves in place.
 pub fn uninstall_body(item: &MarketplaceItem) -> String {
+    if let Some(extension) = item.extension.as_deref() {
+        return package_uninstall_body(&item.name, extension);
+    }
     if item.agent_kind.is_some() {
         format!(
             "{} stops starting new chats. Its accounts stay on this computer until you remove them.",
@@ -142,6 +162,35 @@ pub fn uninstall_body(item: &MarketplaceItem) -> String {
             item.name
         )
     }
+}
+
+/// What removing an extension package deletes, and what it leaves on this computer, in the service's own terms.
+fn package_uninstall_body(name: &str, extension: &ExtensionItem) -> String {
+    let effects = &extension.uninstall;
+    let mut sentences = vec![format!("{name} is removed from this computer.")];
+    if effects.package_files {
+        sentences.push("Its package files are deleted.".to_owned());
+    }
+    if effects.storage {
+        sentences.push("Its data is deleted.".to_owned());
+    }
+    if effects.secrets_unscoped {
+        sentences.push("Every secret it stored is deleted.".to_owned());
+    } else if !effects.secret_names.is_empty() {
+        sentences.push(format!(
+            "Its secrets are deleted: {}.",
+            effects.secret_names.join(", ")
+        ));
+    }
+    if !effects.connections.is_empty() {
+        sentences.push("Its connections are removed.".to_owned());
+    }
+    for binary in &effects.cli_binaries {
+        sentences.push(format!(
+            "The {binary} CLI it installed stays on this computer."
+        ));
+    }
+    sentences.join(" ")
 }
 
 #[cfg(test)]

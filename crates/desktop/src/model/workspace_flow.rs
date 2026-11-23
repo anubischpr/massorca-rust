@@ -6,7 +6,7 @@ use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceRemoveParams,
 };
 
-use crate::model::start_page::{GIT_LATER, SESSIONS_LATER};
+use crate::model::start_page::GIT_LATER;
 use crate::service::Refusal;
 
 /// The last row of every project menu (A95).
@@ -418,11 +418,7 @@ pub fn workspace_menu(workspace: &Workspace) -> Vec<WorkspaceMenuEntry> {
         None
     };
     vec![
-        item(
-            WorkspaceMenuId::NewSession,
-            "New session",
-            Some(SESSIONS_LATER),
-        ),
+        item(WorkspaceMenuId::NewSession, "New session", None),
         WorkspaceMenuEntry::Submenu {
             id: WorkspaceMenuId::OpenIn,
             label: "Open in",
@@ -761,10 +757,7 @@ mod tests {
     #[test]
     fn rows_whose_layer_is_not_built_yet_are_off_with_their_reason() {
         let menu = workspace_menu(&menu_workspace(WorkspaceKind::Worktree, Some("feat/x")));
-        assert_eq!(
-            off_reason(&menu, WorkspaceMenuId::NewSession),
-            Some(SESSIONS_LATER)
-        );
+        assert_eq!(off_reason(&menu, WorkspaceMenuId::NewSession), None);
         assert_eq!(
             off_reason(&menu, WorkspaceMenuId::Rename),
             Some(RENAME_LATER)
@@ -830,8 +823,12 @@ mod tests {
         );
         // A submenu only opens, the divider is not a row, an off row cannot run, and a row past
         // the end, or a submenu child on a plain row, chooses nothing.
-        assert_eq!(chosen_workspace_item(&menu, 0, None), None);
+        assert_eq!(
+            chosen_workspace_item(&menu, 0, None),
+            Some(WorkspaceMenuId::NewSession)
+        );
         assert_eq!(chosen_workspace_item(&menu, 1, None), None);
+        assert_eq!(chosen_workspace_item(&menu, 2, None), None);
         assert_eq!(chosen_workspace_item(&menu, 5, Some(2)), None);
         assert_eq!(chosen_workspace_item(&menu, 6, None), None);
         assert_eq!(chosen_workspace_item(&menu, 9, None), None);

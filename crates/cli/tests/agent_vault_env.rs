@@ -27,6 +27,8 @@ const VALUES: [(&str, &str); 4] = [
 ];
 
 fn declare_fake(sandbox: &Sandbox) {
+    // The kind file goes into the profile, so the profile is created private first (ADR 0073).
+    sandbox.prepare_profile("default");
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
     fs::create_dir_all(&dir).expect("create the kinds directory");
     let fake = json!({
