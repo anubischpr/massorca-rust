@@ -1,13 +1,14 @@
-//! `project.add`, `project.list`, `project.show` and `project.remove` (capability `projects/1`) over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.remove` and `project.set_base` (capability `projects/1`) over the workspace domain.
 
 use std::sync::Arc;
 
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::{
-    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_CHANGED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
@@ -16,6 +17,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{AppState, Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::NoParams;
+use crate::features::config::workspace_layout;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
 use crate::owner::Owner;
 use crate::permission::Permission;
@@ -54,11 +56,19 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             remove,
         )?,
+        registries.methods.register(
+            Owner::Core,
+            projects::SET_BASE,
+            capabilities::PROJECTS,
+            Permission::Workspace,
+            set_base,
+        )?,
     ])
 }
 
 async fn add(ctx: RequestCtx, params: ProjectAddParams) -> Result<Project, ErrorBody> {
-    let domain = for_mutation(&ctx).await?;
+    let layout = workspace_layout(&ctx).await?;
+    let domain = for_mutation(&ctx).await?.with_layout(layout);
     let project = blocking(move || domain.add_project(params)).await?;
     publish(&ctx, TOPIC_PROJECT_ADDED, &project.id);
     Ok(project)
@@ -139,4 +149,11 @@ fn busy(workspace: &Workspace) -> ErrorBody {
             workspace.name
         ),
     )
+}
+
+async fn set_base(ctx: RequestCtx, params: ProjectSetBaseParams) -> Result<Project, ErrorBody> {
+    let domain = for_mutation(&ctx).await?;
+    let project = blocking(move || domain.set_project_base(params)).await?;
+    publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
+    Ok(project)
 }
