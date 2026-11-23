@@ -73,7 +73,9 @@ contact is never proof a process died. Terminals already use `live` /
   whether someone has seen it: `seen_at_ms` on the session's activity, absent
   until then. `agent.mark_seen` (CLI `agent seen <session>`, capability
   `agent-seen/1`) sets it on the current `waiting` or `done` only; a second
-  mark keeps the first time, and any other activity is left as it is. A mark
+  mark keeps the first time, and any other activity is left as it is. A
+  caller names the activity it showed with its `at_ms`, so a late mark never
+  lands on a newer one; a caller without it marks the current one. A mark
   is a change like any other: watchers get a `changed` item and the bus gets
   `agent.changed`, so every client clears its marker together. Any new
   activity, and a resume, clears it, so the next attention state is unseen.

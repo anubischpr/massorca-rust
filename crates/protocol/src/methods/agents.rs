@@ -27,7 +27,8 @@ pub const PROMPT: &str = "agent.prompt";
 pub const RESUME: &str = "agent.resume";
 /// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
 pub const SET_MODE: &str = "agent.set_mode";
-/// Marks a session's latest `waiting` or `done` as seen (capability `agent-seen/1`); answers with the session.
+/// Params: [`AgentMarkSeenParams`]. Result: [`AgentSession`]. Marks a session's latest `waiting` or `done` as seen
+/// (capability `agent-seen/1`).
 pub const MARK_SEEN: &str = "agent.mark_seen";
 /// Params: [`AgentHookParams`]. Result: `null`.
 pub const HOOK: &str = "agent.hook";
@@ -381,6 +382,15 @@ pub struct AgentSessionList {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionRef {
     pub session: String,
+}
+
+/// Params of `agent.mark_seen`. `at_ms` is the `at_ms` of the activity the caller showed; with it, a newer activity is
+/// left unseen. Without it (an older caller), the current `waiting` or `done` is marked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentMarkSeenParams {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<i64>,
 }
 
 /// Params of `agent.stop`. `force` skips the terminal's grace period.

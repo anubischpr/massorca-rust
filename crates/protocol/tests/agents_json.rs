@@ -694,3 +694,18 @@ fn a_queued_prompt_does_not_print_its_text_in_debug() {
     );
     assert_eq!(agents::MAX_DELIVERED_REQUEST_IDS, 100);
 }
+
+#[test]
+fn mark_seen_takes_an_optional_activity_time_and_an_older_caller_sends_only_the_session() {
+    let older: agents::AgentMarkSeenParams =
+        serde_json::from_value(json!({ "session": "s-1" })).expect("decodes without at_ms");
+    assert_eq!(older.at_ms, None);
+    assert_wire(&older, &json!({ "session": "s-1" }));
+    assert_wire(
+        &agents::AgentMarkSeenParams {
+            session: "s-1".to_owned(),
+            at_ms: Some(7),
+        },
+        &json!({ "session": "s-1", "at_ms": 7 }),
+    );
+}

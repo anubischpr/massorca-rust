@@ -121,7 +121,10 @@ async fn marking_seen_is_stored_and_announced_and_a_new_attention_state_is_unsee
     ));
     let mut events = watcher.subscribe_events().await.expect("events open");
 
-    let marked = other.agent_mark_seen(&id).await.expect("agent.mark_seen");
+    let marked = other
+        .agent_mark_seen(&id, None)
+        .await
+        .expect("agent.mark_seen");
     let at = seen_at(&marked).expect("the reply is seen");
 
     let item = watch.next().await.expect("a change").expect("not an error");
@@ -148,17 +151,30 @@ async fn marking_seen_is_stored_and_announced_and_a_new_attention_state_is_unsee
     assert_eq!(event["id"], id.as_str());
 
     let again = other
-        .agent_mark_seen(&id)
+        .agent_mark_seen(&id, None)
         .await
         .expect("a second mark answers");
     assert_eq!(seen_at(&again), Some(at), "the first mark stays");
 
+    let first_at = marked.activity.as_ref().expect("an activity").at_ms;
     // The store is the one source: a newer done written there is unseen for every reader.
     store
-        .set_agent_session_status(&id, Some(&done_at(now_ms() + 1)), None, None)
+        .set_agent_session_status(&id, Some(&done_at(first_at + 1)), None, None)
         .expect("a new done");
     let shown: AgentSession = other.call(agents::SHOW, &by_ref).await.expect("agent.show");
     assert_eq!(seen_at(&shown), None, "a new attention state is unseen");
+
+    // A late mark for the done a client showed earlier leaves the newer one unseen.
+    let late = other
+        .agent_mark_seen(&id, Some(first_at))
+        .await
+        .expect("a late mark answers");
+    assert_eq!(seen_at(&late), None, "the newer done stays unseen");
+    let current = other
+        .agent_mark_seen(&id, Some(first_at + 1))
+        .await
+        .expect("a mark for the shown done");
+    assert!(seen_at(&current).is_some());
 
     drop((watch, events, watcher, other));
     stop(running).await;

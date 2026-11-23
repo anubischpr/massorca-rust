@@ -326,12 +326,18 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Marks a session's current `waiting` or `done` as seen at `at` (inventory STAT-19). An activity already seen keeps
-    /// its first mark. Returns whether the mark was written.
-    pub fn mark_agent_session_seen(&self, id: &str, at: i64) -> Result<bool, StoreError> {
+    /// Marks a session's current `waiting` or `done` as seen at `at` (inventory STAT-19). With `saw`, only the activity
+    /// recorded at that time is marked, so a late mark never lands on a newer one. An activity already seen keeps its first
+    /// mark. Returns whether the mark was written.
+    pub fn mark_agent_session_seen(
+        &self,
+        id: &str,
+        saw: Option<i64>,
+        at: i64,
+    ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET activity_seen_at = ?2 WHERE id = ?1 AND activity IN ('waiting','done') AND activity_seen_at IS NULL",
-            params![id, at],
+            "UPDATE agent_sessions SET activity_seen_at = ?2 WHERE id = ?1 AND activity IN ('waiting','done') AND activity_seen_at IS NULL AND (?3 IS NULL OR activity_at = ?3)",
+            params![id, at, saw],
         )?;
         Ok(changed > 0)
     }

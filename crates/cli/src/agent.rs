@@ -409,7 +409,10 @@ pub async fn execute(
             output.success(&set, &agent_text::mode_set_lines(&set));
         }
         AgentCommand::Seen { session } => {
-            let seen = client.agent_mark_seen(&session).await?;
+            // Mark only the activity shown here, never one that arrived after it was read.
+            let shown = client.agent_show(&session).await?;
+            let at_ms = shown.activity.as_ref().map(|activity| activity.at_ms);
+            let seen = client.agent_mark_seen(&shown.id, at_ms).await?;
             output.success(&seen, &agent_text::session_details(&seen));
         }
         AgentCommand::Queue { command } => {

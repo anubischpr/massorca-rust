@@ -11,12 +11,12 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, PromptReceipt, QueuedPrompt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentMarkSeenParams,
+    AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -300,8 +300,14 @@ async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, 
 }
 
 /// Marks a session's latest `waiting` or `done` as seen (inventory STAT-19); watchers get the change.
-async fn mark_seen(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
-    let session = on_agents(&ctx, move |agents| agents.mark_seen(&params.session)).await?;
+async fn mark_seen(
+    ctx: RequestCtx,
+    params: AgentMarkSeenParams,
+) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.mark_seen(&params.session, params.at_ms)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
 }
 

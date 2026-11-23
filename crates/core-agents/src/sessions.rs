@@ -1155,11 +1155,12 @@ impl Agents {
     }
 
     /// Marks a session's current `waiting` or `done` as seen (inventory STAT-19) and announces the change once, so every
-    /// reader clears its marker together. Any other activity, or one already seen, is returned as it is.
-    pub fn mark_seen(&self, selector: &str) -> Result<AgentSession, AgentError> {
+    /// reader clears its marker together. With `saw`, only the activity recorded at that time is marked. Any other
+    /// activity, or one already seen, is returned as it is.
+    pub fn mark_seen(&self, selector: &str, saw: Option<i64>) -> Result<AgentSession, AgentError> {
         let id = self.resolve(selector)?.id;
         let mut live = lock(&self.inner.status);
-        let marked = self.store().mark_agent_session_seen(&id, now_ms())?;
+        let marked = self.store().mark_agent_session_seen(&id, saw, now_ms())?;
         let row = self.reload(&id)?;
         let session = self.view_with(&mut live, row)?;
         if marked {
