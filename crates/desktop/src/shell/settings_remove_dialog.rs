@@ -6,8 +6,8 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, WeakEntity, div, px};
 use massorca_protocol::methods::secrets::SecretRemoved;
 use massorca_ui::components::dialog::{Dialog, DialogVariant, DialogWidth};
-use massorca_ui::tokens::{SPACE_2, TYPE_BODY_SM};
-use massorca_ui::{ActiveTheme, TextStyled};
+use massorca_ui::tokens::{SPACE_1, SPACE_2, TYPE_BODY_SM};
+use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
 
 use super::Shell;
 use crate::model::secret_form::{FormStatus, RemoveForm, delete_label, removal_refusal_sentence};
@@ -117,8 +117,16 @@ pub(super) fn remove_dialog_view(
         )
         .child(
             div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_1))
                 .text_style(TYPE_BODY_SM)
                 .text_color(theme.palette.status.danger_fg)
+                .child(
+                    Icon::new(IconName::TriangleAlert)
+                        .size(IconSize::XSmall)
+                        .color(theme.palette.status.danger_fg),
+                )
                 .child("This cannot be undone."),
         );
     let (confirm, dismiss) = (shell.clone(), shell.clone());
