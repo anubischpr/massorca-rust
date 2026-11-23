@@ -6,8 +6,8 @@ use std::fmt::Debug;
 use massorca_protocol::methods::agents::{
     self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
     AgentBringBackParams, AgentHookParams, AgentKind, AgentKinds, AgentSession, AgentStartParams,
-    AgentWatchEvent, Execution, KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt,
-    ReceiptKind, StatusMechanism,
+    AgentWatchEvent, Execution, KindCredentials, KindPackage, Outcome, PackageState,
+    PermissionMode, PromptReceipt, ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -171,6 +171,8 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
             imported: false,
         },
         problems: Vec::new(),
+        permission_modes: Vec::new(),
+        default_permission_mode: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -212,6 +214,8 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
             imported: false,
         },
         problems: Vec::new(),
+        permission_modes: Vec::new(),
+        default_permission_mode: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -381,5 +385,58 @@ fn an_account_summary_omits_an_absent_identity() {
             "projects": ["p1"],
             "origin": "migrated"
         }),
+    );
+}
+
+#[test]
+fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
+    let mut kind: AgentKind = serde_json::from_value(json!({
+        "id": "fake", "name": "Fake", "icon": "bot", "owner": "user", "installed": true,
+        "resumable": false, "status_mechanism": "none",
+        "credentials": { "supported": false, "imported": false }
+    }))
+    .expect("a kind from before permission modes decodes");
+    assert!(kind.permission_modes.is_empty());
+    assert_eq!(kind.default_permission_mode, None);
+    assert!(
+        serde_json::to_value(&kind)
+            .unwrap()
+            .get("permission_modes")
+            .is_none(),
+        "a kind with no modes omits them"
+    );
+
+    kind.permission_modes = vec![
+        PermissionMode {
+            id: "careful".to_owned(),
+            label: "Careful".to_owned(),
+            description: None,
+            bypass: false,
+            live_switch: false,
+        },
+        PermissionMode {
+            id: "wild".to_owned(),
+            label: "Wild".to_owned(),
+            description: Some("No prompts.".to_owned()),
+            bypass: true,
+            live_switch: true,
+        },
+    ];
+    kind.default_permission_mode = Some("careful".to_owned());
+    let value = serde_json::to_value(&kind).unwrap();
+    assert_eq!(
+        value["permission_modes"],
+        json!([
+            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false },
+            { "id": "wild", "label": "Wild", "description": "No prompts.", "bypass": true, "live_switch": true }
+        ])
+    );
+    assert_eq!(value["default_permission_mode"], "careful");
+    let decoded: AgentKind = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded, kind);
+    let bare: PermissionMode = serde_json::from_value(json!({ "id": "x", "label": "X" })).unwrap();
+    assert!(
+        !bare.bypass && !bare.live_switch,
+        "absent flags read as false"
     );
 }

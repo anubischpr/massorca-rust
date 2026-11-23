@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials};
 
 use crate::credentials;
-use crate::kind::{KindDecl, StatusMechanism};
+use crate::kind::{KindDecl, PermissionModeDecl, StatusMechanism};
 use crate::paths;
 use crate::resolve::{SearchEnv, resolve_first};
 
@@ -182,6 +182,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
                 imported,
             },
             problems: entry.problems.clone(),
+            permission_modes: Vec::new(),
+            default_permission_mode: None,
         };
     };
     let program_path = if entry.problems.is_empty() {
@@ -205,6 +207,19 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             imported,
         },
         problems: entry.problems.clone(),
+        permission_modes: decl.permission_modes.iter().map(mode_view).collect(),
+        default_permission_mode: decl.default_permission_mode.clone(),
+    }
+}
+
+/// A declared mode as `agent.kinds` lists it: its arguments and switch text stay in the declaration.
+fn mode_view(mode: &PermissionModeDecl) -> wire::PermissionMode {
+    wire::PermissionMode {
+        id: mode.id.clone(),
+        label: mode.label.clone(),
+        description: mode.description.clone(),
+        bypass: mode.bypass,
+        live_switch: mode.live_switch.is_some(),
     }
 }
 
