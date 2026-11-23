@@ -443,6 +443,7 @@ impl Agents {
                 branch: None,
                 base: Some(base.clone()),
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: request_key.clone(),
             })
@@ -931,6 +932,7 @@ then report"
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             })

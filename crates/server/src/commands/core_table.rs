@@ -128,6 +128,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "branch": { "type": "string" },
                     "base": { "type": "string" },
                     "existing_branch": { "type": "boolean" },
+                    "refresh_base": { "type": "boolean" },
                     "path": { "type": "string" },
                     "request_id": { "type": "string" }
                 }

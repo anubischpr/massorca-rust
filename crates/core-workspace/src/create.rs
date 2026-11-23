@@ -2,6 +2,7 @@
 //! registration of an existing directory in a folder project.
 
 use std::path::Path;
+use std::time::Duration;
 
 use massorca_core_git::{Base, WorktreeAdd};
 use massorca_core_store::{
@@ -9,13 +10,16 @@ use massorca_core_store::{
     WorkspaceRow, WorkspaceState as StoreWorkspaceState, new_id, now_ms,
 };
 use massorca_protocol::codes;
-use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
+use massorca_protocol::methods::workspaces::{BaseRefresh, Workspace, WorkspaceCreateParams};
 
 use crate::error::DomainError;
 use crate::names;
 use crate::paths;
 use crate::views;
 use crate::workspaces::Workspaces;
+
+// Held under the mutation lock, so far below decision 0013's five-minute remote cap.
+const BASE_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl Workspaces {
     /// Creates a worktree (git project) or registers a folder (folder project). A repeated
@@ -80,10 +84,16 @@ impl Workspaces {
             name: "HEAD".to_owned(),
             revision: "HEAD".to_owned(),
         };
+        let mut refresh = None;
         if params.existing_branch {
             if params.base.is_some() {
                 return Err(invalid(
                     "base does not apply when an existing branch is checked out",
+                ));
+            }
+            if params.refresh_base {
+                return Err(invalid(
+                    "refresh_base does not apply when an existing branch is checked out",
                 ));
             }
             if !self.git.branch_exists(repo, branch)? {
@@ -108,6 +118,23 @@ impl Workspaces {
                 None => self.git.default_base(repo)?,
             } {
                 base = found;
+            }
+            if params.refresh_base {
+                // A failed refresh does not fail the create: it goes on from the local copy, and the reply says so.
+                refresh = Some(
+                    match self
+                        .git
+                        .fetch_tracking_base(repo, &base.revision, BASE_REFRESH_TIMEOUT)
+                    {
+                        Ok(Some(fetched)) => BaseRefresh::Fetched {
+                            moved: !fetched.updated.is_empty(),
+                        },
+                        Ok(None) => BaseRefresh::NotRemote,
+                        Err(error) => BaseRefresh::Failed {
+                            reason: error.to_string(),
+                        },
+                    },
+                );
             }
             if !self.git.ref_exists(repo, &base.revision)? {
                 return Err(DomainError::new(
@@ -151,7 +178,10 @@ impl Workspaces {
                 self.roll_back_worktree(repo, &target, created_branch.then_some(branch));
             return Err(with_leftovers(refused_insert(error), &leftovers));
         }
-        Ok(views::workspace(&row))
+        Ok(Workspace {
+            base_refresh: refresh,
+            ..views::workspace(&row)
+        })
     }
 
     /// Adopts the worktree an interrupted create left at `target`: git registers it on `branch`
@@ -203,9 +233,13 @@ impl Workspaces {
         project: &ProjectRow,
         params: &WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
-        if params.branch.is_some() || params.base.is_some() || params.existing_branch {
+        if params.branch.is_some()
+            || params.base.is_some()
+            || params.existing_branch
+            || params.refresh_base
+        {
             return Err(invalid(
-                "branch, base and existing_branch apply only to worktrees",
+                "branch, base, existing_branch and refresh_base apply only to worktrees",
             ));
         }
         let directory = match params.path.as_deref() {

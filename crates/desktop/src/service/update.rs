@@ -493,6 +493,7 @@ pub(crate) mod fixtures {
             state: WorkspaceState::Ready,
             missing: false,
             created_at_ms: created,
+            base_refresh: None,
         }
     }
 

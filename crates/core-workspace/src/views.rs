@@ -41,5 +41,6 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         },
         missing: !Path::new(&row.path).is_dir(),
         created_at_ms: row.created_at,
+        base_refresh: None,
     }
 }

@@ -303,6 +303,9 @@ pub struct WorkspaceCreateArgs {
     /// Check out an existing local branch instead of creating one.
     #[arg(long)]
     pub existing_branch: bool,
+    /// Fetch the base from its remote first; a failed fetch starts from the local copy.
+    #[arg(long)]
+    pub refresh_base: bool,
     /// Directory of the worktree. A relative path is taken from the current directory.
     #[arg(long, value_name = "DIR")]
     pub path: Option<PathBuf>,

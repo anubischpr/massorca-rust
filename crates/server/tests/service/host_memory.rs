@@ -75,6 +75,7 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             },
