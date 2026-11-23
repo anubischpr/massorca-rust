@@ -6,6 +6,7 @@ mod harness;
 use std::path::{Path, PathBuf};
 
 use harness::{Sandbox, eventually, git_repo, single_document, with_json};
+use massorca_core_store::Store;
 use serde_json::{Value, json};
 
 /// Generous upper bound for `--until`; the wait ends as soon as the state is observed.
@@ -311,4 +312,56 @@ fn a_bot_teams_path_taken_by_a_git_project_refuses_the_start() {
     assert_eq!(shown["column"], "open");
     assert_eq!(shown["session_id"], Value::Null);
     assert_eq!(shown["error_code"], "team.folder_taken");
+}
+
+#[test]
+fn a_run_a_failed_start_could_not_stop_keeps_its_bot_busy_until_it_ends() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let first = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Start with hold, then stop."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", first.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+
+    // Leave the run as a start that failed after its spawn and could not stop it: unlinked, attempt still pending.
+    let store =
+        Store::open(sandbox.profile_dir("default").join("store.sqlite3")).expect("the store opens");
+    let request = store
+        .get_agent_session(&session)
+        .expect("read the session")
+        .and_then(|row| row.request_id)
+        .expect("the run's request id");
+    let attempt = request
+        .rsplit(':')
+        .next()
+        .expect("the attempt id")
+        .to_owned();
+    assert!(
+        store
+            .reopen_task(&first, Some(session.as_str()), 2)
+            .expect("unlink")
+    );
+    store
+        .begin_task_start_attempt(&first, &attempt)
+        .expect("keep the attempt");
+
+    let second = create_task(&sandbox, "Write the docs", &["--bot", "mara"]);
+    let busy = error_of(&sandbox, &["task", "start", second.as_str()]);
+    assert_eq!(busy["code"], "bot.busy", "{busy}");
+
+    // Once the run is stopped, the bot is free again.
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+    eventually("the stopped run exits", || {
+        let record = sandbox.json_ok("default", &["agent", "status", session.as_str()]);
+        (record["execution"]["state"] == "exited").then_some(())
+    });
+    let freed = sandbox.json_ok("default", &["task", "start", second.as_str()]);
+    let freed_session = freed["session_id"].as_str().expect("linked session");
+    sandbox.json_ok("default", &["agent", "stop", freed_session, "--force"]);
 }

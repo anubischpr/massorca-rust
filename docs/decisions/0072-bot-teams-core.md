@@ -274,9 +274,17 @@ The workspace domain lets one agent write in a workspace at a time
   the session they read. Otherwise they are refused: with `task.running` when
   the task now runs, and with `task.changed` ("the task changed; try again")
   otherwise.
-- **Waiting for a start:** `task.rm` and a bot change in `task.update` wait for
-  a start in progress, then apply their usual check. A task whose session runs
-  cannot be removed or change bot; both are refused with `task.running`.
+- **Waiting for a start:** `task.rm`, `task.done`, `task.reopen`, a bot change
+  in `task.update`, and `agent.resume` take one start gate. Each one checks
+  whether the task runs and writes under that gate, so no start links and no
+  resume revives a session between the check and the write. A task whose
+  session runs cannot be removed, finished, reopened or change bot; each is
+  refused with `task.running`. The gate is one for every team, so starts in
+  different teams also wait for each other. Starts are short, so this is
+  accepted for now.
+- **A task finished during its start:** the link is written only while the task
+  has no session and no outcome. When it finds an outcome, the start stops the
+  session it spawned and records `task.changed` on the task.
 - **Start attempt:** a start stores an attempt id on the task before it starts
   the agent, and the agent request is keyed by it. The id is cleared once the
   attempt is settled: the session is linked, or the start failed with nothing
@@ -284,7 +292,15 @@ The workspace domain lets one agent write in a workspace at a time
   so it finds that run instead of starting a second one.
 - **Stop on failure:** when a start spawned a session but cannot link it, it
   stops that session at once, and records the error on the task if the task
-  still exists. A session that is not linked never keeps running.
+  still exists. A session that is not linked never keeps running. A start that
+  fails after the spawn point is treated the same way: the session is found by
+  its agent request id and stopped. When that stop fails, the attempt is kept.
+  The bot then stays busy while that run lives, and a retry names the same
+  run. A read that fails after a successful link is reported to the caller
+  and never stops the linked run.
+- **Known gap:** the agents domain stores the request id after the terminal
+  spawns. A service crash between the two lets a retry start a second process.
+  That is the agents domain's start order and is tracked there.
 - **A taken team path:** the "Bot teams" project must be a folder project. When
   `<workspaces root>/bot-teams` was already added as another kind of project,
   the start is refused with `team.folder_taken`, recorded on the task like

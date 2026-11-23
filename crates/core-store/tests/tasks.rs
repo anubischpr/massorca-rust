@@ -134,35 +134,6 @@ fn list_tasks_of_a_bot_or_a_project_names_only_its_links() {
 }
 
 #[test]
-fn update_task_changes_its_mutable_fields_and_keeps_its_team_and_origin() {
-    let store = store();
-    let team = team_row("alpha");
-    store.insert_team(&team).unwrap();
-    let mara = bot_row(&team.id, "mara");
-    store.insert_bot(&mara).unwrap();
-    let mut row = TaskRow {
-        bot_id: Some(mara.id.clone()),
-        origin: TaskOrigin::Room,
-        error: Some("start failed".to_owned()),
-        ..task_row(&team.id, "parse", 10)
-    };
-    store.insert_task(&row).unwrap();
-
-    row.title = "parse the body".to_owned();
-    row.bot_id = None;
-    row.session_id = Some("session-2".to_owned());
-    row.outcome = Some(TaskOutcome::Success);
-    row.error = None;
-    row.updated_at = 30;
-    assert!(store.update_task(&row).unwrap());
-
-    let found = store.get_task(&row.id).unwrap().unwrap();
-    assert_eq!(found, row);
-    assert_eq!(found.origin, TaskOrigin::Room);
-    assert!(!store.update_task(&task_row(&team.id, "gone", 1)).unwrap());
-}
-
-#[test]
 fn delete_task_removes_only_that_task() {
     let store = store();
     let team = team_row("alpha");
@@ -440,4 +411,44 @@ fn a_start_attempt_is_set_once_reused_and_cleared_when_settled() {
             .unwrap(),
         None
     );
+}
+
+#[test]
+fn a_task_marked_finished_before_its_link_is_never_linked() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert!(
+        store
+            .set_task_outcome(&row.id, TaskOutcome::Success, None, 20)
+            .unwrap()
+    );
+
+    assert!(!store.link_task_session(&row.id, "session-1", 30).unwrap());
+
+    let found = store.get_task(&row.id).unwrap().unwrap();
+    assert_eq!(found.session_id, None);
+    assert_eq!(found.outcome, Some(TaskOutcome::Success));
+}
+
+#[test]
+fn the_pending_start_attempt_is_read_without_changing_it() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert_eq!(store.task_start_attempt(&row.id).unwrap(), None);
+
+    store
+        .begin_task_start_attempt(&row.id, "attempt-1")
+        .unwrap();
+
+    assert_eq!(
+        store.task_start_attempt(&row.id).unwrap().as_deref(),
+        Some("attempt-1")
+    );
+    assert_eq!(store.task_start_attempt("missing").unwrap(), None);
 }

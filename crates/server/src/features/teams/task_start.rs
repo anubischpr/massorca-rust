@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use massorca_core_agents::{Agents, SecretGrant};
 use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, new_id, now_ms};
-use massorca_core_workspace::Workspaces;
+use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::events::{
     TOPIC_PROJECT_ADDED, TOPIC_TASK_CHANGED, TOPIC_WORKSPACE_CREATED,
@@ -27,7 +27,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::task::{removed, view_of};
-use super::task_state;
+use super::task_state::{self, Session};
 use super::{blocking, selectors, store_error};
 
 /// The folder project that holds every team's folder, under the workspaces default root.
@@ -36,8 +36,9 @@ const TEAMS_PROJECT_NAME: &str = "Bot teams";
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Serialises task starts, and the calls that must wait for an in-flight start: a removal and a bot change.
-pub(super) fn start_gate() -> MutexGuard<'static, ()> {
+/// Serialises task starts with the calls that read whether a task runs and then write: removal, done, reopen, a bot
+/// change, and an agent resume, which can revive a task's session. One gate for every team: starts are short.
+pub(crate) fn start_gate() -> MutexGuard<'static, ()> {
     START_GATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -122,10 +123,14 @@ fn start_task(
         .begin_task_start_attempt(&row.id, &new_id())
         .map_err(store_error)?
         .ok_or_else(removed)?;
-    let launched = prepare(store, agents, workspaces, &team, &bot, &row, changes)
-        .and_then(|workspace| spawn(agents, &workspace, &team, &bot, &row, &attempt, grant));
-    let session = match launched {
-        Ok(session) => session,
+    let stop = |session: &str| {
+        agents
+            .stop(session, true)
+            .map(drop)
+            .map_err(ErrorBody::from)
+    };
+    let workspace = match prepare(store, agents, workspaces, &team, &bot, &row, changes) {
+        Ok(workspace) => workspace,
         Err(error) => {
             // Nothing was spawned, so the attempt is settled.
             store
@@ -134,14 +139,47 @@ fn start_task(
             return Err(record_failure(store, &row, error, changes)?);
         }
     };
-    let stop = |session: &str| {
-        agents
-            .stop(session, true)
-            .map(drop)
-            .map_err(ErrorBody::from)
+    let request = request_id(&row.id, &attempt);
+    let session = match spawn(agents, &workspace, &team, &bot, &row, &request, grant) {
+        Ok(session) => session,
+        Err(error) => {
+            return Err(after_failed_start(
+                store, stop, &row, &attempt, &request, error, changes,
+            )?);
+        }
     };
-    let current = settle(store, stop, &row, &attempt, &session, changes)?;
+    settle(store, stop, &row, &attempt, &session, changes)?;
+    // Read after the link: a failure here is an error to the caller, never a reason to stop the linked run.
+    let current = selectors::task(store, &row.id)?;
     Ok(view_of(&current, &task_state::load(agents, &current)?))
+}
+
+/// The agent request a start attempt is keyed by.
+fn request_id(task: &str, attempt: &str) -> String {
+    format!("task.start:{task}:{attempt}")
+}
+
+/// A start that failed after its spawn point may have left a session; it is found by its request id and abandoned. When
+/// none exists the attempt is settled. When the lookup fails the attempt is kept, so a retry names the same request.
+fn after_failed_start(
+    store: &Store,
+    stop: impl FnOnce(&str) -> Result<(), ErrorBody>,
+    row: &TaskRow,
+    attempt: &str,
+    request: &str,
+    error: ErrorBody,
+    changes: &mut Changes,
+) -> Result<ErrorBody, ErrorBody> {
+    match store.find_agent_session_by_request_id(request) {
+        Ok(Some(spawned)) => abandon(store, stop, row, attempt, &spawned.id, error, changes),
+        Ok(None) => {
+            store
+                .end_task_start_attempt(&row.id, attempt)
+                .map_err(store_error)?;
+            record_failure(store, row, error, changes)
+        }
+        Err(_) => record_failure(store, row, error, changes),
+    }
 }
 
 /// A free bot and the team's folder workspace.
@@ -165,7 +203,7 @@ fn spawn(
     team: &TeamRow,
     bot: &BotRow,
     task: &TaskRow,
-    attempt: &str,
+    request: &str,
     grant: SecretGrant,
 ) -> Result<String, ErrorBody> {
     let session = agents.start(
@@ -180,15 +218,14 @@ fn spawn(
             cols: None,
             rows: None,
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
-            request_id: Some(format!("task.start:{}:{attempt}", task.id)),
+            request_id: Some(request.to_owned()),
         },
         grant,
     )?;
     Ok(session.id)
 }
 
-/// Links the spawned session to the task. When that fails, the session is stopped so no unlinked process survives,
-/// and the attempt is settled once the stop succeeded; a failed stop keeps it, so a retry names the same run.
+/// Links the spawned session to the task. When that fails, the session is abandoned so no unlinked process survives.
 fn settle(
     store: &Store,
     stop: impl FnOnce(&str) -> Result<(), ErrorBody>,
@@ -196,14 +233,46 @@ fn settle(
     attempt: &str,
     session: &str,
     changes: &mut Changes,
-) -> Result<TaskRow, ErrorBody> {
-    let error = match link(store, row, session) {
-        Ok(current) => {
+) -> Result<(), ErrorBody> {
+    let error = match store.link_task_session(&row.id, session, now_ms()) {
+        Ok(true) => {
             changes.task = Some(row.id.clone());
-            return Ok(current);
+            return Ok(());
         }
-        Err(error) => error,
+        Ok(false) => unlinked(store, &row.id),
+        Err(error) => store_error(error),
     };
+    Err(abandon(store, stop, row, attempt, session, error, changes)?)
+}
+
+/// Why a link wrote no row: the task is gone, was marked finished during the start, or another start linked it.
+fn unlinked(store: &Store, id: &str) -> ErrorBody {
+    match store.get_task(id) {
+        Ok(None) => removed(),
+        Ok(Some(current)) if current.session_id.is_none() && current.outcome.is_some() => {
+            ErrorBody::new(
+                codes::TASK_CHANGED,
+                format!("task {id} was marked finished while it started"),
+            )
+        }
+        Ok(Some(_)) | Err(_) => ErrorBody::new(
+            codes::TASK_STARTED,
+            format!("task {id} was started by another call"),
+        ),
+    }
+}
+
+/// Stops a session its task does not name and records `error`. The attempt is settled once the stop succeeded; a failed
+/// stop keeps it, so a retry names the same run and the bot stays busy while that run lives.
+fn abandon(
+    store: &Store,
+    stop: impl FnOnce(&str) -> Result<(), ErrorBody>,
+    row: &TaskRow,
+    attempt: &str,
+    session: &str,
+    error: ErrorBody,
+    changes: &mut Changes,
+) -> Result<ErrorBody, ErrorBody> {
     let error = match stop(session) {
         Ok(()) => {
             store
@@ -219,24 +288,7 @@ fn settle(
             ),
         ),
     };
-    Err(record_failure(store, row, error, changes)?)
-}
-
-fn link(store: &Store, row: &TaskRow, session: &str) -> Result<TaskRow, ErrorBody> {
-    let linked = store
-        .link_task_session(&row.id, session, now_ms())
-        .map_err(store_error)?;
-    let current = store
-        .get_task(&row.id)
-        .map_err(store_error)?
-        .ok_or_else(removed)?;
-    if !linked {
-        return Err(ErrorBody::new(
-            codes::TASK_STARTED,
-            format!("task {} was started by another call", row.id),
-        ));
-    }
-    Ok(current)
+    record_failure(store, row, error, changes)
 }
 
 /// Records a failed start on the task when it still exists without a session, and gives the error back.
@@ -263,10 +315,14 @@ fn refuse_busy_bot(
     task: &TaskRow,
 ) -> Result<(), ErrorBody> {
     for other in store.list_tasks_of_bot(&bot.id).map_err(store_error)? {
-        if other.id != task.id
-            && other.session_id.is_some()
-            && task_state::is_running(&task_state::load(agents, &other)?)
-        {
+        if other.id == task.id {
+            continue;
+        }
+        let session = match other.session_id {
+            Some(_) => task_state::load(agents, &other)?,
+            None => pending_run(store, agents, &other)?,
+        };
+        if task_state::is_running(&session) {
             return Err(ErrorBody::new(
                 codes::BOT_BUSY,
                 format!(
@@ -279,6 +335,20 @@ fn refuse_busy_bot(
     Ok(())
 }
 
+/// The run of a start attempt that was not settled: a session a failed start could not stop, until its stop is confirmed.
+fn pending_run(store: &Store, agents: &Agents, task: &TaskRow) -> Result<Session, ErrorBody> {
+    let Some(attempt) = store.task_start_attempt(&task.id).map_err(store_error)? else {
+        return Ok(Session::Unstarted);
+    };
+    match store
+        .find_agent_session_by_request_id(&request_id(&task.id, &attempt))
+        .map_err(store_error)?
+    {
+        Some(session) => task_state::load_id(agents, &session.id),
+        None => Ok(Session::Unstarted),
+    }
+}
+
 /// The team's folder workspace: `<workspaces root>/bot-teams/<team id>`, in the "Bot teams" folder project, shared by
 /// the team's bots (several writers). Made on the first start; made again if the workspace was removed.
 fn team_folder(
@@ -288,7 +358,8 @@ fn team_folder(
     changes: &mut Changes,
 ) -> Result<Workspace, ErrorBody> {
     if let Some(id) = store.team_workspace(&team.id).map_err(store_error)?
-        && let Ok(workspace) = workspaces.show_workspace(&id)
+        && let Some(workspace) =
+            unless_missing(workspaces.show_workspace(&id), codes::WORKSPACE_NOT_FOUND)?
     {
         // Idempotent; covers a start that stopped between making the workspace and sharing it.
         workspaces.share_writers(&workspace.id)?;
@@ -297,7 +368,10 @@ fn team_folder(
     let root = workspaces.default_root().join(TEAMS_FOLDER);
     let folder = root.join(&team.id);
     // Checked before the folder is made, so nothing is written inside a project that is not ours.
-    let found = workspaces.show_project(&path_text(&root)?).ok();
+    let found = unless_missing(
+        workspaces.show_project(&path_text(&root)?),
+        codes::PROJECT_NOT_FOUND,
+    )?;
     if let Some(project) = found
         .as_ref()
         .filter(|project| project.kind != ProjectKind::Folder)
@@ -350,6 +424,15 @@ fn team_folder(
     Ok(workspace)
 }
 
+/// `None` for a lookup refused with `missing`; any other failure refuses the start.
+fn unless_missing<T>(found: Result<T, DomainError>, missing: &str) -> Result<Option<T>, ErrorBody> {
+    match found {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code() == missing => Ok(None),
+        Err(error) => Err(ErrorBody::from(error)),
+    }
+}
+
 fn path_text(path: &Path) -> Result<String, ErrorBody> {
     path.to_str().map(str::to_owned).ok_or_else(|| {
         ErrorBody::new(
@@ -382,7 +465,10 @@ pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow) -> String {
 mod tests {
     use std::cell::RefCell;
 
-    use massorca_core_store::TaskOrigin;
+    use massorca_core_store::{
+        AgentSessionRow, ProjectKind as StoredProjectKind, ProjectRow, TaskOrigin, TaskOutcome,
+        WorkspaceKind, WorkspaceRow, WorkspaceState,
+    };
 
     use super::*;
 
@@ -438,7 +524,7 @@ mod tests {
             Ok(())
         };
 
-        let current = settle(
+        settle(
             &store,
             stop,
             &task,
@@ -448,6 +534,7 @@ mod tests {
         )
         .expect("linked");
 
+        let current = store.get_task(&task.id).expect("read").expect("task");
         assert_eq!(current.session_id.as_deref(), Some("session-1"));
         assert!(stopped.borrow().is_empty());
         assert_eq!(attempt_of(&store, &task), None);
@@ -535,5 +622,190 @@ mod tests {
         .expect_err("task gone");
         assert_eq!(error.code, codes::TASK_NOT_FOUND);
         assert!(error.message.contains("could not be stopped"));
+    }
+
+    /// An agent session row keyed by `request`, as a start that failed after its spawn point leaves it.
+    fn spawned_session(store: &Store, request: &str) -> String {
+        let project = ProjectRow {
+            id: new_id(),
+            kind: StoredProjectKind::Folder,
+            path: format!("/work/{}", new_id()),
+            path_key: new_id(),
+            name: new_id(),
+            workspaces_root: "/work/root".to_owned(),
+            added_at: 1,
+        };
+        store.insert_project(&project).expect("project");
+        let workspace = WorkspaceRow {
+            id: new_id(),
+            project_id: project.id,
+            kind: WorkspaceKind::Folder,
+            name: "main".to_owned(),
+            path: "/work/team".to_owned(),
+            path_key: new_id(),
+            branch: None,
+            base_ref: None,
+            created_branch: false,
+            state: WorkspaceState::Ready,
+            request_id: None,
+            created_at: 1,
+        };
+        store.insert_workspace(&workspace).expect("workspace");
+        let session = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace.id,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: Some("terminal-1".to_owned()),
+            request_id: Some(request.to_owned()),
+            created_at: 1,
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+        };
+        store.insert_agent_session(&session).expect("session");
+        session.id
+    }
+
+    #[test]
+    fn a_task_marked_finished_during_its_start_stops_the_run_and_records_why() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let attempt = store
+            .begin_task_start_attempt(&task.id, "attempt-1")
+            .expect("attempt")
+            .expect("task");
+        // `task.done` landed between the spawn and the link.
+        assert!(
+            store
+                .set_task_outcome(&task.id, TaskOutcome::Success, None, 2)
+                .expect("done")
+        );
+        let stopped = RefCell::new(Vec::new());
+        let stop = |session: &str| {
+            stopped.borrow_mut().push(session.to_owned());
+            Ok(())
+        };
+
+        let error = settle(
+            &store,
+            stop,
+            &task,
+            &attempt,
+            "session-1",
+            &mut Changes::default(),
+        )
+        .expect_err("not linked");
+
+        assert_eq!(error.code, codes::TASK_CHANGED);
+        assert_eq!(*stopped.borrow(), vec!["session-1".to_owned()]);
+        let kept = store.get_task(&task.id).expect("read").expect("task");
+        assert_eq!(kept.session_id, None);
+        assert_eq!(kept.error_code.as_deref(), Some(codes::TASK_CHANGED));
+        assert_eq!(attempt_of(&store, &task), None);
+    }
+
+    #[test]
+    fn a_start_that_failed_after_its_spawn_stops_the_session_it_left() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let attempt = store
+            .begin_task_start_attempt(&task.id, "attempt-1")
+            .expect("attempt")
+            .expect("task");
+        let request = request_id(&task.id, &attempt);
+        let session = spawned_session(&store, &request);
+        let stopped = RefCell::new(Vec::new());
+        let stop = |session: &str| {
+            stopped.borrow_mut().push(session.to_owned());
+            Ok(())
+        };
+
+        let error = after_failed_start(
+            &store,
+            stop,
+            &task,
+            &attempt,
+            &request,
+            ErrorBody::new(codes::INTERNAL, "the view failed"),
+            &mut Changes::default(),
+        )
+        .expect("recorded");
+
+        assert_eq!(error.code, codes::INTERNAL);
+        assert_eq!(*stopped.borrow(), vec![session]);
+        assert_eq!(attempt_of(&store, &task), None);
+        let kept = store.get_task(&task.id).expect("read").expect("task");
+        assert_eq!(kept.error_code.as_deref(), Some(codes::INTERNAL));
+    }
+
+    #[test]
+    fn a_session_left_by_a_failed_start_keeps_its_attempt_until_a_stop_succeeds() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let attempt = store
+            .begin_task_start_attempt(&task.id, "attempt-1")
+            .expect("attempt")
+            .expect("task");
+        let request = request_id(&task.id, &attempt);
+        spawned_session(&store, &request);
+        let failing = |_: &str| {
+            Err(ErrorBody::new(
+                codes::INTERNAL,
+                "the terminal did not answer",
+            ))
+        };
+
+        let error = after_failed_start(
+            &store,
+            failing,
+            &task,
+            &attempt,
+            &request,
+            ErrorBody::new(codes::INTERNAL, "the view failed"),
+            &mut Changes::default(),
+        )
+        .expect("recorded");
+
+        assert!(error.message.contains("could not be stopped"));
+        // The attempt stays, so the busy check finds the run and a retry names the same request.
+        assert_eq!(
+            store.task_start_attempt(&task.id).expect("read").as_deref(),
+            Some(attempt.as_str())
+        );
+    }
+
+    #[test]
+    fn a_start_that_failed_before_any_spawn_settles_its_attempt_and_stops_nothing() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let attempt = store
+            .begin_task_start_attempt(&task.id, "attempt-1")
+            .expect("attempt")
+            .expect("task");
+        let stopped = RefCell::new(Vec::new());
+        let stop = |session: &str| {
+            stopped.borrow_mut().push(session.to_owned());
+            Ok(())
+        };
+
+        after_failed_start(
+            &store,
+            stop,
+            &task,
+            &attempt,
+            &request_id(&task.id, &attempt),
+            ErrorBody::new(codes::AGENT_NOT_INSTALLED, "no such program"),
+            &mut Changes::default(),
+        )
+        .expect("recorded");
+
+        assert!(stopped.borrow().is_empty());
+        assert_eq!(attempt_of(&store, &task), None);
     }
 }

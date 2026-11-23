@@ -29,9 +29,14 @@ pub(crate) struct Standing {
 
 /// Reads the session a task names. A session the agents domain has forgotten is `Forgotten`, not an error.
 pub(crate) fn load(agents: &Agents, task: &TaskRow) -> Result<Session, ErrorBody> {
-    let Some(session_id) = task.session_id.as_deref() else {
-        return Ok(Session::Unstarted);
-    };
+    match task.session_id.as_deref() {
+        Some(session_id) => load_id(agents, session_id),
+        None => Ok(Session::Unstarted),
+    }
+}
+
+/// Reads one agent session. A session the agents domain has forgotten is `Forgotten`, not an error.
+pub(crate) fn load_id(agents: &Agents, session_id: &str) -> Result<Session, ErrorBody> {
     match agents.show(session_id) {
         Ok(session) => Ok(Session::Known(Box::new(session))),
         Err(error) if error.code == codes::AGENT_NOT_FOUND => Ok(Session::Forgotten),
