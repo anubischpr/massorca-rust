@@ -18,8 +18,14 @@
       "kind": "agents/gentle-shell.json",
       "cli": {
         "binary": "gentle-shell",
-        "source": "https://github.com/Gentleman-Programming/gentle-shell",
-        "sourceChecked": "2026-11-22"
+        "verify": ["gentle-shell", "--version"],
+        "source": "https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md",
+        "sourceChecked": "2026-11-22",
+        "install": [
+          { "os": "windows", "command": ["npm", "install", "-g", "gentle-pi"] },
+          { "os": "linux", "command": ["npm", "install", "-g", "gentle-pi"] },
+          { "os": "macos", "command": ["npm", "install", "-g", "gentle-pi"] }
+        ]
       }
     }]
   },

@@ -64,7 +64,7 @@ fn start(spec: &SpawnSpec) -> Running {
 fn wait_for_members(tree: &ProcessTree, wanted: usize) -> Vec<u32> {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        let members = tree.members();
+        let members = tree.members().unwrap_or_default();
         if members.len() >= wanted {
             return members;
         }
@@ -76,7 +76,7 @@ fn wait_for_members(tree: &ProcessTree, wanted: usize) -> Vec<u32> {
 /// Waits until the tree lists no live process.
 fn wait_for_no_members(tree: &ProcessTree) {
     let deadline = Instant::now() + KILL_BOUND;
-    while !tree.members().is_empty() {
+    while tree.members().is_some_and(|members| !members.is_empty()) {
         assert!(
             Instant::now() < deadline,
             "members still listed after the kill"
@@ -209,7 +209,7 @@ fn kill_reaches_a_job_that_runs_in_its_own_process_group() {
         "the job must lead its own group for this test to mean anything"
     );
 
-    let before = running.tree.members();
+    let before = running.tree.members().unwrap_or_default();
     running.tree.kill(None);
     running
         .exit

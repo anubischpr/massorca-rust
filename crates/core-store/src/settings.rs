@@ -17,6 +17,56 @@ impl Store {
         Ok(())
     }
 
+    /// Stores `json` for `key` and removes the `retired` rows in one transaction, so a reader never sees both.
+    pub fn replace_setting(
+        &self,
+        owner: &str,
+        key: &str,
+        json: &str,
+        retired: &[&str],
+    ) -> Result<(), StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            concat!(
+                "INSERT INTO settings (owner, key, value, updated_at) VALUES (?1, ?2, ?3, ?4) ",
+                "ON CONFLICT (owner, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+            ),
+            params![owner, key, json, now_ms()],
+        )?;
+        for old in retired {
+            transaction.execute(
+                "DELETE FROM settings WHERE owner = ?1 AND key = ?2",
+                params![owner, old],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Removes `key` and the `retired` rows in one transaction. Returns whether `key` itself was stored.
+    pub fn remove_setting(
+        &self,
+        owner: &str,
+        key: &str,
+        retired: &[&str],
+    ) -> Result<bool, StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        let removed = transaction.execute(
+            "DELETE FROM settings WHERE owner = ?1 AND key = ?2",
+            params![owner, key],
+        )?;
+        for old in retired {
+            transaction.execute(
+                "DELETE FROM settings WHERE owner = ?1 AND key = ?2",
+                params![owner, old],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(removed > 0)
+    }
+
     pub fn get_setting(&self, owner: &str, key: &str) -> Result<Option<String>, StoreError> {
         self.query_optional(
             "SELECT value FROM settings WHERE owner = ?1 AND key = ?2",
