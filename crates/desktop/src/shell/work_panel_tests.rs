@@ -54,6 +54,7 @@ fn terminal(id: &str, state: TerminalState, exit: Option<TerminalExit>) -> Termi
         cwd: "/repos/fix-login".to_owned(),
         created_at_ms: 1,
         exit,
+        holds_secrets: false,
     }
 }
 

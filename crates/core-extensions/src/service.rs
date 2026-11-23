@@ -421,7 +421,7 @@ impl Extensions {
             match &entry.state {
                 PlanState::Detected { .. } => record.detected_before_install = true,
                 PlanState::Unsupported => {}
-                PlanState::WillRun { command } => {
+                PlanState::WillRun { command, .. } => {
                     if !is_vendor_program(command) {
                         return Err(Error::InstallerFailed {
                             agent: adapter.id.clone(),
