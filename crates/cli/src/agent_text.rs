@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::agents::{
     Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, BringBackResult,
-    Execution, Outcome, PackageState,
+    Execution, ModeSource, Outcome, PackageState,
 };
 
 use crate::terminal;
@@ -99,6 +99,20 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     ];
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
+    }
+    if let Some(mode) = &session.permission_mode {
+        // A mode no launch argument carried is only requested until something confirms it (decision 0083).
+        let state = if session.mode_confirmed {
+            ""
+        } else {
+            " (requested)"
+        };
+        lines.push(format!("mode: {mode}{state}"));
+    } else if session.mode_source == Some(ModeSource::VendorDefault) {
+        lines.push("mode: the CLI's default".to_owned());
+    }
+    if let Some(pending) = &session.pending_permission_mode {
+        lines.push(format!("next resume mode: {pending}"));
     }
     if session.read_only {
         lines.push("read only: yes".to_owned());

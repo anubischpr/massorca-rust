@@ -218,7 +218,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "cols": { "type": "integer" },
                     "rows": { "type": "integer" },
                     "title": { "type": "string" },
-                    "request_id": { "type": "string" }
+                    "request_id": { "type": "string" },
+                    "permission_mode": { "type": "string" }
                 }
             }),
         ),
@@ -362,7 +363,14 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "agent.resume",
             "Start a new run of an exited agent session",
             "agent.resume",
-            selector("session"),
+            json!({
+                "type": "object",
+                "required": ["session"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "permission_mode": { "type": "string" }
+                }
+            }),
         ),
         command(
             "agent.forget",
@@ -407,7 +415,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "kind": { "type": "string" },
                     "name": { "type": "string" },
                     "read_only": { "type": "boolean" },
-                    "request_id": { "type": "string" }
+                    "request_id": { "type": "string" },
+                    "permission_mode": { "type": "string" }
                 }
             }),
         ),

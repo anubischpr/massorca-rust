@@ -11,10 +11,11 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -235,14 +236,14 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
     Ok(for_caller(&ctx, session))
 }
 
-/// Starts a new run of an exited session, which keeps its id (0054).
-async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+/// Starts a new run of an exited session, which keeps its id (0054), in the mode decision 0083 gives it.
+async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSession, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| {
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
-        agents.resume(&params.session, grant)
+        agents.resume(&params.session, params.permission_mode.as_deref(), grant)
     })
     .await?;
     Ok(for_caller(&ctx, session))

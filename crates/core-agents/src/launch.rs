@@ -50,6 +50,8 @@ pub struct LaunchInput<'a> {
     pub massorca_bin: &'a Path,
     /// The kind's credential home, only when the profile has one (0056).
     pub credential_home: Option<&'a Path>,
+    /// The arguments of the run's permission mode (decision 0083), right after the kind's own.
+    pub mode_args: &'a [String],
     pub caller_args: &'a [String],
     /// Variables from the profile's vault (decision 0071): set after the run's own and the credential home, before the
     /// caller's.
@@ -134,7 +136,8 @@ pub fn check_prompt(text: &str) -> Result<(), LaunchError> {
     Ok(())
 }
 
-/// Builds the plan: the kind's args, hook args, the session ref or resume args, the caller's args, then the prompt.
+/// Builds the plan: the kind's args, the mode's args, hook args, the session ref or resume args, the caller's args, then
+/// the prompt.
 pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     let decl = input.decl;
     if let Some(name) = reserved_name(input.provided_env, decl) {
@@ -146,6 +149,7 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
         return Err(LaunchError::DangerousCallerEnv(name.to_owned()));
     }
     let mut args = decl.args.clone();
+    args.extend(input.mode_args.iter().cloned());
     let mut files = Vec::new();
     install_hooks(input, &mut args, &mut files);
 
@@ -312,6 +316,7 @@ mod tests {
         profile: PathBuf,
         bin: PathBuf,
         home: Option<PathBuf>,
+        mode_args: Vec<String>,
         caller_args: Vec<String>,
         provided: ProvidedEnv,
         holds_secrets: bool,
@@ -326,6 +331,7 @@ mod tests {
                 profile: PathBuf::from("/data/profiles/default"),
                 bin: PathBuf::from("/opt/mass orca/massorca"),
                 home: None,
+                mode_args: Vec::new(),
                 caller_args: Vec::new(),
                 provided: ProvidedEnv::default(),
                 holds_secrets: false,
@@ -343,6 +349,7 @@ mod tests {
                 profile_dir: &self.profile,
                 massorca_bin: &self.bin,
                 credential_home: self.home.as_deref(),
+                mode_args: &self.mode_args,
                 caller_args: &self.caller_args,
                 provided_env: &self.provided,
                 holds_secrets: self.holds_secrets,
@@ -383,6 +390,18 @@ mod tests {
         assert_eq!(plan.program, PathBuf::from("/opt/agents/agent"));
         assert!(plan.files.is_empty(), "env-command installs nothing");
         assert_eq!(plan.agent_ref, None);
+    }
+
+    #[test]
+    fn mode_args_follow_the_kind_args_on_a_first_run_and_a_resume() {
+        let mut fixture = Fixture::new(built_in("codex"));
+        fixture.mode_args = vec!["--sandbox".to_owned(), "read-only".to_owned()];
+        let first = fixture.first(Some("go"));
+        assert_eq!(&first.args[..2], ["--sandbox", "read-only"]);
+        assert_eq!(first.args.last().map(String::as_str), Some("go"));
+        let resumed = fixture.plan(Run::Resume { agent_ref: "r-9" }).unwrap();
+        assert_eq!(&resumed.args[..2], ["--sandbox", "read-only"]);
+        assert_eq!(&resumed.args[resumed.args.len() - 2..], ["resume", "r-9"]);
     }
 
     #[test]
