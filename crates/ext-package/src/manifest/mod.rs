@@ -20,12 +20,16 @@ use serde::Deserialize;
 
 pub use references::check_files_present;
 
+use crate::display_chars;
 use crate::error::{Error, Problem, Problems, at};
 use crate::ids;
 use crate::package_path;
 use crate::permission::{self, Permission};
 use contributes::Contributes;
 use listing::Listing;
+
+/// What a manifest string may not contain, as a problem: the review shows it, so it must read as typed.
+pub const HIDDEN_TEXT: &str = "must not contain a control or format character";
 
 /// The manifest file name at the root of every package.
 pub const MANIFEST_FILE: &str = "extension.json";
@@ -141,6 +145,15 @@ fn validate_identity(manifest: &Manifest, problems: &mut Problems) {
     }
     if manifest.description.trim().is_empty() {
         problems.add("/description", "is required");
+    }
+    for (pointer, text) in [
+        ("/name", &manifest.name),
+        ("/description", &manifest.description),
+        ("/publisher", &manifest.publisher),
+    ] {
+        if display_chars::hidden_char(text).is_some() {
+            problems.add(pointer, HIDDEN_TEXT);
+        }
     }
     if !ids::is_extension_id(&manifest.id) {
         problems.add(

@@ -17,6 +17,7 @@ use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::rose_logo::rose_logo;
 use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection};
+use massorca_ui::components::tooltip::{Tooltip, tooltip_view};
 use massorca_ui::tokens::{
     LAYOUT_CONVERSATION_READING, SPACE_1, SPACE_2, SPACE_4, SPACE_6, SPACE_8, TYPE_CAPTION,
     TYPE_HEADING,
@@ -134,6 +135,7 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .row(fact_row("start-state", "State", page.state.to_owned()));
 
     let mut column = div()
+        .debug_selector(|| "start-column".to_owned())
         .w_full()
         .max_w(px(LAYOUT_CONVERSATION_READING))
         .flex()
@@ -206,7 +208,45 @@ fn start_mode_switch() -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static
 
 /// One read-only fact of the workspace, as a settings row with its value on the right.
 fn fact_row(id: &'static str, label: &'static str, value: String) -> SettingsRow {
-    SettingsRow::new(id, label).control(div().text_body().child(SharedString::from(value)))
+    SettingsRow::new(id, label).control(fact_value(id, &value))
+}
+
+/// A read-only value inside the control column. It shrinks to that column rather than widening the
+/// row: a path gives way in the middle and keeps its last segment; the full text is the tooltip
+/// (SettingsRow.md, long content).
+fn fact_value(id: &'static str, value: &str) -> impl IntoElement {
+    let (head, tail) = split_last_segment(value);
+    div()
+        .id(SharedString::from(format!("{id}-value")))
+        .debug_selector(move || format!("{id}-value"))
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .justify_end()
+        .text_body()
+        .tooltip(tooltip_view(Tooltip::new(value.to_owned())))
+        .child(
+            div()
+                .debug_selector(move || format!("{id}-value-head"))
+                .min_w_0()
+                .truncate()
+                .child(head.to_owned()),
+        )
+        .child(
+            div()
+                .debug_selector(move || format!("{id}-value-tail"))
+                .flex_none()
+                .max_w_full()
+                .truncate()
+                .child(tail.to_owned()),
+        )
+}
+
+/// Splits a value before its last path segment: the head may shrink, the tail (the last segment
+/// with its separator) stays whole. A value without a separator is all tail.
+pub(super) fn split_last_segment(value: &str) -> (&str, &str) {
+    value.split_at(value.rfind(['/', '\\']).unwrap_or(0))
 }
 
 /// "Open terminal": shows the Work panel with a new terminal in this workspace. Off, with its

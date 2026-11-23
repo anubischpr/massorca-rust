@@ -18,18 +18,8 @@
       "kind": "agents/gentle-shell.json",
       "cli": {
         "binary": "gentle-shell",
-        "verify": ["gentle-shell", "--version"],
-        "source": "https://www.npmjs.com/package/gentle-pi",
-        "install": [
-          { "os": "windows", "command": ["npm", "install", "-g", "gentle-pi"] },
-          { "os": "linux", "command": ["npm", "install", "-g", "gentle-pi"] },
-          { "os": "macos", "command": ["npm", "install", "-g", "gentle-pi"] }
-        ],
-        "uninstall": [
-          { "os": "windows", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
-          { "os": "linux", "command": ["npm", "uninstall", "-g", "gentle-pi"] },
-          { "os": "macos", "command": ["npm", "uninstall", "-g", "gentle-pi"] }
-        ]
+        "source": "https://github.com/Gentleman-Programming/gentle-shell",
+        "sourceChecked": "2026-11-22"
       }
     }]
   },
