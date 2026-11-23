@@ -1,9 +1,33 @@
 //! Resolves the selectors of Bot Teams calls: an id first, then an exact name within the scope the call names.
 
-use massorca_core_store::{BotRow, Store, TaskRow, TeamProjectRow, TeamRow};
+use massorca_core_store::{BotRow, Store, TaskRow, TeamProjectRow, TeamRoutineRow, TeamRow};
 use massorca_protocol::{ErrorBody, codes};
 
 use super::store_error;
+
+/// The routine `selector` names within `team`: its id, then its exact name.
+pub(crate) fn routine(
+    store: &Store,
+    team: &TeamRow,
+    selector: &str,
+) -> Result<TeamRoutineRow, ErrorBody> {
+    if let Some(row) = store.get_routine(selector).map_err(store_error)?
+        && row.team_id == team.id
+    {
+        return Ok(row);
+    }
+    store
+        .list_routines(&team.id)
+        .map_err(store_error)?
+        .into_iter()
+        .find(|row| row.name == selector)
+        .ok_or_else(|| {
+            ErrorBody::new(
+                codes::TEAM_ROUTINE_NOT_FOUND,
+                format!("team {} has no routine {selector:?}", team.name),
+            )
+        })
+}
 
 /// The team `selector` names: its id, then its exact name.
 pub(crate) fn team(store: &Store, selector: &str) -> Result<TeamRow, ErrorBody> {
