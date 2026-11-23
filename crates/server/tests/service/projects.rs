@@ -387,6 +387,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             },
