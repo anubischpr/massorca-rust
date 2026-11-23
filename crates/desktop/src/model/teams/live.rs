@@ -367,6 +367,9 @@ mod tests {
                 goal: "Ship checkout".into(),
                 brief: "Checkout copy".into(),
                 created_at_ms: 1,
+                source_project: None,
+                source_project_name: None,
+                source_kind: None,
             },
             board: Board {
                 team_id: "t1".into(),
@@ -404,6 +407,9 @@ mod tests {
                 goal: String::new(),
                 brief: String::new(),
                 created_at_ms: 1,
+                source_project: None,
+                source_project_name: None,
+                source_kind: None,
             },
             board: Board {
                 team_id: "t1".into(),

@@ -556,6 +556,7 @@ async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
             name: "Checkout".to_owned(),
             goal: Some("Ship checkout".to_owned()),
             brief: Some("Checkout copy".to_owned()),
+            source_project: None,
         })
         .await
         .expect("the project is added");
@@ -626,6 +627,7 @@ async fn a_team_project_added_through_another_client_reaches_the_store_without_a
             name: "Checkout".to_owned(),
             goal: None,
             brief: None,
+            source_project: None,
         })
         .await
         .expect("the project is added");
@@ -697,6 +699,7 @@ async fn team_with_checkout(
             name: "Checkout".to_owned(),
             goal: None,
             brief: Some("Old brief".to_owned()),
+            source_project: None,
         })
         .await
         .expect("the project is added");
