@@ -3535,6 +3535,7 @@ dependencies = [
  "crossterm",
  "massorca-client",
  "massorca-core-remote",
+ "massorca-core-store",
  "massorca-core-terminal",
  "massorca-net",
  "massorca-process",

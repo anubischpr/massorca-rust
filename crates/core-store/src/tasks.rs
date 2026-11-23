@@ -192,27 +192,6 @@ impl Store {
         )
     }
 
-    /// Writes every column of a task but its start attempt. Returns whether a row changed. Handlers use the targeted writes
-    /// below, which never overwrite a concurrent link; this one is for fixtures.
-    pub fn update_task(&self, row: &TaskRow) -> Result<bool, StoreError> {
-        let changed = self.lock().execute(
-            "UPDATE tasks SET project_id = ?2, bot_id = ?3, title = ?4, body = ?5, session_id = ?6, outcome = ?7, error = ?8, error_code = ?10, updated_at = ?9 WHERE id = ?1",
-            params![
-                row.id,
-                row.project_id,
-                row.bot_id,
-                row.title,
-                row.body,
-                row.session_id,
-                row.outcome,
-                row.error,
-                row.updated_at,
-                row.error_code
-            ],
-        )?;
-        Ok(changed > 0)
-    }
-
     /// Changes only the given details: `Some` sets a field (`Some(None)` clears a project or bot), `None` keeps it. The
     /// session, outcome and error have their own writes, so an update never overwrites a concurrent link or a concurrent
     /// change to another detail. Returns whether a row changed.
@@ -291,6 +270,19 @@ impl Store {
             .flatten())
     }
 
+    /// The task's pending start attempt, if any.
+    pub fn task_start_attempt(&self, id: &str) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .lock()
+            .query_row(
+                "SELECT start_attempt FROM tasks WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// Clears a start attempt that ended with no live process. Returns false when the task is gone or holds another one.
     pub fn end_task_start_attempt(&self, id: &str, attempt: &str) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
@@ -300,8 +292,8 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Links a task that has no session yet to `session_id`, clears its error and settles its start attempt. Returns false
-    /// when the task is gone or another start linked it first.
+    /// Links a task that has no session and no outcome yet to `session_id`, clears its error and settles its start attempt.
+    /// Returns false when the task is gone, another start linked it first, or it was marked finished meanwhile.
     pub fn link_task_session(
         &self,
         id: &str,
@@ -309,7 +301,7 @@ impl Store {
         updated_at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, start_attempt = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL",
+            "UPDATE tasks SET session_id = ?2, error = NULL, error_code = NULL, start_attempt = NULL, updated_at = ?3 WHERE id = ?1 AND session_id IS NULL AND outcome IS NULL",
             params![id, session_id, updated_at],
         )?;
         Ok(changed > 0)

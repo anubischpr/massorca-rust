@@ -8,6 +8,8 @@ mod selectors;
 mod task;
 mod task_outcome;
 mod task_start;
+
+pub(crate) use task_start::start_gate;
 mod task_state;
 mod team;
 mod team_project;

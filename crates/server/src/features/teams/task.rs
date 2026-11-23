@@ -271,6 +271,8 @@ fn update_task(
 
 /// Marks a task done by hand. Refused while its agent session runs.
 fn finish_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
+    // The running check and the write happen under the start gate, so no start links and no resume revives in between.
+    let _gate = start_gate();
     let row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
@@ -290,6 +292,7 @@ fn finish_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, E
 
 /// Clears the outcome, the error and the session link, so the task returns to Open and can start again. Refused while its agent session runs.
 fn reopen_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {
+    let _gate = start_gate();
     let row = selectors::task(store, selector)?;
     let session = task_state::load(agents, &row)?;
     refuse_while_running(&row, &session)?;
