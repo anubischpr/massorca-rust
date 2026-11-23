@@ -10,6 +10,7 @@ use massorca_core_agents::{
     Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
     ProviderError,
 };
+use massorca_core_extensions::Extensions;
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
 use massorca_core_terminal::shell::EnvSnapshot;
@@ -37,10 +38,12 @@ use crate::context::{AppState, Registries};
 use crate::error::ServiceError;
 use crate::event_bus::EventBus;
 use crate::features;
+use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
 use crate::network::{self, NetworkConfig};
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
+use crate::start_timing::StartTimings;
 
 /// What the service needs to start.
 #[derive(Debug)]
@@ -85,7 +88,7 @@ impl Service {
         config: ServiceConfig,
         vault_options: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, NetworkConfig::default(), vault_options).await
+        Self::start_inner(config, NetworkConfig::default(), vault_options, None).await
     }
 
     /// As `start`, and also listens on the network as `network` says (decision 0045).
@@ -93,40 +96,58 @@ impl Service {
         config: ServiceConfig,
         network: NetworkConfig,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, VaultOptions::from_env()).await
+        Self::start_inner(config, network, VaultOptions::from_env(), None).await
+    }
+
+    /// As `start_with_network`, for a caller that has just checked the profile root itself with `secure_root` and got
+    /// `checked` (`service run` does, before it writes its logs), so the check is not repeated. Nothing in the profile
+    /// was trusted between that check and this call.
+    pub async fn start_checked(
+        config: ServiceConfig,
+        network: NetworkConfig,
+        checked: RootAccess,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_inner(config, network, VaultOptions::from_env(), Some(checked)).await
     }
 
     async fn start_inner(
         config: ServiceConfig,
         network: NetworkConfig,
         vault_options: VaultOptions,
+        checked: Option<RootAccess>,
     ) -> Result<RunningService, ServiceError> {
+        let mut timings = StartTimings::new();
         let ServiceConfig {
             profile,
             server_name,
             server_version,
         } = config;
         // Before anything in the profile is opened, so planted content is never trusted (ADR 0073).
-        if secure_root(&profile)? == RootAccess::Repaired {
+        // A caller that checked the root itself has already reported a repair.
+        if checked.is_none() && secure_root(&profile)? == RootAccess::Repaired {
             tracing::warn!(
                 path = %profile.dir().display(),
                 "profile directory access was repaired: it is now private to its owner"
             );
         }
+        timings.mark("root check");
         ensure_dir(&profile)?;
         let lock = instance_lock::acquire(&profile).await?;
         instance_lock::remove_stale_socket(&profile)?;
+        timings.mark("lock");
 
         let store = open_store(profile.store_path()).await?;
+        timings.mark("store");
         let listener = bind_endpoint_when_released(&profile).await?;
+        timings.mark("endpoint");
 
         let (network_state, acceptor) = network::prepare(&profile, &network, &server_name)?;
         let registries = Registries::default();
         let registrations = features::register_core(&registries)?;
         let (shutdown, signal) = shutdown::channel();
         let started_at_ms = now_ms();
-        // A missing git is reported per call as git.unavailable, so the service still starts.
-        let git = Git::discover().unwrap_or_else(|_| Git::with_binary("git"));
+        // A missing git is reported per call as git.unavailable, so the start does not run git to find out.
+        let git = Git::from_env();
         let default_root = PathBuf::from(features::default_workspace_root()?);
         let workspaces = Arc::new(Workspaces::new(store.clone(), git, default_root));
         let mut terminal_config =
@@ -153,14 +174,22 @@ impl Service {
             .await
             .map_err(io::Error::other)?
             .map_err(|error| io::Error::other(error.to_string()))?;
+        timings.mark("stale runs");
         // Credential homes and account rows are put in order before requests are served (decision 0059).
         let sweeper = agents.clone();
         tokio::task::spawn_blocking(move || sweeper.startup_sweep())
             .await
             .map_err(io::Error::other)?;
+        timings.mark("agent homes");
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
+        let host_programs = Arc::new(HostPrograms::default());
+        let extensions = Arc::new(Extensions::new(
+            &profile,
+            host_programs.clone(),
+            host_programs,
+        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -172,6 +201,7 @@ impl Service {
             vault,
             terminals: terminals.clone(),
             agents,
+            extensions,
             network: network_state,
             server: PeerInfo {
                 name: server_name,
@@ -202,6 +232,8 @@ impl Service {
             .await;
             let _ = terminals_stop.await;
         });
+        timings.mark("serving");
+        timings.report();
         Ok(RunningService {
             state,
             shutdown,
@@ -269,6 +301,11 @@ impl RunningService {
     /// The in-process event bus that publishes change events to subscribers.
     pub fn events(&self) -> &EventBus {
         &self.state.events
+    }
+
+    /// The installed extensions of the profile. Other features register remove guards and cleanups on it.
+    pub fn extensions(&self) -> &Arc<Extensions> {
+        &self.state.extensions
     }
 
     /// Waits until the service has stopped: the listener is closed, connections are gone and the profile lock is released.

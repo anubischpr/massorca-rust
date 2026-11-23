@@ -171,7 +171,7 @@ fn an_adapter_with_an_install_list_adds_the_vendor_installer_reason() {
                     "binary": "claude",
                     "verify": ["claude", "--version"],
                     "source": "https://vendor.example/docs/install",
-                    "install": [{ "os": "linux", "command": ["sh", "-c", "curl x | sh"] }]
+                    "install": [{ "os": "linux", "command": ["bash", "-c", "curl x | sh"] }]
                 }
             }]
         }
