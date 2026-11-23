@@ -3583,6 +3583,7 @@ dependencies = [
  "massorca-core-git",
  "massorca-core-store",
  "massorca-core-terminal",
+ "massorca-core-vault",
  "massorca-core-workspace",
  "massorca-process",
  "massorca-profile",
@@ -3595,6 +3596,7 @@ dependencies = [
  "tracing",
  "uuid",
  "win32job",
+ "zeroize",
 ]
 
 [[package]]
@@ -3834,6 +3836,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "win32job",
+ "zeroize",
 ]
 
 [[package]]

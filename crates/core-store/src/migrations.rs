@@ -266,6 +266,13 @@ END;
 "#,
         foreign_keys_off: false,
     },
+    // Whether an agent session's current or last run received vault secrets (decision 0071); never their names.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 CHECK(holds_secrets IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

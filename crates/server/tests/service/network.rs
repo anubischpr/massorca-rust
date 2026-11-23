@@ -32,7 +32,7 @@ fn peer() -> PeerInfo {
 }
 
 /// A service listening on an ephemeral loopback port.
-async fn start_listening(home: &Path) -> RunningService {
+pub(super) async fn start_listening(home: &Path) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -58,7 +58,7 @@ async fn start_listening(home: &Path) -> RunningService {
     panic!("the network listener did not start");
 }
 
-async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
+pub(super) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
     let owner = connect(home, "server").await;
     let created: PairingCreated = owner
         .call(
@@ -71,13 +71,13 @@ async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
 }
 
 /// A client profile with its own hosts list.
-fn client_side() -> (TempHome, Hosts) {
+pub(super) fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)
 }
 
-async fn pair(
+pub(super) async fn pair(
     hosts: &Hosts,
     offer: &Offer,
     name: &str,
