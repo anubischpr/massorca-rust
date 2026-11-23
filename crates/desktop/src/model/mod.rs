@@ -13,6 +13,7 @@ pub mod navigation;
 pub mod pairing;
 pub mod palette;
 pub mod palette_recent;
+pub mod permission_modes;
 pub mod project_add;
 pub mod rail;
 pub mod region_cycle;

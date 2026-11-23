@@ -18,6 +18,8 @@ pub const AGENTS: &str = "agents/1";
 /// Agent permission modes (decision 0083): `permission_mode` on `agent.start`, `agent.delegate` and `agent.resume`, the
 /// session's `permission_mode` and `mode_confirmed`, and `agent.set_mode`.
 pub const AGENT_MODES: &str = "agent-modes/1";
+/// The prompt queue (`agent.queue*`, decision 0084): queued prompts that the service delivers when the agent is ready.
+pub const AGENT_QUEUE: &str = "agent-queue/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";
