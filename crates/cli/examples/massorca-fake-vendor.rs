@@ -50,12 +50,13 @@ fn main() -> ExitCode {
 
 /// The CLI a command installs or removes, by the package or installer it names.
 fn cli_named_by(words: &[&str]) -> Option<&'static str> {
-    const PACKAGES: [(&str, &str); 5] = [
+    const PACKAGES: [(&str, &str); 6] = [
         ("@openai/codex", "codex"),
         ("@anthropic-ai/claude-code", "claude"),
         ("Anthropic.ClaudeCode", "claude"),
         ("claude-code", "claude"),
         ("antigravity.google", "agy"),
+        ("gentle-pi", "gentle-shell"),
     ];
     PACKAGES
         .iter()

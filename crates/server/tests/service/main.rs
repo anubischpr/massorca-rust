@@ -1,10 +1,12 @@
 //! Service integration tests: the service runs in-process and is driven through the client crate; raw frames cover
 //! the cases the client cannot produce.
 
+mod agents_redaction;
 mod capabilities;
 mod common;
 mod concurrency;
 mod config;
+mod config_aliases;
 mod config_keys;
 mod core_methods;
 mod events;
@@ -20,8 +22,10 @@ mod git_remote;
 mod git_status;
 mod git_watch;
 mod handshake;
+mod host_memory;
 mod lifecycle;
 mod network;
+mod network_account_masking;
 mod projects;
 mod reconnect;
 mod registries;
@@ -29,4 +33,5 @@ mod secrets;
 mod secrets_hardening;
 mod tasks;
 mod teams;
+mod terminal_secrets;
 mod workspaces;

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use massorca_core_agents::sign_in::SIGN_IN_SCOPE;
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
     CreateSpec, ExitReason as CoreExitReason, ExitRecord, ShellChoice, TerminalError, TerminalInfo,
@@ -17,9 +18,10 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
+use crate::features::sees_account_details;
 use crate::features::workspace_domain::{blocking, shared};
 use crate::owner::Owner;
-use crate::permission::Permission;
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -103,6 +105,7 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
         },
         title: params.title,
         request_id: params.request_id,
+        holds_secrets: false,
     };
     let manager = ctx.state.terminals.clone();
     let info = on_manager(move || manager.create(spec)).await?;
@@ -122,7 +125,7 @@ async fn list(ctx: RequestCtx, params: TerminalListParams) -> Result<TerminalLis
         .terminals
         .list(workspace_id.as_deref())
         .into_iter()
-        .map(terminal_of)
+        .map(|info| terminal_for(&ctx.principal, info))
         .collect();
     Ok(TerminalList { terminals })
 }
@@ -131,11 +134,33 @@ async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBod
     ctx.state
         .terminals
         .get(&params.terminal)
-        .map(terminal_of)
+        .map(|info| terminal_for(&ctx.principal, info))
         .map_err(error_of)
 }
 
+/// Refuses a caller below host-admin scope on the terminal of an agent run that holds vault secrets (decision 0071):
+/// reading, attaching to, resizing or writing to it.
+pub(super) async fn require_admin_for_terminal(
+    ctx: &RequestCtx,
+    terminal: &str,
+) -> Result<(), ErrorBody> {
+    if authorize(&ctx.principal, Permission::HostAdmin).is_ok() {
+        return Ok(());
+    }
+    // The terminal's own mark, set at its creation: an exited terminal of an earlier run keeps it.
+    let holds = ctx
+        .state
+        .terminals
+        .get(terminal)
+        .is_ok_and(|info| info.holds_secrets);
+    if holds {
+        return authorize(&ctx.principal, Permission::HostAdmin);
+    }
+    Ok(())
+}
+
 async fn input(ctx: RequestCtx, params: TerminalInputParams) -> Result<(), ErrorBody> {
+    require_admin_for_terminal(&ctx, &params.terminal).await?;
     let bytes = params.decode_data().map_err(|error| {
         let code = match error {
             terminals::InputDecodeError::InvalidBase64 => codes::REQUEST_INVALID_PARAMS,
@@ -149,6 +174,7 @@ async fn input(ctx: RequestCtx, params: TerminalInputParams) -> Result<(), Error
 }
 
 async fn resize(ctx: RequestCtx, params: TerminalResizeParams) -> Result<Terminal, ErrorBody> {
+    require_admin_for_terminal(&ctx, &params.terminal).await?;
     let id = params.terminal;
     let size = PtySize {
         cols: params.cols,
@@ -216,6 +242,15 @@ pub(crate) fn error_of(error: TerminalError) -> ErrorBody {
     ErrorBody::new(code, error.to_string())
 }
 
+/// A terminal as `principal` may see it: a sign-in terminal's cwd is the account's home, hidden below `workspace`.
+fn terminal_for(principal: &Principal, info: TerminalInfo) -> Terminal {
+    let mut terminal = terminal_of(info);
+    if terminal.workspace_id == SIGN_IN_SCOPE && !sees_account_details(principal) {
+        terminal.cwd = String::new();
+    }
+    terminal
+}
+
 pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
     Terminal {
         id: info.id,
@@ -229,6 +264,7 @@ pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
         cwd: info.cwd,
         created_at_ms: info.created_at_ms,
         exit: info.exit.map(exit_of),
+        holds_secrets: info.holds_secrets,
     }
 }
 

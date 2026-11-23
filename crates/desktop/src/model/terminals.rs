@@ -141,6 +141,7 @@ mod tests {
             cwd: "/repos/oppm".to_owned(),
             created_at_ms: 1,
             exit: None,
+            holds_secrets: false,
         }
     }
 

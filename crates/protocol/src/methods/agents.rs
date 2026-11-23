@@ -520,6 +520,13 @@ pub struct AgentSession {
     /// The last turn's result text, at most [`MAX_RESULT_BYTES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    /// The current or last run received vault secrets, or descends from one that did (decision 0071): its terminal,
+    /// prompts, resume and delegation need host-admin scope. Never their names.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holds_secrets: bool,
+    /// Set in the reply to a start, resume or delegation whose run got no vault variables, saying why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets_withheld: Option<String>,
 }
 
 /// The state of an account (decision 0059). A value this build does not know reads as `unknown`.
@@ -539,6 +546,23 @@ pub enum AccountState {
     Unknown,
 }
 
+/// How an account came to be (decision 0059). A value this build does not know, or a summary from a peer that omits the
+/// field, reads as `unknown`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountOrigin {
+    /// The service ran the sign-in.
+    SignIn,
+    /// The person's files were imported.
+    Import,
+    /// Made from the single home of 0056, or adopted from a home that had no row.
+    Migrated,
+    /// A value from a newer peer that this build does not know. Also what a peer that omits the field decodes to.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// One account of a kind, as `agent.accounts.*` returns it. Its files are never part of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountSummary {
@@ -551,6 +575,9 @@ pub struct AccountSummary {
     pub active: bool,
     /// The projects that chose this account, by id.
     pub projects: Vec<String>,
+    /// How the account came to be. A peer that omits it reads as `unknown`.
+    #[serde(default)]
+    pub origin: AccountOrigin,
 }
 
 /// Params of `agent.accounts.list`.
@@ -647,4 +674,37 @@ pub struct AccountsChanged {
     pub kind: String,
     pub account: String,
     pub state: AccountState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_account_summary_without_an_origin_decodes_as_unknown() {
+        let summary: AccountSummary = serde_json::from_value(json!({
+            "id": "0195c0de-0000-7000-8000-000000000002",
+            "label": "work",
+            "state": "signed_in",
+            "active": true,
+            "projects": []
+        }))
+        .expect("a summary from an older peer decodes");
+        assert_eq!(summary.origin, AccountOrigin::Unknown);
+    }
+
+    #[test]
+    fn an_account_origin_decodes_by_its_wire_name_and_a_newer_one_reads_as_unknown() {
+        for (wire, origin) in [
+            ("sign_in", AccountOrigin::SignIn),
+            ("import", AccountOrigin::Import),
+            ("migrated", AccountOrigin::Migrated),
+            ("from_a_newer_peer", AccountOrigin::Unknown),
+        ] {
+            let decoded: AccountOrigin =
+                serde_json::from_value(json!(wire)).expect("an origin decodes");
+            assert_eq!(decoded, origin, "{wire}");
+        }
+    }
 }

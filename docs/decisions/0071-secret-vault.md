@@ -238,8 +238,75 @@ massorca secret reset-key
 
 ## Consequences
 
-- The agents domain launches with `vault.environment_for(project)`. It is not
-  wired here, because agent sessions are still on the phase-4 branches.
+- Every agent run (start, delegated start and resume) whose caller holds
+  HostAdmin receives `vault.environment_for(project)` of its workspace's
+  project. It is read before the launch is planned, under the agents' start
+  gate only, before the homes gate and the status lock, and waited for at most
+  10 seconds: the vault only reads the store, so it cannot deadlock, but a slow
+  read delays other starts and delegations by at most that long, and a read
+  past it fails the launch. Precedence, last wins: the run's own variables, the
+  kind's credential home, the vault's variables, the caller's `env`.
+  - A vault name equal to a `MASSORCA_*` variable, to the kind's credential
+    home variable, or on the dangerous list below is refused.
+  - A vault name in the kind's `strip_env` is set, not emptied: the vault
+    granted it, so for that agent it takes precedence over the login in the
+    profile's credential home.
+  - A refusal, or a vault that is locked, has a case clash or a row that does
+    not open, fails the launch with `agent.secrets_unavailable` before any
+    session exists. The message names the cause and variable names, never a
+    value.
+- **The client boundary.** Setting a secret needs HostAdmin, so reading one
+  through a run does too.
+  - A caller below HostAdmin (a paired device with standard scopes) starts,
+    resumes or delegates a run without vault variables, and the reply says so
+    in `secrets_withheld`.
+  - A run that received vault variables, and every child delegated from it, is
+    marked `holds_secrets` on its session row (no names, no values). Attaching
+    to, snapshotting, resizing or typing into its terminal, prompting it,
+    resuming it, delegating from it and bringing a child back into it need
+    HostAdmin; lower scopes get `permission.denied`. `agent.list` and
+    `agent.status` show the mark.
+  - The agent-produced text of a marked run, its `result`, reaches only
+    HostAdmin callers: `agent.status`, `agent.list`, `agent.tree`, the replies
+    of start, resume, delegate, stop, forget and bring-back, and every
+    `agent.watch` item drop it for lower scopes, per subscriber. Lower scopes
+    still see the run, its state and its mark. `agent.changed` carries the
+    session id only. `terminal.show`, `terminal.kill`, `terminal.close`,
+    `agent.stop` and `agent.forget` stay ungated.
+  - The mark is sticky and lives on the terminal record too: a terminal
+    created for a run that got secrets keeps it for its whole life in the
+    registry, exited included, and a later resume never clears the session's
+    mark. A run marked only through its parent still refuses a dangerous
+    caller variable.
+  - Residual risk: a HostAdmin client sees whatever the agent prints, its
+    environment included.
+- **The trust boundary, as ruled.** Workspace scope on a host can create
+  terminals that run any program as the host user, so holding it is
+  equivalent to acting as that user on that host. On Windows the vault key is
+  user-scope DPAPI, so such a process could unwrap it; on every system it can
+  read the files agents wrote in the workspace. The scope gating above
+  therefore protects against Read-scope clients, against accidental display,
+  and against other OS users. It is defence in depth, not a boundary against a
+  Workspace-scope device.
+- **Open design item**, not in this change: a real boundary needs pairing
+  scopes that exclude `terminal.create` and arbitrary programs, or OS-level
+  isolation of the vault.
+- **Dangerous names**, refused when a secret is set, linked or requested
+  (`secret.reserved_name`) and again at launch, compared without case: `PATH`,
+  `PATHEXT`, `COMSPEC`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`,
+  `TEMP`, `TMPDIR`, `SHELL`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `NODE_PATH`,
+  `RUBYOPT`, `PERL5OPT`, `PERL5LIB`, `RUBYLIB`, `JAVA_TOOL_OPTIONS`,
+  `_JAVA_OPTIONS`, `CLASSPATH`, `EDITOR`, `VISUAL`, `PAGER`, `SYSTEMROOT`,
+  `WINDIR`, the proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+  `ALL_PROXY`, `NO_PROXY`, `NODE_TLS_REJECT_UNAUTHORIZED`,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`,
+  `REQUESTS_CA_BUNDLE`, `OPENSSL_CONF`), every `LD_*`, `DYLD_*`, `PYTHON*`,
+  `GIT_*`, `SSH_*`, `BASH_FUNC_*` and `NPM_CONFIG_*` name, every `*_BASE_URL`,
+  `OPENAI_API_BASE` and
+  `CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY`. Provider API keys stay allowed:
+  they are what the vault is for. A caller's `env` cannot add a dangerous name
+  to a marked run, including one marked only through its parent
+  (`request.invalid_params`).
 - Profile backups contain ciphertext only. A restore on another machine opens
   as `locked` until the key is restored.
 - On a host whose key protection is `file`, anyone who can read the profile

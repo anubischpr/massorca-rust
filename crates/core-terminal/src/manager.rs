@@ -22,6 +22,7 @@ use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySi
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
+use massorca_host_stats::MemorySample;
 
 /// Largest input accepted per call (0033).
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -108,6 +109,9 @@ pub struct CreateSpec {
     pub title: Option<String>,
     /// A repeated id returns the first terminal instead of starting another.
     pub request_id: Option<String>,
+    /// The program got vault secrets (decision 0071). Kept for the terminal's whole life in the registry, exited
+    /// included: its scrollback may hold what was printed.
+    pub holds_secrets: bool,
 }
 
 // Environment values can be secrets, so `Debug` shows the names only.
@@ -121,6 +125,7 @@ impl fmt::Debug for CreateSpec {
             .field("size", &self.size)
             .field("title", &self.title)
             .field("request_id", &self.request_id)
+            .field("holds_secrets", &self.holds_secrets)
             .finish()
     }
 }
@@ -168,6 +173,18 @@ pub struct TerminalInfo {
     pub cwd: String,
     pub created_at_ms: i64,
     pub exit: Option<ExitRecord>,
+    /// Set at creation for a run that got vault secrets, and never cleared.
+    pub holds_secrets: bool,
+}
+
+/// One terminal's process memory (`TerminalManager::memory`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSample {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The shell and what it started. `None` when the terminal's processes cannot be known; see
+    /// `ProcessTree::memory`.
+    pub sample: Option<MemorySample>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -364,6 +381,7 @@ impl TerminalManager {
             seq,
             title: spec.title,
             request_id: spec.request_id.clone(),
+            holds_secrets: spec.holds_secrets,
             pid: spawned.master.pid(),
             master: Arc::new(spawned.master),
             tree: spawned.tree,
@@ -644,6 +662,32 @@ impl TerminalManager {
     pub fn live_count(&self) -> usize {
         lock(&self.inner.registry).live
     }
+
+    /// The process memory of every terminal not yet exited, by creation time, for host memory (decision 0081). A
+    /// terminal whose wait failed (`Unverifiable`) is included. On Unix the process table is taken once for all
+    /// terminals; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
+    pub fn memory(&self) -> Vec<TerminalSample> {
+        let table = if cfg!(unix) {
+            massorca_host_stats::processes()
+        } else {
+            Vec::new()
+        };
+        let mut terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
+            .terminals
+            .values()
+            .cloned()
+            .collect();
+        terminals.sort_by_key(|terminal| terminal.seq);
+        terminals
+            .iter()
+            .filter(|terminal| !terminal.is_exited())
+            .map(|terminal| TerminalSample {
+                terminal_id: terminal.id.clone(),
+                workspace_id: terminal.workspace_id.clone(),
+                sample: terminal.tree.memory(&table),
+            })
+            .collect()
+    }
 }
 
 fn validate_size(size: PtySize) -> Result<()> {
@@ -843,6 +887,7 @@ pub(crate) struct Terminal {
     seq: u64,
     title: Option<String>,
     request_id: Option<String>,
+    holds_secrets: bool,
     pid: Option<u32>,
     master: Arc<PtyMaster>,
     tree: ProcessTree,
@@ -888,6 +933,7 @@ impl Terminal {
             cwd: self.cwd.clone(),
             created_at_ms: self.created_at_ms,
             exit,
+            holds_secrets: self.holds_secrets,
         }
     }
 
@@ -1181,6 +1227,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
         let size = PtySize {
@@ -1236,6 +1283,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
 
@@ -1284,6 +1332,7 @@ mod tests {
                 size: PtySize { cols: 80, rows: 24 },
                 title: None,
                 request_id: None,
+                holds_secrets: false,
             })
             .expect("create the terminal");
         let terminal = super::lock(&manager.inner.registry)
