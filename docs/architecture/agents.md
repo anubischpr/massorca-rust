@@ -323,6 +323,17 @@ queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unkno
 a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
 session id; `agent.watch` streams do not carry queue items.
 
+Delivery: the head of a queue is typed when its agent turns `idle` or `done`, through the prompt guards (merging,
+switching, readiness, typed since the last report). One prompt goes per step, so the next waits for the next report. A
+queue holds while the agent asks the person something (reason `asking`), and `agent.queue.send_now` is refused then. A
+prompt that cannot be typed becomes `failed` with its reason and holds everything behind it; nothing retries, and
+`remove` or `send_now` clears it. A stop by the person pauses the waiting prompts (`paused_stopped`); a service restart
+pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `agent.prompt`, `agent.queue.send_now` or
+`agent.queue.resume` lifts the pauses; a resumed run does not deliver paused prompts by itself.
+`agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
+mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
+`agent.queue.resume {session}` returns the queue as it is after the lift.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
