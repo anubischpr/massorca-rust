@@ -21,7 +21,7 @@ use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, curre
 use crate::layout::Layout;
 use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile};
 use crate::review::{self, CliPlan, PlanState, Review};
-use crate::source::{self, Files, Source};
+use crate::source::{self, Files, LoadedPackage, Source};
 
 /// The extension service of one profile.
 pub struct Extensions {
@@ -123,12 +123,7 @@ impl Extensions {
         let builtin = matches!(source, Source::Catalogue(_));
         displaced(&lockfile, &manifest.id, builtin)?;
         self.check_kind_conflicts(&lockfile, manifest, builtin)?;
-        let kinds: Vec<String> = manifest
-            .contributes
-            .agent_adapters
-            .iter()
-            .map(|adapter| adapter.id.clone())
-            .collect();
+        let kinds = agent_kind_ids(manifest);
         self.refuse_if_busy(&manifest.id)?;
         self.check_installing_kinds(&manifest.id, &kinds)?;
 
@@ -147,13 +142,25 @@ impl Extensions {
         }
 
         let busy = self.mark_busy(&manifest.id, kinds)?;
-        let version = manifest.version.to_string();
-        let rel = Layout::package_rel_path(&manifest.id, &version, &package.sha256);
+        self.unpack_staged(package, busy, plan, expected, builtin)
+    }
+
+    /// Unpacks a checked package and checks the folder against the reviewed hash. Callers hold the change lock.
+    fn unpack_staged(
+        &self,
+        package: LoadedPackage,
+        busy: Busy,
+        plan: Vec<CliPlan>,
+        consent: String,
+        builtin: bool,
+    ) -> Result<Staged, Error> {
+        let version = package.manifest.version.to_string();
+        let rel = Layout::package_rel_path(&package.manifest.id, &version, &package.sha256);
         let dir = self.layout.resolve(&rel);
         let files_sha256 = source::canonical_sha256(&package.files);
-        self.unpack(&manifest.id, &package.files, &dir)?;
-        if let Err(error) = check_unpacked(&manifest.id, &dir, &files_sha256) {
-            self.remove_unpacked(&manifest.id, &dir);
+        self.unpack(&package.manifest.id, &package.files, &dir)?;
+        if let Err(error) = check_unpacked(&package.manifest.id, &dir, &files_sha256) {
+            self.remove_unpacked(&package.manifest.id, &dir);
             return Err(error);
         }
         Ok(Staged {
@@ -166,7 +173,7 @@ impl Extensions {
             files_sha256,
             source: package.source,
             sha256: package.sha256,
-            consent: expected,
+            consent,
             builtin,
         })
     }
@@ -174,46 +181,13 @@ impl Extensions {
     /// Records the install under the change lock, after its vendor command ran. Whatever fails here removes the
     /// unpacked folder, so nothing is registered.
     fn commit(&self, staged: Staged, ran: Result<Vec<LockCli>, Error>) -> Result<LockEntry, Error> {
-        let Staged {
-            _busy,
-            manifest,
-            version,
-            rel,
-            dir,
-            files_sha256,
-            source,
-            sha256,
-            consent,
-            builtin,
-            plan: _,
-        } = staged;
         let _changes = self.lock_changes();
         let committed = ran.and_then(|cli| {
             let mut lockfile = self.read_lockfile()?;
-            let displaced = displaced(&lockfile, &manifest.id, builtin)?;
-            self.check_kind_conflicts(&lockfile, &manifest, builtin)?;
-            let entry = LockEntry {
-                id: manifest.id.clone(),
-                version,
-                source,
-                sha256,
-                files_sha256: Some(files_sha256),
-                path: rel.clone(),
-                enabled: true,
-                consent,
-                installed_at_ms: now_ms(),
-                cli,
-                agent_kinds: manifest
-                    .contributes
-                    .agent_adapters
-                    .iter()
-                    .map(|adapter| adapter.id.clone())
-                    .collect(),
-                extra: Default::default(),
-            };
-            lockfile
-                .packages
-                .retain(|package| package.id != manifest.id);
+            let displaced = displaced(&lockfile, &staged.manifest.id, staged.builtin)?;
+            self.check_kind_conflicts(&lockfile, &staged.manifest, staged.builtin)?;
+            let entry = staged.entry(cli);
+            lockfile.packages.retain(|package| package.id != entry.id);
             lockfile.packages.push(entry.clone());
             lockfile.write(&self.layout.lock_path())?;
             Ok((entry, displaced))
@@ -221,7 +195,7 @@ impl Extensions {
         match committed {
             Ok((entry, displaced)) => {
                 if let Some(old) = displaced
-                    && old.path != rel
+                    && old.path != entry.path
                 {
                     // The displaced entry left the lockfile with this install, so its folder is only litter now.
                     let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
@@ -229,7 +203,7 @@ impl Extensions {
                 Ok(entry)
             }
             Err(error) => {
-                self.remove_unpacked(&manifest.id, &dir);
+                self.remove_unpacked(&staged.manifest.id, &staged.dir);
                 Err(error)
             }
         }
@@ -452,6 +426,26 @@ struct Staged {
     builtin: bool,
 }
 
+impl Staged {
+    /// The lock entry this install records, with what its vendor commands did for each CLI.
+    fn entry(&self, cli: Vec<LockCli>) -> LockEntry {
+        LockEntry {
+            id: self.manifest.id.clone(),
+            version: self.version.clone(),
+            source: self.source.clone(),
+            sha256: self.sha256.clone(),
+            files_sha256: Some(self.files_sha256.clone()),
+            path: self.rel.clone(),
+            enabled: true,
+            consent: self.consent.clone(),
+            installed_at_ms: now_ms(),
+            cli,
+            agent_kinds: agent_kind_ids(&self.manifest),
+            extra: Default::default(),
+        }
+    }
+}
+
 /// Marks one package busy while its install or removal runs without the change lock. Dropping it clears the mark.
 pub(crate) struct Busy {
     installing: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
@@ -465,6 +459,16 @@ impl Drop for Busy {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.id);
     }
+}
+
+/// The agent kind ids a package declares, as its lock entry records them.
+fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
+    manifest
+        .contributes
+        .agent_adapters
+        .iter()
+        .map(|adapter| adapter.id.clone())
+        .collect()
 }
 
 /// The lock entry an install of `id` displaces. Only the built-in replaces a first-party entry the catalogue does not
