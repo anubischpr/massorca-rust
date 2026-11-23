@@ -333,8 +333,15 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
 /// prompt does: its run holds vault secrets. The text is never logged.
 async fn queue(ctx: RequestCtx, params: AgentQueueParams) -> Result<QueuedPrompt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
+    // The caller's scope is kept with the prompt, so a run that later holds secrets types only prompts an admin queued.
+    let host_admin = is_host_admin(&ctx);
     on_agents(&ctx, move |agents| {
-        agents.queue_add(&params.session, &params.text, params.request_id.as_deref())
+        agents.queue_add(
+            &params.session,
+            &params.text,
+            params.request_id.as_deref(),
+            host_admin,
+        )
     })
     .await
 }

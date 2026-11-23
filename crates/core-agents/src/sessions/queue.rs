@@ -29,6 +29,7 @@ impl Agents {
         selector: &str,
         text: &str,
         request_id: Option<&str>,
+        host_admin: bool,
     ) -> Result<QueuedPrompt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
@@ -57,7 +58,7 @@ impl Agents {
             text: text.to_owned(),
             request_id: request_id.map(str::to_owned),
             at: now_ms(),
-            host_admin: false,
+            host_admin,
         })?;
         self.notify(Change::Queue(row.id.clone()));
         let shown = self.queued_item(&mut live, &row.id, &stored.id)?;
@@ -216,6 +217,23 @@ impl Agents {
         }
         let row = self.reload(session).ok()?;
         let view = self.view_with(&mut live, row).ok()?;
+        // A run that holds vault secrets (decision 0071) types only prompts a host-admin caller queued. Others fail here,
+        // and a host-admin send-now may still retry them (decision 0084, D7).
+        if view.holds_secrets && !head.host_admin {
+            if self
+                .store()
+                .set_queued_prompt_state(
+                    &head.id,
+                    QueuedState::Failed,
+                    Some(SECRETS_HELD_REFUSAL),
+                    now_ms(),
+                )
+                .is_ok()
+            {
+                self.notify(Change::Queue(session.to_owned()));
+            }
+            return None;
+        }
         let state = view.activity.as_ref().map(|activity| activity.state);
         if state == Some(ActivityState::Waiting)
             || self.refuse_while_merging(&view.workspace_id).is_err()
@@ -370,6 +388,11 @@ impl Agents {
     }
 }
 
+/// Why a queued prompt is failed instead of typed: its caller held no host-admin scope, and the run now holds vault secrets.
+/// Names no secret.
+const SECRETS_HELD_REFUSAL: &str =
+    "queued by a caller without host-admin; the run now holds secrets";
+
 /// The refusal for a change to a prompt that is being typed into its run.
 fn sending_refusal(id: &str) -> AgentError {
     AgentError::new(
@@ -460,8 +483,8 @@ mod tests {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
 
-        let first = agents.queue_add(&session, "one", None).unwrap();
-        let second = agents.queue_add(&session, "two", None).unwrap();
+        let first = agents.queue_add(&session, "one", None, false).unwrap();
+        let second = agents.queue_add(&session, "two", None, false).unwrap();
 
         assert_eq!((first.position, second.position), (1, 2));
         assert_eq!(first.state, QueueState::Waiting);
@@ -495,7 +518,7 @@ mod tests {
         };
         agents.store().insert_agent_session(&row).unwrap();
 
-        let error = agents.queue_add(&row.id, "later", None).unwrap_err();
+        let error = agents.queue_add(&row.id, "later", None, false).unwrap_err();
         assert_eq!(error.code, codes::AGENT_QUEUE_UNAVAILABLE, "{error}");
     }
 
@@ -504,8 +527,12 @@ mod tests {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
 
-        let first = agents.queue_add(&session, "once", Some("req-1")).unwrap();
-        let again = agents.queue_add(&session, "twice", Some("req-1")).unwrap();
+        let first = agents
+            .queue_add(&session, "once", Some("req-1"), false)
+            .unwrap();
+        let again = agents
+            .queue_add(&session, "twice", Some("req-1"), false)
+            .unwrap();
 
         assert_eq!(again.id, first.id);
         assert_eq!(texts(&agents.queue_list(&session).unwrap()), ["once"]);
@@ -530,7 +557,7 @@ mod tests {
         }
 
         let error = agents
-            .queue_add(&session, "one too many", None)
+            .queue_add(&session, "one too many", None, false)
             .unwrap_err();
 
         assert_eq!(error.code, codes::AGENT_QUEUE_FULL, "{error}");
@@ -545,7 +572,7 @@ mod tests {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
 
-        let error = agents.queue_add(&session, "a\0b", None).unwrap_err();
+        let error = agents.queue_add(&session, "a\0b", None, false).unwrap_err();
 
         assert_eq!(error.code, codes::AGENT_PROMPT_INVALID);
         assert!(agents.queue_list(&session).unwrap().items.is_empty());
@@ -555,8 +582,8 @@ mod tests {
     fn a_prompt_is_edited_or_removed_only_while_waiting_or_failed() {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
-        let waiting = agents.queue_add(&session, "one", None).unwrap();
-        let sending = agents.queue_add(&session, "two", None).unwrap();
+        let waiting = agents.queue_add(&session, "one", None, false).unwrap();
+        let sending = agents.queue_add(&session, "two", None, false).unwrap();
         agents
             .store()
             .set_queued_prompt_state(&sending.id, QueuedState::Sending, None, now_ms())
@@ -594,8 +621,8 @@ mod tests {
     fn a_prompt_says_asking_while_its_agent_asks_and_holds_behind_a_failed_one() {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
-        let head = agents.queue_add(&session, "head", None).unwrap();
-        agents.queue_add(&session, "next", None).unwrap();
+        let head = agents.queue_add(&session, "head", None, false).unwrap();
+        agents.queue_add(&session, "next", None, false).unwrap();
         agents
             .store()
             .set_agent_session_status(
@@ -645,7 +672,7 @@ mod tests {
         let sink = Arc::clone(&seen);
         agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
 
-        let added = agents.queue_add(&session, "one", None).unwrap();
+        let added = agents.queue_add(&session, "one", None, false).unwrap();
         agents.queue_edit(&added.id, "edited").unwrap();
         agents.queue_remove(&added.id).unwrap();
 
@@ -664,8 +691,8 @@ mod tests {
     fn a_failed_delivery_marks_its_prompt_and_holds_the_rest() {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
-        let head = agents.queue_add(&session, "one", None).unwrap();
-        let next = agents.queue_add(&session, "two", None).unwrap();
+        let head = agents.queue_add(&session, "one", None, false).unwrap();
+        let next = agents.queue_add(&session, "two", None, false).unwrap();
         agents
             .store()
             .set_queued_prompt_state(&head.id, QueuedState::Sending, None, now_ms())
@@ -701,8 +728,8 @@ mod tests {
     fn a_delivered_prompt_leaves_the_queue_and_is_announced() {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
-        let head = agents.queue_add(&session, "one", None).unwrap();
-        agents.queue_add(&session, "two", None).unwrap();
+        let head = agents.queue_add(&session, "one", None, false).unwrap();
+        agents.queue_add(&session, "two", None, false).unwrap();
         agents
             .store()
             .set_queued_prompt_state(&head.id, QueuedState::Sending, None, now_ms())
@@ -721,7 +748,7 @@ mod tests {
     fn a_failed_prompt_can_be_edited_and_removed() {
         let (agents, workspace, _profile) = service();
         let session = claude_session(&agents, &workspace);
-        let failed = agents.queue_add(&session, "one", None).unwrap();
+        let failed = agents.queue_add(&session, "one", None, false).unwrap();
         agents
             .store()
             .set_queued_prompt_state(&failed.id, QueuedState::Failed, Some("gone"), now_ms())
@@ -777,11 +804,76 @@ mod tests {
 
         assert_eq!(texts(&agents.queue_list(&row.id).unwrap()), ["kept"]);
         assert_eq!(agents.queue_remove(&kept.id).unwrap().id, kept.id);
-        let error = agents.queue_add(&row.id, "later", None).unwrap_err();
+        let error = agents.queue_add(&row.id, "later", None, false).unwrap_err();
         assert_eq!(
             error.code,
             codes::AGENT_QUEUE_UNAVAILABLE,
             "only add is refused"
         );
+    }
+
+    /// A session of the built-in `claude` kind whose run holds vault secrets (decision 0071), with no terminal.
+    fn claude_session_holding_secrets(agents: &Agents, workspace_id: &str) -> String {
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "claude".to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: true,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+        row.id
+    }
+
+    #[test]
+    fn a_prompt_queued_without_host_admin_fails_once_the_run_holds_secrets() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session_holding_secrets(&agents, &workspace);
+        let plain = agents
+            .queue_add(&session, "by anyone", None, false)
+            .unwrap();
+        agents.queue_add(&session, "behind it", None, true).unwrap();
+
+        assert!(agents.prepare_drain(&session).is_none(), "nothing is typed");
+        let shown = agents.queue_list(&session).unwrap();
+        assert_eq!(shown.items[0].id, plain.id);
+        assert_eq!(shown.items[0].state, QueueState::Failed);
+        assert_eq!(
+            shown.items[0].reason.as_deref(),
+            Some("queued by a caller without host-admin; the run now holds secrets")
+        );
+        assert_eq!(
+            shown.items[1].reason.as_deref(),
+            Some(QUEUE_REASON_BEHIND_FAILED)
+        );
+    }
+
+    #[test]
+    fn a_prompt_queued_by_host_admin_is_not_failed_by_the_secrets_rule() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session_holding_secrets(&agents, &workspace);
+        let admin = agents
+            .queue_add(&session, "by an admin", None, true)
+            .unwrap();
+
+        assert!(
+            agents.prepare_drain(&session).is_none(),
+            "no live run to type into"
+        );
+        let shown = agents.queue_list(&session).unwrap();
+        assert_eq!(shown.items[0].id, admin.id);
+        assert_eq!(shown.items[0].state, QueueState::Waiting);
     }
 }
