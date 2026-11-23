@@ -8,9 +8,9 @@ use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUp
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::extensions::{
-    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionReview,
-    ExtensionState, InstalledInfo, Listing, Permission, Risk, RiskLevel, SourceKind, SourceRef,
-    UninstallEffects,
+    CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
+    ExtensionReview, ExtensionState, InstalledInfo, Listing, Permission, Risk, RiskLevel,
+    SourceKind, SourceRef, UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -386,4 +386,72 @@ fn a_refused_switch_says_why_under_the_item(cx: &mut TestAppContext) {
             "This package is busy. Wait for its install or removal to finish.".to_owned()
         ))
     );
+}
+
+#[gpui::test]
+fn uninstall_sends_the_removal_and_closes_the_confirm_when_the_service_answers(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, id) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert!(!params.delete_agent_homes && !params.uninstall_cli);
+            assert_eq!(params.uninstall_consent, None);
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 2,
+            installed: Ok(Vec::new()),
+            catalogue: Ok(vec![catalogue_package()]),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.marketplace_uninstall.is_none()),
+        "a removal that worked closes the confirm"
+    );
+    assert_eq!(item_state(&rig, cx, id), Some(ItemState::NotInstalled));
+}
+
+#[gpui::test]
+fn a_refused_removal_keeps_the_confirm_open_with_the_reason(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(
+        cx,
+        vec![installed_package(true)],
+        vec![installed_package(true)],
+    );
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "agent.busy".to_owned(),
+                message: "a session uses this agent".to_owned(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+    cx.run_until_parked();
+    let confirm = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_uninstall.clone())
+        .expect("the confirm stays open");
+    assert!(!confirm.sending);
+    assert_eq!(confirm.error.as_deref(), Some("A session uses this agent"));
 }

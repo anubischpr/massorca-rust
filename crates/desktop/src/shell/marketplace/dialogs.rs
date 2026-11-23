@@ -164,6 +164,7 @@ fn uninstall(
     let mut dialog = Dialog::new("marketplace-uninstall", format!("Uninstall {}?", item.name))
         .variant(DialogVariant::Destructive)
         .open(true)
+        .busy(confirm.sending)
         .child(
             div()
                 .text_style(TYPE_BODY_SM)

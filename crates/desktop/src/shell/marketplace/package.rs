@@ -5,7 +5,9 @@ use crate::model::marketplace::{MarketplaceItemId, extension_refusal_text};
 use crate::service::Refusal;
 use crate::shell::Shell;
 use gpui::Context;
-use massorca_protocol::methods::extensions::ExtensionSetEnabledParams;
+use massorca_protocol::methods::extensions::{
+    ExtensionRemoveParams, ExtensionRemoved, ExtensionSetEnabledParams,
+};
 
 impl Shell {
     /// The package an item stands for, when the service lists it as an extension package.
@@ -43,6 +45,83 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// Removes an installed package the person confirmed. The confirm waits for the answer; a refusal keeps it open
+    /// with its sentence. The vendor's own uninstall stays with the person: it is not run from here.
+    pub(super) fn remove_package(
+        &mut self,
+        item: MarketplaceItemId,
+        package: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.sending = true;
+            confirm.error = None;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = service
+                .remove_extension(ExtensionRemoveParams {
+                    id: package,
+                    delete_agent_homes: false,
+                    uninstall_cli: false,
+                    agent_token: None,
+                    uninstall_consent: None,
+                })
+                .await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.finish_package_removal(item, result, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// A removal that worked closes the confirm. A step that did not finish is shown under the item, since the
+    /// package is gone and the item page is the place to read why.
+    fn finish_package_removal(
+        &mut self,
+        item: MarketplaceItemId,
+        result: Result<ExtensionRemoved, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(removed) => {
+                if self
+                    .marketplace_uninstall
+                    .as_ref()
+                    .is_some_and(|confirm| confirm.item == item)
+                {
+                    self.marketplace_uninstall = None;
+                }
+                if !removed.failures.is_empty() {
+                    let steps: Vec<String> = removed
+                        .failures
+                        .iter()
+                        .map(|failure| failure.message.clone())
+                        .collect();
+                    self.marketplace_item_error = Some((
+                        item,
+                        format!("Removed, but not every step finished. {}", steps.join(" ")),
+                    ));
+                }
+            }
+            Err(refusal) => {
+                if let Some(confirm) = self
+                    .marketplace_uninstall
+                    .as_mut()
+                    .filter(|confirm| confirm.item == item)
+                {
+                    confirm.sending = false;
+                    confirm.error =
+                        Some(extension_refusal_text(refusal.code(), &refusal.sentence()));
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// A refused change shows its sentence under the item; a change that worked needs no words here.

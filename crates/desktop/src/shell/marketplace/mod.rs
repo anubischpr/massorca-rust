@@ -31,6 +31,8 @@ pub(super) use dialogs::dialog;
 pub(super) struct UninstallConfirm {
     pub item: MarketplaceItemId,
     pub error: Option<String>,
+    /// The removal is with the service; the confirm waits for its answer.
+    pub sending: bool,
 }
 
 /// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
@@ -227,7 +229,11 @@ impl Shell {
         item: MarketplaceItemId,
         cx: &mut Context<Self>,
     ) {
-        self.marketplace_uninstall = Some(UninstallConfirm { item, error: None });
+        self.marketplace_uninstall = Some(UninstallConfirm {
+            item,
+            error: None,
+            sending: false,
+        });
         cx.notify();
     }
 
@@ -241,6 +247,13 @@ impl Shell {
         let Some(confirm) = self.marketplace_uninstall.clone() else {
             return;
         };
+        if confirm.sending {
+            return;
+        }
+        if let Some(package) = self.package_of(confirm.item) {
+            self.remove_package(confirm.item, package, cx);
+            return;
+        }
         match self.change_marketplace(cx, |source| source.uninstall(confirm.item)) {
             Ok(()) => self.marketplace_uninstall = None,
             Err(error) => {
