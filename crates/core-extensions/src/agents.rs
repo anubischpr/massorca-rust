@@ -45,16 +45,64 @@ pub struct CatalogueAgentKind {
 /// Every installed package's agent kinds, enabled and disabled, in lockfile order. An empty profile has none. A
 /// package whose files cannot be trusted never hides the others: its kinds come back with `error` set and no `path`.
 /// Only an unreadable lockfile fails the whole call.
+///
+/// A package being updated while this reads can show files that no longer match the entry read: the update writes the
+/// new lockfile, then deletes the old folder. So when a package reads as unusable and the lockfile changed meanwhile,
+/// the read starts again from the new lockfile; a lockfile that keeps changing reports those packages as being updated
+/// (`extension.busy`) instead of tampered.
 pub fn installed_agent_kinds(profile: &Profile) -> Result<Vec<InstalledAgentKind>, Error> {
     let layout = Layout::new(profile);
-    let lockfile = Lockfile::read(&layout.lock_path())?;
+    settled(
+        || Lockfile::read(&layout.lock_path()),
+        |lockfile| kinds_of(&layout, lockfile),
+    )
+}
+
+/// How many times a read that found an unusable package starts again because the lockfile changed meanwhile.
+const UPDATE_RETRIES: usize = 3;
+
+/// The kinds `kinds` reads from the lockfile `read` returns, read again while a package reads as unusable and the
+/// lockfile changed meanwhile (see [`installed_agent_kinds`]).
+fn settled(
+    mut read: impl FnMut() -> Result<Lockfile, Error>,
+    kinds: impl Fn(&Lockfile) -> Vec<InstalledAgentKind>,
+) -> Result<Vec<InstalledAgentKind>, Error> {
+    let mut lockfile = read()?;
+    let mut retries = 0;
+    loop {
+        let mut out = kinds(&lockfile);
+        if out.iter().all(|kind| kind.error.is_none()) {
+            return Ok(out);
+        }
+        let now = read()?;
+        if now == lockfile {
+            return Ok(out);
+        }
+        if retries == UPDATE_RETRIES {
+            for kind in &mut out {
+                if let Some(error) = &mut kind.error {
+                    *error = HookError::new(
+                        codes::BUSY,
+                        format!("package {} is being updated; try again", kind.package_id),
+                    );
+                }
+            }
+            return Ok(out);
+        }
+        retries += 1;
+        lockfile = now;
+    }
+}
+
+/// Every installed package's agent kinds as `lockfile` records them, each package's files checked against its entry.
+fn kinds_of(layout: &Layout, lockfile: &Lockfile) -> Vec<InstalledAgentKind> {
     let mut out = Vec::new();
     for entry in &lockfile.packages {
         // A first-party id the catalogue does not vouch for never contributes a kind: it could impersonate a built-in.
         if catalogue::is_unvouched_first_party(entry) {
             continue;
         }
-        let manifest = match installed_manifest(&layout, entry) {
+        let manifest = match installed_manifest(layout, entry) {
             Ok(manifest) => manifest,
             Err(error) => {
                 let failure = HookError::new(error.code(), error.to_string());
@@ -96,7 +144,7 @@ pub fn installed_agent_kinds(profile: &Profile) -> Result<Vec<InstalledAgentKind
             });
         }
     }
-    Ok(out)
+    out
 }
 
 /// The kind ids the lockfile recorded for a package; an entry written before `agent_kinds` existed falls back to its
@@ -225,7 +273,92 @@ fn problem(package_id: &str, error: &HookError) -> String {
     let cause = match error.code.as_str() {
         codes::TAMPERED => "its installed files differ from what was reviewed",
         codes::IO => "its installed files cannot be read",
+        codes::BUSY => "it is being updated; try again",
         _ => "its installed manifest is invalid",
     };
     format!("{package_id}: {cause} ({})", error.code)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    /// A lockfile told apart by one migration name.
+    fn lockfile(mark: &str) -> Lockfile {
+        Lockfile {
+            migrations: vec![mark.to_owned()],
+            ..Lockfile::default()
+        }
+    }
+
+    /// One kind of package `ext.fake`, unusable (tampered) while the lockfile is marked `broken`.
+    fn kinds(lockfile: &Lockfile) -> Vec<InstalledAgentKind> {
+        let broken = lockfile.migrations.iter().any(|mark| mark.starts_with("broken"));
+        vec![InstalledAgentKind {
+            package_id: "ext.fake".to_owned(),
+            package_version: "1.0.0".to_owned(),
+            kind_id: "fake".to_owned(),
+            path: None,
+            enabled: true,
+            cli_installed_by_package: false,
+            error: broken.then(|| HookError::new(codes::TAMPERED, "tampered")),
+        }]
+    }
+
+    /// Reads that return `marks` in order, then the last one forever.
+    fn reads(marks: &[&str]) -> impl FnMut() -> Result<Lockfile, Error> {
+        let left = RefCell::new(marks.iter().map(|mark| lockfile(mark)).collect::<Vec<_>>());
+        move || {
+            let mut left = left.borrow_mut();
+            Ok(if left.len() > 1 {
+                left.remove(0)
+            } else {
+                left[0].clone()
+            })
+        }
+    }
+
+    fn code(kinds: &[InstalledAgentKind]) -> Option<String> {
+        kinds[0].error.as_ref().map(|error| error.code.clone())
+    }
+
+    #[test]
+    fn a_package_updated_during_the_read_is_read_again_from_the_new_lockfile() {
+        let out = settled(reads(&["broken", "updated"]), kinds).unwrap();
+        assert_eq!(code(&out), None, "the new lockfile's files match");
+    }
+
+    #[test]
+    fn a_package_whose_lockfile_did_not_change_stays_tampered() {
+        let out = settled(reads(&["broken"]), kinds).unwrap();
+        assert_eq!(code(&out).as_deref(), Some(codes::TAMPERED));
+    }
+
+    #[test]
+    fn a_package_whose_lockfile_keeps_changing_is_reported_as_being_updated() {
+        let marks: Vec<String> = (0..=UPDATE_RETRIES + 1).map(|n| format!("broken-{n}")).collect();
+        let marks: Vec<&str> = marks.iter().map(String::as_str).collect();
+        let out = settled(reads(&marks), kinds).unwrap();
+        assert_eq!(code(&out).as_deref(), Some(codes::BUSY));
+        let problem = installed_declaration(&out[0]).unwrap_err();
+        assert!(problem.contains("being updated"), "{problem}");
+        assert!(!problem.contains("differ"), "{problem}");
+    }
+
+    #[test]
+    fn a_usable_package_is_read_once() {
+        let mut count = 0;
+        let out = settled(
+            || {
+                count += 1;
+                Ok(lockfile("fine"))
+            },
+            kinds,
+        )
+        .unwrap();
+        assert_eq!(code(&out), None);
+        assert_eq!(count, 1);
+    }
 }

@@ -57,6 +57,11 @@ version.
 
 **Gating.** A kind whose package is not `enabled` is refused with `agent.kind_not_enabled`, data
 `{ kind, package, state }`, and a message that says to install or enable it in the Marketplace.
+A package whose state cannot be read (state `unknown`, as when the extensions lockfile cannot be
+read) is refused with the same code, and its message names that read failure instead, since
+installing or enabling cannot fix it. A package whose files change under the read because it is
+being updated is read again from the new lockfile; one whose lockfile keeps changing is listed with
+the problem that it is being updated (`extension.busy`), not that its files were tampered with.
 The check runs right after the kind is found and before its declaration's problems and its
 program are checked, on `agent.start`, `agent.delegate` (and every other start through
 `Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.
