@@ -23,6 +23,7 @@ fn sample_project() -> projects::Project {
         name: "app".to_owned(),
         workspaces_root: "/repos/app-workspaces".to_owned(),
         added_at_ms: 1_767_225_600_000_i64,
+        base_ref: None,
     }
 }
 
@@ -94,6 +95,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(projects::LIST, "project.list");
     assert_eq!(projects::SHOW, "project.show");
     assert_eq!(projects::REMOVE, "project.remove");
+    assert_eq!(projects::SET_BASE, "project.set_base");
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
@@ -114,6 +116,7 @@ fn no_core_method_uses_the_reserved_extension_prefix() {
         projects::LIST,
         projects::SHOW,
         projects::REMOVE,
+        projects::SET_BASE,
         workspaces::CREATE,
         workspaces::LIST,
         workspaces::SHOW,
@@ -183,6 +186,35 @@ fn project_add_params_carry_set_options() {
             "workspaces_root": "/work"
         }),
     );
+}
+
+#[test]
+fn project_set_base_params_send_null_to_clear_the_base() {
+    assert_wire(
+        &projects::ProjectSetBaseParams {
+            project: "app".to_owned(),
+            base: Some("origin/develop".to_owned()),
+        },
+        &json!({ "project": "app", "base": "origin/develop" }),
+    );
+    assert_wire(
+        &projects::ProjectSetBaseParams {
+            project: "app".to_owned(),
+            base: None,
+        },
+        &json!({ "project": "app", "base": null }),
+    );
+}
+
+#[test]
+fn project_omits_base_ref_until_it_is_set() {
+    let mut project = sample_project();
+    assert_wire(&project, &sample_project_json());
+
+    project.base_ref = Some("origin/develop".to_owned());
+    let mut expected = sample_project_json();
+    expected["base_ref"] = json!("origin/develop");
+    assert_wire(&project, &expected);
 }
 
 #[test]
@@ -486,6 +518,7 @@ fn topic_constants_match_the_contract() {
     assert_eq!(events::TOPIC_WORKSPACE_REMOVED, "workspace.removed");
     assert_eq!(events::TOPIC_PROJECT_ADDED, "project.added");
     assert_eq!(events::TOPIC_PROJECT_REMOVED, "project.removed");
+    assert_eq!(events::TOPIC_PROJECT_CHANGED, "project.changed");
 }
 
 #[test]

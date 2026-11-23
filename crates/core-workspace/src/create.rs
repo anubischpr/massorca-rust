@@ -101,8 +101,9 @@ impl Workspaces {
                     format!("branch {branch:?} already exists"),
                 ));
             }
-            // Unnamed, the repository's default branch (decision 0008); HEAD only when it has none.
-            if let Some(found) = match params.base.as_deref() {
+            // Unnamed: the project's base (WS-04), else the default branch (decision 0008), else HEAD.
+            let named = params.base.as_deref().or(project.base_ref.as_deref());
+            if let Some(found) = match named {
                 Some(name) => Some(self.git.qualify_base(repo, name)?),
                 None => self.git.default_base(repo)?,
             } {
