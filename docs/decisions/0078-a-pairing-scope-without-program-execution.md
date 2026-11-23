@@ -119,7 +119,13 @@ program the repository names to run:
   `extensions.worktreeConfig` is on, both with `--includes`) is overridden
   with an empty value, and such a filter is made optional. `status`,
   `diff-files` and `diff-index` get `--ignore-submodules=dirty`, so git never
-  runs a status inside a submodule under the submodule's own config. Filters
+  runs a status inside a submodule under the submodule's own config. Every
+  transport is closed (`protocol.allow=never`, each named protocol and each
+  `protocol.*.allow` the repository sets overridden with `never`), lazy fetch
+  is off where git knows `GIT_NO_LAZY_FETCH` (2.44+), and a partial clone
+  (`extensions.partialClone` or a true `remote.*.promisor`) is refused, since
+  a read that needs a missing object would fetch through a transport the
+  repository names. Filters
   in user or system config keep running, so a Git LFS set up there still
   works. A run that cannot be made safe (the hooks folder is missing or not
   empty, the config cannot be read, a driver name contains `=`) is refused
@@ -201,6 +207,10 @@ device method writes them.
 - **Git internals.** The refused key list follows git's documented
   program-running keys at the time of writing. A new git release can add one.
   The empty `core.hooksPath` and the config check cover today's set.
+- **Config written between the check and the run.** The repository's config
+  is read in one git process and the command runs in the next. A local
+  writer of that config (an agent working in the worktree) could add a
+  driver in that gap. A read-only device cannot write it on its own.
 - **Out of scope:** OS-level isolation of the vault or of agent runs (a
   separate user, AppContainer, a sandbox), per-workspace scopes, per-device
   limits on which kinds may run, and an approval method for `operate`.
