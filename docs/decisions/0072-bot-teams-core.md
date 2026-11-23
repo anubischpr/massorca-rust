@@ -88,7 +88,10 @@ means "cannot tell", never "dead" (AGENTS.md, SSH use case).
   2. It creates the team's folder workspace if there is none.
   3. It starts the bot's agent through the agents domain's in-process API,
      passing the workspace, the agent kind and the prompt. The prompt gives the
-     bot its name, its team and its job, then the task text.
+     bot its name, its team and its job, then the task text. A task in a
+     project also gets, as in pv96, the line "This task is part of the project
+     "NAME"." (with "Read its brief before you start." when it has a brief),
+     the project's goal, and its brief.
   4. It records the session only once delivery succeeded. A failed delivery
      leaves the task Not started, with `error` set (AUTO-14).
 - `task.done` marks a task done by hand, for work that finished outside an

@@ -517,7 +517,12 @@ fn a_task_on_a_linked_folder_runs_in_that_folder_and_has_no_branch() {
 fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
     let (sandbox, root) = team_sandbox();
     add_bot(&sandbox, "mara", "fake");
-    sandbox.json_ok("default", &["team", "project", "add", "alpha", "loose"]);
+    sandbox.json_ok(
+        "default",
+        &[
+            "team", "project", "add", "alpha", "loose", "--goal", "Ship it",
+        ],
+    );
     let task = create_task(
         &sandbox,
         "Parse the headers",
@@ -542,5 +547,22 @@ fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
         .join(team["id"].as_str().expect("team id"));
     assert!(same_dir(&shown, &folder), "{workspace}");
     let session = started["session_id"].as_str().expect("linked session");
+    // The prompt names the task's project and its goal.
+    let record = sandbox.json_ok("default", &["agent", "status", session]);
+    let terminal = record["terminal_id"].as_str().expect("terminal id");
+    eventually("the project on the agent's screen", || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        let text: String = screen["lines"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        (text.contains("part of the project \"loose\"") && text.contains("Goal: Ship it"))
+            .then_some(())
+    });
     sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
 }
