@@ -47,6 +47,11 @@ fn installed_folder(s: &Setup) -> PathBuf {
     s.service.layout().resolve(rel)
 }
 
+/// A host where Gentle Shell is already on the machine, so installing it registers it without running its installer.
+fn detected_gentle_shell() -> FakeHost {
+    FakeHost::new().with_program("gentle-shell")
+}
+
 #[test]
 fn an_empty_profile_lists_the_four_built_ins_as_available_with_their_declarations() {
     let s = setup(FakeHost::new());
@@ -76,7 +81,7 @@ fn an_empty_profile_lists_the_four_built_ins_as_available_with_their_declaration
 
 #[test]
 fn installing_disabling_and_removing_a_built_in_moves_it_through_its_states() {
-    let s = setup(FakeHost::new());
+    let s = setup(detected_gentle_shell());
     assert_eq!(state_of(&s, "gentle-shell"), ItemState::Available);
 
     s.install(
@@ -104,7 +109,11 @@ fn installing_disabling_and_removing_a_built_in_moves_it_through_its_states() {
 
 #[test]
 fn a_third_party_package_is_listed_after_the_built_ins_in_lockfile_order() {
-    let s = setup(FakeHost::new().with_program("kit"));
+    let s = setup(
+        FakeHost::new()
+            .with_program("kit")
+            .with_program("gentle-shell"),
+    );
     let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
     s.install(&kit, false).expect("kit installs");
     s.install(
@@ -132,7 +141,7 @@ fn a_third_party_package_is_listed_after_the_built_ins_in_lockfile_order() {
 
 #[test]
 fn a_tampered_package_keeps_its_kinds_and_its_declaration_error_names_no_path() {
-    let s = setup(FakeHost::new());
+    let s = setup(detected_gentle_shell());
     s.install(
         &Source::Catalogue("massorca.gentle-shell".to_owned()),
         false,
@@ -157,7 +166,7 @@ fn a_tampered_package_keeps_its_kinds_and_its_declaration_error_names_no_path() 
 
 #[test]
 fn a_package_whose_folder_is_gone_keeps_its_kinds_and_its_declaration_error_names_no_path() {
-    let s = setup(FakeHost::new());
+    let s = setup(detected_gentle_shell());
     s.install(
         &Source::Catalogue("massorca.gentle-shell".to_owned()),
         false,
@@ -248,7 +257,11 @@ fn adoption_runs_once_across_a_restart_so_a_removed_built_in_is_not_adopted_agai
 
 #[test]
 fn unknown_and_third_party_kind_ids_are_ignored_but_the_run_is_recorded() {
-    let s = setup(FakeHost::new().with_program("kit"));
+    let s = setup(
+        FakeHost::new()
+            .with_program("kit")
+            .with_program("gentle-shell"),
+    );
     let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
     s.install(&kit, false).expect("kit installs");
 
