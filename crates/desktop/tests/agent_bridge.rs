@@ -126,13 +126,13 @@ async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
     })
     .await
     .expect("the agent kinds arrive after the connect");
-    // The four built-in kinds, in the order the service lists them, each with its package enabled.
+    // The four built-in kinds, in the order the service lists them; a new profile has installed none of their packages.
     let ids: Vec<&str> = declared.iter().map(|kind| kind.id.as_str()).collect();
     assert_eq!(ids, ["claude", "codex", "antigravity", "gentle-shell"]);
     assert!(
         declared
             .iter()
-            .all(|kind| kind.package.state == PackageState::Enabled)
+            .all(|kind| kind.package.state == PackageState::Available)
     );
 
     let mut store = StoreState::default();

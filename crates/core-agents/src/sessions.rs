@@ -40,6 +40,7 @@ use crate::catalog::Catalog;
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::modes;
+use crate::packages::KindPackages;
 use crate::paths;
 use crate::prompt;
 use crate::provided_env::{
@@ -49,6 +50,7 @@ use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
 mod delegation;
+mod queue;
 
 pub use delegation::{MergeResult, RepoOps};
 
@@ -68,6 +70,8 @@ pub enum Change {
     Forgotten(String),
     /// An account of a kind changed, or its state did (decision 0059). Not a session change, so watchers do not get it.
     Account(AccountsChanged),
+    /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
+    Queue(String),
 }
 
 /// Receives every [`Change`]. Called under the status lock, so it must not block or call back into [`Agents`].
@@ -184,6 +188,9 @@ pub struct AgentsConfig {
     pub massorca_bin: PathBuf,
     /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
     pub env_provider: Option<EnvProvider>,
+    /// The packages that provide kinds and their state (decision 0059); [`crate::BuiltInPackages`] until the extension
+    /// runtime provides them.
+    pub kind_packages: Arc<dyn KindPackages>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -238,6 +245,8 @@ pub(crate) struct LiveRun {
     /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
     /// two writes never interleave in the terminal.
     switching: bool,
+    /// A queued prompt is being typed into the run (decision 0084): no other input waits for it, `force` or not.
+    delivering: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -348,10 +357,16 @@ impl Agents {
         &self.inner.config.profile_dir
     }
 
+    /// The packages that provide kinds (decision 0059).
+    pub(crate) fn kind_packages(&self) -> &dyn KindPackages {
+        self.inner.config.kind_packages.as_ref()
+    }
+
     /// Every declared kind, read again from the profile, with programs resolved on the service's `PATH`.
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
-        let mut kinds = Catalog::load(profile_dir).views(profile_dir, &SearchEnv::current());
+        let mut kinds = Catalog::load(self.kind_packages(), profile_dir)
+            .views(profile_dir, &SearchEnv::current());
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
@@ -487,6 +502,7 @@ impl Agents {
                 pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: access.account.clone(),
             },
         );
@@ -652,6 +668,7 @@ impl Agents {
                 pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: access.account.clone(),
             },
         );
@@ -729,10 +746,11 @@ impl Agents {
 
     /// The declaration and program a resume starts with: declared, valid, with a resume form, and installed (0054).
     fn resumable_kind(&self, row: &AgentSessionRow) -> Result<(KindDecl, PathBuf), AgentError> {
-        let catalog = Catalog::load(self.profile_dir());
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(&row.kind).ok_or_else(|| {
             resume_unavailable(&row.id, &format!("kind {} is no longer declared", row.kind))
         })?;
+        require_enabled(entry)?;
         let decl = entry
             .valid()
             .ok_or_else(|| resume_unavailable(&row.id, &format!("kind {} is invalid", row.kind)))?;
@@ -790,6 +808,8 @@ impl Agents {
             return Ok(());
         };
         let first_idle = report.activity.state == "idle";
+        // An idle or done agent takes the head of its queue (decision 0084, D3).
+        let ready = matches!(report.activity.state.as_str(), "idle" | "done");
         let mut row = self.reload(&params.session)?;
         let result = if report.activity.state == "done" {
             report.result
@@ -846,6 +866,9 @@ impl Agents {
         if let (Some((chunks, switching)), Some(terminal)) = (first, terminal) {
             self.deliver_first_input(&params.session, &terminal, chunks, switching);
         }
+        if ready {
+            self.drain_queue(&params.session);
+        }
         Ok(())
     }
 
@@ -857,6 +880,18 @@ impl Agents {
         selector: &str,
         text: &str,
         force: bool,
+    ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, true)
+    }
+
+    /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
+    /// pauses; a system prompt, such as a bring-back's, does not (decision 0084, D5).
+    pub(crate) fn send_prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+        lift_queue_pauses: bool,
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
@@ -893,6 +928,10 @@ impl Agents {
                 TerminalError::Exited | TerminalError::NotFound => not_live(&session_id),
                 other => AgentError::from(other),
             })?;
+        // An accepted prompt from the person lifts the session's queue pauses (decision 0084, D5).
+        if lift_queue_pauses {
+            self.lift_pauses(&session_id);
+        }
         Ok(PromptReceipt {
             receipt: ReceiptKind::HandedToTerminal,
             bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -980,6 +1019,8 @@ impl Agents {
         let written =
             typed.map(|(terminal, bytes)| self.inner.config.terminals.input(&terminal, &bytes));
         self.end_switching(&row.id);
+        // The switch is typed and the agent is as ready as it was: the queue may go on (decision 0084, D3).
+        self.drain_queue(&row.id);
         let mut live = lock(&self.inner.status);
         if let Some(Err(error)) = written {
             return Err(match error {
@@ -1003,7 +1044,7 @@ impl Agents {
 
     /// The declaration of `id`: declared and valid, whether or not its program is installed now.
     fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
-        let catalog = Catalog::load(self.profile_dir());
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(id).ok_or_else(|| {
             AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
         })?;
@@ -1045,6 +1086,7 @@ impl Agents {
                 }
                 if switching {
                     agents.end_switching(&owner);
+                    agents.drain_queue(&owner);
                 }
             });
         if let Err(error) = spawned {
@@ -1116,6 +1158,8 @@ impl Agents {
     /// A session whose run already ended is returned as it is.
     pub fn stop(&self, selector: &str, force: bool) -> Result<AgentSession, AgentError> {
         let row = self.resolve(selector)?;
+        // The person's stop pauses the queue before the run is killed, so a grace-period idle cannot deliver (decision 0084, D5).
+        self.pause_queue_stopped(&row.id);
         if row.exit.is_none()
             && let Some(terminal) = &row.terminal_id
         {
@@ -1178,17 +1222,38 @@ impl Agents {
                 )?;
             }
         }
+        // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
+        self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
     }
 
+    /// The declaration and program a start uses: declared, enabled (decision 0059), valid and installed. A delegated
+    /// child and a sign-in start through it too.
     pub(crate) fn startable_kind(
         &self,
         id: &str,
     ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
-        let catalog = Catalog::load(self.profile_dir());
+        self.installed_kind(id, true)
+    }
+
+    /// [`Agents::startable_kind`], whatever the state of the kind's package: an account's check, its removal and its
+    /// sign-out keep working on a disabled kind (decision 0059).
+    pub(crate) fn runnable_kind(&self, id: &str) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        self.installed_kind(id, false)
+    }
+
+    fn installed_kind(
+        &self,
+        id: &str,
+        gated: bool,
+    ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(id).ok_or_else(|| {
             AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
         })?;
+        if gated {
+            require_enabled(entry)?;
+        }
         let decl = entry.valid().ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
@@ -1202,6 +1267,15 @@ impl Agents {
             )
         })?;
         Ok((decl.clone(), program))
+    }
+
+    /// Refuses `kind` with `agent.kind_not_enabled` when it is declared by a package that is not enabled (decision
+    /// 0059). An undeclared kind passes: the call reports it as its own.
+    pub(crate) fn require_enabled_kind(&self, kind: &str) -> Result<(), AgentError> {
+        match Catalog::load(self.kind_packages(), self.profile_dir()).find(kind) {
+            Some(entry) => require_enabled(entry),
+            None => Ok(()),
+        }
     }
 
     /// The live writing session of a workspace, if any.
@@ -1367,6 +1441,12 @@ fn input_refusal(
     state: Option<ActivityState>,
     force: bool,
 ) -> Option<AgentError> {
+    if run.delivering {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!("session {session} is typing a queued prompt; try again once it is typed"),
+        ));
+    }
     if run.switching {
         return Some(AgentError::new(
             codes::AGENT_BUSY,
@@ -1528,6 +1608,27 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
+/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state.
+fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
+    if entry.enabled() {
+        return Ok(());
+    }
+    let state = serde_json::to_value(entry.package.state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    let package = entry.package.id.clone().unwrap_or_default();
+    let mut error = AgentError::new(
+        codes::AGENT_KIND_NOT_ENABLED,
+        format!(
+            "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
+            entry.id
+        ),
+    );
+    error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
+    Err(error)
+}
+
 /// The stored activity in wire form; values a newer build wrote read as `unknown`.
 fn activity_of(stored: &StoredActivity) -> Option<Activity> {
     let mut value = json!({
@@ -1566,6 +1667,13 @@ pub(crate) mod tests {
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
     pub(crate) fn service() -> (Agents, String, tempfile::TempDir) {
+        service_with(Arc::new(crate::BuiltInPackages))
+    }
+
+    /// [`service`], with kinds from `packages`.
+    pub(crate) fn service_with(
+        packages: Arc<dyn KindPackages>,
+    ) -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {
@@ -1604,6 +1712,7 @@ pub(crate) mod tests {
             profile_dir: profile.path().to_path_buf(),
             massorca_bin: PathBuf::from("massorca"),
             env_provider: None,
+            kind_packages: packages,
         });
         (agents, workspace.id, profile)
     }
@@ -1705,6 +1814,7 @@ pub(crate) mod tests {
             pending_switch: None,
             typed_since_report: false,
             switching,
+            delivering: false,
             account: None,
         };
         let idle = Some(ActivityState::Idle);
@@ -1743,6 +1853,7 @@ pub(crate) mod tests {
             }),
             typed_since_report: false,
             switching: false,
+            delivering: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -1831,6 +1942,7 @@ pub(crate) mod tests {
                 pending_switch: None,
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
                 account: None,
             },
         );

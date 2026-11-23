@@ -12,7 +12,7 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
         |  agents/1 (+ terminals/1 for attach)
  +---------------------------- massorca service ------------------------------+
  |  agent.* handlers -> Agents (core-agents)                                  |
- |     kinds: built-in JSON + <profile>/agents/kinds/*.json  (0050)           |
+ |     kinds: KindPackages + <profile>/agents/kinds/*.json  (0050, 0059)     |
  |     launch plan: program, args, env, hook files  -> TerminalManager (0051)  |
  |     status store: execution (from terminal) + activity (from hooks) (0052) |
  |     delegation: child workspace via Workspaces, merge via core-git (0055)  |
@@ -32,6 +32,45 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
   accounts/<kind>/<id>/   credential home per account (0059)
   runs/<session>/         generated hook settings for a run (0053)
 ```
+
+## Kind packages (decision 0059)
+
+The catalog (`catalog.rs`) is read again on every call from two sources, in this order:
+
+1. **Packages.** `AgentsConfig.kind_packages` is an `Arc<dyn KindPackages>` (`packages.rs`). Its
+   `kinds()` returns one `PackageKind { kind_id, package_id, version, state, decl }` per kind:
+   `state` is the protocol's `PackageState` (`available`, `enabled`, `disabled`), and `decl` is the
+   declaration's JSON text, or an error that names the package and the cause, never a path. The
+   default, `BuiltInPackages`, returns the four compiled-in declarations as `enabled` packages
+   `massorca.<kind>` at the crate version, for `core-agents`'s own tests. The service uses
+   `ExtensionKindPackages` (`crates/server/src/kind_packages.rs`), which reads the profile's
+   lockfile through `package_agent_kinds` on every load; an unreadable lockfile lists the built-ins
+   as `unknown` with a declaration error. A kind from a
+   `massorca.*` package has owner `core`; any other package's kind has owner `ext:<package id>`.
+   A declaration error, a declaration that does not parse, or one whose id is not the package's
+   `kind_id` is listed in `problems`, so the kind is listed and never started.
+2. **Profile files.** `<profile>/agents/kinds/*.json`, owner `user`, with no package: they count as
+   enabled. A package's kind always wins over a file that reuses its id, as a built-in did.
+
+`agent.kinds` reports each kind's `package: { state, id, version }`; a profile file's has no id or
+version.
+
+**Gating.** A kind whose package is not `enabled` is refused with `agent.kind_not_enabled`, data
+`{ kind, package, state }`, and a message that says to install or enable it in the Marketplace.
+The check runs right after the kind is found and before its declaration's problems and its
+program are checked, on `agent.start`, `agent.delegate` (and every other start through
+`Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.
+`agent.accounts.check`, `agent.accounts.remove`, and the vendor sign-out on removal or on a
+discarded sign-in keep working on a disabled kind.
+
+**Used kinds.** `used_kinds(&Store, profile_dir) -> Result<BTreeSet<String>, AgentError>` (public from core-agents)
+is every kind the profile has used, for the extension runtime's removal rules: the kinds of
+`agent_sessions`, `agent_accounts` (pending sign-ins included), `agent_account_history` and
+`bots` (the store query `used_agent_kinds`), and the directories under
+`<profile>/agents/accounts/` and `<profile>/agents/homes/` that are real directories, never links,
+named by a valid kind id. A store that cannot be read, or a kind directory that exists but cannot be
+listed, is an error (`internal`), so the caller retries instead of treating a used kind as unused; a
+directory that does not exist has no kinds.
 
 ## Kind declaration
 
@@ -136,7 +175,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
-Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
+Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
 `agent.prompt_invalid`, `agent.resume_unavailable`, `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
@@ -265,6 +304,39 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+## Prompt queue (decision 0084)
+
+A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
+`agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
+
+- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
+  returns the prompt it queued then.
+- `agent.queue.list {session}` returns `{session, items}`, head first.
+- `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
+  A prompt being sent is refused with `agent.busy`.
+
+A `QueuedPrompt` has `id`, `session`, `position` (from 1), `text`, `state` (`waiting`, `sending`, `failed`), `reason`
+and `created_at_ms` / `updated_at_ms`. The reason of a waiting prompt is `busy`, `asking`, `paused_stopped`,
+`paused_restarted` or `behind_failed`; the reason of a failed prompt is why its delivery failed. Constants:
+`QUEUE_REASON_*` in `massorca_protocol::methods::agents`.
+
+Refusals: `agent.queue_already_delivered` for a request id the session delivered recently (the last 100, decision 0084,
+D11); `agent.queue_unavailable` for a kind that declares no status mechanism (or is not declared), so it has no
+queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unknown prompt id; `agent.prompt_invalid` for
+a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
+session id; `agent.watch` streams do not carry queue items.
+
+Delivery: the head of a queue is typed when its agent turns `idle` or `done`, through the prompt guards (merging,
+switching, readiness, typed since the last report). One prompt goes per step, so the next waits for the next report. A
+queue holds while the agent asks the person something (reason `asking`), and `agent.queue.send_now` is refused then. A
+prompt that cannot be typed becomes `failed` with its reason and holds everything behind it; nothing retries, and
+`remove` or `send_now` clears it. A stop by the person pauses the waiting prompts (`paused_stopped`); a service restart
+pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `agent.prompt`, `agent.queue.send_now` or
+`agent.queue.resume` lifts the pauses; a resumed run does not deliver paused prompts by itself.
+`agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
+mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
+`agent.queue.resume {session}` returns the queue as it is after the lift.
 
 ## Delegation
 
