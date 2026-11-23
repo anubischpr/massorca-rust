@@ -1,12 +1,14 @@
-//! The Marketplace of a connected service: its agent kinds, as `agent.kinds` lists them. The service has no
-//! method for the other item kinds, so they are not listed, and nothing it offers can be changed from here yet.
+//! The Marketplace of a connected service: its agent kinds, as `agent.kinds` lists them, and its extension packages
+//! (decision 0062). Agent kinds stay as they are; extension items are added beside them.
 
 use std::collections::BTreeMap;
 
 use massorca_protocol::methods::agents::{AccountSummary, AgentKind, PackageState};
+use massorca_protocol::methods::extensions::ExtensionItem;
 
 use super::service_accounts::ServiceAccounts;
 
+use super::extension_items::{ExtensionIds, extension_items};
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
     Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
@@ -15,14 +17,30 @@ use super::types::{
 use crate::service::Refusal;
 
 /// The host every agent item is on: the service the desktop is connected to.
-const SERVICE_HOST: HostId = HostId(1);
+pub(super) const SERVICE_HOST: HostId = HostId(1);
 
-/// The Marketplace the service's agent kinds make up. It is empty until a connect reads the kinds.
+/// The Marketplace a connected service makes up. It is empty until a connect reads its lists.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServiceMarketplace {
     snapshot: MarketplaceSnapshot,
+    kinds: Vec<AgentKind>,
+    installed: Vec<ExtensionItem>,
+    catalogue: Vec<ExtensionItem>,
+    ids: ExtensionIds,
     /// The accounts of every kind, as the service lists them.
     accounts: ServiceAccounts,
+}
+
+impl ServiceMarketplace {
+    /// Builds the snapshot from the lists it holds: the agent items first, then the extension items.
+    fn rebuild(&mut self) {
+        let base = agent_snapshot(&self.kinds);
+        let kind_ids: Vec<String> = self.kinds.iter().map(|kind| kind.id.clone()).collect();
+        let extensions =
+            extension_items(&self.installed, &self.catalogue, &kind_ids, &mut self.ids);
+        let items = base.items.into_iter().chain(extensions).collect();
+        self.snapshot = MarketplaceSnapshot { items, ..base };
+    }
 }
 
 /// The Marketplace snapshot for the agent kinds a service lists, in the order it lists them.
@@ -76,6 +94,7 @@ fn agent_item(index: usize, kind: &AgentKind) -> MarketplaceItem {
         source_url: String::new(),
         previous_version: None,
         has_settings: false,
+        extension: None,
     }
 }
 
@@ -117,7 +136,14 @@ impl MarketplaceSource for ServiceMarketplace {
     }
 
     fn follow_agent_kinds(&mut self, kinds: &[AgentKind]) {
-        self.snapshot = agent_snapshot(kinds);
+        self.kinds = kinds.to_vec();
+        self.rebuild();
+    }
+
+    fn follow_extensions(&mut self, installed: &[ExtensionItem], catalogue: &[ExtensionItem]) {
+        self.installed = installed.to_vec();
+        self.catalogue = catalogue.to_vec();
+        self.rebuild();
     }
 
     fn set_enabled(&mut self, _: MarketplaceItemId, _: bool) -> Result<(), SourceError> {
@@ -286,6 +312,7 @@ mod tests {
             identity: None,
             active: true,
             projects: Vec::new(),
+            origin: massorca_protocol::methods::agents::AccountOrigin::Unknown,
         };
         source.follow_accounts(&BTreeMap::from([("claude".to_owned(), Ok(vec![summary]))]));
         source.follow_agent_kinds(&service_kinds());

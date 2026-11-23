@@ -86,7 +86,7 @@ fn a_started_child_uses_memory_and_is_listed_under_this_process() {
     });
     assert!(bytes > 0);
 
-    let table = processes();
+    let table = processes().processes;
     let entry = table
         .iter()
         .find(|entry| entry.pid == child.pid())
@@ -152,6 +152,61 @@ fn an_exited_child_is_unreadable() {
         memory_of(pid).is_none().then_some(())
     });
     let sample = sample_memory(&[pid]);
+    assert!(sample.processes.is_empty(), "{sample:?}");
+    assert_eq!(sample.unreadable, 1);
+}
+
+/// Only the pids still in the job are kept: a process outside it is dropped, and so is one that is gone.
+#[cfg(windows)]
+#[test]
+fn a_job_keeps_only_the_pids_that_are_still_its_members() {
+    use std::os::windows::io::AsRawHandle;
+
+    let job = win32job::Job::create_with_limit_info(
+        win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
+    )
+    .expect("a job");
+    let child = Sleeper::start();
+    job.assign_process(child.0.as_raw_handle() as isize)
+        .expect("the sleeper joins the job");
+
+    let kept = massorca_host_stats::job_still_holds(&job, &[std::process::id(), child.pid()]);
+    assert_eq!(kept, [child.pid()]);
+}
+
+/// The table says it is complete and lists this process: a short listing is never passed on as a whole one.
+#[test]
+fn the_process_table_is_complete_and_lists_this_process() {
+    let table = processes();
+    assert!(table.complete, "the process table was cut short");
+    assert!(
+        table
+            .processes
+            .iter()
+            .any(|entry| entry.pid == std::process::id()),
+        "this process is listed"
+    );
+}
+
+/// A listing that names another start time for this process is a reused pid: unreadable, never summed. The same
+/// listing, as it was taken, is read.
+#[cfg(unix)]
+#[test]
+fn a_listing_with_another_start_time_is_not_read() {
+    let own = std::process::id();
+    let listed = processes()
+        .processes
+        .into_iter()
+        .find(|entry| entry.pid == own)
+        .expect("this process is listed");
+    assert!(listed.start.is_some(), "{listed:?}");
+    let as_listed = massorca_host_stats::sample_listed(std::slice::from_ref(&listed), &[own]);
+    assert_eq!(as_listed.processes.len(), 1, "{as_listed:?}");
+    let reused = massorca_host_stats::ProcessInfo {
+        start: listed.start.map(|start| start.wrapping_add(1)),
+        ..listed
+    };
+    let sample = massorca_host_stats::sample_listed(std::slice::from_ref(&reused), &[own]);
     assert!(sample.processes.is_empty(), "{sample:?}");
     assert_eq!(sample.unreadable, 1);
 }

@@ -2,12 +2,19 @@
 //! Decision 0007 allows `unsafe` only in named platform modules such as this one.
 #![allow(unsafe_code)]
 
+use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ptr;
 
 use win32job::Job;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_MORE_DATA, GetLastError, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, GetLastError,
+    HANDLE, INVALID_HANDLE_VALUE, NO_ERROR, STILL_ACTIVE,
 };
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GetExtendedTcpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
+};
+use windows_sys::Win32::Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -20,7 +27,9 @@ use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-use crate::{METRIC, MemorySample, ProcessInfo, ProcessMemory};
+use crate::{
+    Listening, ListeningSocket, METRIC, MemorySample, ProcessInfo, ProcessMemory, ProcessTable,
+};
 
 /// Room for this many pids in the first job query; a larger job is queried again with the size it reports.
 const JOB_IDS: usize = 1024;
@@ -28,6 +37,8 @@ const JOB_IDS: usize = 1024;
 const JOB_LIST_HEADER: usize = 8;
 /// Queries before a job that keeps growing is given up on.
 const JOB_ATTEMPTS: usize = 4;
+/// Queries before a TCP owner table that keeps growing is given up on.
+const TABLE_ATTEMPTS: usize = 4;
 
 /// A handle this module opened, closed when dropped.
 struct Owned(HANDLE);
@@ -176,14 +187,17 @@ fn job_ids(job: &Job, capacity: usize) -> Option<Vec<u32>> {
     None
 }
 
-pub(crate) fn process_table() -> Vec<ProcessInfo> {
+pub(crate) fn process_table() -> ProcessTable {
     // SAFETY: the call takes plain values and returns a new snapshot handle or INVALID_HANDLE_VALUE.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE || snapshot.is_null() {
-        return Vec::new();
+        return ProcessTable {
+            processes: Vec::new(),
+            complete: false,
+        };
     }
     let snapshot = Owned(snapshot);
-    let mut table = Vec::new();
+    let mut processes = Vec::new();
     let mut entry = PROCESSENTRY32W {
         dwSize: u32::try_from(size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX),
         ..PROCESSENTRY32W::default()
@@ -191,11 +205,140 @@ pub(crate) fn process_table() -> Vec<ProcessInfo> {
     // SAFETY: `snapshot` is an open process snapshot and `entry` a writable PROCESSENTRY32W with `dwSize` set.
     let mut more = unsafe { Process32FirstW(snapshot.0, &raw mut entry) } != 0;
     while more {
-        table.push(info_of(&entry));
+        processes.push(info_of(&entry));
         // SAFETY: as above; the call overwrites `entry` with the next process.
         more = unsafe { Process32NextW(snapshot.0, &raw mut entry) } != 0;
     }
-    table
+    // The walk ends normally only when the snapshot has no more processes; any other failure leaves the table partial.
+    // SAFETY: reads this thread's last error code; no memory of ours is touched.
+    let complete = unsafe { GetLastError() } == ERROR_NO_MORE_FILES;
+    ProcessTable {
+        processes,
+        complete,
+    }
+}
+
+/// The pids that are still members of `job`: each is opened and checked on its own handle, so a pid reused since it was
+/// listed is not kept. A pid that has ended is not kept either.
+pub(crate) fn job_still_holds(job: &Job, pids: &[u32]) -> Vec<u32> {
+    pids.iter()
+        .copied()
+        .filter(|pid| open_running(*pid).is_some_and(|process| in_job(&process, job)))
+        .collect()
+}
+
+/// The TCP listeners of `pids`, IPv4 and IPv6, from the system's owner tables. A row's address and port are in network
+/// byte order. A listener names only its owner's pid, so the caller confirms that the owner still belongs to the
+/// terminal (`job_still_holds`) after this read. `None` when a table cannot be read.
+pub(crate) fn listening_sockets(_table: &[ProcessInfo], pids: &BTreeSet<u32>) -> Option<Listening> {
+    let v4 = owner_table(AF_INET)?;
+    let v6 = owner_table(AF_INET6)?;
+    let mut sockets = Vec::new();
+    for row in owner_rows::<MIB_TCPROW_OWNER_PID>(&v4) {
+        if pids.contains(&row.dwOwningPid) {
+            sockets.push(ListeningSocket {
+                pid: row.dwOwningPid,
+                address: IpAddr::V4(Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes())),
+                port: port_of(row.dwLocalPort),
+            });
+        }
+    }
+    for row in owner_rows::<MIB_TCP6ROW_OWNER_PID>(&v6) {
+        if pids.contains(&row.dwOwningPid) {
+            sockets.push(ListeningSocket {
+                pid: row.dwOwningPid,
+                address: IpAddr::V6(Ipv6Addr::from(row.ucLocalAddr)),
+                port: port_of(row.dwLocalPort),
+            });
+        }
+    }
+    Some(Listening {
+        sockets,
+        unreadable: BTreeSet::new(),
+    })
+}
+
+/// Rows of room added to an owner table's buffer beyond the size the system reports, so a table that gains a few
+/// listeners between the size query and the read still fits.
+const TABLE_SLACK_ROWS: usize = 16;
+
+/// The words of the buffer for an owner table the system reports as `size` bytes: none for the size query, otherwise
+/// the size plus room for `TABLE_SLACK_ROWS` rows of the larger family.
+fn table_words(size: u32) -> usize {
+    if size == 0 {
+        return 0;
+    }
+    let slack = TABLE_SLACK_ROWS * size_of::<MIB_TCP6ROW_OWNER_PID>();
+    usize::try_from(size)
+        .unwrap_or(usize::MAX)
+        .saturating_add(slack)
+        .div_ceil(size_of::<u64>())
+}
+
+/// The system's TCP owner table of one family, listing only LISTEN sockets with their owners' pids. It is read into
+/// words, so its rows are aligned for their u32 fields, and asked again with the size the system reports while it grows.
+/// Returns the buffer and the bytes the table fills. `None` when it cannot be read.
+fn owner_table(family: ADDRESS_FAMILY) -> Option<(Vec<u64>, usize)> {
+    let mut size = 0u32;
+    for _ in 0..TABLE_ATTEMPTS {
+        let words = table_words(size);
+        let mut buffer = vec![0u64; words];
+        let mut needed = u32::try_from(words * size_of::<u64>()).ok()?;
+        // The size query has no buffer to write into, so it passes a null pointer with a zero size.
+        let table: *mut core::ffi::c_void = if words == 0 {
+            ptr::null_mut()
+        } else {
+            buffer.as_mut_ptr().cast()
+        };
+        // SAFETY: `table` is null only with `needed` zero, so the call writes nothing; otherwise `buffer` holds `needed`
+        // writable bytes, aligned for the table's u32 fields, and the call writes at most `needed` bytes and sets
+        // `needed` to the size the table needs.
+        let status = unsafe {
+            GetExtendedTcpTable(
+                table,
+                &raw mut needed,
+                0,
+                u32::from(family),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        if status == NO_ERROR {
+            return Some((buffer, usize::try_from(needed).ok()?));
+        }
+        if status != ERROR_INSUFFICIENT_BUFFER {
+            return None;
+        }
+        size = needed;
+    }
+    None
+}
+
+/// The rows of an owner table: its entry count (a u32), then the rows. Only the bytes the call filled are read, and a
+/// count that claims more rows than fit is cut to those that fit. The rows hold only integers, so any bytes are a row.
+fn owner_rows<R>((buffer, filled): &(Vec<u64>, usize)) -> Vec<R> {
+    let header = size_of::<u32>();
+    let row = size_of::<R>();
+    let bytes = (*filled).min(buffer.len() * size_of::<u64>());
+    if bytes < header {
+        return Vec::new();
+    }
+    let base = buffer.as_ptr().cast::<u8>();
+    // SAFETY: the first `header` bytes of the buffer are initialized and filled by the call; the read needs no alignment.
+    let count = unsafe { ptr::read_unaligned(base.cast::<u32>()) };
+    let fit = (bytes - header) / row;
+    let count = usize::try_from(count).unwrap_or(usize::MAX).min(fit);
+    (0..count)
+        .map(|index| {
+            // SAFETY: row `index` lies within the `bytes` the call filled (`fit` rows fit); the read needs no alignment.
+            unsafe { ptr::read_unaligned(base.add(header + index * row).cast::<R>()) }
+        })
+        .collect()
+}
+
+/// A row's port: its low 16 bits hold the port in network byte order.
+fn port_of(field: u32) -> u16 {
+    u16::from_be((field & 0xFFFF) as u16)
 }
 
 fn info_of(entry: &PROCESSENTRY32W) -> ProcessInfo {
@@ -210,6 +353,7 @@ fn info_of(entry: &PROCESSENTRY32W) -> ProcessInfo {
         parent: (entry.th32ProcessID != 0).then_some(entry.th32ParentProcessID),
         name: String::from_utf16_lossy(&name[..len]),
         session: None,
+        start: None,
     }
 }
 
@@ -220,7 +364,22 @@ mod tests {
 
     use win32job::{ExtendedLimitInfo, Job};
 
-    use super::{job_ids, memory_in_job, resident_bytes};
+    use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCP6ROW_OWNER_PID;
+
+    use super::{TABLE_SLACK_ROWS, job_ids, memory_in_job, resident_bytes, table_words};
+
+    #[test]
+    fn an_owner_table_buffer_has_room_for_rows_added_after_the_size_query() {
+        assert_eq!(table_words(0), 0, "the size query takes no buffer");
+        for size in [24u32, 4 + 24 * 3, 4 + 56 * 5] {
+            let bytes = table_words(size) * size_of::<u64>();
+            let needed = size as usize + TABLE_SLACK_ROWS * size_of::<MIB_TCP6ROW_OWNER_PID>();
+            assert!(
+                bytes >= needed,
+                "{size} bytes need room for {needed}, got {bytes}"
+            );
+        }
+    }
 
     fn job() -> Job {
         Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())

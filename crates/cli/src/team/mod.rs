@@ -1,4 +1,4 @@
-//! `massorca team ...`: teams, their bots and projects, and their Boards (decision 0072).
+//! `massorca team ...`: teams, their bots, projects and memory, and their Boards (decision 0072).
 
 mod text;
 
@@ -14,7 +14,8 @@ use crate::connect::connect;
 use crate::error::CliError;
 use crate::output::Output;
 use massorca_protocol::methods::teams::{
-    BotUpdateParams, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamUpdateParams,
+    BotUpdateParams, TeamMemoryAddParams, TeamMemoryListParams, TeamMemoryRemoveParams,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamUpdateParams,
 };
 
 #[derive(Debug, Subcommand)]
@@ -47,6 +48,11 @@ pub enum TeamCommand {
     Project {
         #[command(subcommand)]
         command: TeamProjectCommand,
+    },
+    /// Lists, adds and removes a team's memory lines, in the team scope or in one bot's.
+    Memory {
+        #[command(subcommand)]
+        command: TeamMemoryCommand,
     },
     /// Shows a team's Board: its tasks in four columns, or only one project's.
     Board {
@@ -165,6 +171,41 @@ pub struct TeamProjectAddArgs {
     pub goal: Option<String>,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum TeamMemoryCommand {
+    /// Lists a team's memory lines, newest first: all of the team's, or only one bot's with --bot.
+    List {
+        /// Team id or name.
+        team: String,
+        /// Only this bot's lines: id or name within the team.
+        #[arg(long, value_name = "BOT")]
+        bot: Option<String>,
+    },
+    /// Adds a line of at most 500 characters: to the team's memory, or to one bot's with --bot.
+    Add(TeamMemoryAddArgs),
+    /// Removes a memory line by its id.
+    Rm {
+        /// Team id or name.
+        team: String,
+        /// Line id.
+        line: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct TeamMemoryAddArgs {
+    /// Team id or name.
+    pub team: String,
+    /// The line, at most 500 characters.
+    pub text: String,
+    /// The bot whose memory gets the line: id or name within the team.
+    #[arg(long, value_name = "BOT")]
+    pub bot: Option<String>,
+    /// The task that wrote the line, by id; the line is then a task line.
+    #[arg(long, value_name = "TASK")]
+    pub task: Option<String>,
+}
+
 #[derive(Debug, Args)]
 pub struct TeamUpdateArgs {
     /// Team id or name.
@@ -273,6 +314,7 @@ pub async fn execute(
         }
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
+        TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
         TeamCommand::Board { team, project } => {
             let board = client.team_board(&BoardParams { team, project }).await?;
             output.success(&board, &text::board_lines(&board));
@@ -382,6 +424,44 @@ async fn run_project(
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "added")]);
+        }
+    }
+    Ok(())
+}
+
+async fn run_memory(
+    client: &Client,
+    command: TeamMemoryCommand,
+    output: Output,
+) -> Result<(), CliError> {
+    match command {
+        TeamMemoryCommand::List { team, bot } => {
+            let list = client
+                .team_memory_list(&TeamMemoryListParams { team, bot })
+                .await?;
+            let lines = if list.lines.is_empty() {
+                vec!["no memory".to_owned()]
+            } else {
+                text::memory_table(&list.lines)
+            };
+            output.success(&list, &lines);
+        }
+        TeamMemoryCommand::Add(args) => {
+            let line = client
+                .team_memory_add(&TeamMemoryAddParams {
+                    team: args.team,
+                    bot: args.bot,
+                    text: args.text,
+                    task: args.task,
+                })
+                .await?;
+            output.success(&line, &[text::memory_line(&line, "added")]);
+        }
+        TeamMemoryCommand::Rm { team, line } => {
+            let removed = client
+                .team_memory_remove(&TeamMemoryRemoveParams { team, line })
+                .await?;
+            output.success(&removed, &[text::memory_line(&removed, "removed")]);
         }
     }
     Ok(())
