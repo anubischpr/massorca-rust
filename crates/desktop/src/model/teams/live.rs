@@ -84,6 +84,7 @@ fn live_project(ids: &TeamIds, record: &ProjectRecord) -> Option<Project> {
         name: record.project.name.clone(),
         brief: record.project.brief.clone(),
         link: None,
+        link_saved: false,
         tasks: live_tasks(ids, &record.board),
     })
 }
@@ -386,6 +387,30 @@ mod tests {
             .map(|task| task.title.as_str())
             .collect();
         assert_eq!(titles, ["Draft the page"]);
+    }
+
+    #[test]
+    fn a_project_read_from_the_service_keeps_no_link() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].projects = vec![ProjectRecord {
+            project: WireProject {
+                id: "p1".into(),
+                team_id: "t1".into(),
+                name: "Checkout".into(),
+                goal: String::new(),
+                brief: String::new(),
+                created_at_ms: 1,
+            },
+            board: Board {
+                team_id: "t1".into(),
+                project_id: Some("p1".into()),
+                columns: Vec::new(),
+            },
+        }];
+        let view = live_teams(&numbered(&records), "This PC", &records, &[]);
+        let project = &view.teams()[0].projects[0];
+        assert!(!project.link_saved);
+        assert_eq!(project.link, None);
     }
 
     fn wire_bot(id: &str, name: &str, kind: &str) -> WireBot {

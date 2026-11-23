@@ -199,6 +199,7 @@ fn desarrollo() -> Team {
             brief: "How a new bot picks up a task from the Board, and where it reports back."
                 .into(),
             link: None,
+            link_saved: true,
             tasks: vec![task(
                 7,
                 "Draft the first-run checklist",

@@ -125,6 +125,8 @@ pub struct Project {
     pub brief: String,
     /// The Workspaces project the Board links to (D-WS-31), by name.
     pub link: Option<String>,
+    /// Whether a link can be chosen here. The service keeps no link, so a project it reads has none.
+    pub link_saved: bool,
     pub tasks: Vec<Task>,
 }
 
