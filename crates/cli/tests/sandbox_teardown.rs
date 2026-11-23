@@ -13,8 +13,8 @@ use harness::{Sandbox, eventually};
 fn a_service_still_starting_when_the_sandbox_drops_does_not_outlive_it() {
     let sandbox = Sandbox::new();
     let profile = format!("teardown-{}", std::process::id());
+    sandbox.prepare_profile(&profile);
     let dir = sandbox.profile_dir(&profile);
-    fs::create_dir_all(&dir).expect("the profile directory");
     // Plays a predecessor that is still draining: an autostarted service waits for this lock without answering.
     let lock_path = dir.join("service.lock");
     let gate = OpenOptions::new()

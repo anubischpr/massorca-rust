@@ -157,16 +157,21 @@ mod tests {
     }
 
     #[test]
-    fn an_observed_open_reports_each_part_in_order_and_only_the_file_and_wal_once_migrated() {
+    fn an_observed_open_reports_each_part_in_order_and_only_the_file_and_wal_once_created() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
-        let steps = crate::migrations::MIGRATIONS.len();
-        let mut expected = vec!["store file", "store migration lock"];
-        expected.extend(std::iter::repeat_n("store schema step", steps));
-        expected.push("store wal");
-        assert_eq!(parts, expected);
+        assert_eq!(
+            parts,
+            [
+                "store file",
+                "store migration lock",
+                "store schema",
+                "store wal"
+            ],
+            "a new database is built in one step"
+        );
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
         assert_eq!(parts, ["store file", "store wal"]);

@@ -21,9 +21,10 @@ use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED,
-    TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED,
-    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_EXTENSION_DISABLED,
+    TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED,
+    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -41,6 +42,7 @@ use tokio::time::sleep;
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
+use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
@@ -80,6 +82,8 @@ pub(crate) enum Command {
     Terminal(TerminalCommand),
     /// A Bot Teams write, answered on its oneshot.
     Team(TeamCommand),
+    /// A Marketplace extension call, answered on its oneshot.
+    Extension(ExtensionCommand),
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
@@ -407,6 +411,7 @@ impl ServiceBridge {
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
+            extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
         };
@@ -462,6 +467,8 @@ struct Link {
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
     team_reads: Arc<Sequence>,
+    /// Numbers the extension reads across the connections of this bridge.
+    extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
     secrets_order: Arc<SecretsFreshness>,
     /// Orders the account reads, per kind, across the connections of this bridge.
@@ -606,6 +613,8 @@ impl Link {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
         self.emit(StoreUpdate::AgentKindsResync(kinds));
+        let read_extensions = extensions::read(client, &self.extension_reads).await?;
+        self.emit(StoreUpdate::Extensions(read_extensions));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -642,6 +651,14 @@ impl Link {
                             }
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                            }
+                            Some(Command::Extension(command)) => {
+                                extensions::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.extension_reads,
+                                );
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -726,6 +743,13 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
+            // The events carry only the package id, so both lists are read again (decision 0062).
+            TOPIC_EXTENSION_INSTALLED
+            | TOPIC_EXTENSION_ENABLED
+            | TOPIC_EXTENSION_DISABLED
+            | TOPIC_EXTENSION_REMOVED => extensions::read(client, &self.extension_reads)
+                .await
+                .map(StoreUpdate::Extensions),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             TOPIC_AGENT_CHANGED => client
@@ -928,6 +952,7 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
+        Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }

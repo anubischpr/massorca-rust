@@ -1,6 +1,8 @@
 //! The plain data of the Marketplace: catalogue items, the hosts they run on and the agent
 //! accounts they use. Only the sample source fills these with placeholder values.
 
+use massorca_protocol::methods::extensions::ExtensionItem;
+
 /// A catalogue item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MarketplaceItemId(pub u32);
@@ -138,6 +140,8 @@ pub struct MarketplaceItem {
     /// The version before this one, when the item was updated.
     pub previous_version: Option<String>,
     pub has_settings: bool,
+    /// The extension package behind the item, as the service lists it (decision 0062); sample items have none.
+    pub extension: Option<Box<ExtensionItem>>,
 }
 
 impl MarketplaceItem {
