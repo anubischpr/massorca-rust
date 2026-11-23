@@ -636,3 +636,76 @@ fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_pa
         attach_call(&mut rig._script).expect("the agent's terminal is attached");
     assert_eq!(attach.terminal, terminal);
 }
+
+fn claude_with_modes() -> AgentKind {
+    use massorca_protocol::methods::agents::PermissionMode;
+    let mode = |id: &str, label: &str, bypass: bool| PermissionMode {
+        id: id.into(),
+        label: label.into(),
+        description: None,
+        bypass,
+        live_switch: false,
+        may_fall_back: false,
+    };
+    let mut kind = agent_kind("claude", "Claude", PackageState::Enabled);
+    kind.permission_modes = vec![
+        mode("plan", "Plan", false),
+        mode("bypassPermissions", "Bypass permissions", true),
+    ];
+    kind.default_permission_mode = Some("plan".into());
+    kind
+}
+
+#[gpui::test]
+fn the_mode_chip_starts_on_the_clis_default_and_sends_no_mode(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    let modes = composer.read_with(cx, |composer, _| {
+        composer
+            .access_modes()
+            .iter()
+            .map(|mode| (mode.name.to_string(), mode.bypass))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        modes,
+        [
+            ("The CLI's default (Plan)".to_owned(), false),
+            ("Plan".to_owned(), false),
+            ("Bypass permissions".to_owned(), true),
+        ]
+    );
+    draw(cx);
+    assert!(cx.debug_bounds("composer-access").is_some());
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode, None);
+}
+
+#[gpui::test]
+fn a_picked_mode_is_sent_with_the_start_and_stays_across_redraws(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(cx, vec![claude_with_modes()]);
+    let composer = composer_of(&rig, cx);
+    composer.update(cx, |composer, cx| composer.set_access(2, cx));
+    draw(cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, _| composer.access_index()),
+        2
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, _reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.permission_mode.as_deref(), Some("bypassPermissions"));
+}
+
+#[gpui::test]
+fn a_kind_without_modes_shows_no_mode_chip(cx: &mut TestAppContext) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let composer = composer_of(&rig, cx);
+    assert!(composer.read_with(cx, |composer, _| composer.access_modes().is_empty()));
+    assert!(cx.debug_bounds("composer-access").is_none());
+}
