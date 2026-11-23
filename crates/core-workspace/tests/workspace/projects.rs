@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::ProjectKind;
 
-use crate::fixture::{Fixture, canonical, expect_code, project_add, text};
+use crate::fixture::{Fixture, branch_exists, canonical, expect_code, project_add, text};
 
 #[test]
 fn a_path_inside_a_repository_registers_the_toplevel_as_a_git_project() {
@@ -219,10 +219,10 @@ fn removing_a_project_never_deletes_its_files() {
 
     let removed = fx
         .workspaces
-        .remove_project(&project.id)
+        .remove_project(&project.id, false)
         .expect("remove project");
 
-    assert_eq!(removed.id, project.id);
+    assert_eq!(removed.project.id, project.id);
     assert!(fx.path("notes").join("notes.txt").exists());
     assert!(fx.workspaces.list_projects().expect("list").is_empty());
 }
@@ -234,13 +234,15 @@ fn a_project_with_workspaces_is_refused_until_they_are_gone() {
     fx.create(&project.name, "wip");
 
     expect_code(
-        fx.workspaces.remove_project(&project.id),
+        fx.workspaces
+            .remove_project(&project.id, false)
+            .map(|removed| removed.project),
         codes::PROJECT_HAS_WORKSPACES,
     );
 
     fx.remove("wip");
     fx.workspaces
-        .remove_project(&project.id)
+        .remove_project(&project.id, false)
         .expect("remove project once its workspaces are gone");
     assert!(fx.repo().join("README.md").exists());
 }
@@ -250,7 +252,9 @@ fn removing_an_unknown_project_is_not_found() {
     let fx = Fixture::new();
 
     expect_code(
-        fx.workspaces.remove_project("no-such-project"),
+        fx.workspaces
+            .remove_project("no-such-project", false)
+            .map(|removed| removed.project),
         codes::PROJECT_NOT_FOUND,
     );
 }
@@ -319,4 +323,84 @@ fn a_default_root_that_is_not_absolute_is_refused_when_a_project_would_take_it()
         codes::REQUEST_INVALID_PARAMS,
     );
     assert!(fx.workspaces.list_projects().expect("list").is_empty());
+}
+
+#[test]
+fn forgetting_a_git_project_drops_its_rows_and_keeps_the_worktree_and_its_branch() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let created = fx.create(&project.name, "wip");
+    let branch = created.branch.clone().expect("worktree branch");
+
+    expect_code(
+        fx.workspaces
+            .remove_project(&project.id, false)
+            .map(|removed| removed.project),
+        codes::PROJECT_HAS_WORKSPACES,
+    );
+    let removed = fx
+        .workspaces
+        .remove_project(&project.id, true)
+        .expect("forget the project and its workspaces");
+
+    assert_eq!(removed.project.id, project.id);
+    assert_eq!(removed.workspaces, vec![created.id.clone()]);
+    assert!(fx.workspaces.list_projects().expect("list").is_empty());
+    assert!(
+        fx.workspaces
+            .list_workspaces(None)
+            .expect("list")
+            .is_empty()
+    );
+    assert!(
+        Path::new(&created.path).is_dir(),
+        "the worktree directory stays"
+    );
+    assert!(branch_exists(&fx.repo(), &branch), "the branch stays");
+    assert!(fx.repo().join("README.md").exists());
+}
+
+#[test]
+fn forgetting_a_folder_project_drops_its_rows_and_keeps_the_folder() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("notes");
+    let created = fx.create(&project.name, "main");
+
+    let removed = fx
+        .workspaces
+        .remove_project(&project.id, true)
+        .expect("forget the project and its workspaces");
+
+    assert_eq!(removed.workspaces, vec![created.id.clone()]);
+    assert!(
+        fx.workspaces
+            .list_workspaces(None)
+            .expect("list")
+            .is_empty()
+    );
+    assert!(fx.path("notes").join("notes.txt").exists());
+    assert!(
+        Path::new(&created.path).is_dir(),
+        "the folder workspace stays"
+    );
+}
+
+#[test]
+fn a_failed_forget_keeps_the_project_and_every_workspace_row() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let created = fx.create(&project.name, "wip");
+
+    fx.fail_workspace_deletes();
+    assert!(fx.workspaces.remove_project(&project.id, true).is_err());
+    fx.allow_workspace_deletes();
+
+    assert_eq!(fx.workspaces.list_projects().expect("list").len(), 1);
+    assert_eq!(
+        fx.workspaces
+            .show_workspace(&created.id)
+            .expect("row kept")
+            .id,
+        created.id
+    );
 }
