@@ -34,7 +34,10 @@ impl Workspaces {
             }
         }
         let project = self.resolve_project(&params.project)?;
-        names::workspace_name(&params.name)?;
+        let params = WorkspaceCreateParams {
+            name: names::clean_workspace_name(&params.name)?,
+            ..params
+        };
         if self
             .store
             .find_workspace_by_name(&project.id, &params.name)?
