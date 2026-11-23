@@ -13,8 +13,9 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentPromptParams, AgentSession,
-    AgentStartParams, BringBackResult, PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentModeSet, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, BringBackResult,
+    PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -117,8 +118,12 @@ pub(crate) enum Command {
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
     AgentResume {
-        session: String,
+        params: AgentResumeParams,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    AgentSetMode {
+        params: AgentSetModeParams,
+        reply: oneshot::Sender<Result<AgentModeSet, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -899,8 +904,11 @@ fn spawn_call(
         Command::AgentStop { session, reply } => {
             agents::spawn_stop(&client, session, reply, updates);
         }
-        Command::AgentResume { session, reply } => {
-            agents::spawn_resume(&client, session, reply, updates);
+        Command::AgentResume { params, reply } => {
+            agents::spawn_resume(&client, params, reply, updates);
+        }
+        Command::AgentSetMode { params, reply } => {
+            agents::spawn_set_mode(&client, params, reply, updates);
         }
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
@@ -975,6 +983,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentSetMode { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Delegate { reply, .. } => {
