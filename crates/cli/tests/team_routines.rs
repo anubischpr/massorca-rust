@@ -177,6 +177,7 @@ fn a_routine_whose_bot_was_removed_records_why_and_starts_no_agent() {
         &["team", "routine", "run", "alpha", "morning", "--now"],
     );
     assert!(run["task_id"].is_null(), "{run}");
+    assert_eq!(run["error_code"], "bot.not_found", "{run}");
     assert!(
         run["error"]
             .as_str()
@@ -325,5 +326,6 @@ fn the_routine_list_and_runs_print_one_row_each() {
             .success(),
     );
     assert!(runs.contains("bot removed"), "{runs}");
+    assert!(runs.contains("bot.not_found"), "{runs}");
     assert_eq!(runs.lines().count(), 1, "one run, one row: {runs}");
 }

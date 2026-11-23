@@ -278,6 +278,78 @@ fn a_run_records_the_code_and_message_of_its_error_once() {
 }
 
 #[test]
+fn a_claim_records_its_task_and_its_run_together_and_a_lost_claim_records_neither() {
+    let store = store();
+    let team = team(&store);
+    let bot = bot(&store, &team.id);
+    let routine = routine(&team.id, Some(&bot.id), Some(100));
+    store.insert_routine(&routine).unwrap();
+    let made = task(&team.id, &bot.id);
+    let mut claimed = run(&routine.id, 100);
+    claimed.task_id = Some(made.id.clone());
+
+    assert!(
+        store
+            .claim_routine_run(100, Some(200), &claimed, Some(&made))
+            .unwrap()
+    );
+    assert!(store.get_task(&made.id).unwrap().is_some());
+    let saved = store.get_routine_run(&claimed.id).unwrap().unwrap();
+    assert_eq!(saved.task_id.as_deref(), Some(made.id.as_str()));
+    assert_eq!(saved.settled_at, None);
+
+    let lost_task = task(&team.id, &bot.id);
+    let mut lost = run(&routine.id, 100);
+    lost.task_id = Some(lost_task.id.clone());
+    assert!(
+        !store
+            .claim_routine_run(100, Some(300), &lost, Some(&lost_task))
+            .unwrap()
+    );
+    assert!(store.get_task(&lost_task.id).unwrap().is_none());
+    assert!(store.get_routine_run(&lost.id).unwrap().is_none());
+}
+
+#[test]
+fn only_runs_pending_from_before_a_start_are_marked_interrupted() {
+    let store = store();
+    let team = team(&store);
+    let routine = routine(&team.id, None, None);
+    store.insert_routine(&routine).unwrap();
+    let before = run(&routine.id, 100);
+    let mut settled = run(&routine.id, 110);
+    settled.settled_at = Some(120);
+    let after = run(&routine.id, 500);
+    for row in [&before, &settled, &after] {
+        store.insert_routine_run(row, None).unwrap();
+    }
+
+    let marked = store
+        .interrupt_pending_routine_runs(400, "routine.run_interrupted", "stopped", 450)
+        .unwrap();
+
+    assert_eq!(marked, 1);
+    let interrupted = store.get_routine_run(&before.id).unwrap().unwrap();
+    assert_eq!(
+        interrupted.error_code.as_deref(),
+        Some("routine.run_interrupted")
+    );
+    assert_eq!(interrupted.settled_at, Some(450));
+    assert_eq!(
+        store.get_routine_run(&settled.id).unwrap().unwrap().error,
+        None
+    );
+    assert_eq!(
+        store
+            .get_routine_run(&after.id)
+            .unwrap()
+            .unwrap()
+            .settled_at,
+        None
+    );
+}
+
+#[test]
 fn the_store_refuses_an_unknown_cadence_and_a_month_day_outside_one_to_twenty_eight() {
     let store = store();
     let team = team(&store);

@@ -231,10 +231,13 @@ fn claim(store: &Store, routine: TeamRoutineRow, now: i64) -> Result<Option<Clai
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use massorca_core_store::{BotRow, Store, TeamRoutineRow, TeamRoutineRunRow, TeamRow, new_id};
     use massorca_protocol::codes;
 
-    use super::tick;
+    use super::{interrupt_pending, tick};
+    use crate::features::teams::routine_run::INTERRUPTED;
 
     /// A team with one bot and one daily 09:00 routine in `zone`, next due at `next_run_at`.
     fn store_with_routine(zone: &str, next_run_at: Option<i64>) -> (Store, String) {
@@ -360,5 +363,66 @@ mod tests {
             None
         );
         assert!(check(&store, CHECK_AT).is_empty());
+    }
+
+    #[test]
+    fn a_fault_between_claim_and_start_leaves_an_interrupted_run_and_the_next_occurrence_still_fires()
+     {
+        let (store, routine_id) = store_with_routine("Europe/Madrid", Some(FIRST_MISSED));
+
+        // The service dies after the claim committed and before the start recorded anything.
+        let crashed = catch_unwind(AssertUnwindSafe(|| {
+            tick(&store, CHECK_AT, &mut |_run, _grant, _changes| {
+                panic!("the service stops between the claim and the start")
+            })
+        }));
+        assert!(crashed.is_err());
+        let pending = runs(&store, &routine_id);
+        assert_eq!(pending.len(), 1);
+        let task_id = pending[0]
+            .task_id
+            .clone()
+            .expect("the claim stored the task");
+        assert!(store.get_task(&task_id).unwrap().is_some());
+
+        // The next service start marks it interrupted and does not retry it.
+        assert_eq!(
+            interrupt_pending(&store, CHECK_AT + 1, CHECK_AT + 2).unwrap(),
+            1
+        );
+        assert!(check(&store, CHECK_AT + 3).is_empty());
+        let interrupted = &runs(&store, &routine_id)[0];
+        assert_eq!(
+            interrupted.error_code.as_deref(),
+            Some(codes::TEAM_ROUTINE_RUN_INTERRUPTED)
+        );
+        assert_eq!(interrupted.error.as_deref(), Some(INTERRUPTED));
+        assert_eq!(interrupted.task_id.as_deref(), Some(task_id.as_str()));
+
+        let started = check(&store, NEXT);
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].scheduled_for, NEXT);
+        assert_eq!(runs(&store, &routine_id).len(), 2);
+    }
+
+    #[test]
+    fn a_routine_whose_bot_was_removed_records_the_code_and_makes_no_task() {
+        let (store, routine_id) = store_with_routine("Europe/Madrid", Some(FIRST_MISSED));
+        let bot_id = store
+            .get_routine(&routine_id)
+            .unwrap()
+            .unwrap()
+            .bot_id
+            .unwrap();
+        store.delete_bot(&bot_id).unwrap();
+
+        check(&store, CHECK_AT);
+
+        let run = &runs(&store, &routine_id)[0];
+        assert_eq!(run.task_id, None);
+        assert_eq!(run.error_code.as_deref(), Some(codes::BOT_NOT_FOUND));
+        assert!(run.settled_at.is_some());
+        // A settled run is never marked interrupted.
+        assert_eq!(interrupt_pending(&store, NEXT, NEXT).unwrap(), 0);
     }
 }

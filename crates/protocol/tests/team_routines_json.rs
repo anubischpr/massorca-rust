@@ -169,3 +169,21 @@ fn a_run_has_the_documented_shape() {
         })
     );
 }
+
+#[test]
+fn an_interrupted_run_carries_its_error_code() {
+    let run: RoutineRun = serde_json::from_value(json!({
+        "id": "run1",
+        "routine_id": "r1",
+        "scheduled_for_ms": 100,
+        "task_id": "task1",
+        "error": "the service stopped before this run started",
+        "error_code": "team.routine_run_interrupted",
+        "created_at_ms": 100
+    }))
+    .unwrap();
+    assert_eq!(
+        run.error_code.as_deref(),
+        Some("team.routine_run_interrupted")
+    );
+}

@@ -167,7 +167,7 @@ pub fn routine_table(routines: &[Routine]) -> Vec<String> {
         .collect()
 }
 
-/// One line per run, newest first: the occurrence it stands for, its task, its error and its id.
+/// One line per run, newest first: the occurrence it stands for, its task, its error with its code, and its id.
 pub fn run_table(runs: &[RoutineRun]) -> Vec<String> {
     runs.iter()
         .map(|run| {
@@ -175,15 +175,24 @@ pub fn run_table(runs: &[RoutineRun]) -> Vec<String> {
                 "{}\t{}\t{}\t{}",
                 run.scheduled_for_ms,
                 run.task_id.as_deref().unwrap_or("-"),
-                run.error.as_deref().unwrap_or("-"),
+                run_error(run).unwrap_or_else(|| "-".to_owned()),
                 run.id
             )
         })
         .collect()
 }
 
+/// `[bot.not_found] bot removed: ...`, or the message alone from a host that sends no code.
+fn run_error(run: &RoutineRun) -> Option<String> {
+    let message = run.error.as_deref()?;
+    Some(match run.error_code.as_deref() {
+        Some(code) => format!("[{code}] {message}"),
+        None => message.to_owned(),
+    })
+}
+
 pub fn run_line(run: &RoutineRun) -> String {
-    let outcome = match (&run.task_id, &run.error) {
+    let outcome = match (&run.task_id, run_error(run)) {
         (Some(task), None) => format!("task {task}"),
         (Some(task), Some(error)) => format!("task {task} did not start: {error}"),
         (None, Some(error)) => format!("not started: {error}"),
