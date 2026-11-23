@@ -20,7 +20,7 @@ pub struct RemovedProject {
 }
 
 impl Workspaces {
-    /// Registers a git repository (at its toplevel) or a folder. Without `kind`, a directory
+    /// Registers a git repository (at its main worktree) or a folder. Without `kind`, a directory
     /// inside a repository is a git project and any other directory is a folder.
     pub fn add_project(&self, params: ProjectAddParams) -> Result<Project, DomainError> {
         let _guard = self.lock_mutations();
@@ -155,9 +155,22 @@ impl Workspaces {
         }
     }
 
-    /// The canonical toplevel of the repository containing `dir`, or `None` outside one.
+    /// The canonical main worktree of the repository containing `dir`, or `None` outside one. A linked
+    /// worktree stands for its main repository, so it is never registered as a project of its own.
     fn repository_root(&self, dir: &Path) -> Result<Option<PathBuf>, DomainError> {
-        Ok(self.git.toplevel(dir)?.map(|top| paths::canonical(&top)))
+        if self.git.toplevel(dir)?.is_none() {
+            return Ok(None);
+        }
+        match self.git.main_worktree(dir)? {
+            Some(main) => Ok(Some(paths::canonical(&main))),
+            None => Err(DomainError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!(
+                    "{} is a linked worktree of a bare repository, which has no main worktree to register",
+                    dir.display()
+                ),
+            )),
+        }
     }
 }
 

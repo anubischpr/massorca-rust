@@ -1,5 +1,6 @@
-//! Repository queries: the top of a work tree and whether it has changes.
+//! Repository queries: the top of a work tree, the main worktree, and whether it has changes.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::error::GitError;
@@ -24,6 +25,14 @@ impl WorktreeChanges {
     }
 }
 
+/// Whether two paths name the same directory, comparing resolved paths when both exist.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (dunce::canonicalize(a), dunce::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 impl Git {
     /// The top of the work tree containing `dir`, or `None` when `dir` is outside every repository.
     pub fn toplevel(&self, dir: &Path) -> Result<Option<PathBuf>, GitError> {
@@ -36,6 +45,34 @@ impl Git {
         captured.require_success()?;
         let line = captured.text()?.trim_end_matches(['\r', '\n']);
         Ok(Some(path_from_git(line)))
+    }
+
+    /// The main worktree of the repository containing `dir`: `dir`'s own top in a main worktree, and the main
+    /// worktree's top from a linked one. `None` outside every repository, and for a linked worktree of a bare
+    /// repository, which has no main worktree.
+    pub fn main_worktree(&self, dir: &Path) -> Result<Option<PathBuf>, GitError> {
+        let captured = self.run(Some(dir), ["rev-parse", "--git-dir", "--git-common-dir"])?;
+        if !captured.succeeded() && captured.stderr_contains("not a git repository") {
+            return Ok(None);
+        }
+        captured.require_success()?;
+        let mut lines = captured.text()?.lines();
+        let (Some(git_dir), Some(common_dir), None) = (lines.next(), lines.next(), lines.next())
+        else {
+            return Err(captured.invalid_output("expected the git dir and the common dir"));
+        };
+        let git_dir = dir.join(git_dir);
+        let common_dir = dir.join(common_dir);
+        if same_dir(&git_dir, &common_dir) {
+            return self.toplevel(dir);
+        }
+        // A linked worktree's common dir is the main worktree's `.git`; a bare repository's is not named `.git`.
+        if common_dir.file_name() != Some(OsStr::new(".git")) {
+            return Ok(None);
+        }
+        Ok(common_dir
+            .parent()
+            .map(|parent| dunce::simplified(parent).to_path_buf()))
     }
 
     /// Whether the work tree containing `dir` has staged, unstaged or untracked changes.
