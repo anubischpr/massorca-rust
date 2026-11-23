@@ -1,7 +1,7 @@
 //! The extension service of one profile: review, install, enable, disable and remove. Every change is serialised by
 //! one lock, and `lock.json` is committed last, so a failed change leaves nothing registered.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -14,6 +14,7 @@ use massorca_ext_package::manifest::agent::{CliOs, is_vendor_program};
 use massorca_ext_package::manifest::{self, Manifest};
 use massorca_profile::Profile;
 
+use crate::agents::catalogue_agent_kinds;
 use crate::catalogue;
 use crate::error::Error;
 use crate::hooks::Hooks;
@@ -186,7 +187,7 @@ impl Extensions {
             let mut lockfile = self.read_lockfile()?;
             let displaced = displaced(&lockfile, &staged.manifest.id, staged.builtin)?;
             self.check_kind_conflicts(&lockfile, &staged.manifest, staged.builtin)?;
-            let entry = staged.entry(cli);
+            let entry = staged.entry(cli, false);
             lockfile.packages.retain(|package| package.id != entry.id);
             lockfile.packages.push(entry.clone());
             lockfile.write(&self.layout.lock_path())?;
@@ -206,6 +207,74 @@ impl Extensions {
                 self.remove_unpacked(&staged.manifest.id, &staged.dir);
                 Err(error)
             }
+        }
+    }
+
+    /// Adopts the built-in agent packages that declare one of `used_kinds`, once per profile (decision 0063). Each is
+    /// registered enabled, with no vendor command, no program lookup and no consent: the build vouches for it. One
+    /// lockfile write records them and the run, so a later call changes nothing. Returns the adopted package ids in
+    /// catalogue order.
+    pub fn adopt_builtin_agents(
+        &self,
+        used_kinds: &BTreeSet<String>,
+    ) -> Result<Vec<String>, Error> {
+        let _changes = self.lock_changes();
+        let mut lockfile = self.read_lockfile()?;
+        if lockfile.has_migration(BUILTIN_AGENTS_MIGRATION) {
+            return Ok(Vec::new());
+        }
+        let mut staged: Vec<Staged> = Vec::new();
+        for id in adoption_ids(used_kinds, &lockfile) {
+            match self.stage_built_in(&lockfile, &id) {
+                Ok(next) => staged.push(next),
+                Err(error) => {
+                    self.remove_staged(&staged);
+                    return Err(error);
+                }
+            }
+        }
+        let entries: Vec<LockEntry> = staged
+            .iter()
+            .map(|next| next.entry(Vec::new(), true))
+            .collect();
+        let replaced: Vec<String> = lockfile
+            .packages
+            .iter()
+            .filter(|entry| entries.iter().any(|new| new.id == entry.id))
+            .map(|entry| entry.path.clone())
+            .collect();
+        lockfile
+            .packages
+            .retain(|entry| !entries.iter().any(|new| new.id == entry.id));
+        lockfile.packages.extend(entries.iter().cloned());
+        lockfile.record_migration(BUILTIN_AGENTS_MIGRATION);
+        if let Err(error) = lockfile.write(&self.layout.lock_path()) {
+            self.remove_staged(&staged);
+            return Err(error);
+        }
+        for path in replaced {
+            if !entries.iter().any(|entry| entry.path == path) {
+                // The unvouched entry left the lockfile with this write, so its folder is only litter now.
+                let _ = fs::remove_dir_all(self.layout.resolve(&path));
+            }
+        }
+        Ok(entries.into_iter().map(|entry| entry.id).collect())
+    }
+
+    /// Checks and unpacks one built-in package for adoption. Callers hold the change lock.
+    fn stage_built_in(&self, lockfile: &Lockfile, id: &str) -> Result<Staged, Error> {
+        let package = source::load(&Source::Catalogue(id.to_owned()), None)?;
+        self.check_kind_conflicts(lockfile, &package.manifest, true)?;
+        let kinds = agent_kind_ids(&package.manifest);
+        self.check_installing_kinds(id, &kinds)?;
+        let busy = self.mark_busy(id, kinds)?;
+        self.unpack_staged(package, busy, Vec::new(), String::new(), true)
+    }
+
+    /// Deletes the folders of packages staged for an adoption that did not commit.
+    fn remove_staged(&self, staged: &[Staged]) {
+        for next in staged {
+            self.remove_unpacked(&next.manifest.id, &next.dir);
         }
     }
 
@@ -428,7 +497,7 @@ struct Staged {
 
 impl Staged {
     /// The lock entry this install records, with what its vendor commands did for each CLI.
-    fn entry(&self, cli: Vec<LockCli>) -> LockEntry {
+    fn entry(&self, cli: Vec<LockCli>, adopted: bool) -> LockEntry {
         LockEntry {
             id: self.manifest.id.clone(),
             version: self.version.clone(),
@@ -441,6 +510,7 @@ impl Staged {
             installed_at_ms: now_ms(),
             cli,
             agent_kinds: agent_kind_ids(&self.manifest),
+            adopted,
             extra: Default::default(),
         }
     }
@@ -469,6 +539,21 @@ fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
         .iter()
         .map(|adapter| adapter.id.clone())
         .collect()
+}
+
+/// The built-in packages an adoption registers: those declaring a used kind and not installed as built-ins, in catalogue
+/// order.
+fn adoption_ids(used_kinds: &BTreeSet<String>, lockfile: &Lockfile) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for kind in catalogue_agent_kinds() {
+        let installed = lockfile
+            .get(&kind.package_id)
+            .is_some_and(catalogue::is_builtin_install);
+        if used_kinds.contains(&kind.kind_id) && !installed && !ids.contains(&kind.package_id) {
+            ids.push(kind.package_id);
+        }
+    }
+    ids
 }
 
 /// The lock entry an install of `id` displaces. Only the built-in replaces a first-party entry the catalogue does not
@@ -524,6 +609,9 @@ fn note_remaining_cli(log: &Path, command: &[String]) {
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The lockfile migration that adopts the built-in agent packages (decision 0063).
+const BUILTIN_AGENTS_MIGRATION: &str = "builtin-agents";
 
 pub(crate) fn describe(exit: Exit) -> String {
     match (exit.timed_out, exit.code) {

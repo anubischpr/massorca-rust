@@ -3,7 +3,10 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use massorca_ext_package::manifest;
 use massorca_profile::Profile;
@@ -11,10 +14,11 @@ use serde::Serialize;
 
 use crate::catalogue;
 use crate::error::{Error, HookError, codes};
+use crate::host::{CommandRunner, Exit, ProgramResolver};
 use crate::item::ItemState;
 use crate::layout::Layout;
 use crate::lockfile::Lockfile;
-use crate::service::installed_manifest;
+use crate::service::{Extensions, installed_manifest};
 use crate::views::CliSpec;
 
 /// One agent kind of an installed package, enabled or not.
@@ -228,4 +232,28 @@ fn problem(package_id: &str, error: &HookError) -> String {
         _ => "its installed manifest is invalid",
     };
     format!("{package_id}: {cause} ({})", error.code)
+}
+
+/// Adopts the built-in agent packages a profile already used, once per profile (decision 0063). The adoption needs no
+/// program lookup and runs no command, so its service gets a host that does neither.
+pub fn adopt_builtin_agents(
+    profile: &Profile,
+    used_kinds: &BTreeSet<String>,
+) -> Result<Vec<String>, Error> {
+    Extensions::new(profile, Arc::new(NoHost), Arc::new(NoHost)).adopt_builtin_agents(used_kinds)
+}
+
+/// The host of an adoption that needs none: no program resolves and no command runs.
+struct NoHost;
+
+impl ProgramResolver for NoHost {
+    fn resolve(&self, _binary: &str) -> Option<PathBuf> {
+        None
+    }
+}
+
+impl CommandRunner for NoHost {
+    fn run(&self, _argv: &[String], _log: &Path, _timeout: Duration) -> io::Result<Exit> {
+        Err(io::Error::other("the built-in adoption runs no command"))
+    }
 }

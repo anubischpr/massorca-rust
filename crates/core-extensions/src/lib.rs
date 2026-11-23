@@ -18,8 +18,8 @@ pub mod source;
 pub mod views;
 
 pub use agents::{
-    CatalogueAgentKind, InstalledAgentKind, PackageAgentKind, catalogue_agent_kinds,
-    installed_agent_kinds, package_agent_kinds,
+    CatalogueAgentKind, InstalledAgentKind, PackageAgentKind, adopt_builtin_agents,
+    catalogue_agent_kinds, installed_agent_kinds, package_agent_kinds,
 };
 pub use error::{Error, HookError, codes};
 pub use layout::Layout;

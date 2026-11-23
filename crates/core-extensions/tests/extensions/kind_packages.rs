@@ -1,14 +1,16 @@
 //! The agent kinds of the built-in catalogue and of installed packages by state (decision 0063). Every test runs on the
 //! fake host, so no vendor command runs.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
 use massorca_core_extensions::item::ItemState;
 use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{
-    PackageAgentKind, catalogue_agent_kinds, codes, package_agent_kinds,
+    PackageAgentKind, adopt_builtin_agents, catalogue_agent_kinds, codes, package_agent_kinds,
 };
+use serde_json::json;
 
 use crate::fakes::FakeHost;
 use crate::fixture::agent_package;
@@ -183,4 +185,150 @@ fn a_damaged_lockfile_fails_the_listing() {
 
     let error = package_agent_kinds(&s.profile).expect_err("a damaged lockfile");
     assert_eq!(error.code(), codes::INVALID_LOCKFILE);
+}
+
+/// The built-in kinds a profile used, by kind id.
+fn used(kind_ids: &[&str]) -> BTreeSet<String> {
+    kind_ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+#[test]
+fn adoption_registers_exactly_the_used_built_ins_and_runs_no_command() {
+    let s = setup(FakeHost::new());
+    let adopted = s
+        .service
+        .adopt_builtin_agents(&used(&["claude", "codex"]))
+        .expect("adopts");
+    assert_eq!(adopted, ["massorca.claude", "massorca.codex"]);
+    assert!(
+        s.host.runs().is_empty(),
+        "no vendor command ran: {:?}",
+        s.host.runs()
+    );
+    assert_eq!(state_of(&s, "claude"), ItemState::Enabled);
+    assert_eq!(state_of(&s, "codex"), ItemState::Enabled);
+    assert_eq!(state_of(&s, "antigravity"), ItemState::Available);
+    assert_eq!(state_of(&s, "gentle-shell"), ItemState::Available);
+
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["migrations"], json!(["builtin-agents"]));
+    let packages = lock["packages"].as_array().expect("packages");
+    assert_eq!(packages.len(), 2);
+    for entry in packages {
+        assert_eq!(entry["adopted"], true);
+        assert_eq!(entry["enabled"], true);
+        assert_eq!(entry["source"]["kind"], "catalogue");
+        assert_eq!(entry["cli"], json!([]));
+    }
+}
+
+#[test]
+fn adoption_runs_once_so_a_built_in_removed_afterwards_is_not_adopted_again() {
+    let s = setup(FakeHost::new());
+    let first = adopt_builtin_agents(&s.profile, &used(&["claude"])).expect("adopts");
+    assert_eq!(first, ["massorca.claude"]);
+    s.service
+        .remove("massorca.claude", false, false, None)
+        .expect("removes");
+
+    let second = adopt_builtin_agents(&s.profile, &used(&["claude"])).expect("a second run");
+    assert!(second.is_empty());
+    assert_eq!(state_of(&s, "claude"), ItemState::Available);
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["migrations"], json!(["builtin-agents"]));
+    assert_eq!(lock["packages"], json!([]));
+}
+
+#[test]
+fn unknown_and_third_party_kind_ids_are_ignored_but_the_run_is_recorded() {
+    let s = setup(FakeHost::new().with_program("kit"));
+    let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
+    s.install(&kit, false).expect("kit installs");
+
+    let adopted = s
+        .service
+        .adopt_builtin_agents(&used(&["kit", "ghost", "massorca.claude"]))
+        .expect("adopts nothing");
+    assert!(adopted.is_empty());
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["migrations"], json!(["builtin-agents"]));
+    let ids: Vec<&str> = lock["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["acme.kit"]);
+}
+
+#[test]
+fn an_empty_set_of_used_kinds_still_records_the_run() {
+    let s = setup(FakeHost::new());
+    let adopted = s
+        .service
+        .adopt_builtin_agents(&BTreeSet::new())
+        .expect("records the run");
+    assert!(adopted.is_empty());
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["migrations"], json!(["builtin-agents"]));
+    assert_eq!(lock["packages"], json!([]));
+}
+
+#[test]
+fn adoption_leaves_an_installed_built_in_as_it_is_and_adopts_the_rest() {
+    let s = setup(FakeHost::new().with_program("claude"));
+    s.install(&Source::Catalogue("massorca.claude".to_owned()), false)
+        .expect("claude installs");
+    let before = s.lock_json().expect("the lockfile")["packages"][0].clone();
+
+    let adopted = s
+        .service
+        .adopt_builtin_agents(&used(&["claude", "codex"]))
+        .expect("adopts");
+    assert_eq!(adopted, ["massorca.codex"]);
+    let lock = s.lock_json().expect("the lockfile");
+    assert_eq!(lock["packages"][0], before, "the install is untouched");
+    assert!(lock["packages"][0].get("adopted").is_none());
+    assert_eq!(lock["packages"][1]["id"], "massorca.codex");
+    assert_eq!(lock["packages"][1]["adopted"], true);
+}
+
+#[test]
+fn a_damaged_lockfile_fails_adoption_and_is_left_as_it_was() {
+    let s = setup(FakeHost::new());
+    let path = s.service.layout().lock_path();
+    fs::create_dir_all(path.parent().expect("a parent")).expect("the profile folder");
+    fs::write(&path, "{ not json").expect("the lockfile is damaged");
+
+    let error = s
+        .service
+        .adopt_builtin_agents(&used(&["claude"]))
+        .expect_err("a damaged lockfile");
+    assert_eq!(error.code(), codes::INVALID_LOCKFILE);
+    assert_eq!(fs::read_to_string(&path).expect("read"), "{ not json");
+}
+
+#[test]
+fn adoption_replaces_a_first_party_entry_the_catalogue_does_not_vouch_for() {
+    let s = setup(FakeHost::new());
+    let path = s.service.layout().lock_path();
+    fs::create_dir_all(path.parent().expect("a parent")).expect("the profile folder");
+    let forged = json!({ "version": 1, "packages": [{
+        "id": "massorca.claude", "version": "1.0.0",
+        "source": { "kind": "dir", "ref": "C:/evil" },
+        "sha256": "ab", "path": "pkgs/massorca.claude/1.0.0-ab", "enabled": true,
+        "consent": "c", "installed_at_ms": 0, "agent_kinds": ["claude"]
+    }] });
+    fs::write(&path, forged.to_string()).expect("the forged lockfile");
+
+    let adopted = s
+        .service
+        .adopt_builtin_agents(&used(&["claude"]))
+        .expect("adopts");
+    assert_eq!(adopted, ["massorca.claude"]);
+    let lock = s.lock_json().expect("the lockfile");
+    let packages = lock["packages"].as_array().expect("packages");
+    assert_eq!(packages.len(), 1, "{lock}");
+    assert_eq!(packages[0]["source"]["kind"], "catalogue");
+    assert_eq!(state_of(&s, "claude"), ItemState::Enabled);
 }
