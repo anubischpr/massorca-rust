@@ -167,6 +167,7 @@ fn start_with_caller_env(sandbox: &Sandbox, env: BTreeMap<String, String>) -> St
                 cols: None,
                 rows: None,
                 request_id: None,
+                permission_mode: None,
             })
             .await
             .expect("the agent starts");

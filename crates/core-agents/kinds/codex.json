@@ -15,5 +15,39 @@
     "home_env": "CODEX_HOME",
     "files": ["auth.json", "config.toml"],
     "strip_env": ["OPENAI_API_KEY"]
-  }
+  },
+  "permission_modes": [
+    {
+      "id": "auto",
+      "label": "Auto",
+      "description": "The vendor's preset: the workspace-write sandbox, asking for approval when needed.",
+      "args": ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+    },
+    {
+      "id": "read-only",
+      "label": "Safe read-only browsing",
+      "description": "The read-only sandbox, asking for approval when needed.",
+      "args": ["--sandbox", "read-only", "--ask-for-approval", "on-request"]
+    },
+    {
+      "id": "read-only-never",
+      "label": "Read-only non-interactive (CI)",
+      "description": "The read-only sandbox, never asking for approval.",
+      "args": ["--sandbox", "read-only", "--ask-for-approval", "never"]
+    },
+    {
+      "id": "auto-review",
+      "label": "Auto-review mode",
+      "description": "Approval requests go through automatic review, in the workspace-write sandbox.",
+      "args": ["--approve-for-me"]
+    },
+    {
+      "id": "full-access",
+      "label": "Dangerous full access",
+      "description": "No sandbox and no approvals. The vendor says: only inside an externally hardened environment.",
+      "args": ["--dangerously-bypass-approvals-and-sandbox"],
+      "bypass": true
+    }
+  ],
+  "default_permission_mode": "auto"
 }

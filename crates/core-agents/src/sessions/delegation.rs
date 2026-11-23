@@ -20,6 +20,7 @@ use serde_json::json;
 
 use super::{AgentError, Agents, Change, lock, tokens_match};
 use crate::launch;
+use crate::modes;
 use crate::provided_env::SecretGrant;
 
 /// What a merge into the parent's worktree did.
@@ -89,8 +90,26 @@ impl Agents {
             ));
         }
         let kind = params.kind.unwrap_or_else(|| parent.kind.clone());
-        // Checked before a child workspace exists, so an unknown or missing kind leaves nothing behind.
-        self.startable_kind(&kind)?;
+        // Checked before a child workspace exists, so an unknown or missing kind, or a mode it does not declare, leaves
+        // nothing behind. The child's mode is its own request or its kind's default, never the parent's (decision 0083).
+        // An agent asking (its run token is on the call) never picks a bypass mode for its child: that is the person's call
+        // to make, through agent.start (decision 0083, R1).
+        if params.token.is_some()
+            && let Some(mode) = params.permission_mode.as_deref()
+            && self
+                .declared_kind(&kind)?
+                .permission_mode(mode)
+                .is_some_and(|declared| declared.bypass)
+        {
+            return Err(AgentError::new(
+                codes::AGENT_MODE_UNAVAILABLE,
+                format!(
+                    "an agent cannot delegate in bypass mode {mode}; a bypass mode must be chosen by the person, through agent.start"
+                ),
+            ));
+        }
+        let (decl, _) = self.startable_kind(&kind)?;
+        modes::plan_start(&decl, params.permission_mode.as_deref())?;
         let parent_workspace = self
             .inner
             .config
@@ -122,6 +141,7 @@ impl Agents {
                 cols: None,
                 rows: None,
                 request_id: params.request_id,
+                permission_mode: params.permission_mode,
             },
             Some(&parent),
             grant,
@@ -173,6 +193,11 @@ impl Agents {
                     row.id
                 ),
             ));
+        };
+        // Drained however this call ends: a merge that failed or a refused mark may have held the parent's queue (0084, D3).
+        let _drain = DrainParentQueue {
+            agents: self,
+            parent: parent_id.clone(),
         };
         if let Some(token) = &params.token {
             self.check_run_token(&parent_id, token)?;
@@ -232,7 +257,7 @@ impl Agents {
             )
         } else {
             let text = bring_back_prompt(&child, &child_workspace.name, merge_commit.as_deref());
-            match self.prompt(&parent.id, &text, false) {
+            match self.send_prompt(&parent.id, &text, false, false) {
                 Ok(_) => (true, None),
                 Err(error) => (
                     false,
@@ -560,6 +585,18 @@ fn already_brought_back(session: &str) -> AgentError {
     )
 }
 
+/// Drains a session's queue when it goes out of scope, so a bring-back drains the parent however it ends.
+struct DrainParentQueue<'a> {
+    agents: &'a Agents,
+    parent: String,
+}
+
+impl Drop for DrainParentQueue<'_> {
+    fn drop(&mut self) {
+        self.agents.drain_queue(&self.parent);
+    }
+}
+
 /// The prompt a parent run receives on a bring-back: the child, its workspace, the merge commit and the child's result.
 /// It is one line, so a plain paste submits it once: every control character in the result, line breaks included,
 /// becomes a space, and the result is cut to [`MAX_QUOTED_RESULT`] bytes.
@@ -709,6 +746,8 @@ then report"
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         }
     }
 
@@ -725,8 +764,11 @@ then report"
                     submit: "\r".to_owned(),
                 },
                 pending: None,
+                pending_switch: None,
                 account: None,
                 typed_since_report: false,
+                switching: false,
+                delivering: false,
             },
         );
     }
@@ -741,6 +783,46 @@ then report"
             read_only: true,
             token: None,
             request_id: Some(request_id.to_owned()),
+            permission_mode: None,
+        }
+    }
+
+    #[test]
+    fn an_agent_cannot_delegate_into_a_bypass_mode() {
+        let (agents, workspace_id, _profile) = service();
+        let parent = session_row(&workspace_id, None);
+        agents.store().insert_agent_session(&parent).unwrap();
+        live_run(&agents, &parent.id, "parent-token");
+        let params = |token: Option<&str>, mode: &str| AgentDelegateParams {
+            kind: Some("claude".to_owned()),
+            token: token.map(str::to_owned),
+            permission_mode: Some(mode.to_owned()),
+            ..delegate_params(&parent.id, &new_id())
+        };
+
+        let refused = agents
+            .delegate(
+                params(Some("parent-token"), "bypassPermissions"),
+                SecretGrant::Provide,
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, codes::AGENT_MODE_UNAVAILABLE);
+        assert!(
+            refused.message.contains("agent.start"),
+            "{}",
+            refused.message
+        );
+
+        // The person's own call, and an agent's call for a mode that is not a bypass, go on to the kind's program check.
+        for (token, mode) in [(None, "bypassPermissions"), (Some("parent-token"), "plan")] {
+            let error = agents
+                .delegate(params(token, mode), SecretGrant::Provide)
+                .unwrap_err();
+            assert_ne!(
+                error.code,
+                codes::AGENT_MODE_UNAVAILABLE,
+                "{token:?} {mode}"
+            );
         }
     }
 
@@ -812,6 +894,7 @@ then report"
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: None,
                 },
                 SecretGrant::Provide,
             )
@@ -899,6 +982,7 @@ then report"
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: None,
                 },
                 SecretGrant::Provide,
             )

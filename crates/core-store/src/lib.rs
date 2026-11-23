@@ -2,6 +2,7 @@
 //! devices and vault rows, with versioned migrations and a backup taken before each migration.
 
 mod agent_accounts;
+mod agent_prompt_queue;
 mod agent_sessions;
 mod backup;
 mod bots;
@@ -23,7 +24,8 @@ mod workspaces;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
-pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, StoredActivity};
+pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
+pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity};
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;

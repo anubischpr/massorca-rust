@@ -12,7 +12,7 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
         |  agents/1 (+ terminals/1 for attach)
  +---------------------------- massorca service ------------------------------+
  |  agent.* handlers -> Agents (core-agents)                                  |
- |     kinds: built-in JSON + <profile>/agents/kinds/*.json  (0050)           |
+ |     kinds: KindPackages + <profile>/agents/kinds/*.json  (0050, 0059)     |
  |     launch plan: program, args, env, hook files  -> TerminalManager (0051)  |
  |     status store: execution (from terminal) + activity (from hooks) (0052) |
  |     delegation: child workspace via Workspaces, merge via core-git (0055)  |
@@ -32,6 +32,42 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
   accounts/<kind>/<id>/   credential home per account (0059)
   runs/<session>/         generated hook settings for a run (0053)
 ```
+
+## Kind packages (decision 0059)
+
+The catalog (`catalog.rs`) is read again on every call from two sources, in this order:
+
+1. **Packages.** `AgentsConfig.kind_packages` is an `Arc<dyn KindPackages>` (`packages.rs`). Its
+   `kinds()` returns one `PackageKind { kind_id, package_id, version, state, decl }` per kind:
+   `state` is the protocol's `PackageState` (`available`, `enabled`, `disabled`), and `decl` is the
+   declaration's JSON text, or an error that names the package and the cause, never a path. The
+   default, `BuiltInPackages`, returns the four compiled-in declarations as `enabled` packages
+   `massorca.<kind>` at the crate version; the extension runtime replaces it. A kind from a
+   `massorca.*` package has owner `core`; any other package's kind has owner `ext:<package id>`.
+   A declaration error, a declaration that does not parse, or one whose id is not the package's
+   `kind_id` is listed in `problems`, so the kind is listed and never started.
+2. **Profile files.** `<profile>/agents/kinds/*.json`, owner `user`, with no package: they count as
+   enabled. A package's kind always wins over a file that reuses its id, as a built-in did.
+
+`agent.kinds` reports each kind's `package: { state, id, version }`; a profile file's has no id or
+version.
+
+**Gating.** A kind whose package is not `enabled` is refused with `agent.kind_not_enabled`, data
+`{ kind, package, state }`, and a message that says to install or enable it in the Marketplace.
+The check runs right after the kind is found and before its declaration's problems and its
+program are checked, on `agent.start`, `agent.delegate` (and every other start through
+`Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.
+`agent.accounts.check`, `agent.accounts.remove`, and the vendor sign-out on removal or on a
+discarded sign-in keep working on a disabled kind.
+
+**Used kinds.** `used_kinds(&Store, profile_dir) -> Result<BTreeSet<String>, AgentError>` (public from core-agents)
+is every kind the profile has used, for the extension runtime's removal rules: the kinds of
+`agent_sessions`, `agent_accounts` (pending sign-ins included), `agent_account_history` and
+`bots` (the store query `used_agent_kinds`), and the directories under
+`<profile>/agents/accounts/` and `<profile>/agents/homes/` that are real directories, never links,
+named by a valid kind id. A store that cannot be read, or a kind directory that exists but cannot be
+listed, is an error (`internal`), so the caller retries instead of treating a used kind as unused; a
+directory that does not exist has no kinds.
 
 ## Kind declaration
 
@@ -53,7 +89,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
     },
     "result_field": "result"
   },
-  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] }
+  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] },
+  "permission_modes": [
+    { "id": "careful", "label": "Careful", "args": ["--mode", "careful"] },
+    {
+      "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true,
+      "live_switch": { "type": "input", "text": "/mode wild" }
+    }
+  ],
+  "default_permission_mode": "careful"
 }
 ```
 
@@ -69,6 +113,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
   import: the declaration has no optional flag.
+- `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
+  mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
+  kind's own `args`), an optional deterministic `live_switch` typed into a running session,
+  and `bypass` when it lifts the vendor's prompts or sandbox. Ids are unique; the default is
+  one of them and never a bypass mode; a bypass mode has its own `args` or `live_switch`; a
+  mode with neither can only be the default. `may_fall_back` marks a mode the vendor may
+  start another mode in without failing. `default_permission_mode` names the mode the vendor
+  CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
+  as a session's mode. The built-in modes and their sources are in decision 0083.
 
 ## Session record (`AgentSession`)
 
@@ -83,24 +136,30 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 | `execution` | `{ state: live|unverifiable|exited, exit?: { code?, signal?, reason, at_ms } }` |
 | `activity?` | `{ state: working|waiting|idle|done, outcome?, source: hook|process|output, at_ms }` |
 | `result?` | the last turn's result text (at most 16 KiB) |
+| `permission_mode?` | the mode chosen for the current or last run (decision 0083); absent when no mode was chosen (the vendor's own default) or the kind declares none |
+| `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
+| `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
+| `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 
 ## Wire
 
-Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
+Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083). Types in
+`crates/protocol/src/methods/agents.rs`.
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
-| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?` | `AgentSession` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
+| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` |
 | `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
-| `agent.resume` | workspace | `session` | `AgentSession` |
+| `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
+| `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -113,15 +172,58 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
 | `agent.accounts.check` | workspace | `kind`, `account?` | the account's summary, after the check |
 
-Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
+Errors: `agent.not_found`, `agent.kind_not_found`, `agent.kind_not_enabled`, `agent.not_installed`,
 `agent.workspace_busy`, `agent.not_live`, `agent.busy`,
 `agent.prompt_invalid`, `agent.resume_unavailable`, `agent.hook_refused`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
-`agent.credentials_invalid`, `agent.account_not_found`.
+`agent.credentials_invalid`, `agent.account_not_found`, `agent.mode_unknown`,
+`agent.mode_unavailable`.
 
 Event bus topic: `agent.changed` (id = session id).
+
+## Permission modes
+
+Decision 0083. When no mode is chosen, no mode flag is passed and nothing is typed: the vendor
+CLI starts in its own default, exactly as if the person ran it, and the session records
+`mode_source: vendor_default` with no `permission_mode`. The kind's `default_permission_mode`
+is informational: it names that vendor default for display only, the vendor's real default may
+differ by CLI version, and it must never be shown as a session's mode. A `vendor_default`
+session is labelled "the CLI's default". A flag is passed only
+for a chosen mode. An id the kind does not declare, or any id for a kind that declares none,
+is refused with `agent.mode_unknown` (data: `kind`, `mode`, `known`). A chosen mode with
+launch `args` is passed after the kind's own arguments; it is `mode_confirmed` unless the mode
+is marked `may_fall_back` or the caller passed arguments after `--`, which may override it. A
+chosen mode with only a live switch is typed at the run's first `idle`, before a held first
+prompt, and stays unconfirmed; for a kind that reports no `idle` it is refused with
+`agent.mode_unavailable`. A delegated child gets the mode its delegation names or the vendor's
+default, never its parent's, so a bypass mode is never inherited. A delegation that carries a run
+token (an agent asking) is refused with `agent.mode_unavailable` when it names a bypass mode:
+a bypass mode is chosen by the person, through `agent.start`. Bypass modes are not gated
+by device scope: the method's own permission applies.
+
+`agent.set_mode` changes a session's mode. While its run is live and the mode declares a live
+switch, the switch is typed into the run's terminal once the run is ready (as a prompt waits,
+`agent.busy` otherwise), and the reply says `applied: live`; the session's mode is the new one,
+`chosen`, with `mode_confirmed` false, since no hook confirms it. A switch does not count as a
+typed prompt, because it starts no turn for a report to answer. A kind with no status mechanism
+cannot say whether its agent is in the middle of a prompt, so a live switch into it needs
+`force: true` and is refused with `agent.mode_unavailable` without it. While a switch is
+typed the run is marked as switching, and every other prompt or switch, forced or not, is
+refused with `agent.busy` until the write is done. Otherwise the mode is stored as
+`pending_permission_mode` for the next resume (`applied: next_resume`), and the running mode
+and its confirmation are left as they are. A mode a resume could not apply (only a live switch,
+on a kind that reports no `idle`) is refused with `agent.mode_unavailable`; a session whose
+kind cannot resume it, and which has no live switch to apply the mode now, with
+`agent.resume_unavailable`. Every change is written to the session row and announced as
+`agent.changed`.
+
+A resume runs in the mode it names, which also ends any wait; else in the pending mode, unless
+that is a bypass mode: a pending bypass is used only by a resume that names it, and until then
+the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
+unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
+a new run without being named again.
 
 ## Run environment
 
@@ -199,6 +301,39 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+## Prompt queue (decision 0084)
+
+A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
+`agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
+
+- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
+  returns the prompt it queued then.
+- `agent.queue.list {session}` returns `{session, items}`, head first.
+- `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
+  A prompt being sent is refused with `agent.busy`.
+
+A `QueuedPrompt` has `id`, `session`, `position` (from 1), `text`, `state` (`waiting`, `sending`, `failed`), `reason`
+and `created_at_ms` / `updated_at_ms`. The reason of a waiting prompt is `busy`, `asking`, `paused_stopped`,
+`paused_restarted` or `behind_failed`; the reason of a failed prompt is why its delivery failed. Constants:
+`QUEUE_REASON_*` in `massorca_protocol::methods::agents`.
+
+Refusals: `agent.queue_already_delivered` for a request id the session delivered recently (the last 100, decision 0084,
+D11); `agent.queue_unavailable` for a kind that declares no status mechanism (or is not declared), so it has no
+queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unknown prompt id; `agent.prompt_invalid` for
+a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
+session id; `agent.watch` streams do not carry queue items.
+
+Delivery: the head of a queue is typed when its agent turns `idle` or `done`, through the prompt guards (merging,
+switching, readiness, typed since the last report). One prompt goes per step, so the next waits for the next report. A
+queue holds while the agent asks the person something (reason `asking`), and `agent.queue.send_now` is refused then. A
+prompt that cannot be typed becomes `failed` with its reason and holds everything behind it; nothing retries, and
+`remove` or `send_now` clears it. A stop by the person pauses the waiting prompts (`paused_stopped`); a service restart
+pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `agent.prompt`, `agent.queue.send_now` or
+`agent.queue.resume` lifts the pauses; a resumed run does not deliver paused prompts by itself.
+`agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
+mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
+`agent.queue.resume {session}` returns the queue as it is after the lift.
 
 ## Delegation
 

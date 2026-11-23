@@ -91,6 +91,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
     (codes::AGENT_NOT_FOUND, "agent.not_found"),
     (codes::AGENT_KIND_NOT_FOUND, "agent.kind_not_found"),
+    (codes::AGENT_KIND_NOT_ENABLED, "agent.kind_not_enabled"),
     (codes::AGENT_NOT_INSTALLED, "agent.not_installed"),
     (codes::AGENT_WORKSPACE_BUSY, "agent.workspace_busy"),
     (codes::AGENT_NOT_LIVE, "agent.not_live"),
@@ -115,6 +116,15 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (
         codes::AGENT_CREDENTIALS_INVALID,
         "agent.credentials_invalid",
+    ),
+    (codes::AGENT_MODE_UNKNOWN, "agent.mode_unknown"),
+    (codes::AGENT_MODE_UNAVAILABLE, "agent.mode_unavailable"),
+    (codes::AGENT_QUEUE_UNAVAILABLE, "agent.queue_unavailable"),
+    (codes::AGENT_QUEUE_FULL, "agent.queue_full"),
+    (codes::AGENT_QUEUE_NOT_FOUND, "agent.queue_not_found"),
+    (
+        codes::AGENT_QUEUE_ALREADY_DELIVERED,
+        "agent.queue_already_delivered",
     ),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
@@ -159,5 +169,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::TERMINALS, "terminals/1");
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
     assert_eq!(capabilities::AGENTS, "agents/1");
+    assert_eq!(capabilities::AGENT_MODES, "agent-modes/1");
+    assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }
