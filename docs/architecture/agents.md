@@ -302,6 +302,39 @@ no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
 
+## Prompt queue (decision 0084)
+
+A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
+`agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
+
+- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
+  returns the prompt it queued then.
+- `agent.queue.list {session}` returns `{session, items}`, head first.
+- `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
+  A prompt being sent is refused with `agent.busy`.
+
+A `QueuedPrompt` has `id`, `session`, `position` (from 1), `text`, `state` (`waiting`, `sending`, `failed`), `reason`
+and `created_at_ms` / `updated_at_ms`. The reason of a waiting prompt is `busy`, `asking`, `paused_stopped`,
+`paused_restarted` or `behind_failed`; the reason of a failed prompt is why its delivery failed. Constants:
+`QUEUE_REASON_*` in `massorca_protocol::methods::agents`.
+
+Refusals: `agent.queue_already_delivered` for a request id the session delivered recently (the last 100, decision 0084,
+D11); `agent.queue_unavailable` for a kind that declares no status mechanism (or is not declared), so it has no
+queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unknown prompt id; `agent.prompt_invalid` for
+a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
+session id; `agent.watch` streams do not carry queue items.
+
+Delivery: the head of a queue is typed when its agent turns `idle` or `done`, through the prompt guards (merging,
+switching, readiness, typed since the last report). One prompt goes per step, so the next waits for the next report. A
+queue holds while the agent asks the person something (reason `asking`), and `agent.queue.send_now` is refused then. A
+prompt that cannot be typed becomes `failed` with its reason and holds everything behind it; nothing retries, and
+`remove` or `send_now` clears it. A stop by the person pauses the waiting prompts (`paused_stopped`); a service restart
+pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `agent.prompt`, `agent.queue.send_now` or
+`agent.queue.resume` lifts the pauses; a resumed run does not deliver paused prompts by itself.
+`agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
+mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
+`agent.queue.resume {session}` returns the queue as it is after the lift.
+
 ## Delegation
 
 `agent.delegate` and `agent.bring_back` follow decision 0055. Details the record leaves open:
