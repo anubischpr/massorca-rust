@@ -359,6 +359,16 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             "task.reopen",
             selector("task"),
         ),
+        command(
+            "task.stop",
+            "Stop the agent a task runs in",
+            "task.stop",
+            json!({
+                "type": "object",
+                "required": ["task"],
+                "properties": { "task": { "type": "string" }, "force": { "type": "boolean" } }
+            }),
+        ),
         command("task.rm", "Remove a task", "task.rm", selector("task")),
     ]
 }

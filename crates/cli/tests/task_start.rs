@@ -602,3 +602,49 @@ fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
     });
     sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
 }
+
+#[test]
+fn a_stopped_task_keeps_its_session_and_shows_stopped_until_reopened() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Start with hold, then stop."],
+    );
+    let refused = error_of(&sandbox, &["task", "stop", task.as_str()]);
+    assert_eq!(refused["code"], "task.not_running", "{refused}");
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session.as_str(),
+            "--until",
+            "working",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+
+    let stopped = sandbox.json_ok("default", &["task", "stop", task.as_str(), "--force"]);
+    assert_eq!(stopped["session_id"], session.as_str(), "{stopped}");
+    let shown = eventually("the stopped task shows Stopped", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["state"] == "stopped").then_some(shown)
+    });
+    assert_eq!(shown["column"], "waiting", "{shown}");
+    assert_eq!(shown["session_id"], session.as_str(), "{shown}");
+
+    // Stopping it again is refused, and the stopped task can be reopened.
+    let again = error_of(&sandbox, &["task", "stop", task.as_str()]);
+    assert_eq!(again["code"], "task.not_running", "{again}");
+    let reopened = sandbox.json_ok("default", &["task", "reopen", task.as_str()]);
+    assert_eq!(reopened["column"], "open", "{reopened}");
+}
