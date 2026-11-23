@@ -206,6 +206,19 @@ This report compares the desktop shell and the UI gallery with the design artboa
 **No artboard**
 - The Delegate dialog. `ws-delegation` draws the card and the tree, not this form.
 
+## Bring back (X-CH-08)
+
+**Matches**
+- The confirm names the child and the branch it merges into, and sends `agent.bring_back` with the merge and tell-the-parent choices. A refusal keeps it open under the service's sentence.
+- The answer replaces the choices. It says whether the branch merged and whether the parent was told, then shows the service's note as the service wrote it. "Open parent" opens the session the child came back to.
+
+**Cannot match yet**
+- X-CH-08 is a card in the parent transcript, from the child's "Review". The desktop opens a confirm from the sidebar row of a finished child.
+- The commit list and the predicted merge result are not shown: the protocol does not report them.
+
+**No artboard**
+- The bring-back confirm, its choices and its answer. Desktop Bring back has no artboard, so it is built from X-CH-08 and the shared dialog.
+
 ## Palette and quick open
 
 **Matches**
