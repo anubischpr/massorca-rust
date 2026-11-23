@@ -54,6 +54,12 @@ machine attributed to a workspace by working directory or command line, scanned 
   listing before and after the read, so a reused pid is unreadable. A macOS listing that grows while it is read is asked
   again with more room; one that still does not fit makes the table incomplete, and the terminals read from it are
   `partial`. Samples are shared for about a second, so a call within that time gets the sample already taken.
+- D7 Ports, as settled. `host.ports` lists one entry per listening TCP socket, so a process on IPv4 and IPv6 has two
+  (same `port` and `pid`, two addresses) and nothing is merged; a client groups them when it shows one row per process.
+  `connect_host` is `localhost` for a wildcard bind. A terminal is `unverifiable` when none of its members can be read and
+  `partial` when some cannot be read or have left it; when the host's socket table cannot be read, no port is listed and
+  the answer is `unverifiable`. Polling is every 30 seconds while the ports are visible, and nothing is pushed. macOS is
+  not read until its socket layouts are verified (libc 0.2.191 declares none of them), so its answer is unverifiable.
 
 ## Alternatives
 
@@ -68,8 +74,9 @@ machine attributed to a workspace by working directory or command line, scanned 
 
 ## Consequences
 
-- New capability `host/1` with the Read method `host.memory`; ports add `host.ports` to the same capability later.
-- `core-terminal` depends on `massorca-host-stats` on macOS only, for the parent-id walk.
+- Capability `host/1` with the Read methods `host.memory` and `host.ports`, the second added within the version: additive
+  changes keep a capability's version.
+- `core-terminal` depends on `massorca-host-stats` on every platform: its memory and membership reads go through it.
 - `massorca host memory` targets the service like other service commands, so `--host` works for it, unlike the other
   `host` commands.
 - Process-enumeration code gets an independent review before merge.

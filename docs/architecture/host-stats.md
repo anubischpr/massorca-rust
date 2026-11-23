@@ -1,13 +1,13 @@
 # Host stats
 
-Figures the desktop status bar shows, read on the host that runs the work: the memory MassOrca uses, and later the
-ports its processes listen on. The record is decision 0081; this page shows how the pieces fit.
+Figures the desktop status bar shows, read on the host that runs the work: the memory MassOrca uses, and the ports its
+processes listen on. The record is decision 0081; this page shows how the pieces fit.
 
 ## Shape
 
 ```
  desktop / CLI (`massorca host memory`)          polls; never pushed
-        |  host/1: host.memory (Read)
+        |  host/1: host.memory, host.ports (Read)
  +----------------------------- massorca service --------------------------------+
  |  server: host.memory handler, on the blocking pool                            |
  |     TerminalManager::memory()    -> each live terminal's process memory      |
@@ -41,6 +41,38 @@ without it reads as `false`.
 This is the reference desktop's "Memory" with two differences: the desktop's own process is not counted (the desktop
 may add its own figure locally), and the figure is not pushed.
 
+## `host.ports`
+
+Read permission, no params. The answer lists one entry per listening TCP socket that the processes of the live
+terminals hold (agent runs included), and one status per live terminal:
+
+| Field | Meaning |
+|---|---|
+| `ports` | One entry per listening socket: `port`, `address` (the bind address: a wildcard or one interface's), `connect_host` (`localhost` for a wildcard bind, otherwise the address), `pid`, `process_name`, `terminal_id`, `workspace_id`, and `session_id` when an agent session's current run uses the terminal. |
+| `terminals` | One status per live terminal, by creation time: `terminal_id`, `workspace_id`, `unverifiable`, and `partial`. |
+| `unverifiable` | The host's socket table cannot be read: nothing is known about any port, so `ports` is empty and every terminal is `unverifiable`. |
+| `sampled_at_ms` | When the sample was taken. |
+
+A process listening on IPv4 and on IPv6 has two entries, with the same `port` and `pid` and two addresses. Nothing is
+merged: a client that shows one row per process groups them by `pid` and `port`. The service's own listener is never
+listed, since only a terminal's processes are attributed to it (decision 0081, D2).
+
+A terminal is `unverifiable` when its members cannot be listed or none of them can be read: its ports are unknown, so
+it lists none. It is `partial` when some of its members cannot be read or have left it, or when the process table was
+incomplete: its list may miss ports. The flags are additive; an answer without them reads as `false`.
+
+Each platform reads the listening sockets natively, and only for the processes asked about:
+
+- Windows: `GetExtendedTcpTable` for IPv4 and IPv6 with `TCP_TABLE_OWNER_PID_LISTENER`, which names each listener's owner
+  pid; addresses and ports are read in network byte order. After the read, each owner that is a terminal member is
+  checked again on its own handle (`IsProcessInJob`), so a pid reused meanwhile is not attributed.
+- Linux: the LISTEN rows of `/proc/net/tcp` and `/proc/net/tcp6` give each socket's inode. Each member's descriptors
+  (`/proc/<pid>/fd`, `socket:[inode]`) name the inodes it holds, and the lowest pid holding an inode owns it. A member is
+  read only while it is the one listed: its start time and session must match before and after the read.
+- macOS: not read yet. libc 0.2.191 declares neither `socket_fdinfo` nor the TCP socket structures, and their layouts
+  cannot be checked here, so the socket table reads as unreadable and the answer is unverifiable until a macOS build
+  verifies them.
+
 ## Reading
 
 `crates/host-stats` reads with system calls and never starts a program:
@@ -70,6 +102,8 @@ table that still does not fit after its bounded retries is incomplete: the termi
 There is no event and no watch. A client polls while it shows the figure: every 2 seconds while a memory detail is
 open, otherwise with its usual status refresh. One sample reads the process table once (Unix) or each terminal's
 job (Windows), and a few system calls per process, so a poll costs little, but nothing samples while nobody asks. A sample is shared for about a second: a call within that
-time is answered with the sample already taken, and its `sampled_at_ms` is when that sample was taken.
+time is answered with the sample already taken, and its `sampled_at_ms` is when that sample was taken. Ports are polled
+every 30 seconds while they are visible, as the reference does.
 
-A client that cannot reach the service shows `unverifiable`, never zero: the CLI exits 4 with `memory.unverifiable`.
+A client that cannot reach the service shows `unverifiable`, never zero: the CLI exits 4 with `memory.unverifiable`
+(`ports.unverifiable` for ports), and never reports "no ports" for an answer it could not get.
