@@ -156,3 +156,41 @@ These later items call `task.create` and the methods above.
 - `task.start` depends on the agents domain landing on main. Teams, bots,
   projects, tasks and the Board land first, and `task.start` follows in its
   own slice once agent sessions are on main.
+
+## Amendment 2026-11-22: Team memory
+
+A memory line belongs to a team. It is in the team scope, or in one bot's scope
+of that team. A line written during a task names the task and has the source
+`task`. A line the owner wrote has the source `person`. Each line keeps its
+creation time.
+
+A line is at most 500 characters. Surrounding spaces are removed first, and a
+blank line is refused. The count is in Unicode scalar values. The owner lists
+and removes lines. Bots and the owner add them.
+
+A task start reads 40 lines per scope: the newest 40 team-scope lines, and the
+newest 40 lines of the bot that starts the task. The store provides this read
+as `memory_for_start`. Task start does not read it yet. The next PR, which adds
+`task.start`, puts these lines in the bot's prompt.
+
+Methods:
+
+- `team.memory_list` takes `{ team, bot? }`. Without `bot` it lists every line
+  of the team. With `bot` it lists only that bot's lines. Newest first.
+- `team.memory_add` takes `{ team, bot?, text, task? }`. A given `task` makes
+  the line a `task` line. The task must belong to the team.
+- `team.memory_rm` takes `{ team, line }` and returns the removed line.
+
+Adds and removes publish `team.changed` with the team id. Refusals use
+`request.invalid_params` for a blank or long text, `team.not_found`,
+`bot.not_found`, `task.not_found`, and `team.memory_not_found`.
+
+CLI:
+
+```
+massorca team memory list <team> [--bot <bot>]
+massorca team memory add <team> <text> [--bot <bot>] [--task <task>]
+massorca team memory rm <team> <line>
+```
+
+Team files and the Engram link stay out of this change (AUTO-31).
