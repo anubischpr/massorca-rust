@@ -45,6 +45,8 @@ impl Workspaces {
                     project_id: project.id.clone(),
                     path: paths::path_text(&paths::canonical(&entry.path))?,
                     branch: entry.branch.clone(),
+                    locked: entry.locked.clone(),
+                    prunable: entry.prunable.clone(),
                 });
             }
         }

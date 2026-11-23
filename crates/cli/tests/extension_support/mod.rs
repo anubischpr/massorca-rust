@@ -16,9 +16,9 @@ use zip::write::SimpleFileOptions;
 
 use crate::harness::{Sandbox, single_document, with_json};
 
-/// The fake vendor program every test package runs. It is the example `massorca-fake-vendor`, not a shipped binary, so
-/// `cargo test` does not build it: the first call builds it into the same target folder as the test binaries
-/// (decision 0062).
+/// The fake vendor program every test package runs: the example `massorca-fake-vendor`, not a shipped binary. CI builds
+/// it before the tests, so this first call finds it current; a build here compiles the `-p massorca-cli` dependencies
+/// that the workspace build does not share (decision 0062).
 pub fn fake_vendor() -> String {
     static BUILT: std::sync::Once = std::sync::Once::new();
     BUILT.call_once(|| {

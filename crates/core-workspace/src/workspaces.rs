@@ -71,24 +71,31 @@ impl Workspaces {
         &self.git
     }
 
-    /// Every workspace, or only those of `project` (a selector), oldest first.
+    /// Every workspace, or only those of `project` (a selector), oldest first, with git's lock
+    /// and prune state of each worktree.
     pub fn list_workspaces(&self, project: Option<&str>) -> Result<Vec<Workspace>, DomainError> {
         let project_id = match project {
             Some(selector) => Some(self.resolve_project(selector)?.id),
             None => None,
         };
-        Ok(self
-            .store
-            .list_workspaces(project_id.as_deref())?
-            .iter()
-            .map(views::workspace)
-            .collect())
+        let rows = self.store.list_workspaces(project_id.as_deref())?;
+        self.workspaces_with_git_state(&rows)
     }
 
     /// The workspace `selector` names: id, then exact name (unique within a project only),
     /// then path.
     pub fn show_workspace(&self, selector: &str) -> Result<Workspace, DomainError> {
         Ok(views::workspace(&self.resolve_workspace(selector)?))
+    }
+
+    /// Like `show_workspace`, with git's lock and prune state of the worktree. It runs git, so only
+    /// `workspace.show` asks for it; every other lookup takes `show_workspace`.
+    pub fn show_workspace_with_git_state(&self, selector: &str) -> Result<Workspace, DomainError> {
+        let row = self.resolve_workspace(selector)?;
+        // One row in, one workspace out.
+        Ok(self
+            .workspaces_with_git_state(std::slice::from_ref(&row))?
+            .swap_remove(0))
     }
 
     /// Holds the mutation lock. A poisoned lock is still usable: it guards no data.
