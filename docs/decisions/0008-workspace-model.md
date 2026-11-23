@@ -47,7 +47,19 @@ lineage) comes later; the model must not block it.
   given (`origin/main`). An existing local branch is used only with
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
   given. Create carries an optional client request id; repeating the same id
-  returns the first result instead of creating twice.
+  returns the first result instead of creating twice. A git project may set
+  its own base (`massorca project set-base`), which sits between an explicit
+  base and the repository default: a create that names no base starts from it,
+  and clearing it restores the default. A folder project has none.
+- **Refresh the base.** With `refresh_base` (`--refresh-base`), a create of a
+  new branch first fetches the base's branch from its remote when the base
+  resolves to a remote-tracking branch: the named base, else the project base,
+  else the default branch. Only that branch is fetched, within 30 seconds, and
+  nothing is pruned; the network rules, prompts and credentials are those of
+  decision 0013. A failed or slow fetch never fails the create: it starts from
+  the local copy, and the service log records a warning. A local branch, tag or
+  commit base is not fetched, and the option is refused for an existing branch
+  and for a folder project.
 - **Interrupted create.** A create that stops after `worktree add` and before
   its row is stored leaves a worktree that git registers and no row records.
   The same create (same project, name, path and branch) adopts it: it stores

@@ -1,13 +1,14 @@
-//! `project.add`, `project.list`, `project.show` and `project.remove` (capability `projects/1`) over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.remove` and `project.set_base` (capability `projects/1`) over the workspace domain.
 
 use std::sync::Arc;
 
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::{
-    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_CHANGED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
@@ -54,6 +55,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::PROJECTS,
             Permission::Workspace,
             remove,
+        )?,
+        registries.methods.register(
+            Owner::Core,
+            projects::SET_BASE,
+            capabilities::PROJECTS,
+            Permission::Workspace,
+            set_base,
         )?,
     ])
 }
@@ -141,4 +149,11 @@ fn busy(workspace: &Workspace) -> ErrorBody {
             workspace.name
         ),
     )
+}
+
+async fn set_base(ctx: RequestCtx, params: ProjectSetBaseParams) -> Result<Project, ErrorBody> {
+    let domain = for_mutation(&ctx).await?;
+    let project = blocking(move || domain.set_project_base(params)).await?;
+    publish(&ctx, TOPIC_PROJECT_CHANGED, &project.id);
+    Ok(project)
 }

@@ -61,19 +61,36 @@ impl TlsIdentity {
 
     /// Loads a PKCS#8 PEM key and a PEM certificate, refusing a certificate that is not for that key.
     pub fn load(key_path: &Path, cert_path: &Path) -> Result<Self, NetError> {
-        let key = PrivatePkcs8KeyDer::from_pem_slice(&fs::read(key_path)?).map_err(|_| {
-            NetError::Certificate(format!("{} is not a PKCS#8 PEM key", key_path.display()))
-        })?;
-        let cert = CertificateDer::from_pem_slice(&fs::read(cert_path)?).map_err(|_| {
-            NetError::Certificate(format!("{} is not a PEM certificate", cert_path.display()))
-        })?;
+        let key = fs::read(key_path)?;
+        let cert = fs::read(cert_path)?;
+        Self::parse(
+            &key,
+            &cert,
+            &key_path.display().to_string(),
+            &cert_path.display().to_string(),
+        )
+    }
+
+    /// The identity `to_pem` wrote, for a store that keeps the PEM text itself (the phone's sealed store).
+    pub fn from_pem(key_pem: &[u8], cert_pem: &[u8]) -> Result<Self, NetError> {
+        Self::parse(
+            key_pem,
+            cert_pem,
+            "the device key",
+            "the device certificate",
+        )
+    }
+
+    fn parse(key: &[u8], cert: &[u8], key_name: &str, cert_name: &str) -> Result<Self, NetError> {
+        let key = PrivatePkcs8KeyDer::from_pem_slice(key)
+            .map_err(|_| NetError::Certificate(format!("{key_name} is not a PKCS#8 PEM key")))?;
+        let cert = CertificateDer::from_pem_slice(cert)
+            .map_err(|_| NetError::Certificate(format!("{cert_name} is not a PEM certificate")))?;
         let key_pair = KeyPair::try_from(&key).map_err(certificate_error)?;
         let pin = Pin::of_certificate(&cert)?;
         if pin != Pin::of_spki(&key_pair.subject_public_key_info()) {
             return Err(NetError::Certificate(format!(
-                "{} is not the certificate of {}",
-                cert_path.display(),
-                key_path.display()
+                "{cert_name} is not the certificate of {key_name}"
             )));
         }
         Ok(Self { key, cert, pin })
