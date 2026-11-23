@@ -1,14 +1,19 @@
 //! Terminal attach decoding, against a stand-in service: snapshot parts reassemble, output offsets skip repeats and trim
-//! overlaps, and unknown events and chunk tags are ignored.
+//! overlaps, unknown events and chunk tags are ignored,
+//! and an attach cut mid-stream resumes without repeating or losing output.
 
 mod support;
 
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::traits::tokio::Listener as _;
-use massorca_client::{AttachUpdate, Client, ClientError, ConnectOptions, TerminalAttachment};
+use massorca_client::{
+    AttachStep, AttachUpdate, Backoff, Client, ClientError, Connect, ConnectOptions, Link,
+    ResilientAttach, TerminalAttachment,
+};
 use massorca_profile::{Profile, ensure_dir, local_socket_name};
 use massorca_protocol::methods::terminals::{
     AttachMode, ChunkKind, TerminalAttachParams, encode_chunk,
@@ -294,4 +299,147 @@ async fn a_service_error_ends_the_attach_with_that_error() {
 
     stand_in.await.expect("the stand-in finishes");
     drop(client);
+}
+
+/// A stand-in that serves one connection per entry of `connections`. Each answers the attach with `STREAM`, records
+/// the attach's `since`, then sends its frames; a connection whose frames do not end the stream is cut off.
+async fn reconnecting_stand_in(
+    home: &Path,
+    connections: Vec<Vec<Frame>>,
+) -> (Profile, JoinHandle<Vec<Option<u64>>>) {
+    let profile = profile(home);
+    ensure_dir(&profile).expect("the profile directory exists");
+    let listener = ListenerOptions::new()
+        .name(local_socket_name(&profile).expect("the socket name"))
+        .create_tokio()
+        .expect("the stand-in listens");
+
+    let task = tokio::spawn(async move {
+        let mut sinces = Vec::new();
+        for frames in connections {
+            let mut stream = listener.accept().await.expect("the client connects");
+            let Some(Frame::Message(Message::Hello { .. })) =
+                read_frame(&mut stream, MAX_FRAME_LEN_LOCAL)
+                    .await
+                    .expect("the hello arrives")
+            else {
+                panic!("the first frame is hello");
+            };
+            let welcome = Message::Welcome {
+                protocol: PROTOCOL_VERSION,
+                server: PeerInfo {
+                    name: "stand-in".to_owned(),
+                    version: "0.0.0-test".to_owned(),
+                },
+                capabilities: vec![
+                    capabilities::TERMINALS.to_owned(),
+                    capabilities::BINARY_FRAMES.to_owned(),
+                ],
+                connection_id: "connection-1".to_owned(),
+                max_frame_len: None,
+            };
+            write_frame(&mut stream, &Frame::Message(welcome), MAX_FRAME_LEN_LOCAL)
+                .await
+                .expect("the welcome is sent");
+            let Some(Frame::Message(Message::Request { id, params, .. })) =
+                read_frame(&mut stream, MAX_FRAME_LEN_LOCAL)
+                    .await
+                    .expect("the request arrives")
+            else {
+                panic!("the second frame is a request");
+            };
+            sinces.push(params.get("since").and_then(Value::as_u64));
+            let answer = Message::response_ok(id, json!({ "stream": STREAM }));
+            write_frame(&mut stream, &Frame::Message(answer), MAX_FRAME_LEN_LOCAL)
+                .await
+                .expect("the answer is sent");
+            for frame in &frames {
+                write_frame(&mut stream, frame, MAX_FRAME_LEN_LOCAL)
+                    .await
+                    .expect("the frame is sent");
+            }
+            // Dropping the socket here cuts the connection unless the frames ended the stream.
+        }
+        sinces
+    });
+    (profile, task)
+}
+
+struct Local(Profile);
+
+impl Connect for Local {
+    fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send {
+        let profile = self.0.clone();
+        async move { Client::connect(&profile, options()).await }
+    }
+}
+
+#[tokio::test]
+async fn an_attach_cut_mid_stream_resumes_without_repeating_or_losing_output() {
+    let home = support::temp_home();
+    let attached = |offset: u64| {
+        event(
+            json!({"kind": "attached", "terminal": terminal(), "mode": "resume", "offset": offset}),
+        )
+    };
+    let (profile, stand_in) = reconnecting_stand_in(
+        home.path(),
+        vec![
+            // Cut off after "hello wor".
+            vec![
+                attached(0),
+                bytes(ChunkKind::Output, 0, b"hello "),
+                bytes(ChunkKind::Output, 6, b"wor"),
+            ],
+            // The service resends from an earlier offset than asked; the repeat must not show.
+            vec![
+                attached(6),
+                bytes(ChunkKind::Output, 6, b"world!"),
+                Frame::Message(Message::End {
+                    stream: STREAM,
+                    error: None,
+                }),
+            ],
+        ],
+    )
+    .await;
+    let mut attach = ResilientAttach::new(
+        Local(profile),
+        TerminalAttachParams {
+            terminal: TERMINAL.to_owned(),
+            since: None,
+            cols: None,
+            rows: None,
+            answers_queries: None,
+        },
+        Backoff::new(Duration::from_millis(10), Duration::from_millis(50)),
+    );
+
+    let mut shown = Vec::new();
+    let mut links = Vec::new();
+    while let Some(step) = timeout(Duration::from_secs(5), attach.next())
+        .await
+        .expect("the attach reports in time")
+    {
+        match step.expect("no final error") {
+            AttachStep::Update(AttachUpdate::Output { bytes, .. }) => shown.extend(bytes),
+            AttachStep::Update(_) => {}
+            AttachStep::Link(link) => links.push(link),
+        }
+    }
+
+    assert_eq!(String::from_utf8(shown).expect("text"), "hello world!");
+    assert!(
+        matches!(
+            links.as_slice(),
+            [Link::Unverifiable { attempt: 1, .. }, Link::Live]
+        ),
+        "{links:?}"
+    );
+    let sinces = stand_in.await.expect("the stand-in finishes");
+    assert_eq!(
+        sinces,
+        vec![None, Some(9)],
+        "the reattach resumes after the output read"
+    );
 }

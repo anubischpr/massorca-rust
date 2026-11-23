@@ -15,10 +15,9 @@ fn an_empty_profile_has_no_installed_kinds() {
 
 #[test]
 fn installed_kinds_list_enabled_and_disabled_packages_in_lockfile_order() {
-    let s = setup(FakeHost::new().with_program("codex"));
+    let s = setup(FakeHost::new().with_program("codex").with_program("kit"));
     let kit = s.package_dir("kit", &agent_package("acme", "kit", "kit"));
-    s.install(&kit, true)
-        .expect("kit installs with its installer");
+    s.install(&kit, false).expect("kit installs");
     s.install(&Source::Catalogue("massorca.codex".to_owned()), false)
         .expect("codex installs");
     s.service.set_enabled("acme.kit", false).expect("disables");
@@ -38,15 +37,17 @@ fn installed_kinds_list_enabled_and_disabled_packages_in_lockfile_order() {
     assert_eq!(
         summary,
         vec![
-            ("acme.kit", "kit", false, true),
+            ("acme.kit", "kit", false, false),
             ("massorca.codex", "codex", true, false)
         ]
     );
     assert_eq!(kinds[0].package_version, "1.2.0");
     for kind in &kinds {
-        assert!(kind.path.is_absolute(), "{}", kind.path.display());
-        assert!(kind.path.ends_with(format!("agents/{}.json", kind.kind_id)));
-        assert!(kind.path.is_file());
+        let path = kind.path.as_ref().expect("a trusted package has a path");
+        assert!(path.is_absolute(), "{}", path.display());
+        assert!(path.ends_with(format!("agents/{}.json", kind.kind_id)));
+        assert!(path.is_file());
+        assert_eq!(kind.error, None);
     }
 }
 
@@ -60,6 +61,10 @@ fn the_catalogue_offers_the_four_first_party_kinds_with_their_cli() {
         let declaration: serde_json::Value =
             serde_json::from_slice(&kind.declaration).expect("declaration is JSON");
         assert_eq!(declaration["id"], kind.kind_id.as_str());
-        assert_eq!(kind.cli.verify[0], kind.cli.binary);
+        // A verify command, where the vendor documents one, starts with the binary.
+        if let Some(verify) = &kind.cli.verify {
+            assert_eq!(verify[0], kind.cli.binary);
+        }
+        assert!(kind.cli.source.starts_with("https://"));
     }
 }

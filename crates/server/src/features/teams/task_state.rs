@@ -203,6 +203,8 @@ mod tests {
                 at_ms: 2,
             }),
             result: None,
+            holds_secrets: false,
+            secrets_withheld: None,
         }
     }
 

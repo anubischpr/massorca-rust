@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::kind::{KindDecl, PromptMode, REF_PLACEHOLDER, StatusMechanism};
 use crate::paths;
+use crate::provided_env::{ProvidedEnv, dangerous_caller_name, reserved_name, same_name};
 
 /// The session id, for `massorca agent hook` and other commands run by the agent.
 pub const ENV_SESSION: &str = "MASSORCA_AGENT_SESSION";
@@ -49,6 +50,12 @@ pub struct LaunchInput<'a> {
     /// The kind's credential home, only when the profile has one (0056).
     pub credential_home: Option<&'a Path>,
     pub caller_args: &'a [String],
+    /// Variables from the profile's vault (decision 0071): set after the run's own and the credential home, before the
+    /// caller's.
+    pub provided_env: &'a ProvidedEnv,
+    /// The run is marked as holding secrets: it got vault variables now, earlier (the mark is sticky), or through its
+    /// parent. Its terminal carries the mark, and the caller's env may not add a dangerous name.
+    pub holds_secrets: bool,
     pub caller_env: &'a BTreeMap<String, String>,
 }
 
@@ -67,6 +74,8 @@ pub struct LaunchPlan {
     pub agent_ref: Option<String>,
     /// A first prompt the kind cannot take at launch (`prompt.mode` `none`).
     pub pending_prompt: Option<String>,
+    /// Copied to the run's terminal at its creation (decision 0071).
+    pub holds_secrets: bool,
 }
 
 impl std::fmt::Debug for LaunchPlan {
@@ -97,6 +106,12 @@ pub enum LaunchError {
     PromptHasControl,
     #[error("the kind declares no resume form")]
     NotResumable,
+    #[error(
+        "the vault provides {0}, which the run sets itself or which may not carry a secret; rename that secret"
+    )]
+    ReservedName(String),
+    #[error("the caller's env sets {0}, which a run holding vault secrets may not receive")]
+    DangerousCallerEnv(String),
 }
 
 /// Refuses prompts over the size limit, with a NUL, or with a control character other than tab, line feed and carriage
@@ -121,6 +136,14 @@ pub fn check_prompt(text: &str) -> Result<(), LaunchError> {
 /// Builds the plan: the kind's args, hook args, the session ref or resume args, the caller's args, then the prompt.
 pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
     let decl = input.decl;
+    if let Some(name) = reserved_name(input.provided_env, decl) {
+        return Err(LaunchError::ReservedName(name.to_owned()));
+    }
+    if (input.holds_secrets || !input.provided_env.is_empty())
+        && let Some(name) = dangerous_caller_name(input.caller_env)
+    {
+        return Err(LaunchError::DangerousCallerEnv(name.to_owned()));
+    }
     let mut args = decl.args.clone();
     let mut files = Vec::new();
     install_hooks(input, &mut args, &mut files);
@@ -168,6 +191,7 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
         files,
         agent_ref,
         pending_prompt,
+        holds_secrets: input.holds_secrets || !input.provided_env.is_empty(),
     })
 }
 
@@ -240,7 +264,8 @@ fn quote_for_shell(path: &str) -> String {
     quoted
 }
 
-/// The run's own variables, the credential home when there is one, then the caller's; and what to strip.
+/// The run's own variables, the credential home when there is one, the provided ones, then the caller's; and what to
+/// strip. A provided name in `strip_env` is set, not stripped: the vault granted it.
 fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, String>, Vec<String>) {
     let mut env = BTreeMap::new();
     env.insert(ENV_SESSION.to_owned(), input.session_id.to_owned());
@@ -263,20 +288,16 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, String>, Vec<String
             .cloned()
             .collect();
     }
+    for (name, value) in input.provided_env.iter() {
+        env.retain(|existing, _| !same_name(existing, name));
+        remove_env.retain(|stripped| !same_name(stripped, name));
+        env.insert(name.to_owned(), value.to_owned());
+    }
     for (name, value) in input.caller_env {
         env.retain(|existing, _| !same_name(existing, name));
         env.insert(name.clone(), value.clone());
     }
     (env, remove_env)
-}
-
-/// Environment names compare without case on Windows.
-fn same_name(left: &str, right: &str) -> bool {
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(right)
-    } else {
-        left == right
-    }
 }
 
 #[cfg(test)]
@@ -293,6 +314,8 @@ mod tests {
         bin: PathBuf,
         home: Option<PathBuf>,
         caller_args: Vec<String>,
+        provided: ProvidedEnv,
+        holds_secrets: bool,
         caller_env: BTreeMap<String, String>,
     }
 
@@ -305,6 +328,8 @@ mod tests {
                 bin: PathBuf::from("/opt/mass orca/massorca"),
                 home: None,
                 caller_args: Vec::new(),
+                provided: ProvidedEnv::default(),
+                holds_secrets: false,
                 caller_env: BTreeMap::new(),
             }
         }
@@ -320,6 +345,8 @@ mod tests {
                 massorca_bin: &self.bin,
                 credential_home: self.home.as_deref(),
                 caller_args: &self.caller_args,
+                provided_env: &self.provided,
+                holds_secrets: self.holds_secrets,
                 caller_env: &self.caller_env,
             })
         }
@@ -557,12 +584,130 @@ mod tests {
         );
     }
 
+    fn provided(pairs: &[(&str, &str)]) -> ProvidedEnv {
+        ProvidedEnv::new(
+            pairs
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        (*name).to_owned(),
+                        zeroize::Zeroizing::new((*value).to_owned()),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn provided_variables_come_after_the_home_and_before_the_caller() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.home = Some(PathBuf::from("/home-dir"));
+        fixture.provided = provided(&[("API_URL", "from-vault"), ("SHARED", "from-vault")]);
+        fixture.caller_env = BTreeMap::from([("SHARED".to_owned(), "from-caller".to_owned())]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env["API_URL"], "from-vault");
+        assert_eq!(plan.env["SHARED"], "from-caller", "the caller wins");
+        assert_eq!(plan.env["CLAUDE_CONFIG_DIR"], "/home-dir");
+    }
+
+    #[test]
+    fn a_provided_strip_env_name_is_set_and_not_stripped() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.home = Some(PathBuf::from("/home-dir"));
+        fixture.provided = provided(&[("ANTHROPIC_API_KEY", "granted")]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env["ANTHROPIC_API_KEY"], "granted");
+        assert!(
+            !plan
+                .remove_env
+                .iter()
+                .any(|name| name == "ANTHROPIC_API_KEY")
+        );
+        assert!(
+            plan.remove_env
+                .iter()
+                .any(|name| name == "ANTHROPIC_AUTH_TOKEN")
+        );
+    }
+
+    #[test]
+    fn a_provided_massorca_or_home_variable_is_refused() {
+        for name in [
+            "MASSORCA_X",
+            "MASSORCA_AGENT_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+            "NODE_OPTIONS",
+            "ANTHROPIC_BASE_URL",
+        ] {
+            let mut fixture = Fixture::new(built_in("claude"));
+            fixture.provided = provided(&[(name, "placeholder-value")]);
+            let refused = fixture
+                .plan(Run::First {
+                    prompt: None,
+                    new_ref: "r-1",
+                })
+                .unwrap_err();
+            assert_eq!(refused, LaunchError::ReservedName(name.to_owned()));
+            assert!(!refused.to_string().contains("placeholder-value"));
+        }
+    }
+
+    #[test]
+    fn a_run_holding_secrets_refuses_a_dangerous_caller_variable() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.caller_env = BTreeMap::from([("NODE_OPTIONS".to_owned(), "--x".to_owned())]);
+        assert!(
+            fixture
+                .plan(Run::First {
+                    prompt: None,
+                    new_ref: "r-1"
+                })
+                .is_ok()
+        );
+        fixture.provided = provided(&[("API_URL", "from-vault")]);
+        let refused = fixture
+            .plan(Run::First {
+                prompt: None,
+                new_ref: "r-1",
+            })
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            LaunchError::DangerousCallerEnv("NODE_OPTIONS".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_run_marked_only_by_inheritance_refuses_a_dangerous_caller_variable_and_marks_its_terminal()
+    {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.holds_secrets = true;
+        let plan = fixture.first(None);
+        assert!(plan.holds_secrets, "the terminal is created marked");
+        fixture.caller_env =
+            BTreeMap::from([("https_proxy".to_owned(), "http://proxy.invalid".to_owned())]);
+        let refused = fixture
+            .plan(Run::First {
+                prompt: None,
+                new_ref: "r-1",
+            })
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            LaunchError::DangerousCallerEnv("https_proxy".to_owned())
+        );
+    }
+
     #[test]
     fn debug_output_shows_no_values() {
-        let plan = Fixture::new(fake(json!({ "mode": "argv" }))).first(Some("secret prompt"));
+        let mut fixture = Fixture::new(fake(json!({ "mode": "argv" })));
+        fixture.provided = provided(&[("API_KEY", "provided-placeholder")]);
+        let plan = fixture.first(Some("secret prompt"));
         let debug = format!("{plan:?}");
         assert!(
-            !debug.contains("t0k3n") && !debug.contains("secret prompt"),
+            !debug.contains("t0k3n")
+                && !debug.contains("secret prompt")
+                && !debug.contains("provided-placeholder"),
             "{debug}"
         );
     }

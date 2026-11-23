@@ -21,6 +21,7 @@ const EXPIRED_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 /// Declares kind `fake` with its sign-in, its sign-out, and the check `check` runs (`None` declares no check).
 fn declare_kind(sandbox: &Sandbox, check: Option<&[&str]>) {
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&dir).expect("create the kinds directory");
     let mut accounts = json!({ "login": ["login"], "logout": ["logout"] });
     if let Some(args) = check {
@@ -401,6 +402,7 @@ fn migration_turns_the_old_home_into_an_active_default_account() {
         .join("agents")
         .join("homes")
         .join("fake");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&legacy).expect("create the 0056 home");
     fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
     // The move happens at a service start (decision 0059), so the home is in place before the service starts.
@@ -702,6 +704,7 @@ fn an_orphan_account_home_is_adopted_as_migrated_at_startup() {
     declare_fake(&sandbox);
     let orphan = "0195c0de-0000-7000-8000-0000000000aa";
     let home = account_home(&sandbox, orphan);
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&home).expect("create the orphan home");
     fs::write(home.join("token.json"), FAKE_TOKEN).expect("write the orphan token");
 
@@ -722,6 +725,7 @@ fn listing_accounts_and_kinds_does_not_migrate_the_legacy_home() {
         .join("agents")
         .join("homes")
         .join("fake");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&legacy).expect("create the 0056 home");
     fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
 
@@ -766,6 +770,7 @@ fn a_label_with_control_characters_or_too_long_is_refused_as_invalid_params() {
 /// Declares kind `bare`, which has credential files and a check but no sign-in command.
 fn declare_loginless_kind(sandbox: &Sandbox) {
     let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&dir).expect("create the kinds directory");
     let bare = json!({
         "id": "bare",
@@ -841,6 +846,7 @@ fn the_sweep_leaves_a_migrated_account_in_needs_sign_in_alone() {
         .join("agents")
         .join("homes")
         .join("fake");
+    sandbox.prepare_profile("default");
     fs::create_dir_all(&legacy).expect("create the 0056 home");
     fs::write(legacy.join("token.json"), FAKE_TOKEN).expect("write the fake token");
     let _service = spawn_service_with(&sandbox, &[]);

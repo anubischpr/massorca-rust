@@ -158,6 +158,70 @@ These later items call `task.create` and the methods above.
   projects, tasks and the Board land first, and `task.start` follows in its
   own slice once agent sessions are on main.
 
+## Amendment 2026-11-22: Team memory
+
+A memory line belongs to a team. It is in the team scope, or in one bot's scope
+of that team. A line written during a task names the task and has the source
+`task`. A line the owner wrote has the source `person`. Each line keeps its
+creation time.
+
+A line is at most 500 characters. Surrounding spaces are removed first, and a
+blank line is refused. The count is in Unicode scalar values. The owner lists
+and removes lines. Bots and the owner add them.
+
+A task start reads 40 lines per scope: the newest 40 team-scope lines, and the
+newest 40 lines of the bot that starts the task. The store provides this read
+as `memory_for_start`. Task start does not read it yet. The next PR, which adds
+`task.start`, puts these lines in the bot's prompt.
+
+Methods:
+
+- `team.memory_list` takes `{ team, bot? }`. Without `bot` it lists every line
+  of the team. With `bot` it lists only that bot's lines. Newest first.
+- `team.memory_add` takes `{ team, bot?, text, task? }`. A given `task` makes
+  the line a `task` line. The task must belong to the team.
+- `team.memory_rm` takes `{ team, line }` and returns the removed line.
+
+Adds and removes publish `team.changed` with the team id. Refusals use
+`request.invalid_params` for a blank or long text, `team.not_found`,
+`bot.not_found`, `task.not_found`, and `team.memory_not_found`.
+
+CLI:
+
+```
+massorca team memory list <team> [--bot <bot>]
+massorca team memory add <team> <text> [--bot <bot>] [--task <task>]
+massorca team memory rm <team> <line>
+```
+
+Team files and the Engram link stay out of this change (AUTO-31).
+
+## Amendment 2026-11-22: a team project's source
+
+A team project can now name the Workspaces project its code comes from. This
+amends the "code source" that the core decision left out of scope.
+
+- **The link.** `source_project` holds the Workspaces project id. While that
+  project exists, the wire also returns `source_project_name` and `source_kind`
+  (`git` or `folder`). All three are left out when no project is linked.
+- **How it is set.** `team.project_add` and `team.project_update` take an
+  optional `source_project`: a Workspaces project id, exact name or path. The
+  Workspaces domain resolves it. An unknown project is refused with
+  `project.not_found`, and nothing changes.
+- **How it is cleared.** `team.project_update` with an empty `source_project`
+  clears the link. Leaving the field out keeps the link.
+- **When the Workspaces project is removed.** The link is cleared. The column
+  is a foreign key with `ON DELETE SET NULL`, so no dangling id is kept. The
+  team project keeps its id, name, goal, brief and Board.
+- **Storage.** Migration step 15 adds `team_projects.source_project_id`. Rows
+  from before it read as no link.
+- **CLI.** `massorca team project add|update <team> <name> --source <project>`
+  sets the link. On update, an empty `--source` clears it. `team project list`
+  shows the linked project's name in a fourth column, or `-`.
+- **Not in this change.** Starting a task on a linked project comes in the next
+  PR. A git project gets one worktree per task. A folder project runs the task
+  in the folder itself. Read-only tasks run in the main checkout.
+
 ## Amendment 2026-11-22: where a task runs
 
 The workspace domain lets one agent write in a workspace at a time
@@ -184,13 +248,17 @@ The workspace domain lets one agent write in a workspace at a time
   own git worktree for that task. That worktree is made through the path
   delegation uses for child agents, and the result comes back as a branch. A
   task that only reads runs in the main checkout, as in pv96.
-- **What is not built yet:** a team project has no code source yet, so no task
-  reaches either project case today. Both come with the follow-up that lets a
-  team project name its repository or folder.
+- **What is not built yet:** a team project can name its code source, but
+  `task.start` does not use that link yet, so no task reaches either project
+  case today. Both come in a follow-up.
 - **Who owns the run:** the host that runs the agent owns the run. A card
   follows its session in the `live`, `unverifiable` and `exited` terms. An
   unverifiable session counts as running, and losing contact never moves a
   card to Done or to a failure.
+- **Who starts the run:** the run is started with the scope of the caller of
+  `task.start`, never as the service. It gets the vault's variables only when
+  that caller holds host-admin scope, as `agent.start` does (decision 0071).
+  A paired device with standard scopes starts a run without them.
 - **Delivery:** the built-in kinds take the prompt on their command line, so
   the prompt is delivered once the agent starts, and only then is the session
   linked. A kind whose prompt mode is `none` gets its prompt at its first idle,

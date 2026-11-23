@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use massorca_core_agents::Agents;
+use massorca_core_agents::{Agents, SecretGrant};
 use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::agents::AgentStartParams;
@@ -20,6 +20,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
+use crate::features::agents::secret_grant;
 use crate::features::workspace_domain::{for_mutation, publish};
 use crate::owner::Owner;
 use crate::permission::Permission;
@@ -61,9 +62,18 @@ struct Changes {
 
 async fn start(ctx: RequestCtx, params: TaskRef) -> Result<Task, ErrorBody> {
     let workspaces = for_mutation(&ctx).await?;
+    // The run gets the vault's variables only when this caller could start an agent with them itself.
+    let grant = secret_grant(&ctx);
     let (changes, result) = blocking(&ctx, move |store, agents| {
         let mut changes = Changes::default();
-        let result = start_task(store, agents, &workspaces, &params.task, &mut changes);
+        let result = start_task(
+            store,
+            agents,
+            &workspaces,
+            &params.task,
+            grant,
+            &mut changes,
+        );
         Ok((changes, result))
     })
     .await?;
@@ -84,6 +94,7 @@ fn start_task(
     agents: &Agents,
     workspaces: &Workspaces,
     selector: &str,
+    grant: SecretGrant,
     changes: &mut Changes,
 ) -> Result<Task, ErrorBody> {
     // One start at a time, so two starts for one bot cannot both find it free.
@@ -113,7 +124,7 @@ fn start_task(
         .map_err(store_error)?
         .ok_or_else(removed)?;
     let launched = prepare(store, agents, workspaces, &team, &bot, &row, changes)
-        .and_then(|workspace| spawn(agents, &workspace, &team, &bot, &row, &attempt));
+        .and_then(|workspace| spawn(agents, &workspace, &team, &bot, &row, &attempt, grant));
     let session = match launched {
         Ok(session) => session,
         Err(error) => {
@@ -161,20 +172,24 @@ fn spawn(
     bot: &BotRow,
     task: &TaskRow,
     attempt: &str,
+    grant: SecretGrant,
 ) -> Result<String, ErrorBody> {
-    let session = agents.start(AgentStartParams {
-        workspace: workspace.id.clone(),
-        kind: bot.kind.clone(),
-        prompt: Some(prompt(team, bot, task)),
-        args: Vec::new(),
-        env: BTreeMap::new(),
-        read_only: false,
-        title: Some(task.title.clone()),
-        cols: None,
-        rows: None,
-        // A retry of an attempt that left a live run finds that run instead of starting a second one.
-        request_id: Some(format!("task.start:{}:{attempt}", task.id)),
-    })?;
+    let session = agents.start(
+        AgentStartParams {
+            workspace: workspace.id.clone(),
+            kind: bot.kind.clone(),
+            prompt: Some(prompt(team, bot, task)),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            read_only: false,
+            title: Some(task.title.clone()),
+            cols: None,
+            rows: None,
+            // A retry of an attempt that left a live run finds that run instead of starting a second one.
+            request_id: Some(format!("task.start:{}:{attempt}", task.id)),
+        },
+        grant,
+    )?;
     Ok(session.id)
 }
 

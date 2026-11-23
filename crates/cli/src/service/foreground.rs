@@ -1,11 +1,13 @@
 //! `massorca service run`: the service in this process, until it is stopped.
 
+use std::io::Write;
 use std::path::Path;
 
 use massorca_profile::{Profile, RootAccess, ensure_dir, secure_root};
 use massorca_protocol::ErrorBody;
 use massorca_server::{
-    ListenSpec, NetworkConfig, RunningService, Service, ServiceConfig, ServiceError, ShutdownHandle,
+    ListenSpec, NetworkConfig, RunningService, START_TIMING_ENV, Service, ServiceConfig,
+    ServiceError, ShutdownHandle,
 };
 use tokio::runtime::{Builder, Runtime};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -14,6 +16,7 @@ use crate::args::RunArgs;
 use crate::error::CliError;
 use crate::logging::init_service_logging;
 use crate::output::Output;
+use crate::service::parent_watch;
 
 /// Runs the service of `profile` until a stop request or a stop signal arrives. A failure before the service accepts
 /// connections is also written to `--start-status`, where the client that started it reads it (ADR 0073).
@@ -40,12 +43,22 @@ struct Started {
 
 fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
     // Checked before anything is written into the profile, logs included (decision 0073).
+    let checking = std::time::Instant::now();
     let access = secure_root(profile).map_err(ServiceError::from)?;
+    let root_check = checking.elapsed();
     let network = network_config(args)?;
     ensure_dir(profile)?;
     let logging = init_service_logging(profile, args.log_stderr)?;
     if access == RootAccess::Repaired {
         tracing::warn!(path = %profile.dir().display(), "profile directory access was repaired: it is now private to its owner");
+    }
+    tracing::info!(took_ms = root_check.as_millis(), "profile root checked");
+    if std::env::var_os(START_TIMING_ENV).is_some() {
+        let _ = writeln!(
+            std::io::stderr(),
+            "profile root checked in {}ms",
+            root_check.as_millis()
+        );
     }
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let config = ServiceConfig {
@@ -53,7 +66,11 @@ fn start(profile: &Profile, args: &RunArgs) -> Result<Started, CliError> {
         server_name: "massorca".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
-    let running = runtime.block_on(Service::start_with_network(config, network))?;
+    // The root was checked above, before the logs were written; the service does not check it again.
+    // Logged here, while the log file is still open: the guard below flushes it when this function returns.
+    let running = runtime
+        .block_on(Service::start_checked(config, network, access))
+        .inspect_err(|error| tracing::error!(%error, "service did not start"))?;
     Ok(Started {
         runtime,
         running,
@@ -95,6 +112,9 @@ async fn serve(running: RunningService, output: Output) -> Result<(), CliError> 
     );
 
     stop_on_signal(running.shutdown_handle());
+    if let Some(pid) = parent_watch::parent_pid() {
+        parent_watch::stop_with_parent(pid, running.shutdown_handle());
+    }
     running.wait().await?;
     tracing::info!("service stopped");
     Ok(())

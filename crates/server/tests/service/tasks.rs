@@ -79,6 +79,7 @@ async fn a_task_is_created_in_the_open_column_and_listed_shown_and_updated() {
         .call(
             teams::PROJECT_ADD,
             &TeamProjectAddParams {
+                source_project: None,
                 team: "alpha".to_owned(),
                 name: "parser".to_owned(),
                 goal: None,
@@ -192,6 +193,7 @@ async fn the_board_has_four_columns_in_order_and_each_card_sits_in_its_column() 
         .call::<_, TeamProject>(
             teams::PROJECT_ADD,
             &TeamProjectAddParams {
+                source_project: None,
                 team: "alpha".to_owned(),
                 name: "parser".to_owned(),
                 goal: None,
@@ -581,6 +583,7 @@ async fn removing_a_project_leaves_its_tasks_on_the_board_without_it() {
         .call::<_, TeamProject>(
             teams::PROJECT_ADD,
             &TeamProjectAddParams {
+                source_project: None,
                 team: "alpha".to_owned(),
                 name: "parser".to_owned(),
                 goal: None,

@@ -1,7 +1,9 @@
 //! `team.project_list`, `team.project_add`, `team.project_update` and `team.project_rm` (capability `teams/1`, decision 0072).
 
 use massorca_core_store::{Store, TeamProjectRow, new_id, now_ms};
+use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::{TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED};
+use massorca_protocol::methods::projects::Project as WorkspaceProject;
 use massorca_protocol::methods::teams::{
     self, TeamProject, TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams,
     TeamProjectUpdateParams, TeamRef,
@@ -10,12 +12,12 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::workspace_domain::publish;
+use crate::features::workspace_domain::{publish, shared};
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-use super::{blocking, non_blank, selectors, store_error};
+use super::{blocking, non_blank, optional_text, selectors, store_error};
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let methods = &registries.methods;
@@ -52,18 +54,24 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 async fn list(ctx: RequestCtx, params: TeamRef) -> Result<TeamProjectList, ErrorBody> {
+    let workspaces = shared(&ctx);
     blocking(&ctx, move |store, _agents| {
         let team = selectors::team(store, &params.team)?;
         let rows = store.list_team_projects(&team.id).map_err(store_error)?;
+        let linked = workspace_projects(&workspaces)?;
         Ok(TeamProjectList {
-            projects: rows.iter().map(project_view).collect(),
+            projects: rows.iter().map(|row| project_view(row, &linked)).collect(),
         })
     })
     .await
 }
 
 async fn add(ctx: RequestCtx, params: TeamProjectAddParams) -> Result<TeamProject, ErrorBody> {
-    let project = blocking(&ctx, move |store, _agents| add_project(store, params)).await?;
+    let workspaces = shared(&ctx);
+    let project = blocking(&ctx, move |store, _agents| {
+        add_project(store, &workspaces, params)
+    })
+    .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &project.team_id);
     Ok(project)
 }
@@ -72,7 +80,11 @@ async fn update(
     ctx: RequestCtx,
     params: TeamProjectUpdateParams,
 ) -> Result<TeamProject, ErrorBody> {
-    let project = blocking(&ctx, move |store, _agents| update_project(store, params)).await?;
+    let workspaces = shared(&ctx);
+    let project = blocking(&ctx, move |store, _agents| {
+        update_project(store, &workspaces, params)
+    })
+    .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &project.team_id);
     Ok(project)
 }
@@ -82,8 +94,11 @@ async fn remove(
     ctx: RequestCtx,
     params: TeamProjectRemoveParams,
 ) -> Result<TeamProject, ErrorBody> {
-    let (project, tasks) =
-        blocking(&ctx, move |store, _agents| remove_project(store, params)).await?;
+    let workspaces = shared(&ctx);
+    let (project, tasks) = blocking(&ctx, move |store, _agents| {
+        remove_project(store, &workspaces, params)
+    })
+    .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &project.team_id);
     for id in &tasks {
         publish(&ctx, TOPIC_TASK_CHANGED, id);
@@ -91,7 +106,11 @@ async fn remove(
     Ok(project)
 }
 
-fn add_project(store: &Store, params: TeamProjectAddParams) -> Result<TeamProject, ErrorBody> {
+fn add_project(
+    store: &Store,
+    workspaces: &Workspaces,
+    params: TeamProjectAddParams,
+) -> Result<TeamProject, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let row = TeamProjectRow {
         id: new_id(),
@@ -100,13 +119,15 @@ fn add_project(store: &Store, params: TeamProjectAddParams) -> Result<TeamProjec
         goal: params.goal.unwrap_or_default().trim().to_owned(),
         brief: params.brief.unwrap_or_default(),
         created_at: now_ms(),
+        source_project_id: source_project_id(workspaces, params.source_project)?,
     };
     store.insert_team_project(&row).map_err(store_error)?;
-    Ok(project_view(&row))
+    Ok(project_view(&row, &workspace_projects(workspaces)?))
 }
 
 fn update_project(
     store: &Store,
+    workspaces: &Workspaces,
     params: TeamProjectUpdateParams,
 ) -> Result<TeamProject, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
@@ -120,21 +141,26 @@ fn update_project(
     if let Some(brief) = params.brief {
         row.brief = brief;
     }
+    if let Some(source) = params.source_project {
+        row.source_project_id = source_project_id(workspaces, Some(source))?;
+    }
     if !store.update_team_project(&row).map_err(store_error)? {
         return Err(ErrorBody::new(
             codes::INTERNAL,
             "the project was removed by another call",
         ));
     }
-    Ok(project_view(&row))
+    Ok(project_view(&row, &workspace_projects(workspaces)?))
 }
 
 fn remove_project(
     store: &Store,
+    workspaces: &Workspaces,
     params: TeamProjectRemoveParams,
 ) -> Result<(TeamProject, Vec<String>), ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let row = selectors::team_project(store, &team, &params.project)?;
+    let linked_projects = workspace_projects(workspaces)?;
     let linked = store.list_tasks_of_project(&row.id).map_err(store_error)?;
     if !store.delete_team_project(&row.id).map_err(store_error)? {
         return Err(ErrorBody::new(
@@ -143,10 +169,30 @@ fn remove_project(
         ));
     }
     let tasks = linked.into_iter().map(|task| task.id).collect();
-    Ok((project_view(&row), tasks))
+    Ok((project_view(&row, &linked_projects), tasks))
 }
 
-fn project_view(row: &TeamProjectRow) -> TeamProject {
+/// The Workspaces project `selector` names by id, exact name or path; a blank selector links none.
+fn source_project_id(
+    workspaces: &Workspaces,
+    selector: Option<String>,
+) -> Result<Option<String>, ErrorBody> {
+    match optional_text(selector) {
+        Some(selector) => Ok(Some(workspaces.show_project(&selector)?.id)),
+        None => Ok(None),
+    }
+}
+
+fn workspace_projects(workspaces: &Workspaces) -> Result<Vec<WorkspaceProject>, ErrorBody> {
+    Ok(workspaces.list_projects()?)
+}
+
+/// The wire view of a project. Its linked project's name and kind come from `linked` while that project exists.
+fn project_view(row: &TeamProjectRow, linked: &[WorkspaceProject]) -> TeamProject {
+    let source = row
+        .source_project_id
+        .as_deref()
+        .and_then(|id| linked.iter().find(|project| project.id == id));
     TeamProject {
         id: row.id.clone(),
         team_id: row.team_id.clone(),
@@ -154,5 +200,8 @@ fn project_view(row: &TeamProjectRow) -> TeamProject {
         goal: row.goal.clone(),
         brief: row.brief.clone(),
         created_at_ms: row.created_at,
+        source_project: row.source_project_id.clone(),
+        source_project_name: source.map(|project| project.name.clone()),
+        source_kind: source.map(|project| project.kind),
     }
 }
