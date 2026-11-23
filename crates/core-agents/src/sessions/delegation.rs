@@ -585,9 +585,6 @@ fn already_brought_back(session: &str) -> AgentError {
     )
 }
 
-/// The prompt a parent run receives on a bring-back: the child, its workspace, the merge commit and the child's result.
-/// It is one line, so a plain paste submits it once: every control character in the result, line breaks included,
-/// becomes a space, and the result is cut to [`MAX_QUOTED_RESULT`] bytes.
 /// Drains a session's queue when it goes out of scope, so a bring-back drains the parent however it ends.
 struct DrainParentQueue<'a> {
     agents: &'a Agents,
@@ -600,6 +597,9 @@ impl Drop for DrainParentQueue<'_> {
     }
 }
 
+/// The prompt a parent run receives on a bring-back: the child, its workspace, the merge commit and the child's result.
+/// It is one line, so a plain paste submits it once: every control character in the result, line breaks included,
+/// becomes a space, and the result is cut to [`MAX_QUOTED_RESULT`] bytes.
 fn bring_back_prompt(child: &AgentSession, workspace: &str, merge_commit: Option<&str>) -> String {
     let merge = match merge_commit {
         Some(commit) => format!("Its branch is merged into this worktree as commit {commit}."),
