@@ -7,8 +7,8 @@ use std::future::Future;
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentKind, AgentPromptParams, AgentSession, AgentStartParams,
-    BringBackResult, PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentPromptParams,
+    AgentSession, AgentStartParams, BringBackResult, PromptReceipt,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -51,6 +51,15 @@ impl ServiceHandle {
         params: AgentBringBackParams,
     ) -> Result<BringBackResult, Refusal> {
         self.ask(|reply| Command::BringBack { params, reply }).await
+    }
+
+    /// `agent.delegate`: starts a child of a session. The store lists the child after the refetch that follows,
+    /// not from this answer.
+    pub async fn agent_delegate(
+        &self,
+        params: AgentDelegateParams,
+    ) -> Result<AgentDelegated, Refusal> {
+        self.ask(|reply| Command::Delegate { params, reply }).await
     }
 
     /// `agent.prompt`: types `params.text` into the session's terminal and submits it. The receipt says the bytes
@@ -98,6 +107,30 @@ pub(super) fn spawn_start(
             let _ = updates.send(StoreUpdate::AgentChanged(session.clone()));
         }
         let _ = reply.send(result);
+    });
+}
+
+/// Starts a child on its own task, then refetches the tree it joined whatever the answer, so the store lists
+/// the service's own record of the child and never a guess.
+pub(super) fn spawn_delegate(
+    client: &Client,
+    params: AgentDelegateParams,
+    reply: oneshot::Sender<Result<AgentDelegated, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        let answer = client
+            .agent_delegate(&params)
+            .await
+            .map_err(|error| Refusal::from(&error));
+        let tree_of = match &answer {
+            Ok(delegated) => delegated.session.id.clone(),
+            Err(_) => params.parent.clone(),
+        };
+        refetch_tree(&client, &tree_of, &updates).await;
+        let _ = reply.send(answer);
     });
 }
 

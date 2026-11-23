@@ -13,8 +13,8 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentPromptParams, AgentSession, AgentStartParams, BringBackResult,
-    PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentPromptParams, AgentSession,
+    AgentStartParams, BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -90,6 +90,11 @@ pub(crate) enum Command {
     BringBack {
         params: AgentBringBackParams,
         reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
+    },
+    /// `agent.delegate`, answered on its oneshot with the child once the service has started it.
+    Delegate {
+        params: AgentDelegateParams,
+        reply: oneshot::Sender<Result<AgentDelegated, Refusal>>,
     },
     /// `agent.start`, answered on its oneshot once the service has started the session.
     AgentStart {
@@ -876,6 +881,9 @@ fn spawn_call(
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
+        Command::Delegate { params, reply } => {
+            agents::spawn_delegate(&client, params, reply, updates);
+        }
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_)
         | Command::Team(_)
@@ -944,9 +952,40 @@ fn refuse_while_down(command: Command) {
         Command::BringBack { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::Delegate { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use massorca_protocol::methods::agents::AgentDelegateParams;
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[test]
+    fn a_delegate_call_while_the_service_is_down_is_refused_at_once() {
+        let params = AgentDelegateParams {
+            parent: "p".to_owned(),
+            prompt: "look".to_owned(),
+            kind: None,
+            name: None,
+            title: None,
+            read_only: true,
+            token: None,
+            request_id: None,
+        };
+        let (reply, mut answer) = oneshot::channel();
+        refuse_while_down(Command::Delegate { params, reply });
+        assert!(matches!(
+            answer.try_recv(),
+            Ok(Err(Refusal::Unavailable { .. }))
+        ));
     }
 }
