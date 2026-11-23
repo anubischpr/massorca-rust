@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_agents::{
-    Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
-    ProviderError,
+    Agents, AgentsConfig, BuiltInPackages, Change, EnvProvider, Listener as ChangeListener,
+    ProvidedEnv, ProviderError,
 };
 use massorca_core_extensions::Extensions;
 use massorca_core_git::Git;
@@ -167,6 +167,7 @@ impl Service {
             profile_dir: profile.dir().to_path_buf(),
             massorca_bin: std::env::current_exe()?,
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
+            kind_packages: Arc::new(BuiltInPackages),
         });
         // No run survives the previous service (0051); nothing has started one yet in this service.
         let marker = agents.clone();

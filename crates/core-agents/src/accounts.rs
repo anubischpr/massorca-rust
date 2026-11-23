@@ -207,8 +207,13 @@ impl Agents {
                 }
             };
         let verdict = self.check_imported(kind, &account);
-        let files =
-            credentials::account_files_present(self.profile_dir(), kind, &account).unwrap_or(false);
+        let files = credentials::account_files_present(
+            self.profile_dir(),
+            self.kind_packages(),
+            kind,
+            &account,
+        )
+        .unwrap_or(false);
         let refused = refused_state(verdict.as_ref());
         match sign_in_outcome(verdict.as_ref(), files, SignInEnd::TerminalEnded) {
             SignInOutcome::Discard => {
@@ -434,8 +439,13 @@ impl Agents {
         let row = self.account_of(kind, account)?;
         let (decl, program) = self.startable_kind(kind)?;
         let verdict = self.check_verdict(&decl, &program, account, row.identity.as_deref());
-        let files =
-            credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
+        let files = credentials::account_files_present(
+            self.profile_dir(),
+            self.kind_packages(),
+            kind,
+            account,
+        )
+        .unwrap_or(false);
         let outcome = sign_in_outcome(Some(&verdict), files, SignInEnd::TerminalEnded);
         let refused = refused_state(Some(&verdict));
         let sign_out = (row.origin == ORIGIN_SIGN_IN).then_some((decl, program));
@@ -676,8 +686,10 @@ impl Agents {
     /// A read: no migration.
     pub fn credentials_show(&self, kind: &str) -> Result<CredentialsShown, AgentError> {
         match self.store().get_active_agent_account(kind)? {
-            Some(account) => credentials::show_account(self.profile_dir(), kind, &account),
-            None => credentials::show(self.profile_dir(), kind),
+            Some(account) => {
+                credentials::show_account(self.profile_dir(), self.kind_packages(), kind, &account)
+            }
+            None => credentials::show(self.profile_dir(), self.kind_packages(), kind),
         }
     }
 
@@ -896,7 +908,13 @@ impl Agents {
         let account = new_id();
         // Marked before the copy and the row exist, so no check of the account can take the decision first.
         let mark = self.mark_now(&account);
-        let imported = credentials::import_account(self.profile_dir(), kind, &account, from)?;
+        let imported = credentials::import_account(
+            self.profile_dir(),
+            self.kind_packages(),
+            kind,
+            &account,
+            from,
+        )?;
         {
             let _gate = credentials::lock_homes();
             let row = AgentAccountRow {
