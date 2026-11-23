@@ -2,10 +2,21 @@
 //! Decision 0007 allows `unsafe` only in named platform modules such as this one.
 #![allow(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::ffi::{c_int, c_void};
 
 use crate::table::listed_until_it_fits;
-use crate::{ProcessInfo, ProcessTable};
+use crate::{Listening, ProcessInfo, ProcessTable};
+
+/// The socket table is not read on macOS. libc 0.2.191 declares neither `socket_fdinfo` nor the TCP socket
+/// structures, and their layouts cannot be checked against a macOS SDK here, so a wrong offset could report wrong ports.
+/// Until a macOS build verifies them, the table reads as unreadable and no port is listed (decision 0081).
+pub(crate) fn listening_sockets(
+    _table: &[ProcessInfo],
+    _pids: &BTreeSet<u32>,
+) -> Option<Listening> {
+    None
+}
 
 /// `SZOMB` in `sys/proc.h`: the process ended and waits to be reaped.
 const SZOMB: u32 = 5;

@@ -9,6 +9,7 @@
 //! A process that exited or cannot be opened is never an error: it reads as `None`, or is left out of the table.
 
 mod memory;
+mod sockets;
 mod table;
 
 #[cfg(target_os = "linux")]
@@ -34,6 +35,7 @@ pub use memory::sample_job;
 #[cfg(unix)]
 pub use memory::sample_listed;
 pub use memory::{METRIC, MemorySample, Metric, ProcessMemory, memory_of, sample_memory};
+pub use sockets::{Listening, ListeningSocket, listening_tcp};
 #[cfg(unix)]
 pub use table::descendants;
 #[cfg(windows)]

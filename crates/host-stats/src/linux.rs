@@ -1,9 +1,18 @@
 //! Linux: `/proc/<pid>/status` for the resident set, `/proc/<pid>/stat` for the table and for each process's identity.
 //! No `unsafe`.
 
+use std::collections::BTreeSet;
 use std::fs;
 
-use crate::{ProcessInfo, ProcessTable};
+use crate::{Listening, ProcessInfo, ProcessTable};
+
+/// Not read yet: the socket table of Linux is read in the next change. Until then no port is known here.
+pub(crate) fn listening_sockets(
+    _table: &[ProcessInfo],
+    _pids: &BTreeSet<u32>,
+) -> Option<Listening> {
+    None
+}
 
 /// The resident set of `pid` in bytes, with no identity check. Only for a process whose identity is the caller's own.
 pub(crate) fn resident_bytes(pid: u32) -> Option<u64> {

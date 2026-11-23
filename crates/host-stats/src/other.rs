@@ -1,8 +1,17 @@
 //! Platforms without a reader: nothing can be read, so every pid is unreadable and the table is empty and not complete.
 
-use crate::{ProcessInfo, ProcessTable};
+use std::collections::BTreeSet;
+
+use crate::{Listening, ProcessInfo, ProcessTable};
 
 pub(crate) fn resident_bytes(_pid: u32) -> Option<u64> {
+    None
+}
+
+pub(crate) fn listening_sockets(
+    _table: &[ProcessInfo],
+    _pids: &BTreeSet<u32>,
+) -> Option<Listening> {
     None
 }
 
