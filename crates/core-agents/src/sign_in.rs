@@ -82,7 +82,10 @@ impl Agents {
                 program: program.to_string_lossy().into_owned(),
                 args: login,
             }),
-            env,
+            env: env
+                .into_iter()
+                .map(|(name, value)| (name, massorca_core_terminal::EnvValue::new(value)))
+                .collect(),
             size: PtySize {
                 cols: DEFAULT_COLS,
                 rows: DEFAULT_ROWS,

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use massorca_core_terminal::EnvValue;
 use massorca_core_terminal::shell::{
     EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program,
 };
@@ -14,7 +15,7 @@ fn path_value(dirs: &[&Path]) -> String {
         .expect("utf-8 path")
 }
 
-fn terminal_env(extra: &BTreeMap<String, String>) -> TerminalEnv<'_> {
+fn terminal_env(extra: &BTreeMap<String, EnvValue>) -> TerminalEnv<'_> {
     TerminalEnv {
         terminal_id: "terminal-1",
         workspace_id: "workspace-1",
@@ -25,10 +26,10 @@ fn terminal_env(extra: &BTreeMap<String, String>) -> TerminalEnv<'_> {
     }
 }
 
-fn value_of(env: &[(String, String)], name: &str) -> Option<String> {
+fn value_of(env: &[(String, EnvValue)], name: &str) -> Option<String> {
     env.iter()
         .find(|(key, _)| key == name)
-        .map(|(_, value)| value.clone())
+        .map(|(_, value)| value.to_string())
 }
 
 #[test]
@@ -82,9 +83,9 @@ fn colour_switches_are_removed_and_other_variables_kept() {
 fn caller_variables_are_applied_last_and_may_override() {
     let base = EnvSnapshot::from_pairs([("TERM", "linux"), ("MASSORCA_HOME", "/old")]);
     let mut extra = BTreeMap::new();
-    extra.insert("TERM".to_owned(), "dumb".to_owned());
-    extra.insert("NO_COLOR".to_owned(), "1".to_owned());
-    extra.insert("CUSTOM_FLAG".to_owned(), "on".to_owned());
+    extra.insert("TERM".to_owned(), EnvValue::from("dumb".to_owned()));
+    extra.insert("NO_COLOR".to_owned(), EnvValue::from("1".to_owned()));
+    extra.insert("CUSTOM_FLAG".to_owned(), EnvValue::from("on".to_owned()));
     let env = build_environment(&base, &terminal_env(&extra));
 
     assert_eq!(value_of(&env, "TERM").as_deref(), Some("dumb"));
@@ -142,7 +143,10 @@ fn a_repeated_name_keeps_one_entry() {
 fn windows_variable_names_compare_case_insensitively() {
     let base = EnvSnapshot::from_pairs([("no_color", "1"), ("term", "linux")]);
     let mut extra = BTreeMap::new();
-    extra.insert("Term_Program".to_owned(), "other".to_owned());
+    extra.insert(
+        "Term_Program".to_owned(),
+        EnvValue::from("other".to_owned()),
+    );
     let env = build_environment(&base, &terminal_env(&extra));
 
     assert_eq!(value_of(&env, "no_color"), None);

@@ -103,7 +103,7 @@ pub struct CreateSpec {
     /// `None` starts the default shell.
     pub shell: Option<ShellChoice>,
     /// Added to the environment last; may override anything.
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, crate::EnvValue>,
     pub size: PtySize,
     pub title: Option<String>,
     /// A repeated id returns the first terminal instead of starting another.
