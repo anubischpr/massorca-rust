@@ -23,6 +23,7 @@ fn session(id: &str, title: &str, agent: Agent, state: AgentState) -> SessionRow
         agent,
         state,
         place: None,
+        own_worktree: false,
         can_bring_back: false,
         children: Vec::new(),
     }
