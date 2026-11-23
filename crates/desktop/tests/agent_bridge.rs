@@ -365,6 +365,7 @@ async fn add_workspace(handle: &ServiceHandle, repo_dir: &Path) -> Workspace {
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         })
