@@ -2,6 +2,8 @@
 //! they survive the client and reach the agent in order. The calls here queue, list, edit and remove; delivery follows
 //! the agent's activity, and every change is announced as `Change::Queue`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use massorca_core_store::{
@@ -208,6 +210,32 @@ impl Agents {
     }
 }
 
+/// Finishes a delivery as a failure when its thread ends before the delivery does, so a panic cannot leave the prompt
+/// sending and the run delivering (decision 0084). Whether the write started decides the typed flag.
+struct UnfinishedDelivery {
+    agents: Agents,
+    session: String,
+    item: String,
+    started: Arc<AtomicBool>,
+    finished: bool,
+}
+
+impl Drop for UnfinishedDelivery {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.agents.finish_delivery(
+                &self.session,
+                &self.item,
+                Err(AgentError::new(
+                    codes::INTERNAL,
+                    "the queued prompt could not be typed",
+                )),
+                self.started.load(Ordering::SeqCst),
+            );
+        }
+    }
+}
+
 /// What a delivery types into a run: the queued prompt it sends, the run's terminal and the bytes of its text. It holds
 /// the prompt text, so it has no `Debug`.
 struct Delivery {
@@ -233,24 +261,29 @@ impl Agents {
     /// No test stalls this write: `TerminalManager` is concrete and a PTY write cannot be blocked deterministically in
     /// process. The property rests on this spawn, which `deliver_first_input` uses for the same reason.
     fn send_on_thread(&self, delivery: Delivery) {
-        let agents = self.clone();
+        let started = Arc::new(AtomicBool::new(false));
         let session = delivery.session.clone();
         let item = delivery.item.clone();
+        let guard = UnfinishedDelivery {
+            agents: self.clone(),
+            session: session.clone(),
+            item: item.clone(),
+            started: Arc::clone(&started),
+            finished: false,
+        };
+        let agents = self.clone();
         let spawned = thread::Builder::new()
             .name("agent-queue-delivery".to_owned())
             .spawn(move || {
-                let _ = agents.send_delivery(delivery);
+                // Finishes the delivery as a failure if this thread panics before it finishes (decision 0084).
+                let mut guard = guard;
+                let _ = agents.send_delivery(delivery, &started);
+                guard.finished = true;
             });
         if let Err(error) = spawned {
+            // The closure, with its guard, is dropped when no thread starts, and the guard finishes the delivery as not
+            // typed; nothing else needs to happen here.
             tracing::warn!(session = %session, %error, "a queued prompt has no thread to be typed on");
-            self.finish_delivery(
-                &session,
-                &item,
-                Err(AgentError::new(
-                    codes::INTERNAL,
-                    "the queued prompt has no thread to be typed on",
-                )),
-            );
         }
     }
 
@@ -320,7 +353,9 @@ impl Agents {
     }
 
     /// Types a delivery's bytes outside the status lock, as a prompt is typed, then records how it ended.
-    fn send_delivery(&self, delivery: Delivery) -> Result<(), AgentError> {
+    fn send_delivery(&self, delivery: Delivery, started: &AtomicBool) -> Result<(), AgentError> {
+        // Recorded before the write, so a failure after it is known to have attempted the write.
+        started.store(true, Ordering::SeqCst);
         let written = self
             .inner
             .config
@@ -330,16 +365,27 @@ impl Agents {
                 TerminalError::Exited | TerminalError::NotFound => not_live(&delivery.session),
                 other => AgentError::from(other),
             });
-        self.finish_delivery(&delivery.session, &delivery.item, written.clone());
+        self.finish_delivery(&delivery.session, &delivery.item, written.clone(), true);
         written
     }
 
     /// Records how a delivery ended (decision 0084, D4): a typed prompt leaves the queue; one that could not be typed is
     /// failed with its reason, and holds everything behind it until it is removed or sent. Announced either way.
-    fn finish_delivery(&self, session: &str, item: &str, written: Result<(), AgentError>) {
+    fn finish_delivery(
+        &self,
+        session: &str,
+        item: &str,
+        written: Result<(), AgentError>,
+        typing_started: bool,
+    ) {
         let mut live = lock(&self.inner.status);
         if let Some(run) = live.get_mut(session) {
             run.delivering = false;
+            // Nothing was typed, so the agent cannot be answering it: the next prompt need not wait for a report. A write that
+            // may have partly gone out keeps the flag, as agent.prompt's failure does (decision 0058).
+            if written.is_err() && !typing_started {
+                run.typed_since_report = false;
+            }
         }
         let stored = match written {
             Ok(()) => {
@@ -402,7 +448,7 @@ impl Agents {
             let delivery = self.start_sending(run, &item, terminal)?;
             (delivery, shown)
         };
-        let outcome = self.send_delivery(delivery);
+        let outcome = self.send_delivery(delivery, &AtomicBool::new(false));
         if outcome.is_ok() {
             self.lift_pauses(&session);
         }
@@ -778,6 +824,7 @@ mod tests {
                 codes::AGENT_NOT_LIVE,
                 "the run of session has exited",
             )),
+            true,
         );
 
         let held = agents.queue_list(&session).unwrap();
@@ -811,7 +858,7 @@ mod tests {
         let sink = Arc::clone(&seen);
         agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
 
-        agents.finish_delivery(&session, &head.id, Ok(()));
+        agents.finish_delivery(&session, &head.id, Ok(()), true);
 
         assert_eq!(texts(&agents.queue_list(&session).unwrap()), ["two"]);
         assert_eq!(*seen.lock().unwrap(), vec![Change::Queue(session)]);
@@ -921,7 +968,7 @@ mod tests {
             .store()
             .set_queued_prompt_state(&first.id, QueuedState::Sending, None, now_ms())
             .unwrap();
-        agents.finish_delivery(&session, &first.id, Ok(()));
+        agents.finish_delivery(&session, &first.id, Ok(()), true);
         assert!(agents.queue_list(&session).unwrap().items.is_empty());
 
         let retry = agents
@@ -1032,6 +1079,74 @@ mod tests {
         assert_eq!(
             shown.items[0].reason.as_deref(),
             Some("queued by a caller without host-admin; the run now holds secrets")
+        );
+    }
+
+    /// A run of the built-in `claude` kind as the queue sees it while one of its prompts is being typed.
+    fn typing_run(typed_since_report: bool) -> crate::sessions::LiveRun {
+        crate::sessions::LiveRun {
+            token: "t".to_owned(),
+            rules: crate::status::HookRules::default(),
+            prompt: crate::sessions::PromptRules {
+                has_status: true,
+                paste: crate::kind::PasteMode::Plain,
+                submit: "\r".to_owned(),
+            },
+            pending: None,
+            pending_switch: None,
+            typed_since_report,
+            switching: false,
+            delivering: true,
+            account: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_delivery_that_typed_nothing_frees_the_next_prompt_and_a_partial_one_does_not() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let nothing = agents
+            .queue_add(&session, "nothing typed", None, false)
+            .unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&nothing.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+        agents.live_runs().insert(session.clone(), typing_run(true));
+
+        agents.finish_delivery(
+            &session,
+            &nothing.id,
+            Err(AgentError::new(codes::INTERNAL, "nothing was typed")),
+            false,
+        );
+
+        {
+            let live = agents.live_runs();
+            assert!(
+                !live[&session].typed_since_report,
+                "the agent took no text, so the next prompt need not wait for a report"
+            );
+            assert!(!live[&session].delivering);
+        }
+
+        let partial = agents
+            .queue_add(&session, "partly typed", None, false)
+            .unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&partial.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+        agents.live_runs().insert(session.clone(), typing_run(true));
+        agents.finish_delivery(
+            &session,
+            &partial.id,
+            Err(AgentError::new(codes::INTERNAL, "the write failed")),
+            true,
+        );
+        assert!(
+            agents.live_runs()[&session].typed_since_report,
+            "a write that may have partly gone out waits for a report, as agent.prompt does"
         );
     }
 }
