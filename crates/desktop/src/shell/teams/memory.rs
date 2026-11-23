@@ -36,7 +36,7 @@ pub(in crate::shell) fn memory_page(
                 .text_color(theme.palette.text.primary)
                 .child("Memory"),
         )
-        .child(team_pill(&team_data.name, team, &theme));
+        .child(team_pill(&team_data.name, team_data.character, &theme));
     let entries: Vec<&MemoryEntry> = team_data
         .memory
         .iter()
