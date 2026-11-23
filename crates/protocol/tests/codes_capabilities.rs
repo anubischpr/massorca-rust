@@ -91,6 +91,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TERMINAL_LIMIT_REACHED, "terminal.limit_reached"),
     (codes::AGENT_NOT_FOUND, "agent.not_found"),
     (codes::AGENT_KIND_NOT_FOUND, "agent.kind_not_found"),
+    (codes::AGENT_KIND_NOT_ENABLED, "agent.kind_not_enabled"),
     (codes::AGENT_NOT_INSTALLED, "agent.not_installed"),
     (codes::AGENT_WORKSPACE_BUSY, "agent.workspace_busy"),
     (codes::AGENT_NOT_LIVE, "agent.not_live"),

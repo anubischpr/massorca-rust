@@ -185,6 +185,7 @@ impl Agents {
     ) -> Result<AccountsImported, AgentError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
         valid_label(&label)?;
+        self.require_enabled_kind(kind)?;
         let (account, _, mark) =
             match self.import_new_account(kind, Path::new(from), &label, ORIGIN_IMPORT) {
                 Ok(added) => added,
@@ -248,6 +249,7 @@ impl Agents {
         account: &str,
         project: Option<&str>,
     ) -> Result<AccountSummary, AgentError> {
+        self.require_enabled_kind(kind)?;
         let summary = self.activate_under_gate(kind, account, project)?;
         // Announced once, after the gate is released: the account made active, or chosen by the project (decision 0059).
         self.notify_account(kind, account, summary.state);
@@ -314,7 +316,7 @@ impl Agents {
             self.begin_removal(account)?
         };
         if row.origin == ORIGIN_SIGN_IN
-            && let Ok((decl, program)) = self.startable_kind(kind)
+            && let Ok((decl, program)) = self.runnable_kind(kind)
         {
             self.sign_out(&decl, &program, kind, account);
         }
@@ -381,7 +383,7 @@ impl Agents {
         if self.store_pending(&id)? {
             return self.check_undecided(kind, &id);
         }
-        let (decl, program) = self.startable_kind(kind)?;
+        let (decl, program) = self.runnable_kind(kind)?;
         let state = self.check_verdict(&decl, &program, &id, row.identity.as_deref());
         {
             let _gate = credentials::lock_homes();
@@ -437,7 +439,7 @@ impl Agents {
             return self.accounts_check(kind, Some(account));
         }
         let row = self.account_of(kind, account)?;
-        let (decl, program) = self.startable_kind(kind)?;
+        let (decl, program) = self.runnable_kind(kind)?;
         let verdict = self.check_verdict(&decl, &program, account, row.identity.as_deref());
         let files = credentials::account_files_present(
             self.profile_dir(),
@@ -937,7 +939,7 @@ impl Agents {
     /// The check of an import: `None` when the kind declares no check or cannot run one. It records nothing: the import's
     /// decision does.
     fn check_imported(&self, kind: &str, account: &str) -> Option<Verdict> {
-        let (decl, program) = self.startable_kind(kind).ok()?;
+        let (decl, program) = self.runnable_kind(kind).ok()?;
         self.check_account_home(&decl, &program, account, None)
     }
 

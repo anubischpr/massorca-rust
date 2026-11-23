@@ -743,6 +743,7 @@ impl Agents {
         let entry = catalog.find(&row.kind).ok_or_else(|| {
             resume_unavailable(&row.id, &format!("kind {} is no longer declared", row.kind))
         })?;
+        require_enabled(entry)?;
         let decl = entry
             .valid()
             .ok_or_else(|| resume_unavailable(&row.id, &format!("kind {} is invalid", row.kind)))?;
@@ -1191,14 +1192,33 @@ impl Agents {
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
     }
 
+    /// The declaration and program a start uses: declared, enabled (decision 0059), valid and installed. A delegated
+    /// child and a sign-in start through it too.
     pub(crate) fn startable_kind(
         &self,
         id: &str,
+    ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        self.installed_kind(id, true)
+    }
+
+    /// [`Agents::startable_kind`], whatever the state of the kind's package: an account's check, its removal and its
+    /// sign-out keep working on a disabled kind (decision 0059).
+    pub(crate) fn runnable_kind(&self, id: &str) -> Result<(crate::KindDecl, PathBuf), AgentError> {
+        self.installed_kind(id, false)
+    }
+
+    fn installed_kind(
+        &self,
+        id: &str,
+        gated: bool,
     ) -> Result<(crate::KindDecl, PathBuf), AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
         let entry = catalog.find(id).ok_or_else(|| {
             AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
         })?;
+        if gated {
+            require_enabled(entry)?;
+        }
         let decl = entry.valid().ok_or_else(|| {
             AgentError::new(
                 codes::AGENT_NOT_INSTALLED,
@@ -1212,6 +1232,15 @@ impl Agents {
             )
         })?;
         Ok((decl.clone(), program))
+    }
+
+    /// Refuses `kind` with `agent.kind_not_enabled` when it is declared by a package that is not enabled (decision
+    /// 0059). An undeclared kind passes: the call reports it as its own.
+    pub(crate) fn require_enabled_kind(&self, kind: &str) -> Result<(), AgentError> {
+        match Catalog::load(self.kind_packages(), self.profile_dir()).find(kind) {
+            Some(entry) => require_enabled(entry),
+            None => Ok(()),
+        }
     }
 
     /// The live writing session of a workspace, if any.
@@ -1536,6 +1565,27 @@ fn exited(exit: &RunExit) -> Execution {
             at_ms: exit.at,
         }),
     }
+}
+
+/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state.
+fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
+    if entry.enabled() {
+        return Ok(());
+    }
+    let state = serde_json::to_value(entry.package.state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    let package = entry.package.id.clone().unwrap_or_default();
+    let mut error = AgentError::new(
+        codes::AGENT_KIND_NOT_ENABLED,
+        format!(
+            "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
+            entry.id
+        ),
+    );
+    error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
+    Err(error)
 }
 
 /// The stored activity in wire form; values a newer build wrote read as `unknown`.

@@ -177,7 +177,7 @@ impl Agents {
             account,
         )
         .unwrap_or(false);
-        let kind_program = self.startable_kind(kind).ok();
+        let kind_program = self.runnable_kind(kind).ok();
         let verdict = kind_program
             .as_ref()
             .and_then(|(decl, program)| self.check_account_home(decl, program, account, None));

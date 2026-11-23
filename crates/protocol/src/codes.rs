@@ -175,6 +175,9 @@ pub const SECRET_REQUEST_RESOLVED: &str = "secret.request_resolved";
 
 pub const AGENT_NOT_FOUND: &str = "agent.not_found";
 pub const AGENT_KIND_NOT_FOUND: &str = "agent.kind_not_found";
+/// The kind's package is available or disabled, not enabled (decision 0059); the data names the kind, the package and its
+/// state.
+pub const AGENT_KIND_NOT_ENABLED: &str = "agent.kind_not_enabled";
 /// The kind is declared but none of its program candidates resolves, or its declaration has problems.
 pub const AGENT_NOT_INSTALLED: &str = "agent.not_installed";
 /// The workspace already holds a live writing session; `data.session` names it.
