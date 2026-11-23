@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use massorca_core_extensions::host::current_os;
+use massorca_core_extensions::host::{ProgramResolver, current_os};
 use massorca_core_extensions::removal::CliAction;
 use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{HookError, codes};
@@ -190,6 +190,53 @@ fn the_cli_uninstall_runs_only_for_a_cli_the_package_installed_and_only_when_ask
         .expect("removes");
     assert_eq!(left.cli[0].action, CliAction::LeftAlone);
     assert!(s.host.runs().is_empty());
+}
+
+/// The npm uninstall Codex and Gentle Shell declare on every OS, mirroring their npm install.
+fn npm_uninstall(package: &str) -> Vec<String> {
+    ["npm", "uninstall", "-g", package]
+        .iter()
+        .map(|part| (*part).to_owned())
+        .collect()
+}
+
+#[test]
+fn codex_and_gentle_shell_uninstall_only_the_npm_package_they_installed() {
+    for (id, binary, package) in [
+        ("massorca.codex", "codex", "@openai/codex"),
+        ("massorca.gentle-shell", "gentle-shell", "gentle-pi"),
+    ] {
+        let s = setup(FakeHost::new());
+        s.install(&Source::Catalogue(id.to_owned()), true)
+            .expect("installs");
+        assert!(s.host.resolve(binary).is_some(), "{id} installed its CLI");
+        let command = npm_uninstall(package);
+        let fingerprint =
+            massorca_core_extensions::review::uninstall_fingerprint(std::slice::from_ref(&command));
+        let ran = s
+            .service
+            .remove(id, false, true, Some(&fingerprint))
+            .expect("removes");
+        assert_eq!(
+            ran.cli[0].action,
+            CliAction::Ran {
+                command: command.clone(),
+                exit_code: Some(0)
+            },
+            "{id}"
+        );
+        assert_eq!(s.host.runs().last(), Some(&command));
+        assert!(s.host.resolve(binary).is_none(), "{id} removed its CLI");
+        assert!(s.service.layout().uninstall_log(id).exists());
+
+        let s = setup(FakeHost::new().with_program(binary));
+        s.install(&Source::Catalogue(id.to_owned()), false)
+            .expect("installs");
+        let left = s.service.remove(id, false, true, None).expect("removes");
+        assert_eq!(left.cli[0].action, CliAction::LeftAlone, "{id}");
+        assert!(s.host.runs().is_empty(), "{id} ran nothing");
+        assert!(s.host.resolve(binary).is_some(), "{id} kept the CLI");
+    }
 }
 
 #[test]
