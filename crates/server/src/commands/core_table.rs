@@ -368,7 +368,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                 "required": ["session", "text"],
                 "properties": {
                     "session": { "type": "string" },
-                    "text": { "type": "string" }
+                    "text": { "type": "string" },
+                    "request_id": { "type": "string" }
                 }
             }),
         ),

@@ -400,3 +400,49 @@ fn vault_env_provider(vault: Arc<Vault>) -> EnvProvider {
         ))
     })
 }
+
+#[cfg(test)]
+mod agent_queue_event_tests {
+    use std::time::Duration;
+
+    use massorca_core_agents::Change;
+    use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_QUEUE_CHANGED};
+    use tokio::sync::broadcast;
+
+    use super::agent_listener;
+    use crate::event_bus::EventBus;
+
+    /// A queue change reaches the event bus as `agent.queue_changed` under its session id, and no `agent.watch` stream
+    /// gets it (decision 0084).
+    #[test]
+    fn a_queue_change_reaches_the_event_bus_under_its_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        runtime.block_on(async {
+            let events = EventBus::new();
+            let (changes, mut watcher) = broadcast::channel(8);
+            let mut subscription = events.subscribe();
+            let listener = agent_listener(events.clone(), changes);
+
+            listener(Change::Queue("session-1".to_owned()));
+
+            let event = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+                .await
+                .expect("the event arrives")
+                .expect("the bus is open");
+            assert_eq!(
+                event,
+                ChangeEvent {
+                    topic: TOPIC_AGENT_QUEUE_CHANGED.to_owned(),
+                    id: "session-1".to_owned(),
+                }
+            );
+            assert!(
+                watcher.try_recv().is_err(),
+                "no watcher receives a queue change"
+            );
+        });
+    }
+}

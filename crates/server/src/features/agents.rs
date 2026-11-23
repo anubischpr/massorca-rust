@@ -329,7 +329,7 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
     .await
 }
 
-/// A report from a run's hook (0053)./// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a
+/// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a
 /// prompt does: its run holds vault secrets. The text is never logged.
 async fn queue(ctx: RequestCtx, params: AgentQueueParams) -> Result<QueuedPrompt, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
