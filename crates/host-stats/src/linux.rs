@@ -49,20 +49,25 @@ fn read_table(path: &str, absent_is_empty: bool) -> Option<String> {
     }
 }
 
-/// The pid that holds each socket inode among `pids` (the lowest pid when several hold it: the one that created it
-/// after a fork is the lowest), and the asked pids whose descriptors could not be read.
+/// The pid that owns each socket inode among `pids`, and the asked pids whose descriptors could not be read. Several
+/// members can hold one inode when a socket was inherited across a fork. The owner is then the holder that started
+/// first, since a forked child starts after the process that forked it. A pid number says nothing about the order,
+/// because pids wrap around; the start time does (`proc_net::owner_of`).
 fn socket_owners(
     table: &[ProcessInfo],
     pids: &BTreeSet<u32>,
 ) -> (BTreeMap<u64, u32>, BTreeSet<u32>) {
     let listed: BTreeMap<u32, &ProcessInfo> = table.iter().map(|info| (info.pid, info)).collect();
-    let mut owners = BTreeMap::new();
+    let mut holders: BTreeMap<u64, Vec<(Option<u64>, u32)>> = BTreeMap::new();
     let mut unreadable = BTreeSet::new();
     for &pid in pids {
-        match listed.get(&pid).and_then(|info| socket_inodes(info)) {
-            Some(inodes) => {
+        let read = listed
+            .get(&pid)
+            .and_then(|info| socket_inodes(info).map(|inodes| (info.start, inodes)));
+        match read {
+            Some((start, inodes)) => {
                 for inode in inodes {
-                    owners.entry(inode).or_insert(pid);
+                    holders.entry(inode).or_default().push((start, pid));
                 }
             }
             None => {
@@ -70,6 +75,10 @@ fn socket_owners(
             }
         }
     }
+    let owners = holders
+        .into_iter()
+        .filter_map(|(inode, held)| proc_net::owner_of(&held).map(|owner| (inode, owner)))
+        .collect();
     (owners, unreadable)
 }
 

@@ -76,6 +76,42 @@ fn address_of(hex: &str, family: Family) -> Option<IpAddr> {
     }
 }
 
+/// The process that owns a socket several members hold: the one that started first, because a child forked from a
+/// process starts after it. A holder whose start time is unknown comes last, and ties go to the lowest pid.
+pub(crate) fn owner_of(holders: &[(Option<u64>, u32)]) -> Option<u32> {
+    holders
+        .iter()
+        .min_by_key(|&&(start, pid)| (start.unwrap_or(u64::MAX), pid))
+        .map(|&(_, pid)| pid)
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::owner_of;
+
+    #[test]
+    fn the_process_that_started_first_owns_a_shared_socket_even_with_a_higher_pid() {
+        // Pid 7 was forked from pid 9000: once pids wrap the number says little, and the start time says who came first.
+        assert_eq!(owner_of(&[(Some(900), 7), (Some(100), 9000)]), Some(9000));
+    }
+
+    #[test]
+    fn equal_or_unknown_starts_fall_back_to_the_lowest_pid() {
+        assert_eq!(owner_of(&[(Some(5), 12), (Some(5), 3)]), Some(3));
+        assert_eq!(owner_of(&[(None, 12), (None, 3)]), Some(3));
+    }
+
+    #[test]
+    fn a_known_start_comes_before_an_unknown_one() {
+        assert_eq!(owner_of(&[(None, 1), (Some(9), 50)]), Some(50));
+    }
+
+    #[test]
+    fn no_holder_owns_nothing() {
+        assert_eq!(owner_of(&[]), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
