@@ -196,8 +196,9 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Whether the kind has ever had an account. The record outlives its accounts, so a kind that had one is never sent
-    /// back to the agent's usual home (decision 0059).
+    /// Whether the kind has ever had a kept account: an import, a migrated home, or a sign-in whose pending mark was
+    /// cleared. A sign-in deleted while still pending does not count. The record outlives its accounts, so a kind that had
+    /// one is never sent back to the agent's usual home (decision 0059).
     pub fn kind_has_had_account(&self, kind: &str) -> Result<bool, StoreError> {
         Ok(self
             .query_optional(

@@ -34,6 +34,8 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// A terminal or agent run in a workspace being removed did not stop; the workspace stays `removing`.
+pub const WORKSPACE_BUSY: &str = "workspace.busy";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.
@@ -52,6 +54,9 @@ pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
 /// A request path is absolute, has a `..` segment or a NUL, so it could leave the workspace.
 pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
+/// A caller without `workspace` permission asked for a git read that could not be made to start no program the
+/// repository names, such as a hooks folder that is not empty (decision 0078).
+pub const GIT_UNSAFE_FOR_CALLER: &str = "git.unsafe_for_caller";
 /// A revision does not resolve to a commit.
 pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
 /// A discard named untracked files without `delete_untracked`; `data.paths` lists them.

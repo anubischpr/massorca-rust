@@ -26,12 +26,22 @@ impl fmt::Debug for Store {
 impl Store {
     /// Opens the database at `path`, creating it if needed, and migrates it to the latest schema.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_observed(path, |_| {})
+    }
+
+    /// Like `open`, calling `step` as each part of the open ends, so a slow open says which part took the time.
+    pub fn open_observed(
+        path: impl AsRef<Path>,
+        mut step: impl FnMut(&'static str),
+    ) -> Result<Self, StoreError> {
         let path = path.as_ref();
         let mut connection = Connection::open(path)?;
         configure(&connection)?;
+        step("store file");
         // WAL is switched on only after migration, so a refused newer database is never modified.
-        migrations::migrate(&mut connection, Some(path), MIGRATIONS)?;
+        migrations::migrate_observed(&mut connection, Some(path), MIGRATIONS, &mut step)?;
         enable_wal(&connection)?;
+        step("store wal");
         Ok(Self::from_connection(connection))
     }
 
@@ -144,5 +154,21 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn an_observed_open_reports_each_part_in_order_and_only_the_file_and_wal_once_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let mut parts = Vec::new();
+        super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
+        let steps = crate::migrations::MIGRATIONS.len();
+        let mut expected = vec!["store file", "store migration lock"];
+        expected.extend(std::iter::repeat_n("store schema step", steps));
+        expected.push("store wal");
+        assert_eq!(parts, expected);
+        let mut parts = Vec::new();
+        super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
+        assert_eq!(parts, ["store file", "store wal"]);
     }
 }

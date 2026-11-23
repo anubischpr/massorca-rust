@@ -146,14 +146,20 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
         )
         .await
         .expect("close terminal");
-    let after: HostMemory = client.call(host::MEMORY, &()).await.expect("host.memory");
-    assert!(
-        after
+    // A sample is shared for about a second (decision 0081), so the closed terminal leaves the answer within that time.
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let after: HostMemory = client.call(host::MEMORY, &()).await.expect("host.memory");
+        if after
             .terminals
             .iter()
-            .all(|entry| entry.terminal_id != terminal.id),
-        "{after:?}"
-    );
+            .all(|entry| entry.terminal_id != terminal.id)
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{after:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     drop(client);
     stop(running).await;
 }
