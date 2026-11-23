@@ -14,7 +14,7 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
-use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams};
+use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams, TeamProjectAddParams};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -531,6 +531,116 @@ async fn a_bot_added_through_another_client_reaches_the_store_without_a_request(
             .iter()
             .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
     })
+    .await;
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let project = client
+        .team_project_add(&TeamProjectAddParams {
+            team: team.id.clone(),
+            name: "Checkout".to_owned(),
+            goal: Some("Ship checkout".to_owned()),
+            brief: Some("Checkout copy".to_owned()),
+        })
+        .await
+        .expect("the project is added");
+    client
+        .task_create(&TaskCreateParams {
+            team: team.id.clone(),
+            title: "Draft the page".to_owned(),
+            body: None,
+            bot: None,
+            project: Some(project.id.clone()),
+            origin: None,
+        })
+        .await
+        .expect("the task is created");
+
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be listed",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    let view = teams_view(&state);
+    let project = &view.teams()[0].projects[0];
+    assert_eq!(project.brief, "Checkout copy");
+    let titles: Vec<&str> = project
+        .tasks
+        .iter()
+        .map(|task| task.title.as_str())
+        .collect();
+    assert_eq!(titles, ["Draft the page"]);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_added_through_another_client_reaches_the_store_without_a_request() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+
+    client
+        .team_project_add(&TeamProjectAddParams {
+            team: team.id.clone(),
+            name: "Checkout".to_owned(),
+            goal: None,
+            brief: None,
+        })
+        .await
+        .expect("the project is added");
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be listed",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
     .await;
     stop_service(service).await;
 }

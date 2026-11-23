@@ -6,10 +6,12 @@ use massorca_protocol::methods::tasks::Column as WireColumn;
 use massorca_protocol::methods::teams::{Board, Bot as WireBot};
 
 use super::state::TeamsState;
-use super::types::{Bot, BotId, Column, HostChoice, Task, TaskId, Team, TeamId};
+use super::types::{
+    Bot, BotId, Column, HostChoice, Project, ProjectId, Task, TaskId, Team, TeamId,
+};
 use crate::model::agent_kinds::kind_unavailable_reason;
 use crate::model::shell::{Agent, HostReach};
-use crate::service::{TeamIds, TeamRecord};
+use crate::service::{ProjectRecord, TeamIds, TeamRecord};
 
 /// The teams a read named, on one host. A record or card whose id `ids` does not number is left out. `kinds`
 /// are the service's agent kinds, which say whether a bot's kind runs here.
@@ -52,7 +54,11 @@ fn live_team(ids: &TeamIds, host: &str, record: &TeamRecord, kinds: &[AgentKind]
         lead,
         workspaces: record.team.workspaces,
         tasks: live_tasks(ids, &record.board),
-        projects: Vec::new(),
+        projects: record
+            .projects
+            .iter()
+            .filter_map(|project| live_project(ids, project))
+            .collect(),
         routines: Vec::new(),
         addresses: Vec::new(),
         memory: Vec::new(),
@@ -68,6 +74,17 @@ fn live_bot(ids: &TeamIds, bot: &WireBot, kinds: &[AgentKind]) -> Option<Bot> {
         role: bot.job.clone(),
         agent: agent_of_kind(&bot.kind),
         kind_unavailable: kind_unavailable_reason(kinds, &bot.kind),
+    })
+}
+
+/// A project of a team as the page draws it, with the cards of its own Board; `None` when its id is not numbered.
+fn live_project(ids: &TeamIds, record: &ProjectRecord) -> Option<Project> {
+    Some(Project {
+        id: ProjectId(ids.get(&record.project.id)?),
+        name: record.project.name.clone(),
+        brief: record.project.brief.clone(),
+        link: None,
+        tasks: live_tasks(ids, &record.board),
     })
 }
 
@@ -127,11 +144,13 @@ mod tests {
     use massorca_protocol::methods::tasks::CardState;
     use massorca_protocol::methods::teams::{
         Board, BoardCard, BoardColumn, Team as WireTeam, TeamAccess, TeamCharacter,
+        TeamProject as WireProject,
     };
 
     use super::*;
     use crate::model::agent_kinds::{NOT_AVAILABLE_ON_HOST, TURNED_OFF};
     use crate::model::teams::BoardOwner;
+    use crate::service::ProjectRecord;
     use crate::service::fixtures::agent_kind;
     use massorca_protocol::methods::agents::PackageState;
 
@@ -168,6 +187,7 @@ mod tests {
                     .collect(),
             },
             bots: Vec::new(),
+            projects: Vec::new(),
         }
     }
 
@@ -329,6 +349,43 @@ mod tests {
             running.cards[0].kind_unavailable,
             Some(NOT_AVAILABLE_ON_HOST)
         );
+    }
+
+    #[test]
+    fn a_project_of_the_team_lists_its_brief_and_its_own_board() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].projects = vec![ProjectRecord {
+            project: WireProject {
+                id: "p1".into(),
+                team_id: "t1".into(),
+                name: "Checkout".into(),
+                goal: "Ship checkout".into(),
+                brief: "Checkout copy".into(),
+                created_at_ms: 1,
+            },
+            board: Board {
+                team_id: "t1".into(),
+                project_id: Some("p1".into()),
+                columns: vec![BoardColumn {
+                    column: WireColumn::Open,
+                    cards: vec![card("k7", "Draft the page", None, None)],
+                }],
+            },
+        }];
+        let view = live_teams(&numbered(&records), "This PC", &records, &[]);
+        let projects = &view.teams()[0].projects;
+        assert_eq!(projects.len(), 1);
+        let project = &projects[0];
+        assert_eq!(
+            (project.name.as_str(), project.brief.as_str()),
+            ("Checkout", "Checkout copy")
+        );
+        let titles: Vec<&str> = project
+            .tasks
+            .iter()
+            .map(|task| task.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Draft the page"]);
     }
 
     fn wire_bot(id: &str, name: &str, kind: &str) -> WireBot {

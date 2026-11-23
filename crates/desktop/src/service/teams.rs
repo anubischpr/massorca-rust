@@ -11,20 +11,28 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamRef,
+    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamProject, TeamRef,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
 
-/// A team as the service reports it: its Board, every task of the team in four columns, and its bots in
-/// creation order.
+/// A team as the service reports it: its Board, every task of the team in four columns, its bots in creation
+/// order, and its projects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamRecord {
     pub team: Team,
     pub board: Board,
     pub bots: Vec<Bot>,
+    pub projects: Vec<ProjectRecord>,
+}
+
+/// A project of a team as the service reports it, with its own Board: the cards of that project only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectRecord {
+    pub project: TeamProject,
+    pub board: Board,
 }
 
 /// What one read answered: every team with its Board, or why the service could not list them.
@@ -79,19 +87,35 @@ async fn fetch(client: &Client) -> Result<Vec<TeamRecord>, ClientError> {
 }
 
 async fn team_record(client: &Client, team: Team) -> Result<TeamRecord, ClientError> {
+    let team_ref = TeamRef {
+        team: team.id.clone(),
+    };
     let board = client
         .team_board(&BoardParams {
             team: team.id.clone(),
             project: None,
         })
         .await?;
-    let bots = client
-        .team_bot_list(&TeamRef {
+    let bots = client.team_bot_list(&team_ref).await?.bots;
+    let mut projects = Vec::new();
+    for project in client.team_project_list(&team_ref).await?.projects {
+        let params = BoardParams {
             team: team.id.clone(),
-        })
-        .await?
-        .bots;
-    Ok(TeamRecord { team, board, bots })
+            project: Some(project.id.clone()),
+        };
+        match client.team_board(&params).await {
+            Ok(board) => projects.push(ProjectRecord { project, board }),
+            // Removed while the team was read: it is simply not in this read.
+            Err(ClientError::Remote(body)) if body.code == codes::TEAM_PROJECT_NOT_FOUND => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(TeamRecord {
+        team,
+        board,
+        bots,
+        projects,
+    })
 }
 
 /// A Bot Teams write the pages ask the bridge to send. Each one answers through its oneshot.
@@ -223,13 +247,22 @@ pub struct TeamIds {
 }
 
 impl TeamIds {
-    /// Numbers every id a team names: the team, its bots, its cards and the bots on them.
+    /// Numbers every id a team names: the team, its bots, its cards and the bots on them, and each project with
+    /// the cards of its Board.
     pub fn register(&mut self, record: &TeamRecord) {
         self.number(&record.team.id);
         for bot in &record.bots {
             self.number(&bot.id);
         }
-        for column in &record.board.columns {
+        self.register_board(&record.board);
+        for project in &record.projects {
+            self.number(&project.project.id);
+            self.register_board(&project.board);
+        }
+    }
+
+    fn register_board(&mut self, board: &Board) {
+        for column in &board.columns {
             for card in &column.cards {
                 self.number(&card.id);
                 if let Some(bot) = &card.bot_id {

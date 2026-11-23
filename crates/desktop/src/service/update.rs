@@ -499,6 +499,7 @@ pub(crate) mod fixtures {
                 columns: Vec::new(),
             },
             bots: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
