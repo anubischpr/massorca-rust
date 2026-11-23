@@ -29,11 +29,12 @@ pub enum DebugPage {
     RemoveSecret,
     NewTeam,
     AddBot,
+    Session,
 }
 
 impl DebugPage {
     /// Every page, in the order the help lists them.
-    pub const ALL: [DebugPage; 12] = [
+    pub const ALL: [DebugPage; 13] = [
         DebugPage::Workspace,
         DebugPage::SettingsGeneral,
         DebugPage::SettingsHosts,
@@ -46,6 +47,7 @@ impl DebugPage {
         DebugPage::RemoveSecret,
         DebugPage::NewTeam,
         DebugPage::AddBot,
+        DebugPage::Session,
     ];
 
     /// The name `--page` takes for this page.
@@ -63,6 +65,7 @@ impl DebugPage {
             DebugPage::RemoveSecret => "remove-secret",
             DebugPage::NewTeam => "new-team",
             DebugPage::AddBot => "add-bot",
+            DebugPage::Session => "session",
         }
     }
 
@@ -210,7 +213,7 @@ mod tests {
         assert_eq!(
             DebugPage::names(),
             "workspace, settings-general, settings-hosts, settings-vault, pairing, board, \
-             add-host, add-secret, replace-secret, remove-secret, new-team, add-bot"
+             add-host, add-secret, replace-secret, remove-secret, new-team, add-bot, session"
         );
     }
 
@@ -226,6 +229,11 @@ mod tests {
             DebugPage::ALL.len(),
             "every name is unique"
         );
+    }
+
+    #[test]
+    fn the_session_page_is_named_session() {
+        assert_eq!("session".parse::<DebugPage>(), Ok(DebugPage::Session));
     }
 
     #[test]
