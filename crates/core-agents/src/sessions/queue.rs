@@ -2,6 +2,8 @@
 //! they survive the client and reach the agent in order. The calls here queue, list, edit and remove; delivery follows
 //! the agent's activity, and every change is announced as `Change::Queue`.
 
+use std::thread;
+
 use massorca_core_store::{
     NewQueuedPrompt, QueuedPromptRow, QueuedState, StoreError, new_id, now_ms,
 };
@@ -215,7 +217,35 @@ impl Agents {
     /// turns idle or done, when a mode switch ends, after a bring-back, and when a queue call may have changed what waits.
     pub(crate) fn drain_queue(&self, session: &str) {
         if let Some(delivery) = self.prepare_drain(session) {
-            let _ = self.send_delivery(delivery);
+            self.send_on_thread(delivery);
+        }
+    }
+
+    /// Types a delivery on a thread of its own. The write can wait for the agent to read, and the agent may be waiting for
+    /// the hook report that triggered this drain to return, so the report must not wait for the write (decision 0054).
+    /// The delivery is already marked sending, so nothing else types meanwhile.
+    ///
+    /// No test stalls this write: `TerminalManager` is concrete and a PTY write cannot be blocked deterministically in
+    /// process. The property rests on this spawn, which `deliver_first_input` uses for the same reason.
+    fn send_on_thread(&self, delivery: Delivery) {
+        let agents = self.clone();
+        let session = delivery.session.clone();
+        let item = delivery.item.clone();
+        let spawned = thread::Builder::new()
+            .name("agent-queue-delivery".to_owned())
+            .spawn(move || {
+                let _ = agents.send_delivery(delivery);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(session = %session, %error, "a queued prompt has no thread to be typed on");
+            self.finish_delivery(
+                &session,
+                &item,
+                Err(AgentError::new(
+                    codes::INTERNAL,
+                    "the queued prompt has no thread to be typed on",
+                )),
+            );
         }
     }
 

@@ -194,6 +194,11 @@ impl Agents {
                 ),
             ));
         };
+        // Drained however this call ends: a merge that failed or a refused mark may have held the parent's queue (0084, D3).
+        let _drain = DrainParentQueue {
+            agents: self,
+            parent: parent_id.clone(),
+        };
         if let Some(token) = &params.token {
             self.check_run_token(&parent_id, token)?;
         }
@@ -263,8 +268,6 @@ impl Agents {
                 ),
             }
         };
-        // The merge may have held the parent's queue; the parent's run takes its next prompt now if it is ready (0084).
-        self.drain_queue(&parent_id);
         Ok(BringBackResult {
             merged: merge_commit.is_some(),
             merge_commit,
@@ -585,6 +588,18 @@ fn already_brought_back(session: &str) -> AgentError {
 /// The prompt a parent run receives on a bring-back: the child, its workspace, the merge commit and the child's result.
 /// It is one line, so a plain paste submits it once: every control character in the result, line breaks included,
 /// becomes a space, and the result is cut to [`MAX_QUOTED_RESULT`] bytes.
+/// Drains a session's queue when it goes out of scope, so a bring-back drains the parent however it ends.
+struct DrainParentQueue<'a> {
+    agents: &'a Agents,
+    parent: String,
+}
+
+impl Drop for DrainParentQueue<'_> {
+    fn drop(&mut self) {
+        self.agents.drain_queue(&self.parent);
+    }
+}
+
 fn bring_back_prompt(child: &AgentSession, workspace: &str, merge_commit: Option<&str>) -> String {
     let merge = match merge_commit {
         Some(commit) => format!("Its branch is merged into this worktree as commit {commit}."),
