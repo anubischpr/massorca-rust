@@ -26,7 +26,7 @@ fn a_terminal_running_a_child_reads_the_shell_and_the_child() {
 
     let mut listed = Vec::new();
     wait_until("the shell and its child are read", || {
-        listed = manager.memory();
+        listed = manager.memory(&massorca_host_stats::processes());
         listed.iter().any(|terminal| {
             terminal.terminal_id == info.id
                 && terminal
@@ -47,12 +47,19 @@ fn a_terminal_running_a_child_reads_the_shell_and_the_child() {
         .find(|process| process.pid == shell_pid)
         .unwrap_or_else(|| panic!("{shell_pid} not in {sample:?}"));
     assert!(shell.bytes > 0, "{sample:?}");
+    assert!(
+        sample
+            .processes
+            .iter()
+            .all(|process| process.pid != std::process::id()),
+        "the service is never a member of a terminal: {sample:?}"
+    );
 
     let killed = manager.kill(&info.id, true).expect("kill");
     assert_eq!(killed.state, TerminalState::Exited);
     assert!(
         manager
-            .memory()
+            .memory(&massorca_host_stats::processes())
             .iter()
             .all(|terminal| terminal.terminal_id != info.id),
         "an exited terminal has no processes to read"

@@ -38,6 +38,24 @@ impl Composer {
         self
     }
 
+    /// Whether the attach button, its menu and dropped files are offered.
+    pub fn attach(mut self, offered: bool) -> Self {
+        self.attach_offered = offered;
+        self
+    }
+
+    /// Whether the model picker chip is offered.
+    pub fn model_picker(mut self, offered: bool) -> Self {
+        self.model_picker_offered = offered;
+        self
+    }
+
+    /// Whether a message sent while the agent runs queues behind its turn; otherwise the button stops the run.
+    pub fn queueing(mut self, offered: bool) -> Self {
+        self.queueing_offered = offered;
+        self
+    }
+
     /// A control shown first in the bottom row, before attach; `build` runs on each render.
     pub fn leading_control(
         mut self,
@@ -280,6 +298,7 @@ impl Composer {
         let queueing = action == PrimaryAction::Queue;
         div()
             .id("composer-primary")
+            .debug_selector(|| "composer-primary".to_owned())
             .role(Role::Button)
             .aria_label(label)
             .track_focus(&self.primary_focus)
@@ -388,15 +407,22 @@ impl Composer {
                 .text_style(TYPE_BODY_SM)
                 .text_color(p.text.tertiary)
                 .child(reason.clone());
-            if self.sign_in {
+            let action = if self.sign_in {
+                Some(("composer-sign-in", "Sign in", ComposerEvent::SignIn))
+            } else if self.resume {
+                Some(("composer-resume", "Resume", ComposerEvent::Resume))
+            } else {
+                None
+            };
+            if let Some((id, label, event)) = action {
                 let composer = cx.entity();
                 line = line.child(
-                    div().debug_selector(|| "composer-sign-in".into()).child(
-                        Button::new("composer-sign-in", "Sign in")
+                    div().debug_selector(move || id.into()).child(
+                        Button::new(id, label)
                             .variant(ButtonVariant::Secondary)
                             .size(ButtonSize::Compact)
                             .on_click(move |_, cx| {
-                                composer.update(cx, |_, cx| cx.emit(ComposerEvent::SignIn));
+                                composer.update(cx, |_, cx| cx.emit(event.clone()));
                             }),
                     ),
                 );
@@ -481,23 +507,29 @@ impl Render for Composer {
         let action = primary_action(situation);
         let composer = cx.entity();
         let attach_entity = composer.clone();
-        let attach = IconButton::new("composer-attach", IconName::Plus, "Attach")
-            .size(ButtonSize::Default)
-            .on_click(move |window, cx| {
-                attach_entity.update(cx, |this, cx| this.open_attach_menu(window, cx));
-            });
-        let attach = self.attach_trigger.track(div().child(attach));
+        let attach = self.attach_offered.then(|| {
+            let button = IconButton::new("composer-attach", IconName::Plus, "Attach")
+                .size(ButtonSize::Default)
+                .on_click(move |window, cx| {
+                    attach_entity.update(cx, |this, cx| this.open_attach_menu(window, cx));
+                });
+            self.attach_trigger.track(div().child(button))
+        });
         let leading = self.leading.as_ref().map(|build| build(window, cx));
+        // No modes means the host declares none: no chip rather than an empty menu.
+        let access = (!self.access.is_empty()).then(|| self.access_chip(cx));
         let mut bottom = div()
             .flex()
             .items_center()
             .gap(px(SPACE_2))
             .h(px(SIZE_CONTROL_DEFAULT))
             .when_some(leading, |row, leading| row.child(leading))
-            .child(attach)
-            .child(self.access_chip(cx))
+            .when_some(attach, |row, attach| row.child(attach))
+            .when_some(access, |row, chip| row.child(chip))
             .child(div().flex_1())
-            .child(self.picker.clone());
+            .when(self.model_picker_offered, |row| {
+                row.child(self.picker.clone())
+            });
         if self.voice {
             let dictate = move |_: &mut Window, cx: &mut App| {
                 composer.update(cx, |_, cx| cx.emit(ComposerEvent::Dictate));
@@ -520,10 +552,14 @@ impl Render for Composer {
             .shadow(box_shadows(theme.shadows.e1))
             .text_style(TYPE_CHAT)
             .text_color(p.text.primary)
-            .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(p.accent.fg))
-            .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
-                cx.emit(ComposerEvent::DroppedFiles(paths.0.to_vec()));
-            }));
+            .text_color(p.text.primary);
+        if self.attach_offered {
+            column = column
+                .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(p.accent.fg))
+                .on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
+                    cx.emit(ComposerEvent::DroppedFiles(paths.0.to_vec()));
+                }));
+        }
         if let Some(chips) = self.chips(window, cx) {
             column = column.child(chips);
         }
@@ -554,7 +590,9 @@ impl Render for Composer {
         let mut root = div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
-                this.picker.update(cx, |picker, cx| picker.open(window, cx));
+                if this.model_picker_offered {
+                    this.picker.update(cx, |picker, cx| picker.open(window, cx));
+                }
             }))
             .w_full()
             .flex()

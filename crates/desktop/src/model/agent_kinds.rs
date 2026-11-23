@@ -37,6 +37,14 @@ pub fn bot_kind_choices(kinds: &[AgentKind]) -> Vec<KindChoice> {
         .collect()
 }
 
+/// The kinds a new session can run on: turned on, detected here and without problems, in the service's order.
+pub fn session_kind_choices(kinds: &[AgentKind]) -> Vec<KindChoice> {
+    bot_kind_choices(kinds)
+        .into_iter()
+        .filter(|choice| choice.unavailable.is_none())
+        .collect()
+}
+
 /// The choice at `index` when it can be picked: an unavailable kind is refused here, whatever the form shows.
 pub fn choice_at(choices: &[KindChoice], index: usize) -> Option<&KindChoice> {
     choices
@@ -109,6 +117,22 @@ mod tests {
             broken,
         ];
         assert_eq!(ids(&bot_kind_choices(&kinds)), ["claude", "codex"]);
+    }
+
+    #[test]
+    fn a_session_offers_only_kinds_that_are_on_detected_here_and_have_no_problems() {
+        let mut broken = agent_kind("broken", "Broken", PackageState::Enabled);
+        broken.problems = vec!["its declaration does not parse".into()];
+        let mut missing = agent_kind("gemini", "Gemini", PackageState::Enabled);
+        missing.detected = false;
+        let kinds = [
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            agent_kind("codex", "Codex", PackageState::Disabled),
+            agent_kind("cursor", "Cursor", PackageState::Available),
+            broken,
+            missing,
+        ];
+        assert_eq!(ids(&session_kind_choices(&kinds)), ["claude"]);
     }
 
     #[test]

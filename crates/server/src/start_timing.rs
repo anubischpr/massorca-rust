@@ -36,6 +36,20 @@ impl StartTimings {
         }
     }
 
+    /// A logger for the parts of one phase that runs on another thread, such as the store open: with the variable
+    /// set, each part is logged as it ends, with the time since the previous part.
+    pub(crate) fn part_logger() -> impl FnMut(&'static str) + Send + 'static {
+        let mut last = Instant::now();
+        let enabled = std::env::var_os(START_TIMING_ENV).is_some();
+        move |part| {
+            let now = Instant::now();
+            if enabled {
+                tracing::info!(part, took_ms = (now - last).as_millis(), "start part done");
+            }
+            last = now;
+        }
+    }
+
     /// One line: the total and each phase in milliseconds, in order.
     pub(crate) fn summary(&self) -> String {
         let phases = self
