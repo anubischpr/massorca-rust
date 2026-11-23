@@ -707,6 +707,7 @@ mod tests {
             outcome: None,
             source: ActivitySource::Hook,
             at_ms: 11,
+            seen_at_ms: None,
         });
         state.apply(StoreUpdate::AgentChanged(working.clone()), now);
         assert_eq!(state.agents, vec![working]);
