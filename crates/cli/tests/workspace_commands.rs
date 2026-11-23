@@ -374,3 +374,68 @@ fn a_worktree_left_by_an_interrupted_create_is_listed_until_a_create_adopts_it()
     let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
     assert!(listed.get("unregistered").is_none());
 }
+
+/// Git prints `prunable` in `worktree list --porcelain` from 2.31; older git leaves it off.
+fn git_reports_prunable(repo: &Path) -> bool {
+    let version = git(repo, &["--version"]);
+    let mut parts = version.trim().trim_start_matches("git version ").split('.');
+    let major: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    (major, minor) >= (2, 31)
+}
+
+#[test]
+fn a_locked_or_prunable_worktree_is_marked_in_list_and_show() {
+    let sandbox = Sandbox::new();
+    sandbox.prepare_profile("default");
+    let repo = add_repo_project(&sandbox);
+    let usb = sandbox.json_ok("default", &["workspace", "create", "repo", "usb"]);
+    let usb_path = usb["path"].as_str().expect("path").to_owned();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "on a usb disk",
+            usb_path.as_str(),
+        ],
+    );
+    let gone = sandbox.json_ok("default", &["workspace", "create", "repo", "gone"]);
+    let gone_path = PathBuf::from(gone["path"].as_str().expect("path"));
+    std::fs::remove_dir_all(&gone_path).expect("remove the directory");
+
+    let listed = sandbox.json_ok("default", &["workspace", "list", "--project", "repo"]);
+    let usb_row = listed["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .iter()
+        .find(|row| row["name"] == "usb")
+        .expect("the usb row");
+    assert_eq!(usb_row["locked"], "on a usb disk");
+    assert!(usb_row.get("prunable").is_none());
+    sandbox
+        .run("default", &["workspace", "list", "--project", "repo"])
+        .success()
+        .stdout(contains("locked: on a usb disk"));
+    sandbox
+        .run("default", &["workspace", "show", "usb"])
+        .success()
+        .stdout(contains("locked: on a usb disk"));
+    let shown = sandbox.json_ok("default", &["workspace", "show", "usb"]);
+    assert_eq!(shown["locked"], "on a usb disk");
+
+    if git_reports_prunable(&repo) {
+        let gone_row = listed["workspaces"]
+            .as_array()
+            .expect("workspaces")
+            .iter()
+            .find(|row| row["name"] == "gone")
+            .expect("the gone row");
+        assert!(gone_row["prunable"].is_string());
+        sandbox
+            .run("default", &["workspace", "list", "--project", "repo"])
+            .success()
+            .stdout(contains("prunable: "));
+    }
+}

@@ -142,7 +142,7 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
 
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
-    blocking(move || domain.show_workspace(&params.workspace)).await
+    blocking(move || domain.show_workspace_with_git_state(&params.workspace)).await
 }
 
 async fn remove(
