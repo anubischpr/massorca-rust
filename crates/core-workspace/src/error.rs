@@ -64,6 +64,7 @@ impl From<GitError> for DomainError {
             | GitError::File { .. } => codes::GIT_FAILED,
             // The caller named a path git cannot record; nothing ran.
             GitError::UnsupportedPath { .. } => codes::REQUEST_INVALID_PARAMS,
+            GitError::UnsafeForCaller { .. } => codes::GIT_UNSAFE_FOR_CALLER,
         };
         Self::new(code, error.to_string())
     }

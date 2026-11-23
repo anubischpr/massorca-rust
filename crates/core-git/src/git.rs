@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::error::GitError;
 use crate::process::{Bounded, Output, run_bounded};
+use crate::untrusted::{self, EmptyHooks};
 use crate::version::GitVersion;
 
 /// Time a single read-only git query may run before it is killed. Commands that
@@ -21,6 +22,8 @@ pub struct Git {
     /// `None` lets a mutation run to completion: killing one midway can leave a
     /// half-created worktree or branch behind.
     mutation_timeout: Option<Duration>,
+    /// Set for a caller without `workspace` permission: no program the repository names may run (decision 0078).
+    untrusted: Option<EmptyHooks>,
 }
 
 impl Git {
@@ -30,7 +33,17 @@ impl Git {
             binary: binary.into(),
             timeout: DEFAULT_TIMEOUT,
             mutation_timeout: None,
+            untrusted: None,
         }
+    }
+
+    /// The same git for a caller without `workspace` permission (decision 0078). Its reads start no program the
+    /// repository's configuration names: no filter, diff driver, monitor or hook; `empty_hooks` must be an empty
+    /// folder, or every run is refused. Commands that change the repository or reach a remote are refused.
+    #[must_use]
+    pub fn for_untrusted_caller(mut self, empty_hooks: impl Into<PathBuf>) -> Self {
+        self.untrusted = Some(EmptyHooks::new(empty_hooks.into()));
+        self
     }
 
     /// Finds git through `MASSORCA_GIT` or PATH, and checks that it runs.
@@ -151,7 +164,7 @@ impl Git {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let args: Vec<OsString> = args
+        let mut args: Vec<OsString> = args
             .into_iter()
             .map(|arg| arg.as_ref().to_os_string())
             .collect();
@@ -159,11 +172,84 @@ impl Git {
             .iter()
             .map(|arg| redact_urls(&arg.to_string_lossy()))
             .collect();
+        let mut global = Vec::new();
+        if let Some(hooks) = &self.untrusted {
+            if !read_only {
+                return Err(GitError::UnsafeForCaller {
+                    reason: format!(
+                        "`git {}` changes the repository or reaches a remote",
+                        shown.join(" ")
+                    ),
+                });
+            }
+            let driver_keys = match cwd {
+                Some(dir) => self.repository_driver_keys(dir)?,
+                None => String::new(),
+            };
+            global = untrusted::global_args(hooks, &driver_keys)?;
+            untrusted::command_args(&mut args);
+        }
+        let mut command = self.command(read_only);
+        command.args(&global).args(&args);
+        command.envs(env.iter().copied());
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        match run_bounded(&mut command, timeout, max_stdout) {
+            Ok(Bounded::Finished(output)) => Ok(Captured {
+                args: shown,
+                output,
+            }),
+            Ok(Bounded::TimedOut) => Err(GitError::Timeout { args: shown }),
+            Err(error) => Err(GitError::Spawn(error)),
+        }
+    }
+
+    /// The program settings of the repository's own configuration files, as `git config --null` records. Reading
+    /// configuration starts no program.
+    fn repository_driver_keys(&self, dir: &Path) -> Result<String, GitError> {
+        let mut keys = self.config_query(dir, &untrusted::config_query("--local"))?;
+        let worktree_config = self.config_query(dir, &untrusted::WORKTREE_CONFIG_QUERY)?;
+        if worktree_config.trim() == "true" {
+            keys.push_str(&self.config_query(dir, &untrusted::config_query("--worktree"))?);
+        }
+        Ok(keys)
+    }
+
+    fn config_query(&self, dir: &Path, query: &[&str]) -> Result<String, GitError> {
+        let mut command = self.command(true);
+        command.args(query).current_dir(dir);
+        let output = match run_bounded(&mut command, Some(self.timeout), Some(MAX_CONFIG_BYTES)) {
+            Ok(Bounded::Finished(output)) => output,
+            Ok(Bounded::TimedOut) => {
+                return Err(GitError::Timeout {
+                    args: query.iter().map(|arg| (*arg).to_owned()).collect(),
+                });
+            }
+            Err(error) => return Err(untrusted::spawn_failure(&error)),
+        };
+        if output.truncated {
+            return Err(GitError::UnsafeForCaller {
+                reason: "the repository configuration lists too many drivers".to_owned(),
+            });
+        }
+        if !output.status.success() {
+            return match untrusted::config_failure(output.status.code(), &output.stderr) {
+                Some(error) => Err(error),
+                None => Ok(String::new()),
+            };
+        }
+        String::from_utf8(output.stdout).map_err(|_| GitError::UnsafeForCaller {
+            reason: "the repository configuration is not valid UTF-8".to_owned(),
+        })
+    }
+
+    /// A git command with the settings every run shares.
+    fn command(&self, read_only: bool) -> std::process::Command {
         let mut command = massorca_process::command(&self.binary);
         command
             .arg("-c")
             .arg("core.quotepath=off")
-            .args(&args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
             // Nothing may wait for an answer (decision 0013): an empty askpass also skips `core.askPass`.
@@ -183,20 +269,18 @@ impl Git {
             // A read never refreshes the index, so it cannot wake a watcher (decision 0012).
             command.env("GIT_OPTIONAL_LOCKS", "0");
         }
-        command.envs(env.iter().copied());
-        if let Some(cwd) = cwd {
-            command.current_dir(cwd);
+        if self.untrusted.is_some() {
+            for name in untrusted::REMOVED_ENV {
+                command.env_remove(name);
+            }
+            command.envs(untrusted::ADDED_ENV);
         }
-        match run_bounded(&mut command, timeout, max_stdout) {
-            Ok(Bounded::Finished(output)) => Ok(Captured {
-                args: shown,
-                output,
-            }),
-            Ok(Bounded::TimedOut) => Err(GitError::Timeout { args: shown }),
-            Err(error) => Err(GitError::Spawn(error)),
-        }
+        command
     }
 }
+
+/// The most configuration output an untrusted run reads before it refuses.
+const MAX_CONFIG_BYTES: usize = 1 << 20;
 
 /// Output of one git run, kept with its arguments for error reports.
 #[derive(Debug)]
