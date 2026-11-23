@@ -89,6 +89,7 @@ pub fn start_params(workspace: &str, kind: &str, prompt: &str) -> AgentStartPara
         cols: Some(NEW_TERMINAL_COLS),
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
+        permission_mode: None,
     }
 }
 

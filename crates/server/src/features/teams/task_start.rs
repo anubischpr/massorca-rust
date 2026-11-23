@@ -406,6 +406,8 @@ fn spawn(
             rows: None,
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
             request_id: Some(request.to_owned()),
+            // A bot runs in its kind's own default mode (decision 0083).
+            permission_mode: None,
         },
         grant,
     )?;

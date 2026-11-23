@@ -23,8 +23,10 @@ pub const STOP: &str = "agent.stop";
 pub const FORGET: &str = "agent.forget";
 /// Params: [`AgentPromptParams`]. Result: [`PromptReceipt`].
 pub const PROMPT: &str = "agent.prompt";
-/// Params: [`AgentSessionRef`]. Result: [`AgentSession`].
+/// Params: [`AgentResumeParams`] (an [`AgentSessionRef`] with an optional mode). Result: [`AgentSession`].
 pub const RESUME: &str = "agent.resume";
+/// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
+pub const SET_MODE: &str = "agent.set_mode";
 /// Params: [`AgentHookParams`]. Result: `null`.
 pub const HOOK: &str = "agent.hook";
 /// Params: [`AgentWatchParams`]. Result: `{ stream }`, as `events.subscribe`; then [`AgentWatchEvent`]s.
@@ -245,6 +247,10 @@ pub struct AgentStartParams {
     /// A retry with the same id returns the first session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// One of the kind's permission modes (decision 0083, capability `agent-modes/1`); the kind's default when absent.
+    /// An id the kind does not declare is refused with `agent.mode_unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 /// Params of `agent.list`.
@@ -302,6 +308,47 @@ pub struct PromptReceipt {
     pub bytes: u64,
 }
 
+/// Params of `agent.resume`. Without `permission_mode`, the run takes the mode `agent.set_mode` stored for it, else the
+/// session's last mode unless that is a bypass mode, else the kind's default (decision 0083).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentResumeParams {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+}
+
+/// Params of `agent.set_mode`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetModeParams {
+    pub session: String,
+    pub permission_mode: String,
+    /// Types a live switch into a run whose kind reports no activity, where MassOrca cannot tell whether the agent is in
+    /// the middle of a prompt; refused with `agent.mode_unavailable` without it.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// When a mode set with `agent.set_mode` takes effect (decision 0083).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeApplied {
+    /// The kind's live switch was typed into the run's terminal. Nothing confirms the agent took it, so the session's
+    /// `mode_confirmed` is false.
+    Live,
+    /// The mode is stored and the next `agent.resume` launches in it.
+    NextResume,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Result of `agent.set_mode`: when the mode applies, and the session after the change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModeSet {
+    pub applied: ModeApplied,
+    pub session: AgentSession,
+}
+
 /// Params of `agent.hook`, sent by `massorca agent hook` from inside a run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHookParams {
@@ -356,6 +403,9 @@ pub struct AgentDelegateParams {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The child's permission mode (decision 0083); the child kind's default when absent, never the parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 /// Result of `agent.delegate`: the child's record, with its fields at the top level, and an optional note. A reader that
@@ -563,6 +613,35 @@ pub struct AgentSession {
     /// Set in the reply to a start, resume or delegation whose run got no vault variables, saying why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets_withheld: Option<String>,
+    /// The permission mode the session runs in, or was last asked to (decision 0083). Absent when its kind declares no
+    /// modes, and from a peer without capability `agent-modes/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The mode was passed as launch arguments of the current run, no caller arguments followed it, and its vendor never
+    /// falls back from it. False (absent) otherwise: a typed live switch no hook confirmed, caller arguments that may
+    /// override it, a mode marked `may_fall_back`, or the vendor's own default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mode_confirmed: bool,
+    /// Where the current or last run's mode came from (decision 0083): `vendor_default` (no flag was passed, and
+    /// `permission_mode` is absent) or `chosen`. Absent when the kind declares no modes, and from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_source: Option<ModeSource>,
+    /// A mode `agent.set_mode` stored for the next resume; the running mode is unchanged until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_permission_mode: Option<String>,
+}
+
+/// Where a session's mode came from (decision 0083).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeSource {
+    /// No mode was chosen: MassOrca passed no mode flag and the vendor CLI started in its own default.
+    VendorDefault,
+    /// A mode was chosen at start, at resume or with `agent.set_mode`.
+    Chosen,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The state of an account (decision 0059). A value this build does not know reads as `unknown`.

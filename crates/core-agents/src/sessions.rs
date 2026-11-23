@@ -1168,6 +1168,10 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         result: row.result,
         holds_secrets: row.holds_secrets,
         secrets_withheld: None,
+        permission_mode: None,
+        mode_confirmed: false,
+        mode_source: None,
+        pending_permission_mode: None,
     }
 }
 

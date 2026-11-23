@@ -262,6 +262,7 @@ pub async fn execute(
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: None,
                 })
                 .await?;
             output.success(&started, &agent_text::session_details(&started));
@@ -346,6 +347,7 @@ pub async fn execute(
                     title: args.title,
                     read_only: args.read_only,
                     request_id: None,
+                    permission_mode: None,
                 })
                 .await?;
             let mut lines = agent_text::session_details(&delegated.session);

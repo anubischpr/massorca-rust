@@ -122,6 +122,7 @@ impl Agents {
                 cols: None,
                 rows: None,
                 request_id: params.request_id,
+                permission_mode: None,
             },
             Some(&parent),
             grant,
@@ -741,6 +742,7 @@ then report"
             read_only: true,
             token: None,
             request_id: Some(request_id.to_owned()),
+            permission_mode: None,
         }
     }
 
@@ -812,6 +814,7 @@ then report"
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: None,
                 },
                 SecretGrant::Provide,
             )
@@ -899,6 +902,7 @@ then report"
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: None,
                 },
                 SecretGrant::Provide,
             )
