@@ -158,6 +158,51 @@ fn the_session_page_opens_the_newest_session_once_the_service_lists_them(cx: &mu
 }
 
 #[gpui::test]
+fn a_delegate_request_opens_the_form_under_the_newest_session(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::Delegate));
+    rig.updates
+        .send(StoreUpdate::AgentsResync(vec![agent("s", "w1", 10)]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.delegate.is_some()),
+        "the delegate form opens under the session"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .model()
+            .snapshot()
+            .active_session
+            .clone()),
+        Some("s".to_owned())
+    );
+}
+
+#[gpui::test]
+fn a_bring_back_request_opens_the_confirm_for_the_child_it_finds(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::BringBack));
+    let mut child = agent("c", "w1", 20);
+    child.parent_id = Some("s".to_owned());
+    rig.updates
+        .send(StoreUpdate::AgentsResync(vec![agent("s", "w1", 10), child]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .bring_back
+            .as_ref()
+            .map(|confirm| confirm.prompt.child.clone())),
+        Some("c".to_owned())
+    );
+}
+
+#[gpui::test]
 fn the_session_page_waits_for_the_session_list_then_opens_the_start_page_without_sessions(
     cx: &mut TestAppContext,
 ) {

@@ -275,6 +275,38 @@ fn while_the_agent_works_stop_replaces_send_and_stops_it_at_once(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn a_live_run_without_status_hooks_keeps_send_and_a_header_stop(cx: &mut TestAppContext) {
+    let (mut rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(false, None)]);
+    let composer = composer_of(&rig, cx);
+    composer.update_in(cx, |composer, window, cx| composer.focus(window, cx));
+    cx.simulate_input("status?");
+    cx.run_until_parked();
+    assert_eq!(
+        composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
+        PrimaryAction::Send,
+        "nothing says the agent works, so Send stays primary"
+    );
+    draw(cx);
+    click(cx, "button:session-stop");
+    let (session, _reply) =
+        stop_call(&mut rig.script).expect("the header Stop stops the live run at once");
+    assert_eq!(session, "s1");
+}
+
+#[gpui::test]
+fn the_header_stop_is_drawn_only_for_a_live_run_the_composer_does_not_stop(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = session_rig(
+        cx,
+        vec![kind(true)],
+        vec![s1(false, Some(ActivityState::Working))],
+    );
+    draw(cx);
+    assert!(cx.debug_bounds("button:session-stop").is_none());
+}
+
+#[gpui::test]
 fn a_refused_stop_says_why_above_the_composer(cx: &mut TestAppContext) {
     let (mut rig, cx) = session_rig(
         cx,

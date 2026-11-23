@@ -4,11 +4,15 @@
 mod board;
 mod bot;
 mod memory;
+mod routine_run;
+mod routine_timer;
+mod routines;
 mod selectors;
 mod task;
 mod task_outcome;
 mod task_start;
 
+pub(crate) use routine_timer::follow_routines;
 pub(crate) use task_start::start_gate;
 mod task_state;
 mod team;
@@ -39,6 +43,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(task::register(registries)?);
     handles.extend(task_start::register(registries)?);
     handles.extend(board::register(registries)?);
+    handles.extend(routines::register(registries)?);
     Ok(handles)
 }
 

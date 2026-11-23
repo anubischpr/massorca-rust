@@ -11,17 +11,17 @@ use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::events::{
-    TOPIC_PROJECT_ADDED, TOPIC_TASK_CHANGED, TOPIC_WORKSPACE_CREATED,
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_TASK_CHANGED, TOPIC_WORKSPACE_CREATED,
 };
 use massorca_protocol::methods::projects::{ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::tasks::{self, Task, TaskRef};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
-use crate::context::{Registries, RequestCtx};
+use crate::context::{AppState, Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::agents::secret_grant;
-use crate::features::workspace_domain::{for_mutation, publish};
+use crate::features::workspace_domain::for_mutation;
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -55,10 +55,27 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 
 /// What a start attempt changed, so the handler publishes it whether the agent started or not.
 #[derive(Default)]
-struct Changes {
-    project: Option<String>,
-    workspace: Option<String>,
-    task: Option<String>,
+pub(super) struct Changes {
+    pub(super) project: Option<String>,
+    pub(super) workspace: Option<String>,
+    pub(super) task: Option<String>,
+}
+
+/// Publishes what a start or a routine run changed. Called only after the change is committed.
+pub(super) fn publish_changes(state: &AppState, changes: &Changes) {
+    let changed = [
+        (TOPIC_PROJECT_ADDED, &changes.project),
+        (TOPIC_WORKSPACE_CREATED, &changes.workspace),
+        (TOPIC_TASK_CHANGED, &changes.task),
+    ];
+    for (topic, id) in changed {
+        if let Some(id) = id {
+            state.events.publish(ChangeEvent {
+                topic: topic.to_owned(),
+                id: id.clone(),
+            });
+        }
+    }
 }
 
 async fn start(ctx: RequestCtx, params: TaskRef) -> Result<Task, ErrorBody> {
@@ -78,19 +95,11 @@ async fn start(ctx: RequestCtx, params: TaskRef) -> Result<Task, ErrorBody> {
         Ok((changes, result))
     })
     .await?;
-    if let Some(project) = &changes.project {
-        publish(&ctx, TOPIC_PROJECT_ADDED, project);
-    }
-    if let Some(workspace) = &changes.workspace {
-        publish(&ctx, TOPIC_WORKSPACE_CREATED, workspace);
-    }
-    if let Some(task) = &changes.task {
-        publish(&ctx, TOPIC_TASK_CHANGED, task);
-    }
+    publish_changes(&ctx.state, &changes);
     result
 }
 
-fn start_task(
+pub(super) fn start_task(
     store: &Store,
     agents: &Agents,
     workspaces: &Workspaces,

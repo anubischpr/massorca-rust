@@ -225,6 +225,10 @@ impl Service {
             outcome_changes,
             signal.clone(),
         ));
+        let routines_stop = tokio::spawn(features::follow_routines(
+            Arc::clone(&state),
+            signal.clone(),
+        ));
         let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
@@ -239,6 +243,7 @@ impl Service {
             .await;
             let _ = terminals_stop.await;
             let _ = outcomes_stop.await;
+            let _ = routines_stop.await;
         });
         timings.mark("serving");
         timings.report();
