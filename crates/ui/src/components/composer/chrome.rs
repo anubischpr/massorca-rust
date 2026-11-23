@@ -488,6 +488,8 @@ impl Render for Composer {
             });
         let attach = self.attach_trigger.track(div().child(attach));
         let leading = self.leading.as_ref().map(|build| build(window, cx));
+        // No modes means the host declares none: no chip rather than an empty menu.
+        let access = (!self.access.is_empty()).then(|| self.access_chip(cx));
         let mut bottom = div()
             .flex()
             .items_center()
@@ -495,7 +497,7 @@ impl Render for Composer {
             .h(px(SIZE_CONTROL_DEFAULT))
             .when_some(leading, |row, leading| row.child(leading))
             .child(attach)
-            .child(self.access_chip(cx))
+            .when_some(access, |row, chip| row.child(chip))
             .child(div().flex_1())
             .child(self.picker.clone());
         if self.voice {
