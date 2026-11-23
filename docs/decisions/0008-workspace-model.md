@@ -14,8 +14,9 @@ lineage) comes later; the model must not block it.
 
 - **Project.** `{id, kind: git | folder, path, name, workspaces_root,
   added_at}`. `massorca project add <path>` registers it; a git repository is
-  detected with `git rev-parse --show-toplevel`. `workspaces_root` defaults to
-  `<user home>/massorca/workspaces/<project name>` and is a project property,
+  detected with `git rev-parse --show-toplevel`, and a linked worktree registers
+  its main repository (found with `--git-common-dir`). `workspaces_root` defaults
+  to `<user home>/massorca/workspaces/<project name>` and is a project property,
   so a test profile never writes into the real home.
 - **Workspace.** `{id, project_id, kind: worktree | folder, path, name,
   branch?, base_ref?, created_branch, state: ready | removing, created_at}`.

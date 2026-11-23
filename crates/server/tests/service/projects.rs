@@ -192,3 +192,40 @@ async fn a_new_default_root_applies_to_the_next_project_without_restarting() {
     );
     stop(running).await;
 }
+
+#[tokio::test]
+async fn adding_a_linked_worktree_registers_its_main_repository() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let linked = home.path().join("linked-wt");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked-wt",
+            linked.to_str().expect("utf-8 path"),
+        ],
+    );
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let project: Project = client
+        .call(projects::ADD, &add_params(&linked))
+        .await
+        .expect("project.add");
+
+    assert_eq!(project.kind, ProjectKind::Git);
+    assert_eq!(project.name, "repo");
+    assert_eq!(
+        project.path,
+        dunce::canonicalize(&repo)
+            .expect("canonical repo")
+            .to_str()
+            .expect("utf-8 path")
+    );
+    stop(running).await;
+}
