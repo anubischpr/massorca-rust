@@ -454,3 +454,21 @@ massorca team routine run <team> <routine> --now
 Not in this change: one-time routines created from a Conference room (AUTO-13),
 the Calendar (AUTO-30), the desktop Routines page and the phone, which still show
 sample data, and moving routines onto the Automations engine (AUTO-01).
+
+## Amendment 2026-11-23: stopping a task
+
+`task.stop` (`massorca task stop TASK [--force]`, capability `teams/1`) stops
+the agent session a task runs in, as `agent.stop` does, with the same
+permission. It runs under the start gate, so a start in flight links its session
+before the stop reads it.
+
+- The task keeps its session link. When the run exits it shows Stopped in
+  "Waiting for you", as the table above says for an exited session without Done.
+  From there it can be marked done or reopened.
+- A task with no running session is refused with `task.not_running`.
+- pv96 has no Board stop: its chat Stop cancels the current turn and leaves the
+  session running. Here the run ends, because a turn cancel is not available for
+  every agent kind.
+- Older hosts answer `method.not_found`; the method is additive, so no
+  capability was added.
+- Not in this change: a Stop control on the desktop Board.

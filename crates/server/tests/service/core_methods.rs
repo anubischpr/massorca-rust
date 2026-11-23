@@ -74,7 +74,7 @@ const AGENT_METHODS: [&str; 14] = [
 ];
 
 /// The Bot Teams methods this build registers (capability `teams/1`).
-const TEAM_METHODS: [&str; 25] = [
+const TEAM_METHODS: [&str; 26] = [
     "team.create",
     "team.list",
     "team.show",
@@ -99,6 +99,7 @@ const TEAM_METHODS: [&str; 25] = [
     "task.start",
     "task.done",
     "task.reopen",
+    "task.stop",
     "task.rm",
 ];
 

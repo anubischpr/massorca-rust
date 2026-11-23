@@ -4,7 +4,9 @@ mod text;
 
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
-use massorca_protocol::methods::tasks::{Column, TaskCreateParams, TaskListParams, TaskRef};
+use massorca_protocol::methods::tasks::{
+    Column, TaskCreateParams, TaskListParams, TaskRef, TaskStopParams,
+};
 
 use massorca_protocol::codes;
 
@@ -40,6 +42,14 @@ pub enum TaskCommand {
     Reopen {
         /// Task id.
         task: String,
+    },
+    /// Stops the agent a task runs in. The task keeps its session and shows Stopped.
+    Stop {
+        /// Task id.
+        task: String,
+        /// Skip the grace period and end the agent's processes at once.
+        #[arg(long)]
+        force: bool,
     },
     /// Removes a task. Refused while its agent session runs.
     Rm {
@@ -181,6 +191,10 @@ pub async fn execute(
         TaskCommand::Reopen { task } => {
             let reopened = client.task_reopen(&TaskRef { task }).await?;
             output.success(&reopened, &[text::task_line(&reopened, "reopened")]);
+        }
+        TaskCommand::Stop { task, force } => {
+            let stopped = client.task_stop(&TaskStopParams { task, force }).await?;
+            output.success(&stopped, &[text::task_line(&stopped, "stopped")]);
         }
         TaskCommand::Rm { task } => {
             let removed = client.task_remove(&TaskRef { task }).await?;
