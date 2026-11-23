@@ -377,6 +377,13 @@ impl Shell {
         cx.notify();
     }
 
+    /// "New session" in a workspace's menu: that workspace's start page, with no session open.
+    pub(super) fn open_new_session(&mut self, workspace: &str, cx: &mut Context<Self>) {
+        self.model.close_session();
+        self.model.open_workspace(workspace);
+        cx.notify();
+    }
+
     /// The composer of a workspace's start page, created on first use and then kept, so the
     /// draft stays while the page redraws or the workspace is shown again. Each frame keeps its
     /// agents and Send in step with the store and the start in flight.

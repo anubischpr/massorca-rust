@@ -527,3 +527,28 @@ fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppCo
         attach_call(&mut rig._script).expect("the session's terminal is attached");
     assert_eq!(attach.terminal, terminal);
 }
+
+#[gpui::test]
+fn new_session_from_the_workspace_menu_opens_the_start_page_of_that_workspace(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session.clone()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_session(&session.id));
+    draw(cx);
+    let open = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert!(matches!(open, Canvas::Session(_)), "{open:?}");
+    rig.shell
+        .update(cx, |shell, cx| shell.open_new_session("w1", cx));
+    draw(cx);
+    let start = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
+    assert_eq!(start, Canvas::Workspace("w1".to_owned()));
+}

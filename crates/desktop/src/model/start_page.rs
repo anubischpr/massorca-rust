@@ -11,8 +11,7 @@ use super::service_view::LOCAL_HOST;
 use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
 use crate::service::StoreState;
 
-/// Why the page's actions that need sessions or git are off.
-pub const SESSIONS_LATER: &str = "Agent sessions come later.";
+/// Why the page's actions that need git are off.
 pub const GIT_LATER: &str = "Git operations come later.";
 pub const VOICE_LATER: &str = "Voice input comes later.";
 /// The Send button's reason while no agent is chosen, or the service is not connected.
