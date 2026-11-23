@@ -864,6 +864,8 @@ mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         };
         store.insert_agent_session(&session).expect("session");
         session.id

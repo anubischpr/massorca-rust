@@ -382,6 +382,18 @@ CREATE INDEX team_routine_runs_by_routine ON team_routine_runs (routine_id, sche
 "#,
         foreign_keys_off: false,
     },
+    // An agent session's permission mode (decision 0083): the mode of its current or last run, whether launch arguments
+    // confirmed it, where it came from (`vendor_default` or `chosen`), and the mode waiting for the next resume, kept
+    // apart from the running one.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT;
+ALTER TABLE agent_sessions ADD COLUMN mode_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(mode_confirmed IN (0,1));
+ALTER TABLE agent_sessions ADD COLUMN mode_source TEXT CHECK(mode_source IS NULL OR mode_source IN ('vendor_default','chosen'));
+ALTER TABLE agent_sessions ADD COLUMN pending_permission_mode TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

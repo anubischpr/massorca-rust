@@ -505,6 +505,8 @@ impl Agents {
             result: None,
             brought_back_at: None,
             holds_secrets,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
@@ -633,9 +635,13 @@ impl Agents {
                 live.remove(&row.id);
                 remove_dir(&run_dir);
             })?;
-        let restarted = self
-            .store()
-            .restart_agent_session(&row.id, &terminal_id, holds_secrets);
+        let restarted = self.store().restart_agent_session(
+            &row.id,
+            &terminal_id,
+            holds_secrets,
+            &massorca_core_store::RunMode::default(),
+            None,
+        );
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -1417,6 +1423,8 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&stale).unwrap();
         agents
@@ -1526,6 +1534,8 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         let end = RunExit {
@@ -1544,7 +1554,13 @@ pub(crate) mod tests {
         assert!(
             agents
                 .store()
-                .restart_agent_session(&row.id, "t-2", false)
+                .restart_agent_session(
+                    &row.id,
+                    "t-2",
+                    false,
+                    &massorca_core_store::RunMode::default(),
+                    None
+                )
                 .unwrap()
         );
         let mut live: LiveRuns = HashMap::new();
@@ -1597,6 +1613,8 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: massorca_core_store::RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
 
