@@ -201,6 +201,8 @@ pub const TEAM_NOT_FOUND: &str = "team.not_found";
 pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
 pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
 pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+/// The team has no memory line with this id.
+pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";

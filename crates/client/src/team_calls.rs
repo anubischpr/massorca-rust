@@ -1,12 +1,15 @@
-//! Typed helpers over the `teams/1` methods: teams, their bots and projects, the Board, and the tasks on it (decision 0072).
+//! Typed helpers over the `teams/1` methods: teams, their bots, projects and memory, the Board, and the tasks on it
+//! (decision 0072).
 
 use massorca_protocol::methods::tasks::{
     self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskUpdateParams,
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team,
-    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    TeamCreateParams, TeamList, TeamMemoryAddParams, TeamMemoryLine, TeamMemoryList,
+    TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject, TeamProjectAddParams,
+    TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams,
+    TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -93,6 +96,30 @@ impl Client {
     /// `team.board`: a team's Board, or one project's, in four columns.
     pub async fn team_board(&self, params: &BoardParams) -> Result<Board, ClientError> {
         self.call(teams::BOARD, params).await
+    }
+
+    /// `team.memory_list`: a team's memory lines, or one bot's, newest first.
+    pub async fn team_memory_list(
+        &self,
+        params: &TeamMemoryListParams,
+    ) -> Result<TeamMemoryList, ClientError> {
+        self.call(teams::MEMORY_LIST, params).await
+    }
+
+    /// `team.memory_add`: adds a line to a team's memory, or to one bot's.
+    pub async fn team_memory_add(
+        &self,
+        params: &TeamMemoryAddParams,
+    ) -> Result<TeamMemoryLine, ClientError> {
+        self.call(teams::MEMORY_ADD, params).await
+    }
+
+    /// `team.memory_rm`: removes a memory line of a team; the line is returned.
+    pub async fn team_memory_remove(
+        &self,
+        params: &TeamMemoryRemoveParams,
+    ) -> Result<TeamMemoryLine, ClientError> {
+        self.call(teams::MEMORY_REMOVE, params).await
     }
 
     /// `task.create`: creates a task on a team's Board.
