@@ -63,25 +63,41 @@ item keeps it failed.
 D5 Pauses. `agent.stop` by the person pauses the waiting items (`paused_stopped`). A service restart pauses them all
 (`paused_restarted`), and a prompt being sent fails with "the service restarted while sending". An accepted
 `agent.prompt`, a `send_now`, or `agent.queue.resume` lifts the pause. A resumed run does not deliver paused items by
-itself.
+itself. A prompt the system sends, such as a bring-back's automatic prompt, does not lift a pause: only the person's
+`agent.prompt`, `send_now` or `agent.queue.resume` does (N6). The person's stop pauses the queue before the run is killed,
+so a grace-period report cannot deliver to a dying run.
 
 D6 `send_now`. Sends one item at once with force, skipping busy and FIFO. It is refused while switching, while a
 workspace merge holds the session, or while the agent is asking (`agent.busy`). On success the item leaves the queue.
 
 D7 Edit and remove. Only for waiting or failed items; a sending item is refused with `agent.busy`. The text limit is the
 prompt limit (`check_prompt`). The queue holds at most 100 prompts per session (deviation above).
+A queued prompt keeps whether its caller held host-admin scope. Once its run holds vault secrets (decision 0071), a
+prompt queued without that scope is not typed: it fails with the reason "queued by a caller without host-admin; the run
+now holds secrets", which names no secret, and holds the prompts behind it. A host-admin `send_now` may retry it under
+the 0071 check.
 
-D8 Kinds without a status mechanism. A kind that reports no activity has no queue: `agent.queue*` is refused with
-`agent.queue_unavailable`, and prompts go straight through as before.
+D8 Kinds without a status mechanism. A kind that reports no activity has no queue: `agent.queue` (add) is refused with
+`agent.queue_unavailable`, and prompts go straight through as before. Prompts already queued stay listable, editable,
+removable and sendable (N1): only adding is refused.
 
 D9 Events and capability. Every queue change publishes `agent.queue_changed` with the session id. Queue changes are not
 sent to `agent.watch` streams. The capability is `agent-queue/1`. CLI entry points: `massorca agent queue add`,
 `list`, `edit`, `remove`, `send-now` and `resume`.
 
+D10 Write failures. A write that fails partway marks the prompt failed; retrying it types the whole text again, so the
+agent may already have read part of it. Nothing retries on its own.
+
+D11 Dedupe window. A request id is remembered for the session's last 100 delivered prompts (the window is that count of
+the most recent ids, not a span of time). A retry with a remembered id is refused with `agent.queue_already_delivered`
+and is not typed again. A prompt queued without a request id is not remembered.
+
 ## Consequences
 
 - A prompt queued on a session with no live run waits; it is delivered after a resumed run reports its first idle.
 - A direct `agent.prompt` is not ordered against the queue. A caller that wants ordering uses the queue.
+- A queued prompt is typed on a thread of its own after its hook report returns, so a report never waits for the write.
+- A retry of a delivered prompt is refused after 100 later deliveries in the same session, and then types again.
 - Delivery is attempted on every hook report, after a mode switch ends, and when a queue call changes what is waiting.
 - A queue holds the text of prompts, so reading it needs the same host-admin scope as a prompt to a run that holds vault
   secrets.
