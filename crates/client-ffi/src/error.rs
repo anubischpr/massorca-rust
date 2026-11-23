@@ -75,7 +75,7 @@ impl FfiError {
             ClientError::HostUnreachable(_)
             | ClientError::Unavailable(_)
             | ClientError::Disconnected => unreachable(host),
-            error @ ClientError::ServerIdentityMismatch { .. } => Self::IdentityMismatch {
+            error @ ClientError::ServerIdentityMismatch => Self::IdentityMismatch {
                 message: sentence(&error.to_string()),
             },
             ClientError::Remote(body) => from_body(body.code, body.message, None, host),
