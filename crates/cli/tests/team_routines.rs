@@ -35,9 +35,13 @@ fn declare_fake(sandbox: &Sandbox) {
     std::fs::write(dir.join("fake.json"), kind.to_string()).expect("write a kind file");
 }
 
-/// A sandbox whose workspaces go under `<home>/ws`, with team `alpha` and kind `fake`.
+/// The host zone the service reads (`TZ`), so a routine without a zone has a known zone on every machine.
+const HOST_ZONE: &str = "America/New_York";
+
+/// A sandbox whose workspaces go under `<home>/ws`, with team `alpha` and kind `fake`, on a host in [`HOST_ZONE`].
 fn team_sandbox() -> (Sandbox, PathBuf) {
     let sandbox = Sandbox::new();
+    sandbox.set_env("TZ", HOST_ZONE);
     declare_fake(&sandbox);
     let root = sandbox.home().join("ws");
     let root_text = root.to_string_lossy().into_owned();
@@ -328,4 +332,23 @@ fn the_routine_list_and_runs_print_one_row_each() {
     assert!(runs.contains("bot removed"), "{runs}");
     assert!(runs.contains("bot.not_found"), "{runs}");
     assert_eq!(runs.lines().count(), 1, "one run, one row: {runs}");
+}
+
+#[test]
+fn a_routine_without_a_zone_shows_the_zone_it_runs_in() {
+    let (sandbox, _) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let routine = add_morning_routine(&sandbox, &[]);
+    assert!(routine["zone"].is_null(), "{routine}");
+    assert_eq!(routine["zone_used"], HOST_ZONE, "{routine}");
+
+    let listed = stdout_text(
+        &sandbox
+            .run("default", &["team", "routine", "list", "alpha"])
+            .success(),
+    );
+    assert!(
+        listed.contains(&format!("daily 09:00 host zone ({HOST_ZONE})")),
+        "{listed}"
+    );
 }

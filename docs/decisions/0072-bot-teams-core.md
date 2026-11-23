@@ -392,6 +392,14 @@ Caller scope:
   and the routine are both host-admin, so a caller with less scope cannot widen
   what a routine may do.
 
+Zones:
+
+- A routine without a zone runs in the host's zone. `Routine.zone_used` names
+  that zone (its IANA name, or `UTC` when the host's zone cannot be read) so the
+  zone a run uses is never silent. While the host's zone cannot be read, an add
+  without a zone and an update that clears the zone are refused with
+  `request.invalid_params`.
+
 Methods (capability `teams/1`):
 
 - `team.routine_list { team }` lists the routines in creation order.
@@ -419,8 +427,8 @@ the end of the gap, and a repeated one fires once, at the earlier instant. The
 server tests cover both in America/New_York.
 
 Storage: migration step 18 adds `team_routines` and `team_routine_runs`, whose
-runs keep `error_code` and `settled_at`. `RoutineRun.error_code` is an optional
-field an older peer omits.
+runs keep `error_code` and `settled_at`. `RoutineRun.error_code` and
+`Routine.zone_used` are optional fields an older peer omits.
 
 CLI:
 

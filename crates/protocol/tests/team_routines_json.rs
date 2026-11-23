@@ -95,6 +95,7 @@ fn routine_has_the_documented_shape_and_omits_an_absent_bot_and_next_run() {
         month_day: None,
         run_date: None,
         zone: Some("Europe/Madrid".to_owned()),
+        zone_used: None,
         paused: false,
         starts_as_admin: true,
         next_run_at_ms: None,
@@ -136,6 +137,7 @@ fn a_routine_from_an_older_peer_without_the_new_fields_still_decodes() {
     assert_eq!(routine.run_date.as_deref(), Some("2026-11-24"));
     assert_eq!(routine.bot_id, None);
     assert_eq!(routine.next_run_at_ms, None);
+    assert_eq!(routine.zone_used, None);
 }
 
 #[test]
@@ -186,4 +188,23 @@ fn an_interrupted_run_carries_its_error_code() {
         run.error_code.as_deref(),
         Some("team.routine_run_interrupted")
     );
+}
+
+#[test]
+fn a_routine_without_a_zone_carries_the_zone_it_uses() {
+    let routine: Routine = serde_json::from_value(json!({
+        "id": "r1",
+        "team_id": "t1",
+        "name": "Morning check",
+        "prompt": "Read the open issues.",
+        "cadence": "daily",
+        "time": "09:00",
+        "zone_used": "UTC",
+        "paused": false,
+        "starts_as_admin": false,
+        "created_at_ms": 1
+    }))
+    .unwrap();
+    assert_eq!(routine.zone, None);
+    assert_eq!(routine.zone_used.as_deref(), Some("UTC"));
 }

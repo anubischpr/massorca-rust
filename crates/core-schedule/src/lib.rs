@@ -40,4 +40,4 @@ mod zone;
 pub use claim::{ClaimDecision, MAX_COUNTED_SKIPS, decide_claim, next_run_from};
 pub use occurrence::{CompiledSchedule, MAX_SEARCH_DAYS};
 pub use schedule::{Cadence, MAX_ZONE_NAME_LEN, Schedule, ScheduleError, Weekday};
-pub use zone::ZoneSource;
+pub use zone::{ZoneSource, host_zone_used};

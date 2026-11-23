@@ -450,6 +450,10 @@ pub struct Routine {
     /// An IANA zone name; absent means the host's zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
+    /// For a routine without `zone`, the zone its runs use on the host: the host zone's name, or `UTC` when the host's
+    /// zone cannot be read. Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_used: Option<String>,
     /// A paused routine has no next run; resuming schedules the next one from then, so no missed run is made up.
     pub paused: bool,
     /// Whether its scheduled runs receive vault secrets: the host-admin status of the caller that last added or updated it.

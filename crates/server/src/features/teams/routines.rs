@@ -3,7 +3,9 @@
 //! The occurrences are decided by `massorca-core-schedule` (decision 0082); `routine_timer.rs` runs the due ones.
 
 use massorca_core_agents::{Agents, SecretGrant};
-use massorca_core_schedule::{Cadence, Schedule, ScheduleError, Weekday, next_run_from};
+use massorca_core_schedule::{
+    Cadence, Schedule, ScheduleError, Weekday, ZoneSource, host_zone_used, next_run_from,
+};
 use massorca_core_store::{Store, TeamRoutineRow, TeamRoutineRunRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::events::TOPIC_TEAM_CHANGED;
@@ -103,11 +105,12 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 async fn list(ctx: RequestCtx, params: TeamRef) -> Result<RoutineList, ErrorBody> {
+    let host = HostZone::read();
     blocking(&ctx, move |store, _agents| {
         let team = selectors::team(store, &params.team)?;
         let rows = store.list_routines(&team.id).map_err(store_error)?;
         Ok(RoutineList {
-            routines: rows.iter().map(routine_view).collect(),
+            routines: rows.iter().map(|row| routine_view(row, &host)).collect(),
         })
     })
     .await
@@ -115,28 +118,32 @@ async fn list(ctx: RequestCtx, params: TeamRef) -> Result<RoutineList, ErrorBody
 
 async fn add(ctx: RequestCtx, params: RoutineAddParams) -> Result<Routine, ErrorBody> {
     let admin = is_admin(&ctx);
+    let host = HostZone::read();
+    let known = host.clone();
     let row = blocking(&ctx, move |store, _agents| {
-        add_routine(store, params, admin, now_ms())
+        add_routine(store, params, admin, now_ms(), &known)
     })
     .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
-    Ok(routine_view(&row))
+    Ok(routine_view(&row, &host))
 }
 
 async fn update(ctx: RequestCtx, params: RoutineUpdateParams) -> Result<Routine, ErrorBody> {
     let admin = is_admin(&ctx);
+    let host = HostZone::read();
+    let known = host.clone();
     let row = blocking(&ctx, move |store, _agents| {
-        update_routine(store, params, admin, now_ms())
+        update_routine(store, params, admin, now_ms(), &known)
     })
     .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
-    Ok(routine_view(&row))
+    Ok(routine_view(&row, &host))
 }
 
 async fn remove(ctx: RequestCtx, params: RoutineRef) -> Result<Routine, ErrorBody> {
     let row = blocking(&ctx, move |store, _agents| remove_routine(store, &params)).await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
-    Ok(routine_view(&row))
+    Ok(routine_view(&row, &HostZone::read()))
 }
 
 async fn pause(ctx: RequestCtx, params: RoutineRef) -> Result<Routine, ErrorBody> {
@@ -145,7 +152,7 @@ async fn pause(ctx: RequestCtx, params: RoutineRef) -> Result<Routine, ErrorBody
     })
     .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
-    Ok(routine_view(&row))
+    Ok(routine_view(&row, &HostZone::read()))
 }
 
 async fn resume(ctx: RequestCtx, params: RoutineRef) -> Result<Routine, ErrorBody> {
@@ -154,7 +161,7 @@ async fn resume(ctx: RequestCtx, params: RoutineRef) -> Result<Routine, ErrorBod
     })
     .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
-    Ok(routine_view(&row))
+    Ok(routine_view(&row, &HostZone::read()))
 }
 
 async fn runs(ctx: RequestCtx, params: RoutineRunsParams) -> Result<RoutineRunList, ErrorBody> {
@@ -190,11 +197,49 @@ fn is_admin(ctx: &RequestCtx) -> bool {
     matches!(secret_grant(ctx), SecretGrant::Provide)
 }
 
+/// The zone routines without a zone use on this host now, read once per call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HostZone {
+    /// The zone's IANA name: `UTC` when the host's zone cannot be read, `None` when the host's zone has none.
+    name: Option<String>,
+    /// Whether the host's zone could be read.
+    known: bool,
+}
+
+impl HostZone {
+    pub(super) fn read() -> Self {
+        let (name, source) = host_zone_used();
+        Self {
+            name,
+            known: source != ZoneSource::HostUnknownUsedUtc,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn of(name: &str, known: bool) -> Self {
+        Self {
+            name: Some(name.to_owned()),
+            known,
+        }
+    }
+
+    /// Refuses a routine left without a zone while the host's zone cannot be read, since it would silently run at UTC.
+    fn allow(&self, zone: Option<&str>) -> Result<(), ErrorBody> {
+        if zone.is_none() && !self.known {
+            return Err(invalid(
+                "the host's time zone cannot be read, so a routine needs a zone, such as Europe/Madrid",
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn add_routine(
     store: &Store,
     params: RoutineAddParams,
     admin: bool,
     now: i64,
+    host: &HostZone,
 ) -> Result<TeamRoutineRow, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let bot = selectors::bot(store, &team, &params.bot)?;
@@ -210,6 +255,8 @@ fn add_routine(
         params.month_day.map(i64::from),
         optional_text(params.run_date),
     );
+    let zone = optional_text(params.zone);
+    host.allow(zone.as_deref())?;
     let mut row = TeamRoutineRow {
         id: new_id(),
         team_id: team.id,
@@ -221,7 +268,7 @@ fn add_routine(
         weekday,
         month_day,
         run_date,
-        zone: optional_text(params.zone),
+        zone,
         paused: false,
         starts_as_admin: admin,
         next_run_at: None,
@@ -237,6 +284,7 @@ fn update_routine(
     params: RoutineUpdateParams,
     admin: bool,
     now: i64,
+    host: &HostZone,
 ) -> Result<TeamRoutineRow, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let mut row = selectors::routine(store, &team, &params.routine)?;
@@ -254,6 +302,7 @@ fn update_routine(
     }
     if let Some(zone) = params.zone {
         row.zone = optional_text(Some(zone));
+        host.allow(row.zone.as_deref())?;
     }
     let cadence = match params.cadence {
         Some(cadence) => cadence_name(cadence)?.to_owned(),
@@ -405,8 +454,8 @@ fn vanished() -> ErrorBody {
     )
 }
 
-/// A routine as the protocol shows it.
-pub(super) fn routine_view(row: &TeamRoutineRow) -> Routine {
+/// A routine as the protocol shows it, with the zone a routine without one uses on this host.
+pub(super) fn routine_view(row: &TeamRoutineRow, host: &HostZone) -> Routine {
     Routine {
         id: row.id.clone(),
         team_id: row.team_id.clone(),
@@ -419,6 +468,14 @@ pub(super) fn routine_view(row: &TeamRoutineRow) -> Routine {
         month_day: row.month_day.and_then(|day| u8::try_from(day).ok()),
         run_date: row.run_date.clone(),
         zone: row.zone.clone(),
+        zone_used: match &row.zone {
+            Some(_) => None,
+            None => Some(
+                host.name
+                    .clone()
+                    .unwrap_or_else(|| "the host's zone".to_owned()),
+            ),
+        },
         paused: row.paused,
         starts_as_admin: row.starts_as_admin,
         next_run_at_ms: row.next_run_at,
@@ -497,9 +554,125 @@ fn core_weekday(name: &str) -> Result<Weekday, ErrorBody> {
 
 #[cfg(test)]
 mod tests {
-    use massorca_core_store::TeamRoutineRow;
+    use massorca_core_store::{BotRow, Store, TeamRoutineRow, TeamRow, new_id};
+    use massorca_protocol::codes;
+    use massorca_protocol::methods::teams::{
+        RoutineAddParams, RoutineCadence, RoutineUpdateParams,
+    };
 
-    use super::{keep_for, next_run_after};
+    use super::{HostZone, add_routine, keep_for, next_run_after, routine_view, update_routine};
+
+    /// 2026-11-23 12:00 UTC.
+    const NOW: i64 = 1_795_435_200_000;
+
+    /// A store with team `Desarrollo` and its bot `Mara`.
+    fn team_store() -> Store {
+        let store = Store::open_in_memory().expect("in-memory store opens");
+        let team = TeamRow {
+            id: new_id(),
+            name: "Desarrollo".to_owned(),
+            purpose: String::new(),
+            character: "triangle".to_owned(),
+            access: "full".to_owned(),
+            workspaces: false,
+            created_at: 1,
+        };
+        store.insert_team(&team).unwrap();
+        store
+            .insert_bot(&BotRow {
+                id: new_id(),
+                team_id: team.id,
+                name: "Mara".to_owned(),
+                job: "Writes the parser".to_owned(),
+                kind: "claude".to_owned(),
+                model: None,
+                effort: None,
+                lead: false,
+                created_at: 1,
+            })
+            .unwrap();
+        store
+    }
+
+    fn add_params(zone: Option<&str>) -> RoutineAddParams {
+        RoutineAddParams {
+            team: "Desarrollo".to_owned(),
+            bot: "Mara".to_owned(),
+            name: "morning".to_owned(),
+            prompt: "Read the open issues.".to_owned(),
+            cadence: RoutineCadence::Daily,
+            time: "09:00".to_owned(),
+            weekday: None,
+            month_day: None,
+            run_date: None,
+            zone: zone.map(str::to_owned),
+        }
+    }
+
+    fn update_params() -> RoutineUpdateParams {
+        RoutineUpdateParams {
+            team: "Desarrollo".to_owned(),
+            routine: "morning".to_owned(),
+            bot: None,
+            name: None,
+            prompt: None,
+            cadence: None,
+            time: None,
+            weekday: None,
+            month_day: None,
+            run_date: None,
+            zone: None,
+        }
+    }
+
+    #[test]
+    fn a_routine_without_a_zone_is_refused_when_the_host_zone_cannot_be_read() {
+        let store = team_store();
+        let unknown = HostZone::of("UTC", false);
+
+        let refused = add_routine(&store, add_params(None), true, NOW, &unknown).unwrap_err();
+        assert_eq!(refused.code, codes::REQUEST_INVALID_PARAMS);
+        assert!(refused.message.contains("zone"), "{}", refused.message);
+
+        add_routine(
+            &store,
+            add_params(Some("Europe/Madrid")),
+            true,
+            NOW,
+            &unknown,
+        )
+        .unwrap();
+        let clear = RoutineUpdateParams {
+            zone: Some(String::new()),
+            ..update_params()
+        };
+        let refused = update_routine(&store, clear, true, NOW, &unknown).unwrap_err();
+        assert_eq!(refused.code, codes::REQUEST_INVALID_PARAMS);
+    }
+
+    #[test]
+    fn a_routine_without_a_zone_shows_the_zone_it_runs_in() {
+        let store = team_store();
+        let host = HostZone::of("America/New_York", true);
+        let row = add_routine(&store, add_params(None), true, NOW, &host).unwrap();
+
+        let shown = routine_view(&row, &host);
+        assert_eq!(shown.zone, None);
+        assert_eq!(shown.zone_used.as_deref(), Some("America/New_York"));
+
+        let named = add_routine(
+            &store,
+            RoutineAddParams {
+                name: "evening".to_owned(),
+                ..add_params(Some("Europe/Madrid"))
+            },
+            true,
+            NOW,
+            &host,
+        )
+        .unwrap();
+        assert_eq!(routine_view(&named, &host).zone_used, None);
+    }
 
     /// A daily routine at `time` in `zone`.
     fn daily(time: &str, zone: &str) -> TeamRoutineRow {

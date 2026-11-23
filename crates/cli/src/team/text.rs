@@ -215,7 +215,11 @@ fn schedule_text(routine: &Routine) -> String {
         RoutineCadence::Once => format!("once {}", routine.run_date.as_deref().unwrap_or("?")),
         RoutineCadence::Unknown => "unknown cadence".to_owned(),
     };
-    let zone = routine.zone.as_deref().unwrap_or("host zone");
+    let zone = match (&routine.zone, &routine.zone_used) {
+        (Some(zone), _) => zone.clone(),
+        (None, Some(used)) => format!("host zone ({used})"),
+        (None, None) => "host zone".to_owned(),
+    };
     format!("{when} {} {zone}", routine.time)
 }
 
