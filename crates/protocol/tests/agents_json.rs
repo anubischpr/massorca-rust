@@ -6,9 +6,10 @@ use std::fmt::Debug;
 use massorca_protocol::methods::agents::{
     self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
     AgentBringBackParams, AgentDelegateParams, AgentHookParams, AgentKind, AgentKinds,
-    AgentModeSet, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
-    AgentWatchEvent, Execution, KindCredentials, KindPackage, ModeApplied, ModeSource, Outcome,
-    PackageState, PermissionMode, PromptReceipt, ReceiptKind, StatusMechanism,
+    AgentModeSet, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    Execution, KindCredentials, KindPackage, ModeApplied, ModeSource, Outcome, PackageState,
+    PermissionMode, PromptReceipt, ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -563,4 +564,113 @@ fn a_session_says_where_its_mode_came_from_and_what_waits_for_the_resume() {
         (decoded.mode_source, decoded.pending_permission_mode),
         (None, None)
     );
+}
+
+fn queued(state: agents::QueueState, reason: Option<&str>) -> agents::QueuedPrompt {
+    agents::QueuedPrompt {
+        id: "q-1".to_owned(),
+        session: "s-1".to_owned(),
+        position: 1,
+        text: "next".to_owned(),
+        state,
+        reason: reason.map(str::to_owned),
+        created_at_ms: 1,
+        updated_at_ms: 2,
+    }
+}
+
+#[test]
+fn a_queued_prompt_says_its_state_and_reason_and_an_absent_reason_is_omitted() {
+    assert_wire(
+        &queued(agents::QueueState::Waiting, Some(agents::QUEUE_REASON_BUSY)),
+        &json!({
+            "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+            "state": "waiting", "reason": "busy", "created_at_ms": 1, "updated_at_ms": 2
+        }),
+    );
+    assert_wire(
+        &queued(agents::QueueState::Sending, None),
+        &json!({
+            "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+            "state": "sending", "created_at_ms": 1, "updated_at_ms": 2
+        }),
+    );
+    let failed: agents::QueuedPrompt = serde_json::from_value(json!({
+        "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+        "state": "failed", "reason": "the run has exited", "created_at_ms": 1, "updated_at_ms": 2
+    }))
+    .unwrap();
+    assert_eq!(failed.state, agents::QueueState::Failed);
+    assert_eq!(failed.reason.as_deref(), Some("the run has exited"));
+    let newer: agents::QueuedPrompt = serde_json::from_value(json!({
+        "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+        "state": "parked", "created_at_ms": 1, "updated_at_ms": 2
+    }))
+    .unwrap();
+    assert_eq!(newer.state, agents::QueueState::Unknown);
+}
+
+#[test]
+fn queue_params_and_the_list_have_their_wire_shapes() {
+    assert_wire(
+        &AgentQueueParams {
+            session: "s-1".to_owned(),
+            text: "later".to_owned(),
+            request_id: None,
+        },
+        &json!({ "session": "s-1", "text": "later" }),
+    );
+    assert_wire(
+        &AgentQueueParams {
+            session: "s-1".to_owned(),
+            text: "later".to_owned(),
+            request_id: Some("req-1".to_owned()),
+        },
+        &json!({ "session": "s-1", "text": "later", "request_id": "req-1" }),
+    );
+    assert_wire(
+        &AgentQueueEditParams {
+            id: "q-1".to_owned(),
+            text: "edited".to_owned(),
+        },
+        &json!({ "id": "q-1", "text": "edited" }),
+    );
+    assert_wire(
+        &AgentQueueItemRef {
+            id: "q-1".to_owned(),
+        },
+        &json!({ "id": "q-1" }),
+    );
+    assert_wire(
+        &AgentQueueList {
+            session: "s-1".to_owned(),
+            items: vec![queued(agents::QueueState::Failed, Some("gone"))],
+        },
+        &json!({
+            "session": "s-1",
+            "items": [{
+                "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+                "state": "failed", "reason": "gone", "created_at_ms": 1, "updated_at_ms": 2
+            }]
+        }),
+    );
+    assert_eq!(agents::MAX_QUEUED_PROMPTS, 100);
+    assert_eq!(agents::QUEUE, "agent.queue");
+    assert_eq!(agents::QUEUE_LIST, "agent.queue.list");
+    assert_eq!(agents::QUEUE_EDIT, "agent.queue.edit");
+    assert_eq!(agents::QUEUE_REMOVE, "agent.queue.remove");
+    assert_eq!(agents::QUEUE_SEND_NOW, "agent.queue.send_now");
+    assert_eq!(agents::QUEUE_RESUME, "agent.queue.resume");
+}
+
+#[test]
+fn a_queued_prompt_does_not_print_its_text_in_debug() {
+    let item = queued(agents::QueueState::Waiting, Some(agents::QUEUE_REASON_BUSY));
+    let shown = format!("{item:?}");
+    assert!(!shown.contains("next"), "the text is not printed: {shown}");
+    assert!(
+        shown.contains("q-1") && shown.contains("Waiting"),
+        "{shown}"
+    );
+    assert_eq!(agents::MAX_DELIVERED_REQUEST_IDS, 100);
 }

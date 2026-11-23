@@ -373,6 +373,65 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.queue.add",
+            "Queue a prompt behind a busy agent",
+            "agent.queue",
+            json!({
+                "type": "object",
+                "required": ["session", "text"],
+                "properties": {
+                    "session": { "type": "string" },
+                    "text": { "type": "string" },
+                    "request_id": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.queue.list",
+            "List the queued prompts of a session",
+            "agent.queue.list",
+            selector("session"),
+        ),
+        command(
+            "agent.queue.edit",
+            "Replace the text of a waiting or failed queued prompt",
+            "agent.queue.edit",
+            json!({
+                "type": "object",
+                "required": ["id", "text"],
+                "properties": {
+                    "id": { "type": "string" },
+                    "text": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "agent.queue.remove",
+            "Remove a waiting or failed queued prompt",
+            "agent.queue.remove",
+            json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": { "id": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.queue.send-now",
+            "Send a queued prompt at once, ahead of the queue",
+            "agent.queue.send_now",
+            json!({
+                "type": "object",
+                "required": ["id"],
+                "properties": { "id": { "type": "string" } }
+            }),
+        ),
+        command(
+            "agent.queue.resume",
+            "Lift a session's queue pauses and deliver its head once the agent is ready",
+            "agent.queue.resume",
+            selector("session"),
+        ),
+        command(
             "agent.resume",
             "Start a new run of an exited agent session",
             "agent.resume",
