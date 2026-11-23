@@ -1,6 +1,8 @@
 //! Agent account rows (decision 0059): the accounts of each kind, the active account per kind, and per-project
 //! choices. The credential homes themselves live on disk; these rows say which exist and which one is used.
 
+use std::collections::BTreeSet;
+
 use rusqlite::{Row, params};
 
 use crate::error::StoreError;
@@ -207,5 +209,17 @@ impl Store {
                 |_| Ok(()),
             )?
             .is_some())
+    }
+
+    /// Every kind the store names (decision 0059): a session's, an account's (pending sign-ins included), one the account
+    /// history keeps after its accounts are gone, and a bot's. A package whose kind is in it is in use.
+    pub fn used_agent_kinds(&self) -> Result<BTreeSet<String>, StoreError> {
+        let kinds = self.query_all(
+            "SELECT kind FROM agent_sessions UNION SELECT kind FROM agent_accounts \
+             UNION SELECT kind FROM agent_account_history UNION SELECT kind FROM bots",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(kinds.into_iter().collect())
     }
 }
