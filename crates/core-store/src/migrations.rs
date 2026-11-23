@@ -1,5 +1,8 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -273,6 +276,26 @@ ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 C
 "#,
         foreign_keys_off: false,
     },
+    // Only a kept account counts as one the kind had (decision 0059): a row is recorded when it is inserted already decided
+    // (an import or a migrated home) or when its pending sign-in is cleared. A sign-in deleted while still pending was
+    // never kept and leaves no record. Rows recorded by the earlier trigger cannot tell a kept sign-in from a discarded
+    // one, so they are left as they are.
+    Migration {
+        sql: r#"
+DROP TRIGGER agent_accounts_record_kind;
+CREATE TRIGGER agent_accounts_record_kind AFTER INSERT ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+CREATE TRIGGER agent_accounts_record_kept_sign_in AFTER UPDATE OF sign_in_pending ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
@@ -283,6 +306,16 @@ pub(crate) fn migrate(
     connection: &mut Connection,
     file: Option<&Path>,
     steps: &[Migration],
+) -> Result<(), StoreError> {
+    migrate_observed(connection, file, steps, &mut |_| {})
+}
+
+/// Like `migrate`, calling `observe` once the migration lock is held and after each step.
+pub(crate) fn migrate_observed(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    steps: &[Migration],
+    observe: &mut dyn FnMut(&'static str),
 ) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
     // An up-to-date or newer database is answered without the migration lock, so it is never written to.
@@ -296,6 +329,7 @@ pub(crate) fn migrate(
     // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
     // would back up the half-migrated file again.
     let _upgrade = file.map(upgrade_lock).transpose()?;
+    observe("store migration lock");
     let mut backed_up = false;
     loop {
         // Read without the lock first, so an up-to-date database is never written to.
@@ -308,6 +342,7 @@ pub(crate) fn migrate(
             return Ok(());
         };
         apply_step(connection, file, found, index, step, &mut backed_up)?;
+        observe("store schema step");
     }
 }
 
@@ -368,17 +403,44 @@ fn run_step(
     Ok(())
 }
 
-/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish.
+/// How long an open waits for another opener's upgrade before it gives up.
+const UPGRADE_LOCK_WAIT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
+
+/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish. The wait is
+/// bounded, so a lock that is never released fails the open with a message instead of hanging it.
 fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
     let mut name = file.as_os_str().to_owned();
     name.push(".migrating");
+    let path = PathBuf::from(name);
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(PathBuf::from(name))?;
-    lock.lock()?;
-    Ok(lock)
+        .open(&path)?;
+    let deadline = Instant::now() + UPGRADE_LOCK_WAIT;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(StoreError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "{} stayed locked by another upgrade for {}s",
+                        path.display(),
+                        UPGRADE_LOCK_WAIT.as_secs()
+                    ),
+                )));
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
 }
 
 fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
@@ -582,5 +644,23 @@ mod tests {
         assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
         assert_eq!(version(&connection), 1);
         assert_eq!(row_count(&connection, "child"), 1);
+    }
+
+    #[test]
+    fn an_upgrade_lock_that_is_never_released_fails_the_open_instead_of_hanging_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let held = fs::File::create(dir.path().join("store.db.migrating")).unwrap();
+        held.lock().unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let started = std::time::Instant::now();
+        let error = migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap_err();
+        assert!(
+            matches!(&error, StoreError::Io(io) if io.kind() == std::io::ErrorKind::TimedOut),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        drop(held);
+        migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap();
     }
 }
