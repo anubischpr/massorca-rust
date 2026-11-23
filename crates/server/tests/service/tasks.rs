@@ -708,13 +708,16 @@ async fn reopening_a_task_unlinks_its_session_so_it_can_start_again() {
 
     // A session linked the way task.start will link one, to a session the agents domain has forgotten.
     let store = Store::open(profile(home.path(), "default").store_path()).expect("the store opens");
-    let mut linked = store
-        .get_task(&task.id)
-        .expect("the task is stored")
-        .expect("the task row");
-    linked.session_id = Some("forgotten-session".to_owned());
-    linked.outcome = Some(TaskOutcome::Failure);
-    assert!(store.update_task(&linked).expect("the link is stored"));
+    assert!(
+        store
+            .link_task_session(&task.id, "forgotten-session", 2)
+            .expect("the link is stored")
+    );
+    assert!(
+        store
+            .set_task_outcome(&task.id, TaskOutcome::Failure, Some("forgotten-session"), 3)
+            .expect("the outcome is stored")
+    );
     let stuck: Task = client
         .call(
             tasks::SHOW,

@@ -165,6 +165,7 @@ mod tests {
             state: CardState::Working,
             last_known: false,
             error: error.map(Into::into),
+            error_code: None,
             at_ms: 1,
         }
     }

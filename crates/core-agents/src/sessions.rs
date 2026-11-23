@@ -423,6 +423,7 @@ impl Agents {
             }
         }
         if !params.read_only
+            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
         {
             let mut error = AgentError::new(
@@ -561,6 +562,7 @@ impl Agents {
             ));
         }
         if !row.read_only
+            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
         {
             let mut error = AgentError::new(

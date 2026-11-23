@@ -304,6 +304,9 @@ pub struct BoardCard {
     pub last_known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     /// When the task last changed, Unix milliseconds.
     pub at_ms: i64,
 }

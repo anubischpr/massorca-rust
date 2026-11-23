@@ -6,6 +6,9 @@ mod bot;
 mod memory;
 mod selectors;
 mod task;
+mod task_start;
+
+pub(crate) use task_start::start_gate;
 mod task_state;
 mod team;
 mod team_project;
@@ -31,6 +34,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(team_project::register(registries)?);
     handles.extend(memory::register(registries)?);
     handles.extend(task::register(registries)?);
+    handles.extend(task_start::register(registries)?);
     handles.extend(board::register(registries)?);
     Ok(handles)
 }

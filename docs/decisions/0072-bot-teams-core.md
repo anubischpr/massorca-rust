@@ -220,3 +220,93 @@ amends the "code source" that the core decision left out of scope.
 - **Not in this change.** Starting a task on a linked project comes in the next
   PR. A git project gets one worktree per task. A folder project runs the task
   in the folder itself. Read-only tasks run in the main checkout.
+
+## Amendment 2026-11-22: where a task runs
+
+The workspace domain lets one agent write in a workspace at a time
+(`agent.workspace_busy`). A team's bots must still be able to work at once.
+
+- **A task with no project:** the bot works in the team's folder workspace,
+  `<workspaces root>/bot-teams/<team id>`. Every team folder belongs to one
+  folder project named "Bot teams", made on the first start. The team's
+  workspace is stored on the team and made again if it was removed.
+- **A team folder has several writers.** This is a property a folder
+  workspace can have and a worktree cannot. A folder has no git index to
+  corrupt, and the team's bots seeing each other's files is the point of a
+  team folder. Every other workspace keeps one writer and
+  `agent.workspace_busy`. pv96 ran a team's bots in one shared folder in the
+  same way.
+- **A busy bot:** a bot works on one task at a time. Another of its tasks still
+  running blocks a second start, and so does one whose session cannot be
+  verified. That start is refused with `bot.busy`. The task stays Open with the
+  reason in `error`, and nothing is queued. Starts are serialised, so two
+  starts for one bot cannot both find it free.
+- **A task on a team project that is a plain folder:** it runs in that folder,
+  with several writers, as in pv96.
+- **A task on a team project that is a git repository:** the bot works in its
+  own git worktree for that task. That worktree is made through the path
+  delegation uses for child agents, and the result comes back as a branch. A
+  task that only reads runs in the main checkout, as in pv96.
+- **What is not built yet:** a team project can name its code source, but
+  `task.start` does not use that link yet, so no task reaches either project
+  case today. Both come in a follow-up.
+- **Who owns the run:** the host that runs the agent owns the run. A card
+  follows its session in the `live`, `unverifiable` and `exited` terms. An
+  unverifiable session counts as running, and losing contact never moves a
+  card to Done or to a failure.
+- **Who starts the run:** the run is started with the scope of the caller of
+  `task.start`, never as the service. It gets the vault's variables only when
+  that caller holds host-admin scope, as `agent.start` does (decision 0071).
+  A paired device with standard scopes starts a run without them.
+- **Delivery:** the built-in kinds take the prompt on their command line, so
+  the prompt is delivered once the agent starts, and only then is the session
+  linked. A kind whose prompt mode is `none` gets its prompt at its first idle,
+  and the agents domain drops that prompt after 120 s. Such a kind's task can
+  show Running with a prompt it never received.
+- **Error code:** a task and a Board card carry `error_code` next to `error`.
+  It is the protocol code of the failed start, such as `agent.not_installed`,
+  `bot.busy` or `agent.credentials_invalid`, so a client can show its own
+  sentence. The field is optional and additive. A start that links a session
+  clears it, and so does `task.reopen`.
+- **Targeted task writes:** `task.update` writes only the title, body, bot and
+  project, so it never overwrites a session link that a start wrote after it
+  read the task. `task.done` and `task.reopen` write only if the task still has
+  the session they read. Otherwise they are refused: with `task.running` when
+  the task now runs, and with `task.changed` ("the task changed; try again")
+  otherwise.
+- **Waiting for a start:** `task.rm`, `task.done`, `task.reopen`, a bot change
+  in `task.update`, and `agent.resume` take one start gate. Each one checks
+  whether the task runs and writes under that gate, so no start links and no
+  resume revives a session between the check and the write. A task whose
+  session runs cannot be removed, finished, reopened or change bot; each is
+  refused with `task.running`. The gate is one for every team, so starts in
+  different teams also wait for each other. Starts are short, so this is
+  accepted for now.
+- **A task finished during its start:** the link is written only while the task
+  has no session and no outcome. When it finds an outcome, the start stops the
+  session it spawned and records `task.changed` on the task.
+- **Start attempt:** a start stores an attempt id on the task before it starts
+  the agent, and the agent request is keyed by it. The id is cleared once the
+  attempt is settled: the session is linked, or the start failed with nothing
+  left running. A retry after a start that left a run behind uses the same id,
+  so it finds that run instead of starting a second one.
+- **Stop on failure:** when a start spawned a session but cannot link it, it
+  stops that session at once, and records the error on the task if the task
+  still exists. A session that is not linked never keeps running. A start that
+  fails after the spawn point is treated the same way: the session is found by
+  its agent request id and stopped. When that stop fails, the attempt is kept.
+  The bot then stays busy while that run lives, and a retry names the same
+  run. A read that fails after a successful link is reported to the caller
+  and never stops the linked run.
+- **Known gap:** the agents domain stores the request id after the terminal
+  spawns. A service crash between the two lets a retry start a second process.
+  That is the agents domain's start order and is tracked there.
+- **A taken team path:** the "Bot teams" project must be a folder project. When
+  `<workspaces root>/bot-teams` was already added as another kind of project,
+  the start is refused with `team.folder_taken`, recorded on the task like
+  other failed starts. Nothing is written inside that project.
+- **Older hosts:** `task.start` joined `teams/1` without a new capability, so a
+  host from before it answers `method.not_found`. `massorca task start` shows
+  that answer as "this host is too old to run tasks; update it".
+- The bot's model and effort are not passed yet, because `agent.start` has no
+  field for them.

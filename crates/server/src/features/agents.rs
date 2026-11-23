@@ -22,6 +22,7 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
 use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
+use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::{NoParams, sees_account_details};
@@ -238,7 +239,12 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
 async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
-    let session = on_agents(&ctx, move |agents| agents.resume(&params.session, grant)).await?;
+    let session = on_agents(&ctx, move |agents| {
+        // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
+        let _gate = start_gate();
+        agents.resume(&params.session, grant)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
 }
 
@@ -612,7 +618,7 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
 /// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
-fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
     if is_host_admin(ctx) {
         SecretGrant::Provide
     } else {

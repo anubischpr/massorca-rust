@@ -320,6 +320,20 @@ ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(
 "#,
         foreign_keys_off: false,
     },
+    // A team's folder workspace, made on its first task start; folder workspaces that let several agents write at once
+    // (a team folder: no git index to corrupt, and shared files are the point); and the lookup from an agent session to
+    // its task, the protocol code of a failed start beside its message, and the pending start attempt that keys a retry
+    // to the same agent request (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE teams ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN error_code TEXT;
+ALTER TABLE tasks ADD COLUMN start_attempt TEXT;
+ALTER TABLE workspaces ADD COLUMN shared_writers INTEGER NOT NULL DEFAULT 0 CHECK(shared_writers IN (0,1));
+CREATE INDEX tasks_session_id ON tasks (session_id);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
