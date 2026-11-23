@@ -72,7 +72,11 @@ fn lines(answer: &HostPorts) -> Vec<String> {
         .count();
     let mut lines = Vec::new();
     if answer.ports.is_empty() {
-        lines.push(if unverifiable > 0 {
+        // An empty table only speaks for the terminals it could verify: with none verified, nothing is known.
+        let none_verified = !answer.terminals.is_empty() && unverifiable == answer.terminals.len();
+        lines.push(if none_verified {
+            "no terminal could be verified (their ports are not listed)".to_owned()
+        } else if unverifiable > 0 {
             "no listening ports among the verified terminals".to_owned()
         } else {
             "no listening ports".to_owned()
@@ -189,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_answer_says_no_port_and_names_the_terminals_it_could_not_read() {
+    fn an_empty_answer_says_no_port_only_for_the_terminals_it_could_verify() {
         let verified = lines(&answer(
             Vec::new(),
             vec![terminal("t-1", false, false)],
@@ -199,20 +203,35 @@ mod tests {
         assert!(verified.contains("no listening ports"), "{verified}");
         assert!(!verified.contains("verified terminals"), "{verified}");
 
-        let unknown = lines(&answer(
+        // One terminal verified and one not: the empty table speaks for the verified one only.
+        let mixed = lines(&answer(
             Vec::new(),
-            vec![terminal("t-2", true, false)],
+            vec![terminal("t-1", false, false), terminal("t-2", true, false)],
             false,
         ))
         .join("\n");
         assert!(
-            unknown.contains("no listening ports among the verified terminals"),
-            "{unknown}"
+            mixed.contains("no listening ports among the verified terminals"),
+            "{mixed}"
         );
         assert!(
-            unknown.contains("unverifiable terminals: 1 (their ports are not listed)"),
-            "{unknown}"
+            mixed.contains("unverifiable terminals: 1 (their ports are not listed)"),
+            "{mixed}"
         );
+
+        // No terminal verified: nothing is known, so the answer must not claim anything about the verified ones.
+        let none = lines(&answer(
+            Vec::new(),
+            vec![terminal("t-2", true, false), terminal("t-3", true, false)],
+            false,
+        ))
+        .join("\n");
+        assert!(
+            none.contains("no terminal could be verified (their ports are not listed)"),
+            "{none}"
+        );
+        assert!(!none.contains("no listening ports"), "{none}");
+        assert!(!none.contains("among the verified terminals"), "{none}");
     }
 
     #[test]
