@@ -87,7 +87,8 @@ pub struct AgentKind {
     pub id: String,
     pub name: String,
     pub icon: String,
-    /// `core` for built-ins, `user` for the profile's own files, `ext:<id>` later.
+    /// `core` for first-party (`massorca.*`) packages, `user` for the profile's own files, `ext:<package id>` for other
+    /// packages.
     pub owner: String,
     /// Deprecated: the same value as `detected`, kept so `agents/1` clients keep working. Read `detected`
     /// and `package.state` instead; `agents/2` drops this field.
@@ -185,7 +186,7 @@ impl From<AgentKindWire> for AgentKind {
     }
 }
 
-/// The package a kind comes from (0059). Built-ins and profile files are `enabled` with no id until packages land.
+/// The package a kind comes from (0059). A profile file has no package: it is `enabled` with no id or version.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KindPackage {
     #[serde(default)]

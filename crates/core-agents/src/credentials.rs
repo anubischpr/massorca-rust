@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use crate::catalog::Catalog;
 use crate::kind::KindDecl;
+use crate::packages::KindPackages;
 use crate::paths;
 use crate::sessions::AgentError;
 
@@ -48,11 +49,12 @@ const REPLACED: &str = "old";
 /// is written and renamed into place. An existing home is replaced only with `replace`.
 pub fn import(
     profile_dir: &Path,
+    packages: &dyn KindPackages,
     kind: &str,
     from: &Path,
     replace: bool,
 ) -> Result<CredentialsImported, AgentError> {
-    let decl = declared(profile_dir, kind)?;
+    let decl = declared(profile_dir, packages, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
     import_at(profile_dir, &decl, &["homes"], &home, from, replace)
 }
@@ -61,11 +63,12 @@ pub fn import(
 /// is always new, so an existing one is refused and never replaced.
 pub fn import_account(
     profile_dir: &Path,
+    packages: &dyn KindPackages,
     kind: &str,
     account: &str,
     from: &Path,
 ) -> Result<CredentialsImported, AgentError> {
-    let decl = declared(profile_dir, kind)?;
+    let decl = declared(profile_dir, packages, kind)?;
     let home = account_home_of(profile_dir, &decl.id, account)?;
     import_at(
         profile_dir,
@@ -176,8 +179,12 @@ fn import_at(
 
 /// Whether the kind's home exists, and each declared file in it: present when it is a regular file, with its size
 /// and modification time.
-pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
-    let decl = declared(profile_dir, kind)?;
+pub fn show(
+    profile_dir: &Path,
+    packages: &dyn KindPackages,
+    kind: &str,
+) -> Result<CredentialsShown, AgentError> {
+    let decl = declared(profile_dir, packages, kind)?;
     let home = home_of(profile_dir, &decl.id)?;
     show_at(profile_dir, &decl, &["homes"], &home)
 }
@@ -185,10 +192,11 @@ pub fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentErr
 /// Whether one account's home exists, and each declared file in it (decision 0059); names, sizes and times only.
 pub fn show_account(
     profile_dir: &Path,
+    packages: &dyn KindPackages,
     kind: &str,
     account: &str,
 ) -> Result<CredentialsShown, AgentError> {
-    let decl = declared(profile_dir, kind)?;
+    let decl = declared(profile_dir, packages, kind)?;
     let home = account_home_of(profile_dir, &decl.id, account)?;
     show_at(profile_dir, &decl, &["accounts", decl.id.as_str()], &home)
 }
@@ -351,10 +359,11 @@ pub(crate) fn adopt_legacy_home(
 /// holds [`lock_homes`] or accepts that a concurrent change may follow.
 pub(crate) fn account_files_present(
     profile_dir: &Path,
+    packages: &dyn KindPackages,
     kind: &str,
     account: &str,
 ) -> Result<bool, AgentError> {
-    let decl = declared(profile_dir, kind)?;
+    let decl = declared(profile_dir, packages, kind)?;
     let home = account_home_of(profile_dir, &decl.id, account)?;
     let names = decl
         .credentials
@@ -376,8 +385,12 @@ fn account_home_of(profile_dir: &Path, kind: &str, account: &str) -> Result<Path
 }
 
 /// The kind's declaration, when it is known and valid.
-fn declared(profile_dir: &Path, kind: &str) -> Result<KindDecl, AgentError> {
-    let catalog = Catalog::load(profile_dir);
+fn declared(
+    profile_dir: &Path,
+    packages: &dyn KindPackages,
+    kind: &str,
+) -> Result<KindDecl, AgentError> {
+    let catalog = Catalog::load(packages, profile_dir);
     let entry = catalog.find(kind).ok_or_else(|| not_found(kind))?;
     entry.valid().cloned().ok_or_else(|| {
         AgentError::new(
@@ -901,7 +914,31 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::packages::BuiltInPackages;
     use crate::paths;
+
+    // The functions under test with the built-in packages: these tests are about the files, not the packages.
+    fn import(
+        profile_dir: &Path,
+        kind: &str,
+        from: &Path,
+        replace: bool,
+    ) -> Result<CredentialsImported, AgentError> {
+        super::import(profile_dir, &BuiltInPackages, kind, from, replace)
+    }
+
+    fn import_account(
+        profile_dir: &Path,
+        kind: &str,
+        account: &str,
+        from: &Path,
+    ) -> Result<CredentialsImported, AgentError> {
+        super::import_account(profile_dir, &BuiltInPackages, kind, account, from)
+    }
+
+    fn show(profile_dir: &Path, kind: &str) -> Result<CredentialsShown, AgentError> {
+        super::show(profile_dir, &BuiltInPackages, kind)
+    }
 
     const FAKE_TOKEN: &str = r#"{"fake":true}"#;
 
