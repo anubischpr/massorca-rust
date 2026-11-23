@@ -1,9 +1,10 @@
 //! Wire shapes of the team methods: the team, bot and project documents, the defaults of the params, and the Board.
 
+use massorca_protocol::methods::projects::ProjectKind;
 use massorca_protocol::methods::tasks::{CardState, Column};
 use massorca_protocol::methods::teams::{
     Board, BoardCard, BoardColumn, BoardParams, Bot, Team, TeamAccess, TeamCharacter,
-    TeamCreateParams,
+    TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectUpdateParams,
 };
 use serde_json::{Value, json};
 
@@ -136,4 +137,95 @@ fn the_project_of_a_board_is_optional() {
     let board: BoardParams = serde_json::from_value(json!({ "team": "alpha" })).unwrap();
 
     assert_eq!(board.project, None);
+}
+
+fn project(source: Option<(&str, &str, ProjectKind)>) -> TeamProject {
+    let (source_project, source_project_name, source_kind) = match source {
+        Some((id, name, kind)) => (Some(id.to_owned()), Some(name.to_owned()), Some(kind)),
+        None => (None, None, None),
+    };
+    TeamProject {
+        id: "p1".to_owned(),
+        team_id: "t1".to_owned(),
+        name: "parser".to_owned(),
+        goal: String::new(),
+        brief: String::new(),
+        created_at_ms: 3,
+        source_project,
+        source_project_name,
+        source_kind,
+    }
+}
+
+#[test]
+fn an_unset_source_project_is_left_out_of_a_team_project_document() {
+    assert_eq!(
+        serde_json::to_value(project(None)).unwrap(),
+        json!({
+            "id": "p1",
+            "team_id": "t1",
+            "name": "parser",
+            "goal": "",
+            "brief": "",
+            "created_at_ms": 3
+        })
+    );
+}
+
+#[test]
+fn a_linked_team_project_names_its_source_project_and_its_kind() {
+    assert_eq!(
+        serde_json::to_value(project(Some(("w1", "notes", ProjectKind::Folder)))).unwrap(),
+        json!({
+            "id": "p1",
+            "team_id": "t1",
+            "name": "parser",
+            "goal": "",
+            "brief": "",
+            "created_at_ms": 3,
+            "source_project": "w1",
+            "source_project_name": "notes",
+            "source_kind": "folder"
+        })
+    );
+}
+
+#[test]
+fn an_older_team_project_document_decodes_without_a_source_project() {
+    let older: TeamProject = serde_json::from_value(json!({
+        "id": "p1",
+        "team_id": "t1",
+        "name": "parser",
+        "goal": "",
+        "brief": "",
+        "created_at_ms": 3
+    }))
+    .unwrap();
+
+    assert_eq!(older, project(None));
+}
+
+#[test]
+fn unset_source_project_params_are_left_out_and_an_empty_one_is_kept_for_clearing() {
+    let add = TeamProjectAddParams {
+        team: "alpha".to_owned(),
+        name: "parser".to_owned(),
+        goal: None,
+        brief: None,
+        source_project: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&add).unwrap(),
+        json!({ "team": "alpha", "name": "parser" })
+    );
+
+    let untouched: TeamProjectUpdateParams =
+        serde_json::from_value(json!({ "team": "alpha", "project": "parser" })).unwrap();
+    assert_eq!(untouched.source_project, None);
+
+    let cleared: TeamProjectUpdateParams = serde_json::from_value(
+        json!({ "team": "alpha", "project": "parser", "source_project": "" }),
+    )
+    .unwrap();
+    assert_eq!(cleared.source_project, Some(String::new()));
 }
