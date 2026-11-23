@@ -52,6 +52,15 @@ fn type_into(
     });
 }
 
+/// Types `text` into the form's multi-line prompt.
+fn type_prompt(rig: &Rig, cx: &mut VisualTestContext, text: &'static str) {
+    rig.shell.update_in(cx, |shell, window, cx| {
+        let form = shell.delegate.as_ref().expect("the delegate form is open");
+        form.prompt
+            .update(cx, |area, cx| area.set_text(text, window, cx));
+    });
+}
+
 /// The child the service made for a delegate call from `s`.
 fn started_child() -> AgentDelegated {
     AgentDelegated {
@@ -70,7 +79,7 @@ fn a_submit_sends_its_fields_with_a_new_request_id_and_then_offers_the_child(
 ) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    type_into(&rig, cx, |form| &form.prompt, "Write the tests");
+    type_prompt(&rig, cx, "Write the tests");
     type_into(&rig, cx, |form| &form.title, "Feed endpoints");
     rig.shell
         .update(cx, |shell, cx| shell.set_delegate_kind(1, cx));
@@ -128,7 +137,7 @@ fn a_submit_sends_its_fields_with_a_new_request_id_and_then_offers_the_child(
 fn a_refused_submit_keeps_its_input_and_a_retry_sends_the_same_request_id(cx: &mut TestAppContext) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    type_into(&rig, cx, |form| &form.prompt, "Write the tests");
+    type_prompt(&rig, cx, "Write the tests");
     click(cx, "dialog-action");
     let Some(Command::Delegate {
         params: first,
@@ -180,7 +189,7 @@ fn a_refused_submit_keeps_its_input_and_a_retry_sends_the_same_request_id(cx: &m
 fn an_edit_after_a_refusal_makes_the_next_submit_a_new_call(cx: &mut TestAppContext) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    type_into(&rig, cx, |form| &form.prompt, "Write the tests");
+    type_prompt(&rig, cx, "Write the tests");
     click(cx, "dialog-action");
     let Some(Command::Delegate {
         params: first,
@@ -194,7 +203,7 @@ fn an_edit_after_a_refusal_makes_the_next_submit_a_new_call(cx: &mut TestAppCont
         .expect("the shell waits");
     cx.run_until_parked();
 
-    type_into(&rig, cx, |form| &form.prompt, "Write more tests");
+    type_prompt(&rig, cx, "Write more tests");
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, _| {
         assert_eq!(
@@ -215,7 +224,7 @@ fn an_edit_after_a_refusal_makes_the_next_submit_a_new_call(cx: &mut TestAppCont
 fn a_read_only_child_is_sent_without_a_name(cx: &mut TestAppContext) {
     let (mut rig, cx) = with_running_session(cx);
     open_form(&rig, cx);
-    type_into(&rig, cx, |form| &form.prompt, "Review the diff");
+    type_prompt(&rig, cx, "Review the diff");
     type_into(&rig, cx, |form| &form.name, "docs");
     rig.shell
         .update(cx, |shell, cx| shell.set_delegate_read_only(true, cx));
@@ -254,4 +263,52 @@ fn a_blank_prompt_is_not_sent(cx: &mut TestAppContext) {
         );
     });
     assert!(rig.script.next().is_none(), "no call reaches the service");
+}
+
+#[gpui::test]
+fn enter_adds_a_line_to_the_prompt_and_mod_enter_sends_it(cx: &mut TestAppContext) {
+    let (mut rig, cx) = with_running_session(cx);
+    open_form(&rig, cx);
+    rig.shell.update_in(cx, |shell, window, cx| {
+        let form = shell.delegate.as_ref().expect("the delegate form is open");
+        form.prompt.update(cx, |area, cx| area.focus(window, cx));
+    });
+    cx.run_until_parked();
+    cx.simulate_input("Write the tests");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("for the feed");
+    cx.run_until_parked();
+    assert!(
+        rig.script.next().is_none(),
+        "Enter adds a line and sends nothing"
+    );
+    let typed = rig.shell.read_with(cx, |shell, app| {
+        let form = shell.delegate.as_ref().expect("the delegate form is open");
+        form.prompt.read(app).text().to_owned()
+    });
+    assert_eq!(
+        typed,
+        "Write the tests
+for the feed"
+    );
+    draw(cx);
+    assert!(
+        cx.debug_bounds("delegate-prompt-hint").is_some(),
+        "the hint says how to send"
+    );
+    let send = if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    };
+    cx.simulate_keystrokes(send);
+    cx.run_until_parked();
+    let Some(Command::Delegate { params, .. }) = rig.script.next() else {
+        panic!("the modified Enter sends agent.delegate");
+    };
+    assert_eq!(
+        params.prompt,
+        "Write the tests
+for the feed"
+    );
 }

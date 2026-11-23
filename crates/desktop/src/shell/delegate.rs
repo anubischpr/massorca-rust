@@ -8,11 +8,16 @@ use gpui::{
 };
 use massorca_protocol::methods::agents::AgentDelegated;
 use massorca_ui::components::dialog::{Dialog, DialogWidth};
+use massorca_ui::components::kbd::Kbd;
 use massorca_ui::components::popover::OverlayLayer;
 use massorca_ui::components::select::{SelectEvent, SelectView};
 use massorca_ui::components::switch::Switch;
+use massorca_ui::components::text_editing::text_area::{TextArea, TextAreaEvent, TextAreaKey};
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
-use massorca_ui::tokens::{SPACE_1, SPACE_3, TYPE_BODY_SM};
+use massorca_ui::tokens::{
+    RADIUS_MD, SIZE_COMPOSER_MAX_HEIGHT, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY_SM, TYPE_CAPTION,
+    TYPE_LABEL,
+};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
@@ -26,7 +31,8 @@ use crate::service::Refusal;
 #[derive(Debug)]
 pub(super) struct DelegateForm {
     pub(super) parent: String,
-    pub(super) prompt: Entity<TextField>,
+    /// A brief usually runs several lines: Enter adds one and the primary modifier with Enter sends.
+    pub(super) prompt: Entity<TextArea>,
     pub(super) name: Entity<TextField>,
     pub(super) title: Entity<TextField>,
     /// The agents the form offers: the ones turned on and detected here, in the order the service lists them.
@@ -64,6 +70,9 @@ pub(in crate::shell) fn dialog(
         None => form_view(form, weak, cx),
     })
 }
+
+/// Room for about three lines of brief before the prompt grows.
+const PROMPT_MIN_HEIGHT: f32 = 72.0;
 
 /// A text field of the form. Its edits clear the last refusal, and Enter sends the form.
 fn form_field(
@@ -106,7 +115,25 @@ impl Shell {
                 session_kind_choices(&state.agent_kinds),
             )
         };
-        let (prompt, prompt_events) = form_field("Prompt", "What should the child do?", window, cx);
+        let prompt = cx.new(|cx| {
+            TextArea::new(cx)
+                .id("delegate-prompt")
+                .label("Prompt")
+                .placeholder("What should the child do?")
+                .heights(PROMPT_MIN_HEIGHT, SIZE_COMPOSER_MAX_HEIGHT)
+        });
+        let prompt_events = cx.subscribe_in(
+            &prompt,
+            window,
+            |shell, area, event: &TextAreaEvent, _, cx| match event {
+                TextAreaEvent::Changed => shell.delegate_edited(cx),
+                TextAreaEvent::Key(TextAreaKey::Enter) => {
+                    area.update(cx, |area, cx| area.insert_newline(cx));
+                }
+                TextAreaEvent::Key(TextAreaKey::ModifiedEnter) => shell.submit_delegate(cx),
+                _ => {}
+            },
+        );
         let (name, name_events) =
             form_field("Name", "Optional: the child's workspace name", window, cx);
         let (title, title_events) = form_field(
@@ -276,7 +303,7 @@ fn form_view(form: &DelegateForm, weak: &WeakEntity<Shell>, cx: &App) -> AnyElem
         .flex()
         .flex_col()
         .gap(px(SPACE_3))
-        .child(form.prompt.clone())
+        .child(prompt_view(form, cx))
         .child(form.kind_select.clone())
         .child(form.name.clone())
         .child(form.title.clone())
@@ -341,5 +368,47 @@ fn started_view(started: &StartedChild, weak: &WeakEntity<Shell>, cx: &App) -> A
         .on_dismiss(move |_, cx| {
             let _ = done.update(cx, |shell, cx| shell.close_delegate(cx));
         })
+        .into_any_element()
+}
+
+/// The prompt: its label, the multi-line editor in a field outline, and how to add a line and send.
+fn prompt_view(form: &DelegateForm, cx: &App) -> AnyElement {
+    let p = cx.theme().palette;
+    let caption = |text: &'static str| {
+        div()
+            .text_style(TYPE_CAPTION)
+            .text_color(p.text.tertiary)
+            .child(text)
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_1))
+        .child(
+            div()
+                .text_style(TYPE_LABEL)
+                .text_color(p.text.secondary)
+                .child("Prompt"),
+        )
+        .child(
+            div()
+                .px(px(SPACE_2))
+                .py(px(SPACE_1))
+                .rounded(px(RADIUS_MD))
+                .border_1()
+                .border_color(p.border.strong)
+                .child(form.prompt.clone()),
+        )
+        .child(
+            div()
+                .debug_selector(|| "delegate-prompt-hint".to_owned())
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(SPACE_1))
+                .child(caption("Enter adds a line."))
+                .child(Kbd::new("Mod+Enter"))
+                .child(caption("delegates.")),
+        )
         .into_any_element()
 }

@@ -197,12 +197,11 @@ This report compares the desktop shell and the UI gallery with the design artboa
 ## Delegate (X-CH-06)
 
 **Matches**
-- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. A retry sends the same request id. The child appears in the session tree after the refetch, and "Open child" opens it.
+- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. The prompt is multi-line: Enter adds a line and Ctrl+Enter (⌘↩ on macOS) sends, as its hint says. A retry sends the same request id. The child appears in the session tree after the refetch, and "Open child" opens it.
 - The agents offered are the ones turned on and detected on this host, as the start page offers them.
 
 **Cannot match yet**
-- X-CH-06 draws the delegation as a card in the transcript, with a "Runs in" choice for each child. The desktop opens a dialog and offers a read-only switch instead. The service decides where a writing child runs.
-- The prompt is a single-line field. The composer is multi-line, so a long prompt scrolls sideways.
+- Known gap against X-CH-06: it draws the delegation as a card in the transcript, with a "Runs in" choice for each child. The desktop opens a modal dialog and offers a read-only switch instead. The service decides where a writing child runs.
 
 **No artboard**
 - The Delegate dialog. `ws-delegation` draws the card and the tree, not this form.
