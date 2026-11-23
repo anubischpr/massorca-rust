@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use massorca_core_extensions::item::ItemState;
 use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{
-    PackageAgentKind, adopt_builtin_agents, catalogue_agent_kinds, codes, package_agent_kinds,
+    Extensions, PackageAgentKind, catalogue_agent_kinds, codes, package_agent_kinds,
 };
 use serde_json::json;
 
@@ -223,15 +223,22 @@ fn adoption_registers_exactly_the_used_built_ins_and_runs_no_command() {
 }
 
 #[test]
-fn adoption_runs_once_so_a_built_in_removed_afterwards_is_not_adopted_again() {
+fn adoption_runs_once_across_a_restart_so_a_removed_built_in_is_not_adopted_again() {
     let s = setup(FakeHost::new());
-    let first = adopt_builtin_agents(&s.profile, &used(&["claude"])).expect("adopts");
+    let first = s
+        .service
+        .adopt_builtin_agents(&used(&["claude"]))
+        .expect("adopts");
     assert_eq!(first, ["massorca.claude"]);
     s.service
         .remove("massorca.claude", false, false, None)
         .expect("removes");
 
-    let second = adopt_builtin_agents(&s.profile, &used(&["claude"])).expect("a second run");
+    // A service started again on the same profile reads the marker from the lockfile.
+    let restarted = Extensions::new(&s.profile, s.host.clone(), s.host.clone());
+    let second = restarted
+        .adopt_builtin_agents(&used(&["claude"]))
+        .expect("a second run");
     assert!(second.is_empty());
     assert_eq!(state_of(&s, "claude"), ItemState::Available);
     let lock = s.lock_json().expect("the lockfile");

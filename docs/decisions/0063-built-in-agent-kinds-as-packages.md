@@ -17,16 +17,16 @@ switch happens. Nothing may be lost, and no run may break silently.
 
 ### Two sides of one seam
 
-- `core-extensions` owns the packages. It exposes plain functions with no
-  `core-agents` dependency:
+- `core-extensions` owns the packages. It exposes these, with no `core-agents`
+  dependency:
   - `package_agent_kinds(&Profile)` lists every kind of the catalogue, then the
     kinds of installed third-party packages in lockfile order. A built-in with
     an installed copy is listed as that copy, at its catalogue position. Each
     entry has `kind_id`, `package_id`, `version`, `state` and `decl`. `decl` is
     the declaration text, or an error that names the package and the cause and
     never a path.
-  - `adopt_builtin_agents(&Profile, &BTreeSet<String>)` runs the migration
-    below.
+  - `Extensions::adopt_builtin_agents(&BTreeSet<String>)` runs the migration
+    below, on the profile's own service.
 - `core-agents` implements `KindPackages::kinds()` by calling these functions
   and maps `state` to the protocol's `PackageState`. `core-extensions` does not
   depend on `massorca-protocol`, so `state` is its own `item::ItemState`, which
@@ -64,10 +64,10 @@ Removing the kind, checking it and signing out stay allowed.
 
 ### Migration for existing profiles
 
-The server runs `adopt_builtin_agents` once per profile, at startup. Its input,
-`used_kinds`, holds every kind id the profile used: sessions, accounts
-(including pending ones), account history, bots and credential-home folders.
-Kind ids that are not built-in are ignored.
+The server calls `Extensions::adopt_builtin_agents` once per profile, at startup,
+on the profile's own service. Its input, `used_kinds`, holds every kind id the
+profile used: sessions, accounts (including pending ones), account history, bots
+and credential-home folders. Kind ids that are not built-in are ignored.
 
 - For each built-in package that declares a used kind and is not installed, the
   migration registers the package as `Enabled`, with `adopted: true`. It runs no
@@ -79,10 +79,8 @@ Kind ids that are not built-in are ignored.
   `used_kinds` still records the run.
 - A failure, such as a busy package, a damaged lockfile or a write error, leaves
   the lockfile unchanged and the run unrecorded, so the next start tries again.
-- The free function builds its own service, so its change lock is not shared
-  with services already running on the same profile. The server must therefore
-  run it before any service of that profile changes anything, or call the
-  service's `adopt_builtin_agents` method instead.
+- The run holds the profile service's change lock for its whole length, the same
+  lock an install or a removal takes, so the two cannot interleave.
 
 Both lockfile fields are additive. An older service keeps unknown fields on
 write, so it still works.
