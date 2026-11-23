@@ -163,3 +163,68 @@ fn repository_dirs_agree_with_rev_parse() {
         assert_eq!(canonical(&common), canonical(&expected_common));
     }
 }
+
+#[test]
+fn main_worktree_of_the_main_repository_is_the_repository() {
+    let fixture = Fixture::new();
+    let main = git().main_worktree(&fixture.repo()).expect("main worktree");
+    assert_eq!(
+        main.map(|path| canonical(&path)),
+        Some(canonical(&fixture.repo()))
+    );
+}
+
+#[test]
+fn main_worktree_from_a_linked_worktree_is_the_main_repository() {
+    let fixture = Fixture::new();
+    let linked = fixture.sibling("linked");
+    run_git(
+        &fixture.repo(),
+        &["worktree", "add", "-q", "-b", "linked", text(&linked)],
+    );
+    let main = git().main_worktree(&linked).expect("main worktree");
+    assert_eq!(
+        main.map(|path| canonical(&path)),
+        Some(canonical(&fixture.repo()))
+    );
+}
+
+#[test]
+fn main_worktree_from_a_subfolder_of_a_linked_worktree_is_the_main_repository() {
+    let fixture = Fixture::new();
+    let linked = fixture.sibling("linked");
+    run_git(
+        &fixture.repo(),
+        &["worktree", "add", "-q", "-b", "linked", text(&linked)],
+    );
+    let nested = linked.join("src").join("deep");
+    std::fs::create_dir_all(&nested).expect("create nested dir");
+    let main = git().main_worktree(&nested).expect("main worktree");
+    assert_eq!(
+        main.map(|path| canonical(&path)),
+        Some(canonical(&fixture.repo()))
+    );
+}
+
+#[test]
+fn main_worktree_outside_every_repository_is_none() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    assert_eq!(
+        git().main_worktree(dir.path()).expect("main worktree"),
+        None
+    );
+}
+
+#[test]
+fn main_worktree_of_a_linked_worktree_of_a_bare_repository_is_none() {
+    let fixture = Fixture::new();
+    let bare = fixture.sibling("bare.git");
+    run_git(
+        &fixture.repo(),
+        &["clone", "-q", "--bare", text(&fixture.repo()), text(&bare)],
+    );
+    let linked = fixture.sibling("linked");
+    run_git(&bare, &["worktree", "add", "-q", text(&linked), "main"]);
+    assert!(git().toplevel(&linked).expect("toplevel").is_some());
+    assert_eq!(git().main_worktree(&linked).expect("main worktree"), None);
+}
