@@ -198,6 +198,31 @@ impl ProcessTree {
         ))
     }
 
+    /// The pids of `pids` that still belong to this terminal's tree (decision 0081). Windows: each is checked on its own
+    /// handle against the job. Unix: the readers check each process's identity when they read it, and a shell that is
+    /// reaped has no tree, so nothing is kept once it is reaped.
+    pub fn still_members(&self, pids: &[u32]) -> Vec<u32> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            if self.unreaped_shell().is_none() {
+                return Vec::new();
+            }
+            pids.to_vec()
+        }
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+        {
+            let _ = pids;
+            Vec::new()
+        }
+        #[cfg(windows)]
+        {
+            match lock(&self.job).as_ref() {
+                Some(job) => massorca_host_stats::job_still_holds(job, pids),
+                None => Vec::new(),
+            }
+        }
+    }
+
     /// The pids the terminal's tree lists, the service's own process included when a listing names it.
     fn listed_pids(&self, table: &[ProcessInfo]) -> Option<Vec<u32>> {
         #[cfg(target_os = "linux")]

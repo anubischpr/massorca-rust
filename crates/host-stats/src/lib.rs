@@ -40,6 +40,6 @@ pub use memory::{METRIC, MemorySample, Metric, ProcessMemory, memory_of, sample_
 pub use sockets::{Listening, ListeningSocket, listening_tcp};
 #[cfg(unix)]
 pub use table::descendants;
-#[cfg(windows)]
-pub use table::job_members;
 pub use table::{ProcessInfo, ProcessTable, processes};
+#[cfg(windows)]
+pub use table::{job_members, job_still_holds};

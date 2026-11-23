@@ -40,6 +40,13 @@ pub fn job_members(job: &win32job::Job) -> Option<Vec<u32>> {
     sys::job_members(job)
 }
 
+/// The pids of `pids` that are still members of `job` (Windows), each checked on its own handle.
+#[cfg(windows)]
+#[must_use]
+pub fn job_still_holds(job: &win32job::Job, pids: &[u32]) -> Vec<u32> {
+    sys::job_still_holds(job, pids)
+}
+
 /// `root` and every process below it in `table`, by parent id, in pid order. Unix only: Windows parent ids may name a
 /// parent that exited, whose pid another process now holds. `root` is included only when it is in
 /// the table. A cycle (a reused pid named as a parent) is walked once.

@@ -218,6 +218,15 @@ pub(crate) fn process_table() -> ProcessTable {
     }
 }
 
+/// The pids that are still members of `job`: each is opened and checked on its own handle, so a pid reused since it was
+/// listed is not kept. A pid that has ended is not kept either.
+pub(crate) fn job_still_holds(job: &Job, pids: &[u32]) -> Vec<u32> {
+    pids.iter()
+        .copied()
+        .filter(|pid| open_running(*pid).is_some_and(|process| in_job(&process, job)))
+        .collect()
+}
+
 /// The TCP listeners of `pids`, IPv4 and IPv6, from the system's owner tables. A row's address and port are in network
 /// byte order. A listener names only its owner's pid, so the caller confirms that the owner still belongs to the
 /// terminal (`job_still_holds`) after this read. `None` when a table cannot be read.

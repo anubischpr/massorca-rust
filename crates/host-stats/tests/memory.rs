@@ -156,6 +156,24 @@ fn an_exited_child_is_unreadable() {
     assert_eq!(sample.unreadable, 1);
 }
 
+/// Only the pids still in the job are kept: a process outside it is dropped, and so is one that is gone.
+#[cfg(windows)]
+#[test]
+fn a_job_keeps_only_the_pids_that_are_still_its_members() {
+    use std::os::windows::io::AsRawHandle;
+
+    let job = win32job::Job::create_with_limit_info(
+        win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
+    )
+    .expect("a job");
+    let child = Sleeper::start();
+    job.assign_process(child.0.as_raw_handle() as isize)
+        .expect("the sleeper joins the job");
+
+    let kept = massorca_host_stats::job_still_holds(&job, &[std::process::id(), child.pid()]);
+    assert_eq!(kept, [child.pid()]);
+}
+
 /// The table says it is complete and lists this process: a short listing is never passed on as a whole one.
 #[test]
 fn the_process_table_is_complete_and_lists_this_process() {
