@@ -5,14 +5,14 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use massorca_net::{Keepalive, NetError, Pin, TlsIdentity};
-use massorca_protocol::methods::devices::{self, Secret, WhoAmI};
+use massorca_protocol::methods::devices::Secret;
 use massorca_protocol::pairing::{AuthRequest, Offer};
 use massorca_protocol::{MAX_FRAME_LEN_NETWORK, PeerInfo};
 
 use crate::client::Client;
 use crate::error::ClientError;
 use crate::handshake;
-use crate::hosts::{HostRecord, Hosts};
+use crate::host_storage::{HostRecord, HostStorage};
 use crate::transport::FrameIo;
 
 /// How long one address may take to accept a TCP connection.
@@ -21,7 +21,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 impl Client {
     /// Connects to a paired host as this device.
     pub async fn connect_host(
-        hosts: &Hosts,
+        hosts: &(impl HostStorage + ?Sized),
         name: &str,
         client: &PeerInfo,
     ) -> Result<Self, ClientError> {
@@ -40,13 +40,13 @@ impl Client {
 
     /// Pairs this client with the server of `offer` and stores it as host `name` (decision 0041). The offer is used once.
     pub async fn pair(
-        hosts: &Hosts,
+        hosts: &(impl HostStorage + ?Sized),
         offer: &Offer,
         name: &str,
         device_name: &str,
         client: &PeerInfo,
     ) -> Result<(Self, HostRecord), ClientError> {
-        crate::hosts::validate_host_name(name)?;
+        crate::host_storage::validate_host_name(name)?;
         if hosts.exists(name) {
             return Err(ClientError::HostExists(name.to_owned()));
         }
@@ -61,7 +61,7 @@ impl Client {
             name: device_name.to_owned(),
         };
         let connected = open(&offer.addresses, pin, &identity, client, auth).await?;
-        let me: WhoAmI = connected.call(devices::WHOAMI, &()).await?;
+        let me = connected.device_whoami().await?;
         let device = me.device.ok_or_else(|| {
             ClientError::Protocol("the server did not report the paired device".to_owned())
         })?;

@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use super::policy::{PrimaryAction, primary_action, truncate_name, visible_attachments};
-use super::{Attachment, Composer, ComposerEvent, KEY_CONTEXT, OpenModelPicker};
+use super::{AccessMode, Attachment, Composer, ComposerEvent, KEY_CONTEXT, OpenModelPicker};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::IconButton;
 use crate::components::menu::{MenuEntry, MenuEvent, MenuItem, MenuOrigin, MenuView, menu_overlay};
@@ -20,7 +20,8 @@ use crate::style::FocusRing;
 use crate::theme::{ActiveTheme, TextStyled, box_shadows};
 use crate::tokens::{
     LAYOUT_CONVERSATION_READING, RADIUS_FULL, RADIUS_XL, SIZE_CONTROL_COMPACT,
-    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_CHAT, TYPE_LABEL,
+    SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_CAPTION,
+    TYPE_CHAT, TYPE_LABEL,
 };
 
 const CHIP_NAME_MAX: usize = 24;
@@ -86,6 +87,40 @@ impl Composer {
     pub fn set_attachments(&mut self, attachments: Vec<Attachment>, cx: &mut Context<Self>) {
         self.attachments = attachments;
         cx.notify();
+    }
+
+    /// Replaces the access modes and selects `selected`, or the first mode when it is out of range. An empty list
+    /// hides the chip.
+    pub fn set_access_modes(
+        &mut self,
+        modes: Vec<AccessMode>,
+        selected: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.access_index = if selected < modes.len() { selected } else { 0 };
+        if self.access != modes {
+            self.access = modes;
+            self.access_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// The access modes the chip offers.
+    pub fn access_modes(&self) -> &[AccessMode] {
+        &self.access
+    }
+
+    /// The selected access mode's index.
+    pub fn access_index(&self) -> usize {
+        self.access_index
+    }
+
+    /// Sets the caption after the access chip.
+    pub fn set_access_note(&mut self, note: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.access_note != note {
+            self.access_note = note;
+            cx.notify();
+        }
     }
 
     /// Selects an access mode by index; out-of-range indexes are ignored.
@@ -344,18 +379,22 @@ impl Composer {
             })
     }
 
-    /// The access chip: shield, the mode's name and a chevron; it opens the access menu.
+    /// The access chip: shield, the mode's name and a chevron; it opens the access menu. A bypass mode shows a
+    /// warning glyph in place of the shield.
     fn access_chip(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = *cx.theme();
         let p = theme.palette;
-        let name = self
-            .access
-            .get(self.access_index)
-            .map(|mode| mode.name.clone())
-            .unwrap_or_default();
+        let selected = self.access.get(self.access_index);
+        let name = selected.map(|mode| mode.name.clone()).unwrap_or_default();
+        let (glyph, glyph_color) = if selected.is_some_and(|mode| mode.bypass) {
+            (IconName::TriangleAlert, p.status.warning_fg)
+        } else {
+            (IconName::Shield, p.text.secondary)
+        };
         let composer = cx.entity();
         let chip = div()
             .id("composer-access")
+            .debug_selector(|| "composer-access".to_owned())
             .role(Role::Button)
             .aria_label(format!("Access: {name}"))
             .track_focus(&self.access_focus)
@@ -377,11 +416,7 @@ impl Composer {
             .on_click(move |_, window, cx| {
                 composer.update(cx, |this, cx| this.open_access_menu(window, cx));
             })
-            .child(
-                Icon::new(IconName::Shield)
-                    .size(IconSize::Small)
-                    .color(p.text.secondary),
-            )
+            .child(Icon::new(glyph).size(IconSize::Small).color(glyph_color))
             .child(name)
             .child(
                 Icon::new(IconName::ChevronDown)
@@ -390,7 +425,19 @@ impl Composer {
             );
         div()
             .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(SPACE_2))
             .child(self.access_trigger.track(div().child(chip)))
+            .when_some(self.access_note.clone(), |row, note| {
+                row.child(
+                    div()
+                        .debug_selector(|| "composer-access-note".to_owned())
+                        .text_style(TYPE_CAPTION)
+                        .text_color(p.text.secondary)
+                        .child(note),
+                )
+            })
     }
 
     /// Status lines above the bottom row: the disabled reason, host state, a failed send with
