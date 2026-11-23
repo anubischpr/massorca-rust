@@ -5,7 +5,9 @@ use super::zones::region_focus_ring;
 use super::{Shell, change};
 use crate::model::regions::Region;
 use crate::model::shell_state::ShellModel;
-use crate::model::title_bar::{RegionToggle, TitleBarModel, title_bar as title_bar_model};
+use crate::model::title_bar::{
+    BackControl, RegionToggle, TitleBarModel, title_bar as title_bar_model,
+};
 use gpui::{
     Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window,
     WindowControlArea, div, prelude::*, px, svg,
@@ -44,7 +46,10 @@ pub(super) fn title_bar(
         .pl(px(SPACE_1 + SPACE_HALF))
         .bg(theme.palette.surface.frame)
         .focus_visible(|style| style.shadow(region_focus_ring(theme)))
-        .child(sidebar_toggle(&bar, shell.clone()))
+        .children(
+            bar.show_sidebar_toggle
+                .then(|| sidebar_toggle(&bar, shell.clone())),
+        )
         .child(history(&bar, shell))
         .child(title(&bar, theme))
         .children(
@@ -69,12 +74,12 @@ fn bar_height() -> f32 {
 fn sidebar_toggle(bar: &TitleBarModel, shell: WeakEntity<Shell>) -> impl IntoElement {
     let button = IconButton::new("sidebar-toggle", IconName::PanelLeft, bar.sidebar_label)
         .size(ButtonSize::Default)
-        .disabled(!bar.sidebar_enabled)
         .on_click(move |_, cx| change(&shell, cx, |shell| shell.model.toggle_sidebar()));
     with_tooltip(button, bar.sidebar_label)
 }
 
-/// Back and Forward; full pages and Bot Teams screens show one labelled Back instead (D-SH-03).
+/// The Back control the page's artboard shows (D-SH-03): Back and Forward on a session, one Back on
+/// a full page, and none on a Bot Teams page, whose team tree in the Sidebar leads back.
 fn history(bar: &TitleBarModel, shell: &WeakEntity<Shell>) -> Div {
     let row = div()
         .flex()
@@ -82,28 +87,43 @@ fn history(bar: &TitleBarModel, shell: &WeakEntity<Shell>) -> Div {
         .flex_none()
         .items_center()
         .gap(px(SPACE_1));
-    if bar.labelled_back {
-        let back = shell.clone();
-        let page_back = Button::new("back-page", "Back")
-            .variant(ButtonVariant::Ghost)
-            .size(ButtonSize::Default)
-            .leading_icon(IconName::ArrowLeft)
-            .disabled(!bar.can_go_back)
-            .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
-        row.child(page_back)
-    } else {
-        let back = shell.clone();
-        let forward = shell.clone();
-        let back_button = IconButton::new("back", IconName::ArrowLeft, "Back")
-            .size(ButtonSize::Default)
-            .disabled(!bar.can_go_back)
-            .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
-        let forward_button = IconButton::new("forward", IconName::ArrowRight, "Forward")
-            .size(ButtonSize::Default)
-            .disabled(!bar.can_go_forward)
-            .on_click(move |_, cx| change(&forward, cx, |shell| shell.model.go_forward()));
-        row.child(with_tooltip(back_button, "Back"))
-            .child(with_tooltip(forward_button, "Forward"))
+    match bar.back {
+        BackControl::None => row,
+        BackControl::Labelled => {
+            let back = shell.clone();
+            let page_back = Button::new("back-page", "Back")
+                .variant(ButtonVariant::Ghost)
+                .size(ButtonSize::Default)
+                .leading_icon(IconName::ArrowLeft)
+                .disabled(!bar.can_go_back)
+                .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
+            row.debug_selector(|| "title-back".to_owned())
+                .child(page_back)
+        }
+        BackControl::Icon => {
+            let back = shell.clone();
+            let page_back = IconButton::new("back-page-icon", IconName::ArrowLeft, "Back")
+                .size(ButtonSize::Default)
+                .disabled(!bar.can_go_back)
+                .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
+            row.debug_selector(|| "title-back".to_owned())
+                .child(with_tooltip(page_back, "Back"))
+        }
+        BackControl::History => {
+            let back = shell.clone();
+            let forward = shell.clone();
+            let back_button = IconButton::new("back", IconName::ArrowLeft, "Back")
+                .size(ButtonSize::Default)
+                .disabled(!bar.can_go_back)
+                .on_click(move |_, cx| change(&back, cx, |shell| shell.model.go_back()));
+            let forward_button = IconButton::new("forward", IconName::ArrowRight, "Forward")
+                .size(ButtonSize::Default)
+                .disabled(!bar.can_go_forward)
+                .on_click(move |_, cx| change(&forward, cx, |shell| shell.model.go_forward()));
+            row.debug_selector(|| "title-back".to_owned())
+                .child(with_tooltip(back_button, "Back"))
+                .child(with_tooltip(forward_button, "Forward"))
+        }
     }
 }
 
@@ -136,6 +156,7 @@ fn title(bar: &TitleBarModel, theme: &Theme) -> impl IntoElement {
         .child(
             div()
                 .id("title-text")
+                .debug_selector(|| "title-text".to_owned())
                 .min_w_0()
                 .truncate()
                 .text_style(TYPE_TITLE_SM)
