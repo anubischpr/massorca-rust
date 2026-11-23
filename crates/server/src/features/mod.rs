@@ -23,16 +23,25 @@ mod workspaces;
 
 pub(crate) use config::default_workspace_root;
 pub(crate) use service::info_of;
+pub(crate) use teams::{follow_routines, follow_task_outcomes};
 
 use serde::Deserialize;
 
 use crate::context::Registries;
 use crate::error::ServiceError;
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 /// Params of a method that takes none. Null and `{}` both decode to it.
 #[derive(Debug, Deserialize)]
 pub(crate) struct NoParams {}
+
+/// Whether `principal` may see an agent account's personal details: the vendor identity it is signed in as, and the
+/// working directory of its sign-in terminal (the account's home). The owner and a device holding `workspace` may; a
+/// device below `workspace` gets the same answers with those details left out (decision 0059).
+pub(crate) fn sees_account_details(principal: &Principal) -> bool {
+    authorize(principal, Permission::Workspace).is_ok()
+}
 
 /// Registers every core feature and returns the handles that keep them offered.
 pub(crate) fn register_core(

@@ -182,8 +182,18 @@ Events, ids only and never values:
 - Values live in a `SecretValue` type. It zeroes its buffer on drop.
 - Its `Debug` and `Display` print `[redacted]`, and it does not implement
   `Serialize`.
-- The only way to the bytes is one explicit method, which the injection path
-  uses.
+- The only way to the bytes is one explicit method, which the injection path,
+  sealing and the key check use.
+- On the way to a run, every environment value is an `EnvValue`
+  (`Zeroizing<String>`), zeroed on drop: the provided variables, the run's
+  plan, the terminal's create spec, the merged environment and the spawn spec.
+  The whole map is zeroed, not only the secret entries, so the run's hook
+  token and the caller's values are covered too.
+- What this side cannot zero: portable-pty copies each value into its own map
+  and then into the block it hands to the OS (UTF-16 on Windows, a C string
+  array on Unix); the child process holds its own environment; and freed heap
+  pages may keep old bytes. Removing the portable-pty copies would need a fork
+  of it, which is not planned.
 
 **On the wire.** The `secret.set` params are the one place a value travels.
 - A malformed `secret.set` is refused with a message that names the field and
@@ -256,8 +266,11 @@ massorca secret reset-key
     session exists. The message names the cause and variable names, never a
     value.
 - **The client boundary.** Setting a secret needs HostAdmin, so reading one
-  through a run does too.
-  - A caller below HostAdmin (a paired device with standard scopes) starts,
+  through a run does too. Pairing defaults to full access, HostAdmin
+  included, because a paired device is the owner themself (0078, not
+  adopted). The gating below therefore applies only to a device the owner
+  deliberately paired with reduced scopes, an optional, advanced restriction.
+  - A caller below HostAdmin (a device paired with reduced scopes) starts,
     resumes or delegates a run without vault variables, and the reply says so
     in `secrets_withheld`.
   - A run that received vault variables, and every child delegated from it, is
@@ -288,9 +301,12 @@ massorca secret reset-key
   therefore protects against Read-scope clients, against accidental display,
   and against other OS users. It is defence in depth, not a boundary against a
   Workspace-scope device.
-- **Open design item**, not in this change: a real boundary needs pairing
-  scopes that exclude `terminal.create` and arbitrary programs, or OS-level
-  isolation of the vault.
+- **No device boundary is planned.** A real boundary against a device would
+  need pairing scopes that exclude `terminal.create` and arbitrary programs,
+  or OS-level isolation of the vault. 0078 designed such a scope and was not
+  adopted: a paired device is the owner, and restrictions come from the
+  agent's permission mode. Anyone who holds a full-access device can read
+  every secret, as the owner at the keyboard can.
 - **Dangerous names**, refused when a secret is set, linked or requested
   (`secret.reserved_name`) and again at launch, compared without case: `PATH`,
   `PATHEXT`, `COMSPEC`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`,

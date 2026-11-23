@@ -8,7 +8,7 @@ pub const ADD: &str = "project.add";
 pub const LIST: &str = "project.list";
 /// Params: [`ProjectRef`]. Result: [`Project`].
 pub const SHOW: &str = "project.show";
-/// Params: [`ProjectRef`]. Result: [`Project`].
+/// Params: [`ProjectRemoveParams`]. Result: [`Project`].
 pub const REMOVE: &str = "project.remove";
 /// Params: [`ProjectSetBaseParams`]. Result: [`Project`].
 pub const SET_BASE: &str = "project.set_base";
@@ -35,7 +35,7 @@ pub struct ProjectAddParams {
     pub workspaces_root: Option<String>,
 }
 
-/// Selector for `project.show` and `project.remove`: id, then exact name, then path.
+/// Selector for `project.show`: id, then exact name, then path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectRef {
     pub project: String,
@@ -47,6 +47,15 @@ pub struct ProjectSetBaseParams {
     /// Selected as `project.show` selects: id, then exact name, then path.
     pub project: String,
     pub base: Option<String>,
+}
+
+/// Params of `project.remove`. Selects by id, then exact name, then path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRemoveParams {
+    pub project: String,
+    /// Also forgets the project's workspace records. No file, folder, worktree or branch is touched.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forget_workspaces: bool,
 }
 
 /// Result of `project.list`.

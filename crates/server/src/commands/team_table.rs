@@ -127,7 +127,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),
@@ -143,7 +144,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "project": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),
@@ -158,6 +160,127 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "project": { "type": "string" }
                 }
+            }),
+        ),
+        command(
+            "team.memory.list",
+            "List a team's memory lines, or one bot's",
+            "team.memory_list",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.memory.add",
+            "Add a line to a team's memory",
+            "team.memory_add",
+            json!({
+                "type": "object",
+                "required": ["team", "text"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "text": { "type": "string" },
+                    "task": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.memory.rm",
+            "Remove a line from a team's memory",
+            "team.memory_rm",
+            json!({
+                "type": "object",
+                "required": ["team", "line"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "line": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.routine.list",
+            "List a team's routines",
+            "team.routine_list",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": { "team": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.add",
+            "Add a routine to a team",
+            "team.routine_add",
+            json!({
+                "type": "object",
+                "required": ["team", "bot", "name", "prompt", "cadence", "time"],
+                "properties": { "team": { "type": "string" }, "bot": { "type": "string" }, "name": { "type": "string" }, "prompt": { "type": "string" }, "cadence": { "type": "string" }, "time": { "type": "string" }, "weekday": { "type": "string" }, "month_day": { "type": "integer" }, "run_date": { "type": "string" }, "zone": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.update",
+            "Change a team's routine",
+            "team.routine_update",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" }, "bot": { "type": "string" }, "name": { "type": "string" }, "prompt": { "type": "string" }, "cadence": { "type": "string" }, "time": { "type": "string" }, "weekday": { "type": "string" }, "month_day": { "type": "integer" }, "run_date": { "type": "string" }, "zone": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.rm",
+            "Remove a team's routine and its runs",
+            "team.routine_rm",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.pause",
+            "Pause a team's routine",
+            "team.routine_pause",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.resume",
+            "Resume a team's routine from now",
+            "team.routine_resume",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" } }
+            }),
+        ),
+        command(
+            "team.routine.runs",
+            "List a routine's runs, newest first",
+            "team.routine_runs",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" }, "limit": { "type": "integer" } }
+            }),
+        ),
+        command(
+            "team.routine.run",
+            "Run a routine once now",
+            "team.routine_run",
+            json!({
+                "type": "object",
+                "required": ["team", "routine"],
+                "properties": { "team": { "type": "string" }, "routine": { "type": "string" } }
             }),
         ),
         command(
@@ -217,6 +340,12 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "project": { "type": "string" }
                 }
             }),
+        ),
+        command(
+            "task.start",
+            "Start a task's bot on it",
+            "task.start",
+            selector("task"),
         ),
         command(
             "task.done",

@@ -185,6 +185,7 @@ fn sample_item(
         source_url: format!("https://example.com/marketplace/{slug}"),
         previous_version: None,
         has_settings: false,
+        extension: None,
     }
 }
 

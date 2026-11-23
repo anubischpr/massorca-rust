@@ -23,8 +23,10 @@ pub const STOP: &str = "agent.stop";
 pub const FORGET: &str = "agent.forget";
 /// Params: [`AgentPromptParams`]. Result: [`PromptReceipt`].
 pub const PROMPT: &str = "agent.prompt";
-/// Params: [`AgentSessionRef`]. Result: [`AgentSession`].
+/// Params: [`AgentResumeParams`] (an [`AgentSessionRef`] with an optional mode). Result: [`AgentSession`].
 pub const RESUME: &str = "agent.resume";
+/// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
+pub const SET_MODE: &str = "agent.set_mode";
 /// Params: [`AgentHookParams`]. Result: `null`.
 pub const HOOK: &str = "agent.hook";
 /// Params: [`AgentWatchParams`]. Result: `{ stream }`, as `events.subscribe`; then [`AgentWatchEvent`]s.
@@ -48,6 +50,113 @@ pub const ACCOUNTS_IMPORT: &str = "agent.accounts.import";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
 pub const ACCOUNTS_CHECK: &str = "agent.accounts.check";
+
+/// Params: [`AgentQueueParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE: &str = "agent.queue";
+/// Params: [`AgentSessionRef`]. Result: [`AgentQueueList`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_LIST: &str = "agent.queue.list";
+/// Params: [`AgentQueueEditParams`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_EDIT: &str = "agent.queue.edit";
+/// Params: [`AgentQueueItemRef`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_REMOVE: &str = "agent.queue.remove";
+/// Params: [`AgentQueueItemRef`]. Result: [`QueuedPrompt`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_SEND_NOW: &str = "agent.queue.send_now";
+/// Params: [`AgentSessionRef`]. Result: [`AgentQueueList`]. Capability `agent-queue/1` (decision 0084).
+pub const QUEUE_RESUME: &str = "agent.queue.resume";
+
+/// Most prompts one session's queue holds (decision 0084).
+pub const MAX_QUEUED_PROMPTS: usize = 100;
+
+/// Most request ids of delivered prompts one session remembers, so a retry of a delivered prompt is refused (decision
+/// 0084). The window is the most recent ids, not a span of time.
+pub const MAX_DELIVERED_REQUEST_IDS: usize = 100;
+
+/// `reason` of a waiting prompt held because its agent is busy.
+pub const QUEUE_REASON_BUSY: &str = "busy";
+/// `reason` of a waiting prompt held because its agent is asking the person something.
+pub const QUEUE_REASON_ASKING: &str = "asking";
+/// `reason` of a waiting prompt paused by the person's stop.
+pub const QUEUE_REASON_PAUSED_STOPPED: &str = "paused_stopped";
+/// `reason` of a waiting prompt paused by a service restart.
+pub const QUEUE_REASON_PAUSED_RESTARTED: &str = "paused_restarted";
+/// `reason` of a waiting prompt held behind a failed delivery.
+pub const QUEUE_REASON_BEHIND_FAILED: &str = "behind_failed";
+
+/// Params of `agent.queue`. `request_id`, when given, makes a repeated call return the prompt it queued first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueParams {
+    pub session: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+/// Params of `agent.queue.edit`. Only a waiting or failed prompt can be edited.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueEditParams {
+    pub id: String,
+    pub text: String,
+}
+
+/// Params of `agent.queue.remove` and `agent.queue.send_now`: a queued prompt's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueItemRef {
+    pub id: String,
+}
+
+/// Where a queued prompt is in its delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueState {
+    /// Not delivered yet; `reason` says what holds it.
+    Waiting,
+    /// Its text is being typed into the run.
+    Sending,
+    /// Its delivery failed; `reason` says why. Nothing behind it is delivered until it is removed or sent.
+    Failed,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One prompt waiting in a session's queue (decision 0084).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedPrompt {
+    pub id: String,
+    pub session: String,
+    /// Its place in the queue, from 1; the lowest is delivered first.
+    pub position: u64,
+    pub text: String,
+    pub state: QueueState,
+    /// For a waiting prompt, one of the `QUEUE_REASON_*` values; for a failed prompt, why its delivery failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Prints every field but the text, which is replaced by its length: a queued prompt is never printed into a log.
+impl std::fmt::Debug for QueuedPrompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueuedPrompt")
+            .field("id", &self.id)
+            .field("session", &self.session)
+            .field("position", &self.position)
+            .field("text", &format_args!("{} bytes", self.text.len()))
+            .field("state", &self.state)
+            .field("reason", &self.reason)
+            .field("created_at_ms", &self.created_at_ms)
+            .field("updated_at_ms", &self.updated_at_ms)
+            .finish()
+    }
+}
+
+/// Result of `agent.queue.list` and `agent.queue.resume`: a session's queue, head first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQueueList {
+    pub session: String,
+    pub items: Vec<QueuedPrompt>,
+}
 
 /// Most bytes of a prompt given at launch or through `agent.prompt` (0054).
 pub const MAX_PROMPT_BYTES: usize = 8 * 1024;
@@ -85,7 +194,8 @@ pub struct AgentKind {
     pub id: String,
     pub name: String,
     pub icon: String,
-    /// `core` for built-ins, `user` for the profile's own files, `ext:<id>` later.
+    /// `core` for first-party (`massorca.*`) packages, `user` for the profile's own files, `ext:<package id>` for other
+    /// packages.
     pub owner: String,
     /// Deprecated: the same value as `detected`, kept so `agents/1` clients keep working. Read `detected`
     /// and `package.state` instead; `agents/2` drops this field.
@@ -104,6 +214,36 @@ pub struct AgentKind {
     /// Why the declaration is invalid. A kind with problems is listed but never started.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+    /// The permission modes the kind declares (decision 0083), in declared order. Absent from an older peer: none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub permission_modes: Vec<PermissionMode>,
+    /// The id of the mode the vendor CLI starts in by itself, for display only (decision 0083). It is informational: the
+    /// vendor's real default may differ by CLI version, so it must never be shown as a session's mode. A session in the
+    /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_permission_mode: Option<String>,
+}
+
+/// One permission mode of a kind, as `agent.kinds` lists it (decision 0083). How the mode is passed stays in the
+/// declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionMode {
+    /// The vendor's own id of the mode, as `agent.start` and `agent.set_mode` take it.
+    pub id: String,
+    /// The vendor's name for the mode.
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The mode lifts the vendor's permission prompts or sandbox. It is never the default and must always be named.
+    #[serde(default)]
+    pub bypass: bool,
+    /// A running session can switch to the mode at once (`agent.set_mode` replies `live`); otherwise a switch applies at
+    /// the next resume.
+    #[serde(default)]
+    pub live_switch: bool,
+    /// The vendor may start a run asked for this mode in another one without failing, so it is never confirmed.
+    #[serde(default)]
+    pub may_fall_back: bool,
 }
 
 /// The decoded form of [`AgentKind`]. Only the fallback for an absent `detected` lives here: an `agents/1` peer
@@ -126,6 +266,10 @@ struct AgentKindWire {
     credentials: KindCredentials,
     #[serde(default)]
     problems: Vec<String>,
+    #[serde(default)]
+    permission_modes: Vec<PermissionMode>,
+    #[serde(default)]
+    default_permission_mode: Option<String>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -143,11 +287,13 @@ impl From<AgentKindWire> for AgentKind {
             status_mechanism: wire.status_mechanism,
             credentials: wire.credentials,
             problems: wire.problems,
+            permission_modes: wire.permission_modes,
+            default_permission_mode: wire.default_permission_mode,
         }
     }
 }
 
-/// The package a kind comes from (0059). Built-ins and profile files are `enabled` with no id until packages land.
+/// The package a kind comes from (0059). A profile file has no package: it is `enabled` with no id or version.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KindPackage {
     #[serde(default)]
@@ -209,6 +355,10 @@ pub struct AgentStartParams {
     /// A retry with the same id returns the first session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// One of the kind's permission modes (decision 0083, capability `agent-modes/1`); the kind's default when absent.
+    /// An id the kind does not declare is refused with `agent.mode_unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 /// Params of `agent.list`.
@@ -266,6 +416,47 @@ pub struct PromptReceipt {
     pub bytes: u64,
 }
 
+/// Params of `agent.resume`. Without `permission_mode`, the run takes the mode `agent.set_mode` stored for it, else the
+/// session's last mode unless that is a bypass mode, else the kind's default (decision 0083).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentResumeParams {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+}
+
+/// Params of `agent.set_mode`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetModeParams {
+    pub session: String,
+    pub permission_mode: String,
+    /// Types a live switch into a run whose kind reports no activity, where MassOrca cannot tell whether the agent is in
+    /// the middle of a prompt; refused with `agent.mode_unavailable` without it.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// When a mode set with `agent.set_mode` takes effect (decision 0083).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeApplied {
+    /// The kind's live switch was typed into the run's terminal. Nothing confirms the agent took it, so the session's
+    /// `mode_confirmed` is false.
+    Live,
+    /// The mode is stored and the next `agent.resume` launches in it.
+    NextResume,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Result of `agent.set_mode`: when the mode applies, and the session after the change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModeSet {
+    pub applied: ModeApplied,
+    pub session: AgentSession,
+}
+
 /// Params of `agent.hook`, sent by `massorca agent hook` from inside a run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHookParams {
@@ -320,6 +511,9 @@ pub struct AgentDelegateParams {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The child's permission mode (decision 0083); the child kind's default when absent, never the parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 /// Result of `agent.delegate`: the child's record, with its fields at the top level, and an optional note. A reader that
@@ -527,6 +721,35 @@ pub struct AgentSession {
     /// Set in the reply to a start, resume or delegation whose run got no vault variables, saying why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets_withheld: Option<String>,
+    /// The permission mode the session runs in, or was last asked to (decision 0083). Absent when its kind declares no
+    /// modes, and from a peer without capability `agent-modes/1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The mode was passed as launch arguments of the current run, no caller arguments followed it, and its vendor never
+    /// falls back from it. False (absent) otherwise: a typed live switch no hook confirmed, caller arguments that may
+    /// override it, a mode marked `may_fall_back`, or the vendor's own default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mode_confirmed: bool,
+    /// Where the current or last run's mode came from (decision 0083): `vendor_default` (no flag was passed, and
+    /// `permission_mode` is absent) or `chosen`. Absent when the kind declares no modes, and from an older peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_source: Option<ModeSource>,
+    /// A mode `agent.set_mode` stored for the next resume; the running mode is unchanged until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_permission_mode: Option<String>,
+}
+
+/// Where a session's mode came from (decision 0083).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeSource {
+    /// No mode was chosen: MassOrca passed no mode flag and the vendor CLI started in its own default.
+    VendorDefault,
+    /// A mode was chosen at start, at resume or with `agent.set_mode`.
+    Chosen,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The state of an account (decision 0059). A value this build does not know reads as `unknown`.
@@ -546,6 +769,23 @@ pub enum AccountState {
     Unknown,
 }
 
+/// How an account came to be (decision 0059). A value this build does not know, or a summary from a peer that omits the
+/// field, reads as `unknown`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountOrigin {
+    /// The service ran the sign-in.
+    SignIn,
+    /// The person's files were imported.
+    Import,
+    /// Made from the single home of 0056, or adopted from a home that had no row.
+    Migrated,
+    /// A value from a newer peer that this build does not know. Also what a peer that omits the field decodes to.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// One account of a kind, as `agent.accounts.*` returns it. Its files are never part of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountSummary {
@@ -558,6 +798,9 @@ pub struct AccountSummary {
     pub active: bool,
     /// The projects that chose this account, by id.
     pub projects: Vec<String>,
+    /// How the account came to be. A peer that omits it reads as `unknown`.
+    #[serde(default)]
+    pub origin: AccountOrigin,
 }
 
 /// Params of `agent.accounts.list`.
@@ -654,4 +897,37 @@ pub struct AccountsChanged {
     pub kind: String,
     pub account: String,
     pub state: AccountState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_account_summary_without_an_origin_decodes_as_unknown() {
+        let summary: AccountSummary = serde_json::from_value(json!({
+            "id": "0195c0de-0000-7000-8000-000000000002",
+            "label": "work",
+            "state": "signed_in",
+            "active": true,
+            "projects": []
+        }))
+        .expect("a summary from an older peer decodes");
+        assert_eq!(summary.origin, AccountOrigin::Unknown);
+    }
+
+    #[test]
+    fn an_account_origin_decodes_by_its_wire_name_and_a_newer_one_reads_as_unknown() {
+        for (wire, origin) in [
+            ("sign_in", AccountOrigin::SignIn),
+            ("import", AccountOrigin::Import),
+            ("migrated", AccountOrigin::Migrated),
+            ("from_a_newer_peer", AccountOrigin::Unknown),
+        ] {
+            let decoded: AccountOrigin =
+                serde_json::from_value(json!(wire)).expect("an origin decodes");
+            assert_eq!(decoded, origin, "{wire}");
+        }
+    }
 }

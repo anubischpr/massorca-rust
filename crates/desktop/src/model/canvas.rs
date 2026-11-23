@@ -9,7 +9,7 @@ use super::teams::TeamPage;
 pub enum Canvas {
     /// The mode's home with no session open: the start page, or the Bot Teams team list (P13).
     Home(Mode),
-    /// An open Workspaces session, by its title. Its conversation is not built yet.
+    /// An open Workspaces session, by its title. Its live terminal is the view; the conversation comes later.
     Session(String),
     /// A Bot Teams page, which keeps the Sidebar (screens 4).
     Team(TeamPage),

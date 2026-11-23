@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use massorca_protocol::methods::agents::{AccountSummary, AgentKind};
+use massorca_protocol::methods::extensions::ExtensionItem;
 
 use super::types::{AccountId, MarketplaceItemId, MarketplaceSnapshot};
 use crate::service::Refusal;
@@ -16,6 +17,10 @@ pub trait MarketplaceSource: std::fmt::Debug {
 
     /// Takes the agent kinds the connected service lists. A source that lists no service's kinds ignores them.
     fn follow_agent_kinds(&mut self, _kinds: &[AgentKind]) {}
+
+    /// Takes the extension packages the connected service lists: the installed ones and the built-in catalogue.
+    /// A source that lists no service's packages ignores them.
+    fn follow_extensions(&mut self, _installed: &[ExtensionItem], _catalogue: &[ExtensionItem]) {}
 
     /// Takes each kind's accounts the connected service lists. A source that lists no service's accounts ignores them.
     fn follow_accounts(

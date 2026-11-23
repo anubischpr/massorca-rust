@@ -26,6 +26,14 @@ struct Facts {
     teams_answered: bool,
     /// The vault status or list has answered, a refusal included.
     vault_answered: bool,
+    /// The newest agent session the store holds, which `--page session` opens.
+    session: Option<String>,
+    /// The agent session list has arrived (or the shell runs on sample data).
+    sessions_answered: bool,
+    /// Whether a service backs the shell: a delegate needs one to send to.
+    service: bool,
+    /// The first child session the store holds that is not brought back yet, which `--page bring-back` opens.
+    child: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +45,7 @@ struct OwnedSecret {
 
 enum Target {
     Workspace(String),
+    Session(String),
     Settings(SettingsSection),
     Pairing,
     AddHost,
@@ -46,6 +55,8 @@ enum Target {
     Remove(OwnedSecret),
     NewTeam,
     AddBot(TeamId),
+    Delegate(String),
+    BringBack(String),
 }
 
 /// The page a request falls back to when its data is absent.
@@ -82,6 +93,36 @@ fn plan(page: DebugPage, facts: &Facts) -> Step {
                 facts.workspaces_answered,
                 Parent::Workspaces,
                 "the service lists no workspace",
+            ),
+        },
+        DebugPage::Session => match (&facts.session, &facts.workspace) {
+            (Some(session), _) => Step::Open(Target::Session(session.clone())),
+            _ if !facts.sessions_answered => Step::Wait,
+            (None, Some(workspace)) => Step::Open(Target::Workspace(workspace.clone())),
+            (None, None) => answered(
+                facts.workspaces_answered,
+                Parent::Workspaces,
+                "the service lists no workspace",
+            ),
+        },
+        DebugPage::Delegate => match (&facts.session, facts.service) {
+            (Some(session), true) => Step::Open(Target::Delegate(session.clone())),
+            (Some(_), false) => Step::Fall(
+                Parent::Workspaces,
+                "no service is connected, so no delegate can be sent",
+            ),
+            (None, _) => answered(
+                facts.sessions_answered,
+                Parent::Workspaces,
+                "the service lists no agent session",
+            ),
+        },
+        DebugPage::BringBack => match &facts.child {
+            Some(child) => Step::Open(Target::BringBack(child.clone())),
+            None => answered(
+                facts.sessions_answered,
+                Parent::Workspaces,
+                "the service lists no child session to bring back",
             ),
         },
         DebugPage::SettingsGeneral => Step::Open(Target::Settings(SettingsSection::General)),
@@ -203,6 +244,18 @@ impl Shell {
                 .flatten(),
             teams_connected,
             owned_secret: owned_secret(state),
+            session: state
+                .agents
+                .iter()
+                .max_by_key(|session| session.created_at_ms)
+                .map(|session| session.id.clone()),
+            sessions_answered: sample || state.agents_answered,
+            service: self.service.is_some(),
+            child: state
+                .agents
+                .iter()
+                .find(|session| session.parent_id.is_some() && session.brought_back_at_ms.is_none())
+                .map(|session| session.id.clone()),
             workspaces_answered: sample || state.loaded,
             teams_answered: sample || state.team_read > 0,
             vault_answered: sample
@@ -216,6 +269,20 @@ impl Shell {
             Target::Workspace(id) => {
                 self.go_home(Mode::Workspaces);
                 self.model.open_workspace(id);
+            }
+            Target::Session(id) => {
+                self.go_home(Mode::Workspaces);
+                self.model.open_session(&id);
+            }
+            Target::Delegate(id) => {
+                self.go_home(Mode::Workspaces);
+                self.model.open_session(&id);
+                self.open_delegate(&id, window, cx);
+            }
+            Target::BringBack(child) => {
+                self.go_home(Mode::Workspaces);
+                self.model.open_session(&child);
+                self.ask_bring_back(&child, cx);
             }
             Target::Settings(section) => self.open_debug_settings(section),
             Target::Pairing => self.model.open_page(Page::Pairing),

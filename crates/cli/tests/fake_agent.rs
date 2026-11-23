@@ -298,3 +298,33 @@ fn a_hook_program_that_cannot_start_does_not_stop_a_prompt() {
     assert_eq!(output.status.code(), Some(0));
     assert!(lines(&output).contains(&"fake-agent: done say hello".to_owned()));
 }
+
+#[test]
+fn the_launch_mode_is_printed_after_the_session_line() {
+    let output = run_here(&["--session-id", "s-9", "--mode", "careful"], "exit\n");
+    assert_eq!(
+        lines(&output),
+        expected(&[
+            "ready",
+            "session s-9",
+            "mode careful",
+            "credentials missing",
+            "bye"
+        ])
+    );
+}
+
+#[test]
+fn a_mode_switch_line_is_recorded_and_is_not_a_prompt() {
+    let output = run_here(&["--mode", "careful"], "/mode wild\nexit\n");
+    assert_eq!(
+        lines(&output),
+        expected(&[
+            "ready",
+            "mode careful",
+            "credentials missing",
+            "mode switched wild",
+            "bye"
+        ])
+    );
+}

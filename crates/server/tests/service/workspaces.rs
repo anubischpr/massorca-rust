@@ -10,7 +10,7 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectRef,
+    self, Project, ProjectAddParams, ProjectKind, ProjectRemoveParams,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceKind, WorkspaceList, WorkspaceListParams,
@@ -245,6 +245,52 @@ async fn a_refresh_base_create_starts_from_the_remote_branch_and_a_plain_one_fro
 }
 
 #[tokio::test]
+async fn a_locked_worktree_reports_its_lock_reason_in_list_and_show() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "usb"))
+        .await
+        .expect("create");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "on a usb disk",
+            created.path.as_str(),
+        ],
+    );
+
+    let list: WorkspaceList = client
+        .call(
+            workspaces::LIST,
+            &WorkspaceListParams {
+                project: Some(project.id.clone()),
+            },
+        )
+        .await
+        .expect("list");
+    assert_eq!(list.workspaces[0].locked.as_deref(), Some("on a usb disk"));
+    let shown: Workspace = client
+        .call(
+            workspaces::SHOW,
+            &WorkspaceRef {
+                workspace: "usb".to_owned(),
+            },
+        )
+        .await
+        .expect("show");
+    assert_eq!(shown.locked.as_deref(), Some("on a usb disk"));
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_folder_workspace_is_forgotten_on_removal_and_its_directory_stays() {
     let home = temp_home();
     let folder = home.path().join("notes");
@@ -323,8 +369,9 @@ async fn a_dirty_worktree_is_refused_and_a_project_with_workspaces_cannot_be_rem
     let blocked = client
         .call::<_, Project>(
             projects::REMOVE,
-            &ProjectRef {
+            &ProjectRemoveParams {
                 project: project.id.clone(),
+                forget_workspaces: false,
             },
         )
         .await
@@ -382,5 +429,57 @@ async fn ignored_files_refuse_removal_over_the_wire_until_discard_ignored_is_sen
         .expect("removal with discard_ignored");
     assert!(!removed.directory_kept);
     assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_workspace_stops_its_terminals_first() {
+    use massorca_protocol::methods::terminals::{
+        self, Terminal, TerminalCreateParams, TerminalList, TerminalListParams, TerminalState,
+    };
+
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "busy"))
+        .await
+        .expect("create");
+    let terminal: Terminal = client
+        .call(
+            terminals::CREATE,
+            &TerminalCreateParams {
+                workspace: created.id.clone(),
+                shell: None,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                cols: None,
+                rows: None,
+                title: None,
+                request_id: None,
+            },
+        )
+        .await
+        .expect("a terminal starts in the workspace");
+    assert_eq!(terminal.state, TerminalState::Live);
+
+    let _: WorkspaceRemoved = client
+        .call(workspaces::REMOVE, &remove_params(&created.id, false))
+        .await
+        .expect("the removal stops the terminal, then removes the worktree");
+    assert!(!Path::new(&created.path).exists());
+    let listed: TerminalList = client
+        .call(terminals::LIST, &TerminalListParams { workspace: None })
+        .await
+        .expect("list");
+    let after = listed
+        .terminals
+        .iter()
+        .find(|listed| listed.id == terminal.id)
+        .expect("the stopped terminal stays listed as exited");
+    assert_eq!(after.state, TerminalState::Exited);
     stop(running).await;
 }

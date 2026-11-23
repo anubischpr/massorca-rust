@@ -4,14 +4,16 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
-    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
+    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
-use massorca_protocol::methods::host::{self, HostMemory};
+use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef,
 };
@@ -44,6 +46,11 @@ impl Client {
     /// `host.memory`: the memory of the service and of each live terminal's processes, read now on the service's host.
     pub async fn host_memory(&self) -> Result<HostMemory, ClientError> {
         self.call(host::MEMORY, &()).await
+    }
+
+    /// `host.ports`: the listening sockets of each live terminal's processes, read now on the service's host.
+    pub async fn host_ports(&self) -> Result<HostPorts, ClientError> {
+        self.call(host::PORTS, &()).await
     }
 
     /// `events.subscribe`: the change events the service publishes.
@@ -243,9 +250,65 @@ impl Client {
         self.call(agents::PROMPT, params).await
     }
 
+    /// `agent.queue`: queues a prompt behind a busy agent; it is typed once the agent is idle or done (capability
+    /// `agent-queue/1`, decision 0084).
+    pub async fn agent_queue(
+        &self,
+        params: &AgentQueueParams,
+    ) -> Result<QueuedPrompt, ClientError> {
+        self.call(agents::QUEUE, params).await
+    }
+
+    /// `agent.queue.list`: the queued prompts of a session, head first (decision 0084).
+    pub async fn agent_queue_list(&self, session: &str) -> Result<AgentQueueList, ClientError> {
+        self.call(agents::QUEUE_LIST, &session_ref(session)).await
+    }
+
+    /// `agent.queue.edit`: replaces the text of a waiting or failed queued prompt (decision 0084).
+    pub async fn agent_queue_edit(
+        &self,
+        params: &AgentQueueEditParams,
+    ) -> Result<QueuedPrompt, ClientError> {
+        self.call(agents::QUEUE_EDIT, params).await
+    }
+
+    /// `agent.queue.send_now`: sends a queued prompt at once, with force; it leaves the queue (decision 0084).
+    pub async fn agent_queue_send_now(&self, id: &str) -> Result<QueuedPrompt, ClientError> {
+        let params = AgentQueueItemRef { id: id.to_owned() };
+        self.call(agents::QUEUE_SEND_NOW, &params).await
+    }
+
+    /// `agent.queue.resume`: lifts a session's queue pauses and delivers its head if the agent is ready (decision 0084).
+    pub async fn agent_queue_resume(&self, session: &str) -> Result<AgentQueueList, ClientError> {
+        self.call(agents::QUEUE_RESUME, &session_ref(session)).await
+    }
+
+    /// `agent.queue.remove`: removes a waiting or failed queued prompt (decision 0084).
+    pub async fn agent_queue_remove(&self, id: &str) -> Result<QueuedPrompt, ClientError> {
+        let params = AgentQueueItemRef { id: id.to_owned() };
+        self.call(agents::QUEUE_REMOVE, &params).await
+    }
+
     /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
     pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::RESUME, &session_ref(session)).await
+    }
+
+    /// `agent.resume` with its optional permission mode (capability `agent-modes/1`, decision 0083).
+    pub async fn agent_resume_with(
+        &self,
+        params: &AgentResumeParams,
+    ) -> Result<AgentSession, ClientError> {
+        self.call(agents::RESUME, params).await
+    }
+
+    /// `agent.set_mode`: switches a session's permission mode at once where the kind has a live switch, or stores it for
+    /// the next resume; the result says which (capability `agent-modes/1`, decision 0083).
+    pub async fn agent_set_mode(
+        &self,
+        params: &AgentSetModeParams,
+    ) -> Result<AgentModeSet, ClientError> {
+        self.call(agents::SET_MODE, params).await
     }
 
     /// `agent.delegate`: starts a child session of a parent session; the child's record and an optional note.

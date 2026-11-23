@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use massorca_protocol::methods::agents::{
-    self, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
-    AgentBringBackParams, AgentHookParams, AgentKind, AgentKinds, AgentSession, AgentStartParams,
-    AgentWatchEvent, Execution, KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt,
-    ReceiptKind, StatusMechanism,
+    self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
+    AgentBringBackParams, AgentDelegateParams, AgentHookParams, AgentKind, AgentKinds,
+    AgentModeSet, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams,
+    AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    Execution, KindCredentials, KindPackage, ModeApplied, ModeSource, Outcome, PackageState,
+    PermissionMode, PromptReceipt, ReceiptKind, StatusMechanism,
 };
 use massorca_protocol::methods::terminals::{ExitReason, TerminalExit, TerminalState};
 use serde::{Serialize, de::DeserializeOwned};
@@ -43,6 +45,10 @@ fn live_session() -> AgentSession {
         result: None,
         holds_secrets: false,
         secrets_withheld: None,
+        permission_mode: None,
+        mode_confirmed: false,
+        mode_source: None,
+        pending_permission_mode: None,
     }
 }
 
@@ -119,6 +125,10 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
         result: Some("all green".to_owned()),
         holds_secrets: false,
         secrets_withheld: None,
+        permission_mode: None,
+        mode_confirmed: false,
+        mode_source: None,
+        pending_permission_mode: None,
         ..live_session()
     };
     assert_wire(
@@ -171,6 +181,8 @@ fn a_kind_lists_its_mechanism_in_kebab_case_and_omits_no_problems() {
             imported: false,
         },
         problems: Vec::new(),
+        permission_modes: Vec::new(),
+        default_permission_mode: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -212,6 +224,8 @@ fn a_listed_package_carries_its_id_and_version_and_no_program() {
             imported: false,
         },
         problems: Vec::new(),
+        permission_modes: Vec::new(),
+        default_permission_mode: None,
     };
     assert_wire(
         &AgentKinds { kinds: vec![kind] },
@@ -286,6 +300,7 @@ fn start_params_default_every_optional_field() {
             cols: None,
             rows: None,
             request_id: None,
+            permission_mode: None,
         }
     );
 }
@@ -369,6 +384,7 @@ fn an_account_summary_omits_an_absent_identity() {
         identity: None,
         active: true,
         projects: vec!["p1".to_owned()],
+        origin: AccountOrigin::Migrated,
     };
     assert_wire(
         &summary,
@@ -377,7 +393,284 @@ fn an_account_summary_omits_an_absent_identity() {
             "label": "work",
             "state": "migrated",
             "active": true,
-            "projects": ["p1"]
+            "projects": ["p1"],
+            "origin": "migrated"
         }),
     );
+}
+
+#[test]
+fn a_kind_lists_its_permission_modes_and_default_and_an_older_kind_has_none() {
+    let mut kind: AgentKind = serde_json::from_value(json!({
+        "id": "fake", "name": "Fake", "icon": "bot", "owner": "user", "installed": true,
+        "resumable": false, "status_mechanism": "none",
+        "credentials": { "supported": false, "imported": false }
+    }))
+    .expect("a kind from before permission modes decodes");
+    assert!(kind.permission_modes.is_empty());
+    assert_eq!(kind.default_permission_mode, None);
+    assert!(
+        serde_json::to_value(&kind)
+            .unwrap()
+            .get("permission_modes")
+            .is_none(),
+        "a kind with no modes omits them"
+    );
+
+    kind.permission_modes = vec![
+        PermissionMode {
+            id: "careful".to_owned(),
+            label: "Careful".to_owned(),
+            description: None,
+            bypass: false,
+            live_switch: false,
+            may_fall_back: true,
+        },
+        PermissionMode {
+            id: "wild".to_owned(),
+            label: "Wild".to_owned(),
+            description: Some("No prompts.".to_owned()),
+            bypass: true,
+            live_switch: true,
+            may_fall_back: false,
+        },
+    ];
+    kind.default_permission_mode = Some("careful".to_owned());
+    let value = serde_json::to_value(&kind).unwrap();
+    assert_eq!(
+        value["permission_modes"],
+        json!([
+            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false, "may_fall_back": true },
+            { "id": "wild", "label": "Wild", "description": "No prompts.", "bypass": true, "live_switch": true, "may_fall_back": false }
+        ])
+    );
+    assert_eq!(value["default_permission_mode"], "careful");
+    let decoded: AgentKind = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded, kind);
+    let bare: PermissionMode = serde_json::from_value(json!({ "id": "x", "label": "X" })).unwrap();
+    assert!(
+        !bare.bypass && !bare.live_switch && !bare.may_fall_back,
+        "absent flags read as false"
+    );
+}
+
+#[test]
+fn a_session_carries_its_permission_mode_and_an_older_one_decodes_without() {
+    let mut session = live_session();
+    let before = serde_json::to_value(&session).unwrap();
+    assert!(before.get("permission_mode").is_none());
+    assert!(before.get("mode_confirmed").is_none(), "false is omitted");
+    let decoded: AgentSession = serde_json::from_value(before).unwrap();
+    assert_eq!(decoded.permission_mode, None);
+    assert!(!decoded.mode_confirmed);
+
+    session.permission_mode = Some("careful".to_owned());
+    session.mode_confirmed = true;
+    let value = serde_json::to_value(&session).unwrap();
+    assert_eq!(value["permission_mode"], "careful");
+    assert_eq!(value["mode_confirmed"], true);
+    assert_eq!(
+        serde_json::from_value::<AgentSession>(value).unwrap(),
+        session
+    );
+}
+
+#[test]
+fn start_and_delegate_take_an_optional_permission_mode() {
+    let start: AgentStartParams = serde_json::from_value(
+        json!({ "workspace": "main", "kind": "fake", "permission_mode": "wild" }),
+    )
+    .unwrap();
+    assert_eq!(start.permission_mode.as_deref(), Some("wild"));
+    let old: AgentStartParams =
+        serde_json::from_value(json!({ "workspace": "main", "kind": "fake" })).unwrap();
+    assert_eq!(old.permission_mode, None);
+    assert!(
+        serde_json::to_value(&old)
+            .unwrap()
+            .get("permission_mode")
+            .is_none()
+    );
+
+    let delegate: AgentDelegateParams = serde_json::from_value(
+        json!({ "parent": "p", "prompt": "go", "permission_mode": "careful" }),
+    )
+    .unwrap();
+    assert_eq!(delegate.permission_mode.as_deref(), Some("careful"));
+    let old: AgentDelegateParams =
+        serde_json::from_value(json!({ "parent": "p", "prompt": "go" })).unwrap();
+    assert_eq!(old.permission_mode, None);
+}
+
+#[test]
+fn set_mode_says_when_the_mode_applies_and_resume_takes_an_optional_mode() {
+    let params: AgentSetModeParams =
+        serde_json::from_value(json!({ "session": "s-1", "permission_mode": "wild" })).unwrap();
+    assert_eq!(params.permission_mode, "wild");
+    let mut session = live_session();
+    session.permission_mode = Some("wild".to_owned());
+    let set = AgentModeSet {
+        applied: ModeApplied::Live,
+        session: session.clone(),
+    };
+    let value = serde_json::to_value(&set).unwrap();
+    assert_eq!(value["applied"], "live");
+    assert_eq!(value["session"]["permission_mode"], "wild");
+    assert_eq!(serde_json::from_value::<AgentModeSet>(value).unwrap(), set);
+    assert_eq!(
+        serde_json::to_value(ModeApplied::NextResume).unwrap(),
+        "next_resume"
+    );
+    assert_eq!(
+        serde_json::from_value::<ModeApplied>(json!("on_reboot")).unwrap(),
+        ModeApplied::Unknown
+    );
+
+    let old: AgentResumeParams = serde_json::from_value(json!({ "session": "s-1" })).unwrap();
+    assert_eq!(
+        old.permission_mode, None,
+        "a resume from before modes decodes"
+    );
+    assert_eq!(
+        serde_json::to_value(&old).unwrap(),
+        json!({ "session": "s-1" })
+    );
+}
+
+#[test]
+fn a_session_says_where_its_mode_came_from_and_what_waits_for_the_resume() {
+    let mut session = live_session();
+    session.mode_source = Some(ModeSource::VendorDefault);
+    let value = serde_json::to_value(&session).unwrap();
+    assert_eq!(value["mode_source"], "vendor_default");
+    assert!(value.get("permission_mode").is_none(), "no mode is claimed");
+    session.permission_mode = Some("careful".to_owned());
+    session.mode_source = Some(ModeSource::Chosen);
+    session.pending_permission_mode = Some("wild".to_owned());
+    let value = serde_json::to_value(&session).unwrap();
+    assert_eq!(value["mode_source"], "chosen");
+    assert_eq!(value["pending_permission_mode"], "wild");
+    assert_eq!(
+        serde_json::from_value::<AgentSession>(value).unwrap(),
+        session
+    );
+    assert_eq!(
+        serde_json::from_value::<ModeSource>(json!("saved_preference")).unwrap(),
+        ModeSource::Unknown
+    );
+    let old = serde_json::to_value(live_session()).unwrap();
+    let decoded: AgentSession = serde_json::from_value(old).unwrap();
+    assert_eq!(
+        (decoded.mode_source, decoded.pending_permission_mode),
+        (None, None)
+    );
+}
+
+fn queued(state: agents::QueueState, reason: Option<&str>) -> agents::QueuedPrompt {
+    agents::QueuedPrompt {
+        id: "q-1".to_owned(),
+        session: "s-1".to_owned(),
+        position: 1,
+        text: "next".to_owned(),
+        state,
+        reason: reason.map(str::to_owned),
+        created_at_ms: 1,
+        updated_at_ms: 2,
+    }
+}
+
+#[test]
+fn a_queued_prompt_says_its_state_and_reason_and_an_absent_reason_is_omitted() {
+    assert_wire(
+        &queued(agents::QueueState::Waiting, Some(agents::QUEUE_REASON_BUSY)),
+        &json!({
+            "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+            "state": "waiting", "reason": "busy", "created_at_ms": 1, "updated_at_ms": 2
+        }),
+    );
+    assert_wire(
+        &queued(agents::QueueState::Sending, None),
+        &json!({
+            "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+            "state": "sending", "created_at_ms": 1, "updated_at_ms": 2
+        }),
+    );
+    let failed: agents::QueuedPrompt = serde_json::from_value(json!({
+        "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+        "state": "failed", "reason": "the run has exited", "created_at_ms": 1, "updated_at_ms": 2
+    }))
+    .unwrap();
+    assert_eq!(failed.state, agents::QueueState::Failed);
+    assert_eq!(failed.reason.as_deref(), Some("the run has exited"));
+    let newer: agents::QueuedPrompt = serde_json::from_value(json!({
+        "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+        "state": "parked", "created_at_ms": 1, "updated_at_ms": 2
+    }))
+    .unwrap();
+    assert_eq!(newer.state, agents::QueueState::Unknown);
+}
+
+#[test]
+fn queue_params_and_the_list_have_their_wire_shapes() {
+    assert_wire(
+        &AgentQueueParams {
+            session: "s-1".to_owned(),
+            text: "later".to_owned(),
+            request_id: None,
+        },
+        &json!({ "session": "s-1", "text": "later" }),
+    );
+    assert_wire(
+        &AgentQueueParams {
+            session: "s-1".to_owned(),
+            text: "later".to_owned(),
+            request_id: Some("req-1".to_owned()),
+        },
+        &json!({ "session": "s-1", "text": "later", "request_id": "req-1" }),
+    );
+    assert_wire(
+        &AgentQueueEditParams {
+            id: "q-1".to_owned(),
+            text: "edited".to_owned(),
+        },
+        &json!({ "id": "q-1", "text": "edited" }),
+    );
+    assert_wire(
+        &AgentQueueItemRef {
+            id: "q-1".to_owned(),
+        },
+        &json!({ "id": "q-1" }),
+    );
+    assert_wire(
+        &AgentQueueList {
+            session: "s-1".to_owned(),
+            items: vec![queued(agents::QueueState::Failed, Some("gone"))],
+        },
+        &json!({
+            "session": "s-1",
+            "items": [{
+                "id": "q-1", "session": "s-1", "position": 1, "text": "next",
+                "state": "failed", "reason": "gone", "created_at_ms": 1, "updated_at_ms": 2
+            }]
+        }),
+    );
+    assert_eq!(agents::MAX_QUEUED_PROMPTS, 100);
+    assert_eq!(agents::QUEUE, "agent.queue");
+    assert_eq!(agents::QUEUE_LIST, "agent.queue.list");
+    assert_eq!(agents::QUEUE_EDIT, "agent.queue.edit");
+    assert_eq!(agents::QUEUE_REMOVE, "agent.queue.remove");
+    assert_eq!(agents::QUEUE_SEND_NOW, "agent.queue.send_now");
+    assert_eq!(agents::QUEUE_RESUME, "agent.queue.resume");
+}
+
+#[test]
+fn a_queued_prompt_does_not_print_its_text_in_debug() {
+    let item = queued(agents::QueueState::Waiting, Some(agents::QUEUE_REASON_BUSY));
+    let shown = format!("{item:?}");
+    assert!(!shown.contains("next"), "the text is not printed: {shown}");
+    assert!(
+        shown.contains("q-1") && shown.contains("Waiting"),
+        "{shown}"
+    );
+    assert_eq!(agents::MAX_DELIVERED_REQUEST_IDS, 100);
 }

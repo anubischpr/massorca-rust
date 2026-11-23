@@ -95,7 +95,7 @@ pub enum Principal {
 }
 
 impl Principal {
-    fn holds(&self, permission: Permission) -> bool {
+    pub(crate) fn holds(&self, permission: Permission) -> bool {
         match self {
             Self::Owner => true,
             Self::Device { scopes, .. } => scopes.contains(permission),

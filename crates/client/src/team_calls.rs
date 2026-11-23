@@ -1,12 +1,16 @@
-//! Typed helpers over the `teams/1` methods: teams, their bots and projects, the Board, and the tasks on it (decision 0072).
+//! Typed helpers over the `teams/1` methods: teams, their bots, projects and memory, the Board, and the tasks on it
+//! (decision 0072).
 
 use massorca_protocol::methods::tasks::{
     self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskUpdateParams,
 };
 use massorca_protocol::methods::teams::{
-    self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams, Team,
-    TeamCreateParams, TeamList, TeamProject, TeamProjectAddParams, TeamProjectList,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
+    Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
+    RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams, TeamList, TeamMemoryAddParams,
+    TeamMemoryLine, TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectUpdateParams,
+    TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 
 use crate::client::Client;
@@ -95,6 +99,30 @@ impl Client {
         self.call(teams::BOARD, params).await
     }
 
+    /// `team.memory_list`: a team's memory lines, or one bot's, newest first.
+    pub async fn team_memory_list(
+        &self,
+        params: &TeamMemoryListParams,
+    ) -> Result<TeamMemoryList, ClientError> {
+        self.call(teams::MEMORY_LIST, params).await
+    }
+
+    /// `team.memory_add`: adds a line to a team's memory, or to one bot's.
+    pub async fn team_memory_add(
+        &self,
+        params: &TeamMemoryAddParams,
+    ) -> Result<TeamMemoryLine, ClientError> {
+        self.call(teams::MEMORY_ADD, params).await
+    }
+
+    /// `team.memory_rm`: removes a memory line of a team; the line is returned.
+    pub async fn team_memory_remove(
+        &self,
+        params: &TeamMemoryRemoveParams,
+    ) -> Result<TeamMemoryLine, ClientError> {
+        self.call(teams::MEMORY_REMOVE, params).await
+    }
+
     /// `task.create`: creates a task on a team's Board.
     pub async fn task_create(&self, params: &TaskCreateParams) -> Result<Task, ClientError> {
         self.call(tasks::CREATE, params).await
@@ -115,6 +143,11 @@ impl Client {
         self.call(tasks::UPDATE, params).await
     }
 
+    /// `task.start`: starts the task's bot on it in the team's folder workspace; a failed start keeps it Open with `error`.
+    pub async fn task_start(&self, params: &TaskRef) -> Result<Task, ClientError> {
+        self.call(tasks::START, params).await
+    }
+
     /// `task.done`: marks a task done by hand; refused while its agent session runs.
     pub async fn task_done(&self, params: &TaskRef) -> Result<Task, ClientError> {
         self.call(tasks::DONE, params).await
@@ -128,5 +161,54 @@ impl Client {
     /// `task.rm`: removes a task; refused while its agent session runs.
     pub async fn task_remove(&self, params: &TaskRef) -> Result<Task, ClientError> {
         self.call(tasks::REMOVE, params).await
+    }
+
+    /// `team.routine_list`: a team's routines, in creation order.
+    pub async fn team_routine_list(&self, params: &TeamRef) -> Result<RoutineList, ClientError> {
+        self.call(teams::ROUTINE_LIST, params).await
+    }
+
+    /// `team.routine_add`: adds a routine that starts a bot on a task each time it is due.
+    pub async fn team_routine_add(
+        &self,
+        params: &RoutineAddParams,
+    ) -> Result<Routine, ClientError> {
+        self.call(teams::ROUTINE_ADD, params).await
+    }
+
+    /// `team.routine_update`: changes the fields of a routine that are given.
+    pub async fn team_routine_update(
+        &self,
+        params: &RoutineUpdateParams,
+    ) -> Result<Routine, ClientError> {
+        self.call(teams::ROUTINE_UPDATE, params).await
+    }
+
+    /// `team.routine_rm`: removes a routine and its runs; the runs' tasks stay.
+    pub async fn team_routine_remove(&self, params: &RoutineRef) -> Result<Routine, ClientError> {
+        self.call(teams::ROUTINE_REMOVE, params).await
+    }
+
+    /// `team.routine_pause`: pauses a routine; it has no next run until resumed.
+    pub async fn team_routine_pause(&self, params: &RoutineRef) -> Result<Routine, ClientError> {
+        self.call(teams::ROUTINE_PAUSE, params).await
+    }
+
+    /// `team.routine_resume`: resumes a routine from now; runs missed while paused are not made up.
+    pub async fn team_routine_resume(&self, params: &RoutineRef) -> Result<Routine, ClientError> {
+        self.call(teams::ROUTINE_RESUME, params).await
+    }
+
+    /// `team.routine_runs`: a routine's runs, newest first.
+    pub async fn team_routine_runs(
+        &self,
+        params: &RoutineRunsParams,
+    ) -> Result<RoutineRunList, ClientError> {
+        self.call(teams::ROUTINE_RUNS, params).await
+    }
+
+    /// `team.routine_run`: makes one run now, without moving the schedule.
+    pub async fn team_routine_run(&self, params: &RoutineRef) -> Result<RoutineRun, ClientError> {
+        self.call(teams::ROUTINE_RUN, params).await
     }
 }

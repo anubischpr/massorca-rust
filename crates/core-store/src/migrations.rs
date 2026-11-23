@@ -1,5 +1,8 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -273,6 +276,158 @@ ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 C
 "#,
         foreign_keys_off: false,
     },
+    // Only a kept account counts as one the kind had (decision 0059): a row is recorded when it is inserted already decided
+    // (an import or a migrated home) or when its pending sign-in is cleared. A sign-in deleted while still pending was
+    // never kept and leaves no record. Rows recorded by the earlier trigger cannot tell a kept sign-in from a discarded
+    // one, so they are left as they are.
+    Migration {
+        sql: r#"
+DROP TRIGGER agent_accounts_record_kind;
+CREATE TRIGGER agent_accounts_record_kind AFTER INSERT ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+CREATE TRIGGER agent_accounts_record_kept_sign_in AFTER UPDATE OF sign_in_pending ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team memory (decision 0072): lines a team or one of its bots keeps for later tasks. A bot-less line is the team's
+    // scope. A team's or a bot's removal removes its lines.
+    Migration {
+        sql: r#"
+CREATE TABLE team_memory (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('task','person')),
+    task_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
+"#,
+        foreign_keys_off: false,
+    },
+    // A team project's code source (decision 0072): the Workspaces project it links to. Removing that project clears the link.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A team's folder workspace, made on its first task start; folder workspaces that let several agents write at once
+    // (a team folder: no git index to corrupt, and shared files are the point); and the lookup from an agent session to
+    // its task, the protocol code of a failed start beside its message, and the pending start attempt that keys a retry
+    // to the same agent request (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE teams ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN error_code TEXT;
+ALTER TABLE tasks ADD COLUMN start_attempt TEXT;
+ALTER TABLE workspaces ADD COLUMN shared_writers INTEGER NOT NULL DEFAULT 0 CHECK(shared_writers IN (0,1));
+CREATE INDEX tasks_session_id ON tasks (session_id);
+"#,
+        foreign_keys_off: false,
+    },
+    // Where a task's last start ran: its own worktree on a linked git project, a linked folder or the team folder, and
+    // the worktree's branch, where the result is (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE tasks ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN branch TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team routines (decision 0072 amendment): a schedule that starts a task for a bot on each occurrence. A team's
+    // removal removes its routines and their runs; a bot's removal keeps the routine with no bot, and its runs record
+    // why. A run keeps its task: removing the run or its routine never removes the task. A run whose `settled_at` is
+    // NULL has not recorded its start's outcome yet; the next service start marks it interrupted.
+    Migration {
+        sql: r#"
+CREATE TABLE team_routines (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('daily','weekly','monthly','once')),
+    time TEXT NOT NULL,
+    weekday TEXT,
+    month_day INTEGER CHECK(month_day IS NULL OR month_day BETWEEN 1 AND 28),
+    run_date TEXT,
+    zone TEXT,
+    paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+    starts_as_admin INTEGER NOT NULL CHECK(starts_as_admin IN (0,1)),
+    next_run_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routines_by_team ON team_routines (team_id, created_at);
+CREATE INDEX team_routines_due ON team_routines (next_run_at);
+CREATE TABLE team_routine_runs (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES team_routines(id) ON DELETE CASCADE,
+    scheduled_for INTEGER NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    error TEXT,
+    error_code TEXT,
+    settled_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routine_runs_by_routine ON team_routine_runs (routine_id, scheduled_for);
+"#,
+        foreign_keys_off: false,
+    },
+    // An agent session's permission mode (decision 0083): the mode of its current or last run, whether launch arguments
+    // confirmed it, where it came from (`vendor_default` or `chosen`), and the mode waiting for the next resume, kept
+    // apart from the running one.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT;
+ALTER TABLE agent_sessions ADD COLUMN mode_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(mode_confirmed IN (0,1));
+ALTER TABLE agent_sessions ADD COLUMN mode_source TEXT CHECK(mode_source IS NULL OR mode_source IN ('vendor_default','chosen'));
+ALTER TABLE agent_sessions ADD COLUMN pending_permission_mode TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // Queued prompts (decision 0084): the prompts a person queued for a session while its agent was busy, delivered in
+    // position order. A session's queue is removed with the session.
+    Migration {
+        sql: r#"
+CREATE TABLE agent_prompt_queue (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK(position >= 1),
+    text TEXT NOT NULL,
+    request_id TEXT,
+    state TEXT NOT NULL CHECK(state IN ('waiting','sending','failed')),
+    reason TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, position),
+    UNIQUE(session_id, request_id)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Who queued a prompt (decision 0084, D7): whether its caller held host-admin scope, checked again before it is typed.
+    // The request ids of the prompts a session delivered are kept, so a retry after a lost answer is not typed twice (0084).
+    Migration {
+        sql: r#"
+ALTER TABLE agent_prompt_queue ADD COLUMN host_admin INTEGER NOT NULL DEFAULT 0 CHECK(host_admin IN (0,1));
+CREATE TABLE agent_prompt_delivered (
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL,
+    delivered_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(session_id, request_id)
+);
+"#,
+        foreign_keys_off: false,
+    },
     // A project's base branch, which a new workspace starts from when it names none (WS-04).
     Migration {
         sql: r#"
@@ -291,6 +446,16 @@ pub(crate) fn migrate(
     file: Option<&Path>,
     steps: &[Migration],
 ) -> Result<(), StoreError> {
+    migrate_observed(connection, file, steps, &mut |_| {})
+}
+
+/// Like `migrate`, calling `observe` once the migration lock is held and after each step.
+pub(crate) fn migrate_observed(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    steps: &[Migration],
+    observe: &mut dyn FnMut(&'static str),
+) -> Result<(), StoreError> {
     let supported = i64::try_from(steps.len()).unwrap_or(i64::MAX);
     // An up-to-date or newer database is answered without the migration lock, so it is never written to.
     let found = user_version(connection)?;
@@ -303,6 +468,11 @@ pub(crate) fn migrate(
     // Held across every step: SQLite's write lock is released between steps, and a second opener that took it there
     // would back up the half-migrated file again.
     let _upgrade = file.map(upgrade_lock).transpose()?;
+    observe("store migration lock");
+    if found == 0 && create_fresh(connection, file, steps)? {
+        observe("store schema");
+        return Ok(());
+    }
     let mut backed_up = false;
     loop {
         // Read without the lock first, so an up-to-date database is never written to.
@@ -315,7 +485,43 @@ pub(crate) fn migrate(
             return Ok(());
         };
         apply_step(connection, file, found, index, step, &mut backed_up)?;
+        observe("store schema step");
     }
+}
+
+/// Builds the whole schema of a new, empty database file in one transaction: one commit and one sync instead of one per
+/// step, which on a busy disk made a first start take longer than the client waits. Nothing is lost if it fails: the
+/// database was empty. Returns `false`, changing nothing, for an in-memory database, one that already holds objects or
+/// a version, or steps that need foreign keys switched off; those run one transaction per step, as an upgrade does.
+fn create_fresh(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    steps: &[Migration],
+) -> Result<bool, StoreError> {
+    if file.is_none() || steps.iter().any(|step| step.foreign_keys_off) {
+        return Ok(false);
+    }
+    create_in_one_transaction(connection, steps)
+}
+
+fn create_in_one_transaction(
+    connection: &mut Connection,
+    steps: &[Migration],
+) -> Result<bool, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if user_version(&transaction)? != 0 || backup::holds_objects(&transaction)? {
+        return Ok(false);
+    }
+    for step in steps {
+        transaction.execute_batch(step.sql)?;
+    }
+    let version = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+    if let Some(table) = first_foreign_key_violation(&transaction)? {
+        return Err(StoreError::ForeignKeyViolation { version, table });
+    }
+    transaction.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+    transaction.commit()?;
+    Ok(true)
 }
 
 /// Runs one step, with foreign keys switched off around its transaction when the step asks for that.
@@ -375,17 +581,44 @@ fn run_step(
     Ok(())
 }
 
-/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish.
+/// How long an open waits for another opener's upgrade before it gives up.
+const UPGRADE_LOCK_WAIT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
+
+/// Takes the exclusive OS lock on `<file>.migrating`, waiting for another opener's upgrade to finish. The wait is
+/// bounded, so a lock that is never released fails the open with a message instead of hanging it.
 fn upgrade_lock(file: &Path) -> Result<File, StoreError> {
     let mut name = file.as_os_str().to_owned();
     name.push(".migrating");
+    let path = PathBuf::from(name);
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(PathBuf::from(name))?;
-    lock.lock()?;
-    Ok(lock)
+        .open(&path)?;
+    let deadline = Instant::now() + UPGRADE_LOCK_WAIT;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(StoreError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "{} stayed locked by another upgrade for {}s",
+                        path.display(),
+                        UPGRADE_LOCK_WAIT.as_secs()
+                    ),
+                )));
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
 }
 
 fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
@@ -589,5 +822,68 @@ mod tests {
         assert!(matches!(error, StoreError::Constraint { .. }), "{error:?}");
         assert_eq!(version(&connection), 1);
         assert_eq!(row_count(&connection, "child"), 1);
+    }
+
+    #[test]
+    fn an_upgrade_lock_that_is_never_released_fails_the_open_instead_of_hanging_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let held = fs::File::create(dir.path().join("store.db.migrating")).unwrap();
+        held.lock().unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let started = std::time::Instant::now();
+        let error = migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap_err();
+        assert!(
+            matches!(&error, StoreError::Io(io) if io.kind() == std::io::ErrorKind::TimedOut),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        drop(held);
+        migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap();
+    }
+
+    fn schema(connection: &Connection) -> Vec<(String, String, Option<String>)> {
+        let mut statement = connection
+            .prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_new_database_gets_the_same_schema_in_one_transaction_as_step_by_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh_path = dir.path().join("fresh.db");
+        let mut fresh = Connection::open(&fresh_path).unwrap();
+        migrate(&mut fresh, Some(&fresh_path), super::MIGRATIONS).unwrap();
+
+        let stepped_path = dir.path().join("stepped.db");
+        let mut stepped = Connection::open(&stepped_path).unwrap();
+        // One step first: the database then holds objects, so the rest runs step by step as an upgrade does.
+        migrate(&mut stepped, Some(&stepped_path), &super::MIGRATIONS[..1]).unwrap();
+        migrate(&mut stepped, Some(&stepped_path), super::MIGRATIONS).unwrap();
+
+        assert_eq!(schema(&fresh), schema(&stepped));
+        let version = |connection: &Connection| -> i64 {
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            version(&fresh),
+            i64::try_from(super::MIGRATIONS.len()).unwrap()
+        );
+        assert_eq!(version(&fresh), version(&stepped));
+        assert!(
+            !fs::read_dir(dir.path()).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("fresh.db.bak")),
+            "a new database has nothing to back up"
+        );
     }
 }

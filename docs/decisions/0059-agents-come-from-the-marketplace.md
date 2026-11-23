@@ -308,3 +308,31 @@ one is active.
 ## Amendment 2026-11-22
 
 Account commands (check, sign-in, sign-out) judge the account's home only: for those commands the vendor's credential environment variables (`accounts.strip_env`) are removed in addition to `credentials.strip_env`. Agent sessions are unchanged; whether they strip them is a recorded follow-up.
+
+## Amendment 2026-11-22 (accounts follow-ups)
+
+- **Abandoned sign-ins.** A sign-in terminal still open after 15 minutes is closed, and its account is decided as an ended sign-in is. The limit is a test hook, `MASSORCA_SIGN_IN_TIMEOUT_MS`, which exists for tests only: whole milliseconds, clamped to 100 ms through the default, read when the service starts.
+- **A discarded sign-in is signed out first.** When a sign-in is not kept, the kind's `accounts.logout` runs against its home before the home is deleted; its outcome is only logged, by kind. An imported or migrated account is never signed out this way.
+- **Cannot tell keeps the account as unknown.** When a sign-in's terminal ends, a check that cannot tell (a kind without a check, a timeout, or a program that could not start) keeps the account as `unknown` and decided, so it can be activated, while its declared files exist. With no declared file left, the account is signed out and deleted. The startup sweep is the one decision that leaves such an account pending, until a check decides it. A check that judges the login decides it as before: `signed_in` keeps it, and any other verdict (`expired`, or a non-zero exit) discards it. No network detection is added, because the declaration names no offline failure.
+- **A pending sign-in is not activated.** A sign-in still marked pending, in memory or in the store, refuses activation with `agent.busy`, also after a restart. Only a sign-in the startup sweep left undecided is marked pending in the store. A check of the account decides it and clears the mark.
+- **One decision at a time.** An undecided sign-in or import is decided by one call at a time: the terminal's end, the startup sweep, or a check. The decision holds the account's mark until its outcome is stored, and any other check, activation or removal of the account is refused with `agent.busy` meanwhile. A check of an open sign-in, which used to only record its state, is now refused the same way. A check that signs an undecided account out deletes it, and answers `agent.account_not_found`.
+- **Imports are undecided until checked.** An import is inserted undecided, so it does not count as the kind's history, and it is kept only when its check passes. A refused import is deleted without a sign-out. An import a crash left undecided is decided at the next start, as its import would be.
+
+## Amendment 2026-11-23 (kind packages seam)
+
+- **How `core-agents` reads packages.** Step 2 of "How the built-in declarations move" no longer
+  calls `massorca_core_extensions::installed_agent_kinds(&Profile)`. `core-agents` defines a
+  `KindPackages` trait in `AgentsConfig`, and the extension runtime implements it, so
+  `core-agents` takes no dependency on `core-extensions`. Each kind comes with its package id,
+  version and state (`available`, `enabled` or `disabled`) and the declaration's JSON text, or an
+  error that names the package and the cause, never a path. Until the runtime lands, the default
+  `BuiltInPackages` provides the four compiled-in kinds as enabled packages `massorca.<kind>`.
+- **Not enabled is its own error.** A kind whose package is available or disabled is refused with
+  `agent.kind_not_enabled` (data `{ kind, package, state }`), not `agent.not_installed`, on a
+  start, a delegation, a resume, and accounts add, import and activate. An account's check, its
+  removal and the vendor sign-out keep working on a disabled kind. `agent.not_installed` keeps
+  its meaning for an enabled kind with problems or no program.
+- **Used kinds.** `core-agents` exposes `used_kinds(&Store, profile_dir)`: the kinds its sessions,
+  accounts, account history and bots name, and the kind directories under
+  `<profile>/agents/accounts/` and `<profile>/agents/homes/`. A store or a kind directory that cannot be read is an
+  error, never an empty answer.

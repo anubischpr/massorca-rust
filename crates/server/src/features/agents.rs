@@ -11,10 +11,12 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
+    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -22,12 +24,13 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
 use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
+use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::NoParams;
+use crate::features::{NoParams, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
-use crate::permission::{Permission, authorize};
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -35,6 +38,14 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     let agents_cap = capabilities::AGENTS;
     Ok(vec![
         registries.capabilities.register(agents_cap, Owner::Core)?,
+        // Permission modes (decision 0083) ride on the agent methods; the capability tells a client they are there.
+        registries
+            .capabilities
+            .register(capabilities::AGENT_MODES, Owner::Core)?,
+        // The prompt queue (decision 0084) has its own capability, so a client knows the service keeps queued prompts.
+        registries
+            .capabilities
+            .register(capabilities::AGENT_QUEUE, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -86,6 +97,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         methods.register(
             Owner::Core,
+            agents::SET_MODE,
+            capabilities::AGENT_MODES,
+            Permission::Workspace,
+            set_mode,
+        )?,
+        methods.register(
+            Owner::Core,
             agents::FORGET,
             agents_cap,
             Permission::Workspace,
@@ -118,6 +136,48 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             bring_back,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_LIST,
+            capabilities::AGENT_QUEUE,
+            Permission::Read,
+            queue_list,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_EDIT,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_edit,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_REMOVE,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_SEND_NOW,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_send_now,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_RESUME,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_resume,
         )?,
         methods.register_stream(
             Owner::Core,
@@ -234,12 +294,30 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
     Ok(for_caller(&ctx, session))
 }
 
-/// Starts a new run of an exited session, which keeps its id (0054).
-async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+/// Starts a new run of an exited session, which keeps its id (0054), in the mode decision 0083 gives it.
+async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSession, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
-    let session = on_agents(&ctx, move |agents| agents.resume(&params.session, grant)).await?;
+    let session = on_agents(&ctx, move |agents| {
+        // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
+        let _gate = start_gate();
+        agents.resume(&params.session, params.permission_mode.as_deref(), grant)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
+}
+
+/// Switches a session's permission mode, live or at its next resume (decision 0083). A live switch types into the run's
+/// terminal, so a run holding vault secrets needs host-admin scope, as a prompt does. A bypass mode needs no more than
+/// the method's own permission.
+async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentModeSet, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let mut set = on_agents(&ctx, move |agents| {
+        agents.set_mode(&params.session, &params.permission_mode, params.force)
+    })
+    .await?;
+    set.session = for_caller(&ctx, set.session);
+    Ok(set)
 }
 
 /// Types a prompt into a run's terminal (0054). The text is never logged.
@@ -249,6 +327,77 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
         agents.prompt(&params.session, &params.text, params.force)
     })
     .await
+}
+
+/// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a
+/// prompt does: its run holds vault secrets. The text is never logged.
+async fn queue(ctx: RequestCtx, params: AgentQueueParams) -> Result<QueuedPrompt, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    // The caller's scope is kept with the prompt, so a run that later holds secrets types only prompts an admin queued.
+    let host_admin = is_host_admin(&ctx);
+    on_agents(&ctx, move |agents| {
+        agents.queue_add(
+            &params.session,
+            &params.text,
+            params.request_id.as_deref(),
+            host_admin,
+        )
+    })
+    .await
+}
+
+/// A session's queued prompts, head first (decision 0084).
+async fn queue_list(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentQueueList, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.queue_list(&params.session)).await
+}
+
+/// Edits a queued prompt's text (decision 0084). The admin check follows the prompt's session.
+async fn queue_edit(
+    ctx: RequestCtx,
+    params: AgentQueueEditParams,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    // An edit makes the text the caller's, so the prompt takes the caller's scope, as a queued prompt does.
+    let host_admin = is_host_admin(&ctx);
+    on_agents(&ctx, move |agents| {
+        agents.queue_edit(&params.id, &params.text, host_admin)
+    })
+    .await
+}
+
+/// Removes a queued prompt (decision 0084). The admin check follows the prompt's session.
+async fn queue_remove(
+    ctx: RequestCtx,
+    params: AgentQueueItemRef,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    on_agents(&ctx, move |agents| agents.queue_remove(&params.id)).await
+}
+
+/// Sends a queued prompt at once, with force, skipping the busy hold and the queue's order (decision 0084). The admin
+/// check follows the prompt's session.
+async fn queue_send_now(
+    ctx: RequestCtx,
+    params: AgentQueueItemRef,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    on_agents(&ctx, move |agents| agents.queue_send_now(&params.id)).await
+}
+
+/// Lifts a session's queue pauses and delivers its head if the agent is ready (decision 0084).
+async fn queue_resume(
+    ctx: RequestCtx,
+    params: AgentSessionRef,
+) -> Result<AgentQueueList, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.queue_resume(&params.session)).await
 }
 
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.
@@ -469,12 +618,27 @@ async fn credentials_import(
     .await
 }
 
-/// Deprecated (0056): the kind's active account's files, names and sizes only.
+/// Deprecated (0056): the kind's active account's files, names and sizes only. Below `workspace` the home is left
+/// empty and a refusal keeps its code but not its message, which may name the home ([`sees_account_details`]).
 async fn credentials_show(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsShown, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await
+    let kind = params.kind.clone();
+    let shown = on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await;
+    if sees_account_details(&ctx.principal) {
+        return shown;
+    }
+    match shown {
+        Ok(mut shown) => {
+            shown.home = String::new();
+            Ok(shown)
+        }
+        Err(error) => Err(ErrorBody::new(
+            error.code,
+            format!("the credential home of agent kind {kind} cannot be shown"),
+        )),
+    }
 }
 
 /// Deprecated (0056): removes the kind's active account. Refused while a run of the kind is live.
@@ -494,12 +658,13 @@ async fn accounts_list(
     ctx: RequestCtx,
     params: AccountsListParams,
 ) -> Result<AccountsList, ErrorBody> {
-    on_agents(&ctx, move |agents| {
-        agents
-            .accounts_list(&params.kind)
-            .map(|accounts| AccountsList { accounts })
+    let accounts = on_agents(&ctx, move |agents| agents.accounts_list(&params.kind)).await?;
+    Ok(AccountsList {
+        accounts: accounts
+            .into_iter()
+            .map(|account| account_for_caller(&ctx.principal, account))
+            .collect(),
     })
-    .await
 }
 
 /// Sign-in: a new account and the terminal that runs the kind's login (decision 0059).
@@ -507,10 +672,12 @@ async fn accounts_add(
     ctx: RequestCtx,
     params: AccountsAddParams,
 ) -> Result<AccountsAdded, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let mut added = on_agents(&ctx, move |agents| {
         agents.accounts_add(&params.kind, params.label)
     })
-    .await
+    .await?;
+    added.account = account_for_caller(&ctx.principal, added.account);
+    Ok(added)
 }
 
 /// Import into a new account from a directory the person names (decision 0059).
@@ -518,20 +685,25 @@ async fn accounts_import(
     ctx: RequestCtx,
     params: AccountsImportParams,
 ) -> Result<AccountsImported, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let mut imported = on_agents(&ctx, move |agents| {
         agents.accounts_import(&params.kind, &params.from, params.label)
     })
-    .await
+    .await?;
+    imported.account = imported
+        .account
+        .map(|account| account_for_caller(&ctx.principal, account));
+    Ok(imported)
 }
 
 async fn accounts_activate(
     ctx: RequestCtx,
     params: AccountsActivateParams,
 ) -> Result<AccountSummary, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let account = on_agents(&ctx, move |agents| {
         agents.accounts_activate(&params.kind, &params.account, params.project.as_deref())
     })
-    .await
+    .await?;
+    Ok(account_for_caller(&ctx.principal, account))
 }
 
 async fn accounts_remove(
@@ -548,10 +720,20 @@ async fn accounts_check(
     ctx: RequestCtx,
     params: AccountsCheckParams,
 ) -> Result<AccountSummary, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let account = on_agents(&ctx, move |agents| {
         agents.accounts_check(&params.kind, params.account.as_deref())
     })
-    .await
+    .await?;
+    Ok(account_for_caller(&ctx.principal, account))
+}
+
+/// An account as `principal` may see it: without its identity below `workspace` ([`sees_account_details`]). Every
+/// `agent.accounts.*` answer that carries an account passes through here.
+fn account_for_caller(principal: &Principal, mut account: AccountSummary) -> AccountSummary {
+    if !sees_account_details(principal) {
+        account.identity = None;
+    }
+    account
 }
 
 /// Refuses with `agent.busy` while any session of `kind` has a run that has not exited: replacing or removing its home
@@ -579,7 +761,7 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
 /// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
-fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
     if is_host_admin(ctx) {
         SecretGrant::Provide
     } else {

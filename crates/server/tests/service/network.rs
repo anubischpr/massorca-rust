@@ -16,7 +16,7 @@ use massorca_protocol::methods::devices::{
 use massorca_protocol::methods::extensions::{
     ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams,
 };
-use massorca_protocol::methods::host::{self, HostMemory};
+use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
@@ -25,7 +25,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::common::{connect, profile, remote_code, service_config, stop, temp_home};
 
-fn peer() -> PeerInfo {
+pub(crate) fn peer() -> PeerInfo {
     PeerInfo {
         name: "massorca-test-device".to_owned(),
         version: "0.0.0-test".to_owned(),
@@ -33,7 +33,7 @@ fn peer() -> PeerInfo {
 }
 
 /// A service listening on an ephemeral loopback port.
-pub(super) async fn start_listening(home: &Path) -> RunningService {
+pub(crate) async fn start_listening(home: &Path) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -59,12 +59,16 @@ pub(super) async fn start_listening(home: &Path) -> RunningService {
     panic!("the network listener did not start");
 }
 
-pub(super) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
+pub(crate) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
     let owner = connect(home, "server").await;
     let created: PairingCreated = owner
         .call(
             devices::PAIRING_CREATE,
-            &PairingCreateParams { ttl_secs, admin },
+            &PairingCreateParams {
+                ttl_secs,
+                admin,
+                standard: !admin,
+            },
         )
         .await
         .expect("an offer");
@@ -72,13 +76,13 @@ pub(super) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Of
 }
 
 /// A client profile with its own hosts list.
-pub(super) fn client_side() -> (TempHome, Hosts) {
+pub(crate) fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)
 }
 
-pub(super) async fn pair(
+pub(crate) async fn pair(
     hosts: &Hosts,
     offer: &Offer,
     name: &str,
@@ -291,6 +295,56 @@ async fn a_revoked_device_is_forgotten_by_a_host_admin_and_leaves_the_list() {
         matches!(refused, ClientError::Handshake { .. }),
         "{refused:?}"
     );
+    stop(running).await;
+}
+
+/// An offer that asks for nothing in particular grants every scope, as an older client's `admin: false` does;
+/// only `standard` reduces it. `device.grant` raises a reduced device from its next connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_default_offer_is_full_access_and_grant_raises_a_reduced_device() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let owner = connect(home.path(), "server").await;
+    let all = vec!["read", "workspace", "host-admin", "device-admin"];
+
+    for params in [
+        PairingCreateParams::default(),
+        PairingCreateParams {
+            ttl_secs: None,
+            admin: true,
+            standard: false,
+        },
+    ] {
+        let created: PairingCreated = owner
+            .call(devices::PAIRING_CREATE, &params)
+            .await
+            .expect("an offer");
+        let offer = Offer::decode(created.offer.expose()).expect("the offer decodes");
+        assert_eq!(offer.scopes, all, "{params:?}");
+    }
+
+    let reduced = offer(home.path(), false, None).await;
+    assert_eq!(reduced.scopes, vec!["read", "workspace"]);
+    let (_, record) = pair(&hosts, &reduced, "small").await.unwrap();
+    let granted: DeviceInfo = owner
+        .call(
+            devices::GRANT,
+            &devices::DeviceGrantParams {
+                device: record.device_id.clone(),
+            },
+        )
+        .await
+        .expect("granted");
+    assert_eq!(granted.scopes, all);
+    let again = Client::connect_host(&hosts, "small", &peer())
+        .await
+        .unwrap();
+    let list: DeviceList = again
+        .call(devices::LIST, &())
+        .await
+        .expect("full access from the next connection");
+    assert!(!list.devices.is_empty());
     stop(running).await;
 }
 
@@ -516,6 +570,39 @@ async fn a_read_only_device_may_read_host_memory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_may_read_host_ports() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let standard_set = Scopes::STANDARD.names();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|device| device.scopes == standard_set)
+        .expect("the paired device holds the standard scopes");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("the narrowed device reconnects");
+
+    let ports: HostPorts = reader
+        .call(host::PORTS, &())
+        .await
+        .expect("host.ports needs only Read");
+    assert!(ports.sampled_at_ms > 0, "{ports:?}");
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_read_only_device_is_refused_every_agent_account_write_and_may_list() {
     let home = temp_home();
     let running = start_listening(home.path()).await;
@@ -652,5 +739,116 @@ async fn a_device_without_host_admin_cannot_install_enable_or_remove_extensions(
             );
         }
     }
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names() {
+    use crate::git_fixture::git;
+    use massorca_protocol::methods::git::diff::{self, DiffTarget, GitDiffFile, GitDiffFileParams};
+    use massorca_protocol::methods::git::status::GitStatusParams;
+    use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
+    use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
+
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["config", "core.autocrlf", "false"]);
+    std::fs::write(repo.join(".gitattributes"), "*.txt filter=planted\n").unwrap();
+    std::fs::write(repo.join("file.txt"), "one\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "initial"]);
+    let marker = home.path().join("marker");
+    let shown = marker.to_string_lossy().replace('\\', "/");
+    let record = |name: &str| format!("echo {name} >> '{shown}'");
+    git(&repo, &["config", "core.fsmonitor", &record("fsmonitor")]);
+    let clean = format!("{}; cat", record("clean"));
+    git(&repo, &["config", "filter.planted.clean", &clean]);
+
+    let running = start_listening(home.path()).await;
+    let owner = connect(home.path(), "server").await;
+    let project: Project = owner
+        .call(
+            projects::ADD,
+            &ProjectAddParams {
+                path: repo.to_string_lossy().into_owned(),
+                name: Some("repo".to_owned()),
+                kind: Some(ProjectKind::Git),
+                workspaces_root: Some(home.path().join("ws").to_string_lossy().into_owned()),
+            },
+        )
+        .await
+        .expect("add project");
+    let workspace: Workspace = owner
+        .call(
+            workspaces::CREATE,
+            &WorkspaceCreateParams {
+                project: project.id,
+                name: "feature".to_owned(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                path: None,
+                request_id: None,
+            },
+        )
+        .await
+        .expect("create workspace");
+    std::fs::write(Path::new(&workspace.path).join("file.txt"), "one\ntwo\n").unwrap();
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .pop()
+        .expect("the paired device");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("reconnects");
+    // Creating the workspace ran the planted programs as the owner; only the reads below count.
+    let _ = std::fs::remove_file(&marker);
+
+    let status = reader
+        .git_status(&GitStatusParams {
+            workspace: "feature".to_owned(),
+            limit: None,
+        })
+        .await
+        .expect("a read-only device reads the status");
+    assert!(
+        status.entries.iter().any(|entry| entry.path == "file.txt"),
+        "{status:?}"
+    );
+    let diff_file = GitDiffFileParams {
+        workspace: "feature".to_owned(),
+        target: DiffTarget::Worktree,
+        path: "file.txt".to_owned(),
+        original_path: None,
+        max_bytes: None,
+    };
+    let patch: GitDiffFile = reader
+        .call(diff::DIFF_FILE, &diff_file)
+        .await
+        .expect("diff");
+    assert!(patch.patch.unwrap_or_default().contains("+two"));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap_or_default(), "");
+
+    // The owner, who holds `workspace`, keeps git's own behaviour: the repository's filter runs.
+    let _: GitDiffFile = owner.call(diff::DIFF_FILE, &diff_file).await.expect("diff");
+    assert!(
+        std::fs::read_to_string(&marker)
+            .unwrap_or_default()
+            .contains("clean")
+    );
+    drop((owner, reader));
     stop(running).await;
 }

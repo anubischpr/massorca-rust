@@ -14,8 +14,15 @@ use crate::paths;
 use crate::views;
 use crate::workspaces::Workspaces;
 
+/// What `remove_project` took away: the project, and the ids of the workspace rows forgotten with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedProject {
+    pub project: Project,
+    pub workspaces: Vec<String>,
+}
+
 impl Workspaces {
-    /// Registers a git repository (at its toplevel) or a folder. Without `kind`, a directory
+    /// Registers a git repository (at its main worktree) or a folder. Without `kind`, a directory
     /// inside a repository is a git project and any other directory is a folder.
     pub fn add_project(&self, params: ProjectAddParams) -> Result<Project, DomainError> {
         let _guard = self.lock_mutations();
@@ -118,19 +125,33 @@ impl Workspaces {
         Ok(views::project(&self.resolve_project(selector)?))
     }
 
-    /// Unregisters a project. Refused while it has workspaces, and never deletes its files.
-    pub fn remove_project(&self, selector: &str) -> Result<Project, DomainError> {
+    /// Unregisters a project. Refused while it has workspaces, unless `forget_workspaces` drops their
+    /// records with it in one transaction. Never deletes files, worktrees or branches.
+    pub fn remove_project(
+        &self,
+        selector: &str,
+        forget_workspaces: bool,
+    ) -> Result<RemovedProject, DomainError> {
         let _guard = self.lock_mutations();
         let row = self.resolve_project(selector)?;
+        if forget_workspaces {
+            return match self.store.forget_project(&row.id)? {
+                Some(workspaces) => Ok(RemovedProject {
+                    project: views::project(&row),
+                    workspaces,
+                }),
+                None => Err(not_found(&row.name)),
+            };
+        }
         if self.store.count_workspaces(&row.id)? > 0 {
             return Err(has_workspaces(&row.name));
         }
         match self.store.delete_project(&row.id) {
-            Ok(true) => Ok(views::project(&row)),
-            Ok(false) => Err(DomainError::new(
-                codes::PROJECT_NOT_FOUND,
-                format!("no project named {:?}", row.name),
-            )),
+            Ok(true) => Ok(RemovedProject {
+                project: views::project(&row),
+                workspaces: Vec::new(),
+            }),
+            Ok(false) => Err(not_found(&row.name)),
             // A workspace inserted after the count is still referenced; the foreign key refuses.
             Err(StoreError::Constraint { .. }) => Err(has_workspaces(&row.name)),
             Err(error) => Err(error.into()),
@@ -176,9 +197,22 @@ impl Workspaces {
         }))
     }
 
-    /// The canonical toplevel of the repository containing `dir`, or `None` outside one.
+    /// The canonical main worktree of the repository containing `dir`, or `None` outside one. A linked
+    /// worktree stands for its main repository, so it is never registered as a project of its own.
     fn repository_root(&self, dir: &Path) -> Result<Option<PathBuf>, DomainError> {
-        Ok(self.git.toplevel(dir)?.map(|top| paths::canonical(&top)))
+        if self.git.toplevel(dir)?.is_none() {
+            return Ok(None);
+        }
+        match self.git.main_worktree(dir)? {
+            Some(main) => Ok(Some(paths::canonical(&main))),
+            None => Err(DomainError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!(
+                    "{} is a linked worktree of a bare repository, which has no main worktree to register",
+                    dir.display()
+                ),
+            )),
+        }
     }
 }
 
@@ -186,6 +220,13 @@ fn not_git(dir: &Path) -> DomainError {
     DomainError::new(
         codes::PROJECT_NOT_GIT,
         format!("{} is not inside a git repository", dir.display()),
+    )
+}
+
+fn not_found(name: &str) -> DomainError {
+    DomainError::new(
+        codes::PROJECT_NOT_FOUND,
+        format!("no project named {name:?}"),
     )
 }
 

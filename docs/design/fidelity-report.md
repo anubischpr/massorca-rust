@@ -180,6 +180,45 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - Still open: the Bot Teams home and the gallery draw the generic users avatar (`Avatar::team`). The sidebar team row is not changed on this branch.
 - N39 dashed "Nightly summary" border: `board_column.rs`. Open (L4).
 
+## Session composer (D-AG-03)
+
+**Matches**
+- The composer sits under the session's terminal with the shared body: placeholder, bottom row, and a round Stop while the agent runs.
+
+**Cannot match yet**
+- The access chip, model picker, attach button and voice input are not offered in a session. The access chip has no modes to show and the rest have no service behind them yet. Voice is disabled with its reason, as on the start page.
+- Known gap: queued messages. Composer.md and the artboard's queued-message dock show a message typed while the agent runs waiting behind it. The service refuses `agent.prompt` while the agent works, and keeps no queue of its own, so the session composer offers Stop and no Queue. The service side needs a per-session queue it owns and delivers when the agent reports ready, with reads, edit, remove and send now, and an event when it changes.
+
+**No artboard**
+- "Sending…" and "Resuming…" under the text while a call is in flight, and the ended-session lines "This session has ended." and "This session has ended and cannot be resumed.", with the Resume button beside the first.
+- The Stop in the session header while the run is live and the composer does not stop it, as for a kind without status hooks. The desktop session artboard has no header actions.
+- The notice above the composer when a stop or resume is refused: "Could not stop the agent: …" and "Could not resume the session: …".
+
+## Delegate (X-CH-06)
+
+**Matches**
+- The session header offers Delegate on a running session of a connected service. The dialog sends `agent.delegate` with the prompt, the agent, the name, the title and read only. The prompt is multi-line: Enter adds a line and Ctrl+Enter (⌘↩ on macOS) sends, as its hint says. A retry sends the same request id. The child appears in the session tree after the refetch, and "Open child" opens it.
+- The agents offered are the ones turned on and detected on this host, as the start page offers them.
+
+**Cannot match yet**
+- Known gap against X-CH-06: it draws the delegation as a card in the transcript, with a "Runs in" choice for each child. The desktop opens a modal dialog and offers a read-only switch instead. The service decides where a writing child runs.
+
+**No artboard**
+- The Delegate dialog. `ws-delegation` draws the card and the tree, not this form.
+
+## Bring back (X-CH-08)
+
+**Matches**
+- The confirm names the child and the branch it merges into, and sends `agent.bring_back` with the merge and tell-the-parent choices. A refusal keeps it open under the service's sentence.
+- The answer replaces the choices. It says whether the branch merged and whether the parent was told, then shows the service's note as the service wrote it. "Open parent" opens the session the child came back to.
+
+**Cannot match yet**
+- X-CH-08 is a card in the parent transcript, from the child's "Review". The desktop opens a confirm from the sidebar row of a finished child.
+- The commit list and the predicted merge result are not shown: the protocol does not report them.
+
+**No artboard**
+- The bring-back confirm, its choices and its answer. Desktop Bring back has no artboard, so it is built from X-CH-08 and the shared dialog.
+
 ## Palette and quick open
 
 **Matches**
