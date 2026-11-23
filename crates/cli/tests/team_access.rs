@@ -6,19 +6,15 @@ mod harness;
 use harness::{Sandbox, stdout_text};
 use serde_json::{Value, json};
 
-/// Declares kind `id`, running the fake agent with `modes`.
-fn declare(sandbox: &Sandbox, id: &str, modes: Value) {
+/// Declares kind `id`, running the fake agent with `modes` and the status table `status`.
+fn declare_with_status(sandbox: &Sandbox, id: &str, modes: Value, status: Value) {
     sandbox.prepare_profile("default");
     let kind = json!({
         "id": id,
         "name": format!("Fake agent {id}"),
         "program": [env!("CARGO_BIN_EXE_massorca-fake-agent")],
         "prompt": { "mode": "argv" },
-        "status": {
-            "mechanism": "env-command",
-            "events": { "start": "idle", "prompt": "working", "stop": "done" },
-            "result_field": "result"
-        },
+        "status": status,
         "permission_modes": modes,
         "default_permission_mode": "careful"
     });
@@ -27,13 +23,34 @@ fn declare(sandbox: &Sandbox, id: &str, modes: Value) {
     std::fs::write(dir.join(format!("{id}.json")), kind.to_string()).expect("write a kind file");
 }
 
+/// Declares kind `id`, running the fake agent with `modes` and a status table that reports idle.
+fn declare(sandbox: &Sandbox, id: &str, modes: Value) {
+    let status = json!({
+        "mechanism": "env-command",
+        "events": { "start": "idle", "prompt": "working", "stop": "done" },
+        "result_field": "result"
+    });
+    declare_with_status(sandbox, id, modes, status);
+}
+
 /// A sandbox with kind `fake` (modes careful and the bypass mode wild) and kind `tame` (careful only).
 fn sandbox() -> Sandbox {
     let sandbox = Sandbox::new();
     let careful = json!({ "id": "careful", "label": "Careful", "args": ["--mode", "careful"] });
     let wild = json!({ "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true });
     declare(&sandbox, "fake", json!([careful, wild]));
-    declare(&sandbox, "tame", json!([careful]));
+    declare(&sandbox, "tame", json!([careful.clone()]));
+    // A bypass mode with only a live switch, on a kind that reports no idle: a start cannot apply it.
+    let switch_only = json!({
+        "id": "wild", "label": "Wild", "bypass": true,
+        "live_switch": { "type": "input", "text": "/mode wild" }
+    });
+    declare_with_status(
+        &sandbox,
+        "shy",
+        json!([careful, switch_only]),
+        json!({ "mechanism": "none" }),
+    );
     let root = sandbox.home().join("ws");
     sandbox.json_ok(
         "default",
@@ -156,4 +173,33 @@ fn a_full_access_bot_whose_kind_has_no_bypass_mode_runs_its_default_and_the_star
     let record = sandbox.json_ok("default", &["agent", "status", session]);
     assert_eq!(record["permission_mode"], Value::Null, "{record}");
     sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
+fn a_full_access_bot_whose_bypass_mode_a_start_cannot_apply_still_starts_in_its_default() {
+    let sandbox = sandbox();
+    sandbox.json_ok("default", &["team", "create", "alpha"]);
+
+    let record = start_task(&sandbox, "alpha", "kit", "shy");
+
+    assert_eq!(record["permission_mode"], Value::Null, "{record}");
+}
+
+#[test]
+fn turning_full_access_off_runs_the_next_start_without_a_mode() {
+    let sandbox = sandbox();
+    sandbox.json_ok("default", &["team", "create", "alpha"]);
+    let updated = stdout_text(
+        &sandbox
+            .run(
+                "default",
+                &["team", "update", "alpha", "--access", "default"],
+            )
+            .success(),
+    );
+    assert!(!updated.contains("Full access"), "{updated}");
+
+    let record = start_task(&sandbox, "alpha", "mara", "fake");
+
+    assert_eq!(record["permission_mode"], Value::Null, "{record}");
 }

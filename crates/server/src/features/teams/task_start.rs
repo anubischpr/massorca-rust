@@ -414,22 +414,21 @@ fn spawn(
     Ok(session.id)
 }
 
-/// The mode a team's bot runs in (decision 0072, amendment "team access"; decision 0083): a full-access team names its
-/// kind's first declared bypass mode; a team with default access, or a kind that declares no bypass mode, passes none,
-/// so the vendor CLI starts in its own default.
+/// The mode a team's bot runs in (decision 0072, amendment "team access"; decision 0083): a full-access team names the
+/// first bypass mode its kind declares that a start can apply; a team with default access, or a kind with no such mode,
+/// passes none, so the vendor CLI starts in its own default.
 fn team_mode(agents: &Agents, team: &TeamRow, bot: &BotRow) -> Option<String> {
     if team.access != ACCESS_FULL {
         return None;
     }
-    agents
-        .kinds()
-        .kinds
-        .into_iter()
-        .find(|kind| kind.id == bot.kind)?
-        .permission_modes
-        .into_iter()
-        .find(|mode| mode.bypass)
-        .map(|mode| mode.id)
+    let mode = agents.startable_bypass_mode(&bot.kind);
+    if mode.is_none() {
+        tracing::info!(
+            kind = %bot.kind,
+            "a full-access team's bot runs in its agent's default mode: the kind has no bypass mode a start can apply"
+        );
+    }
+    mode
 }
 
 /// Links the spawned session to the task. When that fails, the session is abandoned so no unlinked process survives.

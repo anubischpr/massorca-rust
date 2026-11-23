@@ -460,10 +460,13 @@ sample data, and moving routines onto the Automations engine (AUTO-01).
 A team's access decides the permission mode its bots run in (decision 0083). It
 has two values, as in pv96, and there is no per-bot mode.
 
-- **`full`**: a task start names the bot's kind's first declared bypass mode
-  (`bypass: true`), so the agent runs without asking for permission. A kind
-  that declares no bypass mode runs in its vendor default, and `massorca task
-  start` says so on that start.
+- **`full`**: a task start names the first bypass mode (`bypass: true`) the
+  bot's kind declares that a start can apply: one with launch arguments, or a
+  live switch on a kind that reports idle. The agent then runs without asking
+  for permission. A kind with no such mode, such as one whose only bypass mode
+  is a live switch and that reports no status, runs in its vendor default
+  instead of failing the start. `massorca task start` says so on that start,
+  and the service log notes it for starts made elsewhere, such as routines.
 - **`default`**: no mode is passed, and the vendor CLI starts in its own
   default, which may ask for permission.
 - **New teams are `full`**, as in pv96: an unattended bot that stops to ask is a
