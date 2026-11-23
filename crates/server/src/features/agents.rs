@@ -360,8 +360,10 @@ async fn queue_edit(
     let id = params.id.clone();
     let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
     require_admin_for_session(&ctx, session).await?;
+    // An edit makes the text the caller's, so the prompt takes the caller's scope, as a queued prompt does.
+    let host_admin = is_host_admin(&ctx);
     on_agents(&ctx, move |agents| {
-        agents.queue_edit(&params.id, &params.text)
+        agents.queue_edit(&params.id, &params.text, host_admin)
     })
     .await
 }

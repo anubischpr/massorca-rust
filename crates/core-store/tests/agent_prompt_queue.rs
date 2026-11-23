@@ -151,7 +151,7 @@ fn an_edit_changes_the_text_and_its_update_time_only() {
 
     assert!(
         store
-            .update_queued_prompt_text(&row.id, "edited", 20)
+            .update_queued_prompt_text(&row.id, "edited", false, 20)
             .unwrap()
     );
     let shown = store.get_queued_prompt(&row.id).unwrap().unwrap();
@@ -161,7 +161,7 @@ fn an_edit_changes_the_text_and_its_update_time_only() {
     assert_eq!(shown.updated_at_ms, 20);
     assert!(
         !store
-            .update_queued_prompt_text("no-such-id", "x", 20)
+            .update_queued_prompt_text("no-such-id", "x", false, 20)
             .unwrap()
     );
 }

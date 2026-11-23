@@ -144,16 +144,18 @@ impl Store {
         )
     }
 
-    /// Replaces a prompt's text. Returns whether a row matched.
+    /// Replaces a prompt's text and records the scope of the caller that made the edit, which is the scope a run that holds
+    /// vault secrets is checked against (decision 0084, D7). Returns whether a row matched.
     pub fn update_queued_prompt_text(
         &self,
         id: &str,
         text: &str,
+        host_admin: bool,
         at: i64,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_prompt_queue SET text = ?2, updated_at_ms = ?3 WHERE id = ?1",
-            params![id, text, at],
+            "UPDATE agent_prompt_queue SET text = ?2, host_admin = ?3, updated_at_ms = ?4 WHERE id = ?1",
+            params![id, text, host_admin, at],
         )?;
         Ok(changed > 0)
     }

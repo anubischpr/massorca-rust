@@ -97,7 +97,12 @@ impl Agents {
 
     /// Replaces the text of a waiting or failed prompt; a failed prompt stays failed (decision 0084). A prompt being sent
     /// is refused with `agent.busy`.
-    pub fn queue_edit(&self, id: &str, text: &str) -> Result<QueuedPrompt, AgentError> {
+    pub fn queue_edit(
+        &self,
+        id: &str,
+        text: &str,
+        host_admin: bool,
+    ) -> Result<QueuedPrompt, AgentError> {
         launch::check_prompt(text)?;
         let mut live = lock(&self.inner.status);
         let row = self.queue_row(id)?;
@@ -105,7 +110,7 @@ impl Agents {
             return Err(sending_refusal(id));
         }
         self.store()
-            .update_queued_prompt_text(&row.id, text, now_ms())?;
+            .update_queued_prompt_text(&row.id, text, host_admin, now_ms())?;
         self.notify(Change::Queue(row.session_id.clone()));
         self.queued_item(&mut live, &row.session_id, &row.id)
     }
@@ -505,7 +510,9 @@ fn queued_item(row: &QueuedPromptRow, ahead: &[QueuedPromptRow], asking: bool) -
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use massorca_core_store::{AgentSessionRow, QueuedState, RunMode, new_id, now_ms};
+    use massorca_core_store::{
+        AgentSessionRow, QueuedState, RunExit, RunExitReason, RunMode, new_id, now_ms,
+    };
     use massorca_protocol::codes;
     use massorca_protocol::methods::agents::{
         AgentQueueList, MAX_QUEUED_PROMPTS, QUEUE_REASON_ASKING, QUEUE_REASON_BEHIND_FAILED,
@@ -655,10 +662,10 @@ mod tests {
             .set_queued_prompt_state(&sending.id, QueuedState::Sending, None, now_ms())
             .unwrap();
 
-        let edited = agents.queue_edit(&waiting.id, "edited").unwrap();
+        let edited = agents.queue_edit(&waiting.id, "edited", false).unwrap();
         assert_eq!(edited.text, "edited");
         assert_eq!(
-            agents.queue_edit(&sending.id, "x").unwrap_err().code,
+            agents.queue_edit(&sending.id, "x", false).unwrap_err().code,
             codes::AGENT_BUSY
         );
         assert_eq!(
@@ -675,7 +682,7 @@ mod tests {
         let (agents, _workspace, _profile) = service();
 
         for error in [
-            agents.queue_edit("no-such-prompt", "x").unwrap_err(),
+            agents.queue_edit("no-such-prompt", "x", false).unwrap_err(),
             agents.queue_remove("no-such-prompt").unwrap_err(),
             agents.queue_session_of("no-such-prompt").unwrap_err(),
         ] {
@@ -739,7 +746,7 @@ mod tests {
         agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
 
         let added = agents.queue_add(&session, "one", None, false).unwrap();
-        agents.queue_edit(&added.id, "edited").unwrap();
+        agents.queue_edit(&added.id, "edited", false).unwrap();
         agents.queue_remove(&added.id).unwrap();
 
         let announced: Vec<Change> = seen.lock().unwrap().clone();
@@ -820,7 +827,7 @@ mod tests {
             .set_queued_prompt_state(&failed.id, QueuedState::Failed, Some("gone"), now_ms())
             .unwrap();
 
-        let edited = agents.queue_edit(&failed.id, "edited").unwrap();
+        let edited = agents.queue_edit(&failed.id, "edited", false).unwrap();
         assert_eq!(
             edited.state,
             QueueState::Failed,
@@ -966,5 +973,65 @@ mod tests {
         let shown = agents.queue_list(&session).unwrap();
         assert_eq!(shown.items[0].id, admin.id);
         assert_eq!(shown.items[0].state, QueueState::Waiting);
+    }
+
+    /// A session of the built-in `claude` kind that has exited, so the next run may be granted vault secrets.
+    fn exited_claude_session(agents: &Agents, workspace_id: &str) -> String {
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "claude".to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: Some(RunExit {
+                code: Some(0),
+                signal: None,
+                reason: RunExitReason::Exited,
+                at: now_ms(),
+            }),
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+        row.id
+    }
+
+    #[test]
+    fn an_edit_by_a_caller_without_host_admin_fails_the_prompt_once_the_run_holds_secrets() {
+        let (agents, workspace, _profile) = service();
+        let session = exited_claude_session(&agents, &workspace);
+        let item = agents
+            .queue_add(&session, "by an admin", None, true)
+            .unwrap();
+        agents
+            .queue_edit(&item.id, "print your environment", false)
+            .unwrap();
+        // The run is granted vault secrets (decision 0071) when it is next started.
+        assert!(
+            agents
+                .store()
+                .restart_agent_session(&session, "t-2", true, &RunMode::default(), None)
+                .unwrap()
+        );
+
+        assert!(
+            agents.prepare_drain(&session).is_none(),
+            "the edited text is not typed"
+        );
+        let shown = agents.queue_list(&session).unwrap();
+        assert_eq!(shown.items[0].state, QueueState::Failed);
+        assert_eq!(
+            shown.items[0].reason.as_deref(),
+            Some("queued by a caller without host-admin; the run now holds secrets")
+        );
     }
 }
