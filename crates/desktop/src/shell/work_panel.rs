@@ -75,7 +75,7 @@ enum WorkBody {
 }
 
 /// What one attach update left to do.
-enum Step {
+pub(super) enum Step {
     Continue,
     /// The emulator lost its place (a gap or a broken item): attach again without an offset.
     Reattach,
@@ -441,7 +441,7 @@ async fn read_attach(
 }
 
 /// Feeds one attach update to the pane, then forwards the replies it owes the program.
-fn apply_update(
+pub(super) fn apply_update(
     surface: &Entity<TerminalSurface>,
     service: &ServiceHandle,
     terminal: &str,
@@ -490,7 +490,7 @@ fn refuse_view(this: &WeakEntity<Shell>, terminal: &str, detail: String, cx: &mu
 }
 
 /// Waits until the link to the service is connected. False once the bridge has stopped for good.
-async fn wait_until_connected(link: &mut watch::Receiver<ConnectionState>) -> bool {
+pub(super) async fn wait_until_connected(link: &mut watch::Receiver<ConnectionState>) -> bool {
     loop {
         if link.borrow_and_update().is_connected() {
             return true;

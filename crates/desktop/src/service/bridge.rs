@@ -18,10 +18,10 @@ use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_AGENT_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
-    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_EXTENSION_DISABLED,
+    TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED,
+    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -36,6 +36,7 @@ use massorca_protocol::methods::workspaces::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
+use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
@@ -81,6 +82,8 @@ pub(crate) enum Command {
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
     Secret(SecretCommand),
+    /// An agent account write, answered on its oneshot.
+    Account(AccountCommand),
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
@@ -348,6 +351,7 @@ impl ServiceBridge {
             team_reads: Arc::new(Sequence::default()),
             extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
+            accounts_order: Arc::new(AccountsFreshness::default()),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -405,6 +409,8 @@ struct Link {
     extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
     secrets_order: Arc<SecretsFreshness>,
+    /// Orders the account reads, per kind, across the connections of this bridge.
+    accounts_order: Arc<AccountsFreshness>,
 }
 
 impl Link {
@@ -541,6 +547,9 @@ impl Link {
         self.emit(StoreUpdate::AgentsResync(sessions));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
+        for kind in &kinds {
+            accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
+        }
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
@@ -597,6 +606,14 @@ impl Link {
                                     &self.secrets_order,
                                 );
                             }
+                            Some(Command::Account(command)) => {
+                                accounts::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.accounts_order,
+                                );
+                            }
                             Some(Command::GitWatch { workspace }) => {
                                 watches.start(client, &workspace, &self.updates, &self.freshness);
                                 self.watching.insert(workspace);
@@ -631,6 +648,11 @@ impl Link {
             TOPIC_SECRET_CHANGED => {
                 // The event names a scope and a name; the store takes the whole list again, names only.
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
+                return Outcome::Continue;
+            }
+            TOPIC_ACCOUNTS_CHANGED => {
+                // The event names the kind; its whole list is read again.
+                accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
                 return Outcome::Continue;
             }
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_REMOVING => client
@@ -813,6 +835,7 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Secret(_)
+        | Command::Account(_)
         | Command::RetryNow
         | Command::Stop => {}
         other => git::spawn(&client, other, updates, freshness),
@@ -870,6 +893,7 @@ fn refuse_while_down(command: Command) {
         }
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
+        Command::Account(command) => accounts::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }

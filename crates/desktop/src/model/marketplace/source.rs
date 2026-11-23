@@ -1,9 +1,12 @@
 //! The seam between the Marketplace pages and the service that owns installs and agent accounts.
 
-use massorca_protocol::methods::agents::AgentKind;
+use std::collections::BTreeMap;
+
+use massorca_protocol::methods::agents::{AccountSummary, AgentKind};
 use massorca_protocol::methods::extensions::ExtensionItem;
 
 use super::types::{AccountId, MarketplaceItemId, MarketplaceSnapshot};
+use crate::service::Refusal;
 
 /// Reads the Marketplace and changes it. The sample implements it in memory; the real service
 /// implements it later. The account methods map to agent.accounts.list (the snapshot), add,
@@ -18,6 +21,23 @@ pub trait MarketplaceSource: std::fmt::Debug {
     /// Takes the extension packages the connected service lists: the installed ones and the built-in catalogue.
     /// A source that lists no service's packages ignores them.
     fn follow_extensions(&mut self, _installed: &[ExtensionItem], _catalogue: &[ExtensionItem]) {}
+
+    /// Takes each kind's accounts the connected service lists. A source that lists no service's accounts ignores them.
+    fn follow_accounts(
+        &mut self,
+        _accounts: &BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
+    ) {
+    }
+
+    /// The kind and service id of an account, when its source's accounts live in the service.
+    fn service_account(&self, _account: AccountId) -> Option<(String, String)> {
+        None
+    }
+
+    /// The number the pages use for a service account, when its source's accounts live in the service.
+    fn account_number(&mut self, _kind: &str, _account: &str) -> Option<AccountId> {
+        None
+    }
 
     /// Turns an installed item on or off.
     fn set_enabled(&mut self, item: MarketplaceItemId, enabled: bool) -> Result<(), SourceError>;

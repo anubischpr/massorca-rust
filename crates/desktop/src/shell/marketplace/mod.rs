@@ -1,13 +1,16 @@
 //! The Marketplace pages: the catalogue and its views, and each item's page (D-EX-01, 7.2, 7.4).
 //! Installs and agent accounts go through the source trait, and the snapshot always follows it.
 
+mod accounts;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]
 mod extension_tests;
+mod import;
 mod item;
 mod package;
 mod review;
+mod sign_in;
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +19,8 @@ use crate::model::marketplace::{
     AccountId, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
+use std::collections::BTreeSet;
+
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
     prelude::*, px,
@@ -24,6 +29,8 @@ use massorca_protocol::methods::extensions::ExtensionReview;
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::tokens::SPACE_6;
 
+use accounts::AccountWrite;
+pub(super) use accounts::AccountsUi;
 pub(super) use dialogs::dialog;
 
 /// The uninstall confirm on screen: the item, and the refusal to show in it, if any.
@@ -62,6 +69,14 @@ pub(super) struct MarketplaceFrame {
     error: Option<(Option<AccountId>, String)>,
     /// A refused change to an installed package, with the item it concerns.
     item_error: Option<(MarketplaceItemId, String)>,
+    /// The accounts the service refused as busy.
+    busy: BTreeSet<AccountId>,
+    /// The account whose sign-in terminal runs in the dialog.
+    signing_in: Option<AccountId>,
+    /// The accounts live in the connected service, so they can be imported.
+    live_accounts: bool,
+    /// Why a kind's accounts could not be listed, by kind.
+    list_refusals: Vec<(String, String)>,
     shell: WeakEntity<Shell>,
 }
 
@@ -70,6 +85,7 @@ pub(super) fn frame(
     shell: &Shell,
     page: MarketplacePage,
     weak: WeakEntity<Shell>,
+    cx: &App,
 ) -> MarketplaceFrame {
     MarketplaceFrame {
         snapshot: shell.model.marketplace().clone(),
@@ -79,6 +95,14 @@ pub(super) fn frame(
         advanced_open: shell.model.marketplace_advanced_open(),
         error: shell.marketplace_error.clone(),
         item_error: shell.marketplace_item_error.clone(),
+        busy: shell.marketplace_accounts.busy.clone(),
+        signing_in: shell
+            .marketplace_accounts
+            .sign_in
+            .as_ref()
+            .and_then(|sign_in| sign_in.running_account()),
+        live_accounts: shell.service.is_some(),
+        list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
         shell: weak,
     }
 }
@@ -168,7 +192,13 @@ impl Shell {
         let _ = self.change_marketplace(cx, |source| source.set_enabled(item, enabled));
     }
 
+    /// Add account: on a connected service the sign-in runs in a service terminal inside the dialog.
     pub(super) fn add_marketplace_account(&mut self, agent_kind: &str, cx: &mut Context<Self>) {
+        if self.service.is_some() {
+            self.marketplace_error = None;
+            self.start_service_sign_in(agent_kind, cx);
+            return;
+        }
         self.marketplace_error =
             match self.change_marketplace(cx, |source| source.add_account(agent_kind)) {
                 Ok(()) => None,
@@ -182,11 +212,15 @@ impl Shell {
         account: AccountId,
         cx: &mut Context<Self>,
     ) {
-        self.report_account(account, cx, |source| source.activate_account(account));
+        if !self.write_service_account(account, AccountWrite::Activate, cx) {
+            self.report_account(account, cx, |source| source.activate_account(account));
+        }
     }
 
     pub(super) fn check_marketplace_account(&mut self, account: AccountId, cx: &mut Context<Self>) {
-        self.report_account(account, cx, |source| source.check_account(account));
+        if !self.write_service_account(account, AccountWrite::Check, cx) {
+            self.report_account(account, cx, |source| source.check_account(account));
+        }
     }
 
     pub(super) fn remove_marketplace_account(
@@ -194,7 +228,9 @@ impl Shell {
         account: AccountId,
         cx: &mut Context<Self>,
     ) {
-        self.report_account(account, cx, |source| source.remove_account(account));
+        if !self.write_service_account(account, AccountWrite::Remove, cx) {
+            self.report_account(account, cx, |source| source.remove_account(account));
+        }
     }
 
     pub(super) fn sign_in_open_page(&mut self, cx: &mut Context<Self>) {

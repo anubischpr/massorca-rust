@@ -77,6 +77,8 @@ mod debug_focus_tests;
 #[cfg(test)]
 mod debug_page_tests;
 #[cfg(test)]
+mod marketplace_accounts_tests;
+#[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
@@ -126,6 +128,8 @@ pub struct Shell {
     revoke: Option<RevokeFlow>,
     /// The Add host dialog on screen, if one is open (D-HO-02, SSH path).
     add_host: Option<add_host::AddHostFlow>,
+    /// The `.ssh` folder whose key files the Add host dialog lists.
+    ssh_dir: std::path::PathBuf,
     _settings_folder_changes: Subscription,
     _settings_folder_blur: Subscription,
     /// The palette's query field, present while the palette is open.
@@ -174,6 +178,8 @@ pub struct Shell {
     marketplace_review: Option<marketplace::InstallReview>,
     /// The last refused change to an installed package, with the item it concerns.
     marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
+    /// What the Connection part knows beyond the service's account lists.
+    marketplace_accounts: marketplace::AccountsUi,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -267,6 +273,7 @@ impl Shell {
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
                 let (installed, catalogue) = state.extension_lists();
                 shell.marketplace.follow_extensions(installed, catalogue);
+                shell.follow_service_accounts(state);
                 shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();
@@ -363,6 +370,7 @@ impl Shell {
             devices_asked: false,
             revoke: None,
             add_host: None,
+            ssh_dir: add_host::default_ssh_dir(),
             _settings_folder_changes: folder_changes,
             _settings_folder_blur: folder_blur,
             palette_input: None,
@@ -390,6 +398,7 @@ impl Shell {
             marketplace_uninstall: None,
             marketplace_review: None,
             marketplace_item_error: None,
+            marketplace_accounts: marketplace::AccountsUi::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
@@ -619,7 +628,7 @@ impl Render for Shell {
             .then(|| project_sidebar::project_body(self, &shell, cx));
         let marketplace = match self.model.canvas() {
             Canvas::Page(Page::Marketplace(page)) => {
-                Some(marketplace::frame(self, page, shell.clone()))
+                Some(marketplace::frame(self, page, shell.clone(), cx))
             }
             _ => None,
         };
