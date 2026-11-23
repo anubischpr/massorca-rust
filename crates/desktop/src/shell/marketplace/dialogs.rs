@@ -70,11 +70,11 @@ fn install_review(
     }
     let mut dialog = Dialog::new(
         "marketplace-install-review",
-        format!("Install {}?", item.name),
+        format!("Install {}", item.name),
     )
     .open(true)
     .child(body)
-    .action("Install")
+    .action("Allow and install")
     .cancel_label("Cancel")
     .busy(review.sending)
     .action_disabled(!may_install)

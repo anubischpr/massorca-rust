@@ -377,10 +377,8 @@ fn settings_section(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) 
                 .child(Badge::text(NOT_AVAILABLE).tone(BadgeTone::Neutral)),
         );
     }
-    if let Some((id, text)) = &frame.item_error {
-        if *id == item.id {
-            body = body.child(alert(text, cx));
-        }
+    if let Some((_, text)) = frame.item_error.as_ref().filter(|(id, _)| *id == item.id) {
+        body = body.child(alert(text, cx));
     }
     part_section("marketplace-part-settings", "Settings", body, cx)
 }
