@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord, Subscription};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
+use massorca_protocol::methods::agents::{
+    AgentBringBackParams, AgentSession, AgentStartParams, BringBackResult,
+};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
@@ -91,6 +93,11 @@ pub(crate) enum Command {
     BringBack {
         params: AgentBringBackParams,
         reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
+    },
+    /// `agent.start`, answered on its oneshot once the service has started the session.
+    AgentStart {
+        params: AgentStartParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -862,6 +869,9 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::AgentStart { params, reply } => {
+            agents::spawn_start(&client, params, reply, updates);
+        }
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -920,6 +930,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentStart { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

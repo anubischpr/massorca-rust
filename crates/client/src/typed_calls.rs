@@ -11,7 +11,7 @@ use massorca_protocol::methods::agents::{
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
-use massorca_protocol::methods::host::{self, HostMemory};
+use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectList, ProjectRef,
 };
@@ -44,6 +44,11 @@ impl Client {
     /// `host.memory`: the memory of the service and of each live terminal's processes, read now on the service's host.
     pub async fn host_memory(&self) -> Result<HostMemory, ClientError> {
         self.call(host::MEMORY, &()).await
+    }
+
+    /// `host.ports`: the listening sockets of each live terminal's processes, read now on the service's host.
+    pub async fn host_ports(&self) -> Result<HostPorts, ClientError> {
+        self.call(host::PORTS, &()).await
     }
 
     /// `events.subscribe`: the change events the service publishes.
