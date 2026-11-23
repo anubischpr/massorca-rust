@@ -350,13 +350,14 @@ fn type_and_send(rig: &Rig, cx: &mut VisualTestContext, text: &str) {
     cx.simulate_keystrokes("enter");
 }
 
-/// The next `agent.start` the shell sends, with the reply that answers it.
-fn start_call(
-    script: &mut Script,
-) -> Option<(
+/// An `agent.start` the shell sent, with the reply that answers it.
+type StartCall = (
     AgentStartParams,
     oneshot::Sender<Result<AgentSession, Refusal>>,
-)> {
+);
+
+/// The next `agent.start` the shell sends.
+fn start_call(script: &mut Script) -> Option<StartCall> {
     while let Some(command) = script.next() {
         if let Command::AgentStart { params, reply } = command {
             return Some((params, reply));
@@ -487,13 +488,14 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
     assert_eq!(active.as_deref(), Some(session.id.as_str()));
 }
 
-/// The next `terminal.attach` the shell sends, with the reply that answers it.
-fn attach_call(
-    script: &mut Script,
-) -> Option<(
+/// A `terminal.attach` the shell sent, with the reply that answers it.
+type AttachCall = (
     TerminalAttachParams,
     oneshot::Sender<Result<UnboundedReceiver<TerminalStreamItem>, Refusal>>,
-)> {
+);
+
+/// The next `terminal.attach` the shell sends.
+fn attach_call(script: &mut Script) -> Option<AttachCall> {
     while let Some(command) = script.next() {
         if let Command::Terminal(TerminalCommand::Attach { params, reply }) = command {
             return Some((params, reply));
