@@ -22,7 +22,7 @@ pub enum MemoryMetric {
 pub struct HostMemory {
     pub metric: MemoryMetric,
     /// The service plus every terminal that is not `unverifiable`, as a plain sum: a page shared by two processes
-    /// counts twice.
+    /// counts twice. A `partial` terminal counts the processes it read.
     pub total_bytes: u64,
     pub service: ProcessMemory,
     /// Live terminals, by creation time.
@@ -54,6 +54,11 @@ pub struct TerminalMemory {
     /// `processes` and `bytes` are 0 and must not be shown as a size, and the terminal is not in `total_bytes`.
     #[serde(default)]
     pub unverifiable: bool,
+    /// Some of the terminal's processes were read and some were not (they exited, or access was denied). `processes`
+    /// and `bytes` cover only the ones read, so the sum is a lower bound and must be shown as partial. It is counted in
+    /// `total_bytes` with what it read. Never set together with `unverifiable`.
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[cfg(test)]
@@ -75,6 +80,7 @@ mod tests {
                     processes: 2,
                     bytes: 20,
                     unverifiable: false,
+                    partial: false,
                 },
                 TerminalMemory {
                     terminal_id: "t-2".to_owned(),
@@ -83,6 +89,16 @@ mod tests {
                     processes: 0,
                     bytes: 0,
                     unverifiable: true,
+                    partial: false,
+                },
+                TerminalMemory {
+                    terminal_id: "t-3".to_owned(),
+                    workspace_id: "w-1".to_owned(),
+                    session_id: None,
+                    processes: 1,
+                    bytes: 4,
+                    unverifiable: false,
+                    partial: true,
                 },
             ],
             unreadable: 1,
@@ -96,8 +112,9 @@ mod tests {
                 "total_bytes": 30,
                 "service": { "pid": 7, "bytes": 10 },
                 "terminals": [
-                    { "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1", "processes": 2, "bytes": 20, "unverifiable": false },
-                    { "terminal_id": "t-2", "workspace_id": "w-1", "processes": 0, "bytes": 0, "unverifiable": true }
+                    { "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1", "processes": 2, "bytes": 20, "unverifiable": false, "partial": false },
+                    { "terminal_id": "t-2", "workspace_id": "w-1", "processes": 0, "bytes": 0, "unverifiable": true, "partial": false },
+                    { "terminal_id": "t-3", "workspace_id": "w-1", "processes": 1, "bytes": 4, "unverifiable": false, "partial": true }
                 ],
                 "unreadable": 1,
                 "sampled_at_ms": 1_700_000_000_000_i64
@@ -108,11 +125,12 @@ mod tests {
             serde_json::to_value(MemoryMetric::Resident).unwrap(),
             json!("resident")
         );
-        // An answer from a service that predates the flag reads as verified.
+        // An answer from a service that predates the flags reads as verified and complete.
         let older: TerminalMemory = serde_json::from_value(json!({
-            "terminal_id": "t-3", "workspace_id": "w-1", "processes": 1, "bytes": 4
+            "terminal_id": "t-4", "workspace_id": "w-1", "processes": 1, "bytes": 4
         }))
         .unwrap();
         assert!(!older.unverifiable);
+        assert!(!older.partial);
     }
 }

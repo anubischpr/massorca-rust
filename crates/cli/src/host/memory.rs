@@ -74,6 +74,12 @@ fn lines(memory: &HostMemory) -> Vec<String> {
                 // An unverifiable terminal's counts are 0 and mean nothing: it is shown as unknown.
                 let (processes, bytes) = if terminal.unverifiable {
                     ("-".to_owned(), "unverifiable".to_owned())
+                } else if terminal.partial {
+                    // Some of its processes were not read: the size is only the part that was.
+                    (
+                        terminal.processes.to_string(),
+                        format!("{} (partial)", human_bytes(terminal.bytes)),
+                    )
                 } else {
                     (terminal.processes.to_string(), human_bytes(terminal.bytes))
                 };
@@ -102,6 +108,16 @@ fn lines(memory: &HostMemory) -> Vec<String> {
     if unverifiable > 0 {
         lines.push(format!(
             "unverifiable terminals: {unverifiable} (not counted)"
+        ));
+    }
+    let partial = memory
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.partial)
+        .count();
+    if partial > 0 {
+        lines.push(format!(
+            "partial terminals: {partial} (their sums count only the processes read)"
         ));
     }
     if memory.unreadable > 0 {
@@ -146,6 +162,7 @@ mod tests {
             processes: if unverifiable { 0 } else { 2 },
             bytes,
             unverifiable,
+            partial: false,
         }
     }
 
@@ -219,5 +236,37 @@ mod tests {
         assert_eq!(human_bytes(GIB - MIB), "1023.0 MB");
         assert_eq!(human_bytes(GIB), "1.00 GB");
         assert_eq!(human_bytes(GIB + GIB / 4), "1.25 GB");
+    }
+
+    #[test]
+    fn a_partial_terminal_is_marked_and_its_size_is_said_to_be_partial() {
+        let mut partial = terminal("t-part", MIB, false);
+        partial.partial = true;
+        let memory = HostMemory {
+            metric: MemoryMetric::WorkingSet,
+            total_bytes: 3 * MIB,
+            service: ProcessMemory {
+                pid: 7,
+                bytes: 2 * MIB,
+            },
+            terminals: vec![partial, terminal("t-read", MIB, false)],
+            unreadable: 1,
+            sampled_at_ms: 1,
+        };
+        let text = lines(&memory).join("\n");
+        let row = text
+            .lines()
+            .find(|line| line.starts_with("t-part"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(row.trim_end().ends_with("1.0 MB (partial)"), "{row}");
+        let read = text
+            .lines()
+            .find(|line| line.starts_with("t-read"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(!read.contains("partial"), "{read}");
+        assert!(
+            text.contains("partial terminals: 1 (their sums count only the processes read)"),
+            "{text}"
+        );
     }
 }

@@ -27,13 +27,15 @@ Read permission, no params. The answer:
 | `metric` | `working_set` (Windows) or `resident` (Linux, macOS). |
 | `total_bytes` | The service plus every terminal not `unverifiable`, as a plain sum: a shared page counts once per process. |
 | `service` | `{ pid, bytes }` of the service process. |
-| `terminals` | One entry per live terminal, by creation time: `terminal_id`, `workspace_id`, `session_id` when an agent session's current run uses the terminal, `processes` (how many were read), `bytes`, and `unverifiable`. |
+| `terminals` | One entry per live terminal, by creation time: `terminal_id`, `workspace_id`, `session_id` when an agent session's current run uses the terminal, `processes` (how many were read), `bytes`, `unverifiable`, and `partial`. |
 | `unreadable` | Processes listed but not read: they exited between the listing and the read, or access was denied. They are in no sum. |
 | `sampled_at_ms` | When the sample was taken. |
 
 A terminal is `unverifiable` when its processes cannot be listed (a job query failed, the shell was just reaped but
 its exit is not recorded yet, or the platform has no listing) or when none of them could be read. Its `processes` and
-`bytes` are then 0 and mean nothing: a client shows it as unknown, never as `0 KB`. The flag is additive; an answer
+`bytes` are then 0 and mean nothing: a client shows it as unknown, never as `0 KB`. A terminal with some processes read and
+some not is `partial`: its `processes` and `bytes` cover only those read, the total counts that sum, and a client marks
+the row as partial. The flags are additive; an answer
 without it reads as `false`.
 
 This is the reference desktop's "Memory" with two differences: the desktop's own process is not counted (the desktop

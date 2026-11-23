@@ -137,6 +137,7 @@ fn entry_of(terminal: TerminalSample, sessions: &HashMap<String, String>) -> (Te
         processes,
         bytes,
         unverifiable,
+        partial: !unverifiable && unreadable > 0,
     };
     (entry, unreadable)
 }
@@ -256,6 +257,26 @@ mod tests {
         assert_eq!((entry.processes, entry.bytes), (2, 15));
         assert_eq!(entry.session_id.as_deref(), Some("s-1"));
         assert_eq!(unreadable, 1);
+    }
+
+    #[test]
+    fn a_terminal_with_some_processes_unread_is_partial_and_counts_what_it_read() {
+        let read = sample(vec![ProcessMemory { pid: 1, bytes: 10 }], 2);
+        let (entry, unreadable) = entry_of(terminal(Some(read)), &HashMap::new());
+        assert!(entry.partial, "{entry:?}");
+        assert!(!entry.unverifiable, "{entry:?}");
+        assert_eq!((entry.processes, entry.bytes), (1, 10));
+        assert_eq!(unreadable, 2);
+        let (complete, _) = entry_of(
+            terminal(Some(sample(vec![ProcessMemory { pid: 1, bytes: 10 }], 0))),
+            &HashMap::new(),
+        );
+        assert!(!complete.partial, "{complete:?}");
+        let (none_read, _) = entry_of(terminal(Some(sample(Vec::new(), 2))), &HashMap::new());
+        assert!(
+            none_read.unverifiable && !none_read.partial,
+            "{none_read:?}"
+        );
     }
 }
 
