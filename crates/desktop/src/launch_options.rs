@@ -30,11 +30,13 @@ pub enum DebugPage {
     NewTeam,
     AddBot,
     Session,
+    Delegate,
+    BringBack,
 }
 
 impl DebugPage {
     /// Every page, in the order the help lists them.
-    pub const ALL: [DebugPage; 13] = [
+    pub const ALL: [DebugPage; 15] = [
         DebugPage::Workspace,
         DebugPage::SettingsGeneral,
         DebugPage::SettingsHosts,
@@ -48,6 +50,8 @@ impl DebugPage {
         DebugPage::NewTeam,
         DebugPage::AddBot,
         DebugPage::Session,
+        DebugPage::Delegate,
+        DebugPage::BringBack,
     ];
 
     /// The name `--page` takes for this page.
@@ -66,6 +70,8 @@ impl DebugPage {
             DebugPage::NewTeam => "new-team",
             DebugPage::AddBot => "add-bot",
             DebugPage::Session => "session",
+            DebugPage::Delegate => "delegate",
+            DebugPage::BringBack => "bring-back",
         }
     }
 
@@ -213,7 +219,7 @@ mod tests {
         assert_eq!(
             DebugPage::names(),
             "workspace, settings-general, settings-hosts, settings-vault, pairing, board, \
-             add-host, add-secret, replace-secret, remove-secret, new-team, add-bot, session"
+             add-host, add-secret, replace-secret, remove-secret, new-team, add-bot, session, delegate, bring-back"
         );
     }
 

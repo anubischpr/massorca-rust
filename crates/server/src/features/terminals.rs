@@ -106,7 +106,11 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
             program: shell.program,
             args: shell.args,
         }),
-        env: params.env,
+        env: params
+            .env
+            .into_iter()
+            .map(|(name, value)| (name, massorca_core_terminal::EnvValue::new(value)))
+            .collect(),
         size: PtySize {
             cols: params.cols.unwrap_or(DEFAULT_COLS),
             rows: params.rows.unwrap_or(DEFAULT_ROWS),
