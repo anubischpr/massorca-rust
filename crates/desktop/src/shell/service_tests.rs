@@ -119,6 +119,23 @@ fn next_remove(
 }
 
 #[gpui::test]
+fn a_live_status_bar_has_no_memory_or_ports_item_because_no_service_reports_them(
+    cx: &mut TestAppContext,
+) {
+    let (_rig, cx) = rig(cx, &[("p1", "alpha")]);
+    assert!(
+        cx.debug_bounds("status-memory").is_none(),
+        "no source for memory"
+    );
+    assert!(
+        cx.debug_bounds("status-ports").is_none(),
+        "no source for ports"
+    );
+    assert!(cx.debug_bounds("status-terminals").is_some());
+    assert!(cx.debug_bounds("status-hosts").is_some());
+}
+
+#[gpui::test]
 fn the_service_fills_the_sidebar_and_the_hosts_item_counts_its_hosts(cx: &mut TestAppContext) {
     let (rig, cx) = rig(cx, &[("p1", "alpha")]);
     rig.shell.read_with(cx, |shell, _| {
