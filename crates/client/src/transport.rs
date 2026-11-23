@@ -1,10 +1,7 @@
 //! Frame transports. A connection reads and writes frames through two tasks and two queues, so the handshake and the
 //! client above them do not know which transport they run on (decision 0040). Only the reader reads.
 
-use std::sync::Arc;
-
-use interprocess::local_socket::tokio::Stream;
-use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, Message, read_frame, write_message};
+use massorca_protocol::{Frame, Message};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -59,39 +56,53 @@ impl FrameIo {
 }
 
 /// The transport of the local socket: `u32` length-prefixed frames (decision 0002).
-pub(crate) fn spawn_local(stream: Stream) -> FrameIo {
-    FrameIo::spawn_with(MAX_FRAME_LEN_LOCAL, |queues| {
-        let stream = Arc::new(stream);
-        let reader = tokio::spawn(read_frames(Arc::clone(&stream), queues.inbound));
-        let writer = tokio::spawn(write_frames(stream, queues.outbound));
-        (reader, writer)
-    })
-}
+#[cfg(feature = "local")]
+pub(crate) use local::spawn_local;
 
-/// Reads frames until the service closes the connection or a read fails; the frames go to `inbound`.
-async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
-    let mut recv: &Stream = &stream;
-    loop {
-        match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
-            Ok(Some(frame)) => {
-                if inbound.send(frame).await.is_err() {
-                    return;
+#[cfg(feature = "local")]
+mod local {
+    use std::sync::Arc;
+
+    use interprocess::local_socket::tokio::Stream;
+    use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, Message, read_frame, write_message};
+    use tokio::sync::mpsc;
+
+    use super::FrameIo;
+
+    pub(crate) fn spawn_local(stream: Stream) -> FrameIo {
+        FrameIo::spawn_with(MAX_FRAME_LEN_LOCAL, |queues| {
+            let stream = Arc::new(stream);
+            let reader = tokio::spawn(read_frames(Arc::clone(&stream), queues.inbound));
+            let writer = tokio::spawn(write_frames(stream, queues.outbound));
+            (reader, writer)
+        })
+    }
+
+    /// Reads frames until the service closes the connection or a read fails; the frames go to `inbound`.
+    async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
+        let mut recv: &Stream = &stream;
+        loop {
+            match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
+                Ok(Some(frame)) => {
+                    if inbound.send(frame).await.is_err() {
+                        return;
+                    }
                 }
+                Ok(None) | Err(_) => return,
             }
-            Ok(None) | Err(_) => return,
         }
     }
-}
 
-/// Writes queued requests in order until every sender is gone or a write fails.
-async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Message>) {
-    let mut send: &Stream = &stream;
-    while let Some(message) = outbound.recv().await {
-        if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
-            .await
-            .is_err()
-        {
-            return;
+    /// Writes queued requests in order until every sender is gone or a write fails.
+    async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Message>) {
+        let mut send: &Stream = &stream;
+        while let Some(message) = outbound.recv().await {
+            if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
+                .await
+                .is_err()
+            {
+                return;
+            }
         }
     }
 }

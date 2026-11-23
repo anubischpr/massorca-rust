@@ -18,6 +18,8 @@ pub const AGENTS: &str = "agents/1";
 /// Agent permission modes (decision 0083): `permission_mode` on `agent.start`, `agent.delegate` and `agent.resume`, the
 /// session's `permission_mode` and `mode_confirmed`, and `agent.set_mode`.
 pub const AGENT_MODES: &str = "agent-modes/1";
+/// The prompt queue (`agent.queue*`, decision 0084): queued prompts that the service delivers when the agent is ready.
+pub const AGENT_QUEUE: &str = "agent-queue/1";
 /// Seen state of an agent's attention states: `seen_at_ms` on a session's activity, and `agent.mark_seen`.
 pub const AGENT_SEEN: &str = "agent-seen/1";
 pub const GIT: &str = "git/1";

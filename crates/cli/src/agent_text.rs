@@ -5,6 +5,8 @@ use massorca_protocol::methods::agents::{
     BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
 };
 
+use massorca_protocol::methods::agents::{AgentQueueList, QueueState, QueuedPrompt};
+
 use crate::terminal;
 use crate::workspace_text;
 
@@ -274,4 +276,37 @@ fn source_text(source: ActivitySource) -> &'static str {
         ActivitySource::Output => "output",
         ActivitySource::Unknown => "unknown",
     }
+}
+
+/// The state of a queued prompt as its CLI word.
+fn queue_state_text(state: QueueState) -> &'static str {
+    match state {
+        QueueState::Waiting => "waiting",
+        QueueState::Sending => "sending",
+        QueueState::Failed => "failed",
+        QueueState::Unknown => "unknown",
+    }
+}
+
+/// One queued prompt: its id, position, state, the reason it waits or failed, and its text on one line.
+pub fn queued_lines(item: &QueuedPrompt) -> Vec<String> {
+    let mut line = format!(
+        "queued {} #{}: {}",
+        item.id,
+        item.position,
+        queue_state_text(item.state)
+    );
+    if let Some(reason) = &item.reason {
+        line.push_str(&format!(" ({reason})"));
+    }
+    line.push_str(&format!(" {}", item.text.replace('\n', " ")));
+    vec![line]
+}
+
+/// The queue of a session, head first, one line per prompt.
+pub fn queue_lines(list: &AgentQueueList) -> Vec<String> {
+    if list.items.is_empty() {
+        return vec![format!("no queued prompts for session {}", list.session)];
+    }
+    list.items.iter().flat_map(queued_lines).collect()
 }

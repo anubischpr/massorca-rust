@@ -12,10 +12,11 @@ use massorca_protocol::methods::agents::{
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
     AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
-    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
-    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
-    CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -44,6 +45,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_SEEN, Owner::Core)?,
+        // The prompt queue (decision 0084) has its own capability, so a client knows the service keeps queued prompts.
+        registries
+            .capabilities
+            .register(capabilities::AGENT_QUEUE, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -141,6 +146,48 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             bring_back,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_LIST,
+            capabilities::AGENT_QUEUE,
+            Permission::Read,
+            queue_list,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_EDIT,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_edit,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_REMOVE,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_remove,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_SEND_NOW,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_send_now,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::QUEUE_RESUME,
+            capabilities::AGENT_QUEUE,
+            Permission::Workspace,
+            queue_resume,
         )?,
         methods.register_stream(
             Owner::Core,
@@ -296,6 +343,77 @@ async fn prompt(ctx: RequestCtx, params: AgentPromptParams) -> Result<PromptRece
         agents.prompt(&params.session, &params.text, params.force)
     })
     .await
+}
+
+/// Queues a prompt behind a session's busy agent (decision 0084). A queued prompt needs host-admin scope exactly where a
+/// prompt does: its run holds vault secrets. The text is never logged.
+async fn queue(ctx: RequestCtx, params: AgentQueueParams) -> Result<QueuedPrompt, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    // The caller's scope is kept with the prompt, so a run that later holds secrets types only prompts an admin queued.
+    let host_admin = is_host_admin(&ctx);
+    on_agents(&ctx, move |agents| {
+        agents.queue_add(
+            &params.session,
+            &params.text,
+            params.request_id.as_deref(),
+            host_admin,
+        )
+    })
+    .await
+}
+
+/// A session's queued prompts, head first (decision 0084).
+async fn queue_list(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentQueueList, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.queue_list(&params.session)).await
+}
+
+/// Edits a queued prompt's text (decision 0084). The admin check follows the prompt's session.
+async fn queue_edit(
+    ctx: RequestCtx,
+    params: AgentQueueEditParams,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    // An edit makes the text the caller's, so the prompt takes the caller's scope, as a queued prompt does.
+    let host_admin = is_host_admin(&ctx);
+    on_agents(&ctx, move |agents| {
+        agents.queue_edit(&params.id, &params.text, host_admin)
+    })
+    .await
+}
+
+/// Removes a queued prompt (decision 0084). The admin check follows the prompt's session.
+async fn queue_remove(
+    ctx: RequestCtx,
+    params: AgentQueueItemRef,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    on_agents(&ctx, move |agents| agents.queue_remove(&params.id)).await
+}
+
+/// Sends a queued prompt at once, with force, skipping the busy hold and the queue's order (decision 0084). The admin
+/// check follows the prompt's session.
+async fn queue_send_now(
+    ctx: RequestCtx,
+    params: AgentQueueItemRef,
+) -> Result<QueuedPrompt, ErrorBody> {
+    let id = params.id.clone();
+    let session = on_agents(&ctx, move |agents| agents.queue_session_of(&id)).await?;
+    require_admin_for_session(&ctx, session).await?;
+    on_agents(&ctx, move |agents| agents.queue_send_now(&params.id)).await
+}
+
+/// Lifts a session's queue pauses and delivers its head if the agent is ready (decision 0084).
+async fn queue_resume(
+    ctx: RequestCtx,
+    params: AgentSessionRef,
+) -> Result<AgentQueueList, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    on_agents(&ctx, move |agents| agents.queue_resume(&params.session)).await
 }
 
 /// A report from a run's hook (0053). The payload, the result and the token are never logged.

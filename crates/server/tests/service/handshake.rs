@@ -28,6 +28,7 @@ async fn welcome_offers_the_registered_capabilities() {
         welcome.capabilities,
         [
             capabilities::AGENT_MODES,
+            capabilities::AGENT_QUEUE,
             capabilities::AGENT_SEEN,
             capabilities::AGENTS,
             capabilities::BINARY_FRAMES,

@@ -11,11 +11,13 @@ use crate::store::ServiceStore;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentPromptParams, AgentSession,
-    PackageState, PromptReceipt, ReceiptKind,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentPromptParams,
+    AgentSession, AgentSetModeParams, ModeApplied, ModeSource, PackageState, PromptReceipt,
+    ReceiptKind,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::composer::Composer;
+use massorca_ui::components::composer::ComposerEvent;
 use massorca_ui::components::composer::policy::PrimaryAction;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -175,8 +177,8 @@ fn stop_call(script: &mut Script) -> Option<SessionCallReply> {
 
 fn resume_call(script: &mut Script) -> Option<SessionCallReply> {
     while let Some(command) = script.next() {
-        if let Command::AgentResume { session, reply } = command {
-            return Some((session, reply));
+        if let Command::AgentResume { params, reply } = command {
+            return Some((params.session, reply));
         }
     }
     None
@@ -389,4 +391,185 @@ fn after_a_resume_the_session_view_attaches_the_terminal_of_the_new_run(cx: &mut
             .read_with(cx, |shell, _| shell.terminal_views.contains_key("t2")),
         "the canvas follows the session to its new terminal"
     );
+}
+
+/// Claude with two modes, Plan the vendor's own default and a bypass mode.
+fn kind_with_modes() -> AgentKind {
+    use massorca_protocol::methods::agents::PermissionMode;
+    let mode = |id: &str, label: &str, bypass: bool| PermissionMode {
+        id: id.into(),
+        label: label.into(),
+        description: None,
+        bypass,
+        live_switch: false,
+        may_fall_back: false,
+    };
+    let mut kind = kind(true);
+    kind.permission_modes = vec![
+        mode("plan", "Plan", false),
+        mode("bypassPermissions", "Bypass permissions", true),
+    ];
+    kind.default_permission_mode = Some("plan".into());
+    kind
+}
+
+type SetModeCall = (
+    AgentSetModeParams,
+    oneshot::Sender<Result<AgentModeSet, Refusal>>,
+);
+
+fn set_mode_call(script: &mut Script) -> Option<SetModeCall> {
+    while let Some(command) = script.next() {
+        if let Command::AgentSetMode { params, reply } = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+fn chip_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> (Vec<String>, usize) {
+    composer.read_with(cx, |composer, _| {
+        (
+            composer
+                .access_modes()
+                .iter()
+                .map(|mode| mode.name.to_string())
+                .collect(),
+            composer.access_index(),
+        )
+    })
+}
+
+#[gpui::test]
+fn a_session_in_the_vendors_default_shows_it_and_a_pick_asks_the_service(cx: &mut TestAppContext) {
+    let mut session = s1(false, None);
+    session.mode_source = Some(ModeSource::VendorDefault);
+    let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session.clone()]);
+    let composer = composer_of(&rig, cx);
+    assert_eq!(
+        chip_of(&composer, cx),
+        (
+            vec![
+                "The CLI's default (Plan)".to_owned(),
+                "Plan".to_owned(),
+                "Bypass permissions".to_owned()
+            ],
+            0
+        )
+    );
+    assert!(cx.debug_bounds("composer-access").is_some());
+
+    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(1)));
+    cx.run_until_parked();
+    let (params, reply) =
+        set_mode_call(&mut rig.script).expect("the switch is sent to the service");
+    assert_eq!(params.session, "s1");
+    assert_eq!(params.permission_mode, "plan");
+    assert!(!params.force);
+
+    session.pending_permission_mode = Some("plan".into());
+    reply
+        .send(Ok(AgentModeSet {
+            applied: ModeApplied::NextResume,
+            session: session.clone(),
+        }))
+        .expect("the shell waits for the answer");
+    rig.updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(chip_of(&composer, cx).1, 0, "the running mode is unchanged");
+    assert!(cx.debug_bounds("composer-access-note").is_some());
+}
+
+#[gpui::test]
+fn picking_the_running_mode_or_the_clis_default_sends_nothing(cx: &mut TestAppContext) {
+    let mut session = s1(false, None);
+    session.mode_source = Some(ModeSource::VendorDefault);
+    let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session]);
+    let composer = composer_of(&rig, cx);
+    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(0)));
+    cx.run_until_parked();
+    assert!(set_mode_call(&mut rig.script).is_none());
+}
+
+#[gpui::test]
+fn a_refused_switch_says_why_above_the_composer(cx: &mut TestAppContext) {
+    let mut session = s1(false, None);
+    session.permission_mode = Some("plan".into());
+    session.mode_source = Some(ModeSource::Chosen);
+    session.mode_confirmed = true;
+    let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session]);
+    let composer = composer_of(&rig, cx);
+    assert_eq!(chip_of(&composer, cx).1, 0);
+    composer.update(cx, |_, cx| cx.emit(ComposerEvent::AccessChanged(1)));
+    cx.run_until_parked();
+    let (params, reply) =
+        set_mode_call(&mut rig.script).expect("the switch is sent to the service");
+    assert_eq!(params.permission_mode, "bypassPermissions");
+    let refusal = refused(codes::AGENT_MODE_UNAVAILABLE, "mode cannot be applied");
+    reply
+        .send(Err(refusal.clone()))
+        .expect("the shell waits for the answer");
+    cx.run_until_parked();
+    let notice = rig
+        .shell
+        .read_with(cx, |shell, _| shell.session_notices.get("s1").cloned());
+    assert_eq!(
+        notice,
+        Some(format!("Could not change the mode: {}", refusal.sentence()))
+    );
+    assert_eq!(
+        chip_of(&composer, cx).1,
+        0,
+        "the chip keeps the service's mode"
+    );
+}
+
+#[gpui::test]
+fn a_kind_without_modes_has_no_chip_in_the_session(cx: &mut TestAppContext) {
+    let (rig, cx) = session_rig(cx, vec![kind(true)], vec![s1(false, None)]);
+    let composer = composer_of(&rig, cx);
+    assert!(chip_of(&composer, cx).0.is_empty());
+    assert!(cx.debug_bounds("composer-access").is_none());
+}
+
+/// The mode the next `agent.resume` names.
+fn resume_mode(script: &mut Script) -> Option<Option<String>> {
+    while let Some(command) = script.next() {
+        if let Command::AgentResume { params, .. } = command {
+            return Some(params.permission_mode);
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn resume_names_a_pending_bypass_mode_and_leaves_any_other_to_the_service(cx: &mut TestAppContext) {
+    let mut session = s1(true, Some(ActivityState::Done));
+    session.permission_mode = Some("plan".into());
+    session.mode_source = Some(ModeSource::Chosen);
+    session.pending_permission_mode = Some("bypassPermissions".into());
+    let (mut rig, cx) = session_rig(cx, vec![kind_with_modes()], vec![session.clone()]);
+    click(cx, "composer-resume");
+    assert_eq!(
+        resume_mode(&mut rig.script),
+        Some(Some("bypassPermissions".to_owned()))
+    );
+
+    let mut other = s1(true, Some(ActivityState::Done));
+    other.permission_mode = Some("bypassPermissions".into());
+    other.mode_source = Some(ModeSource::Chosen);
+    other.pending_permission_mode = Some("plan".into());
+    rig.updates
+        .send(StoreUpdate::AgentChanged(other))
+        .expect("the store listens");
+    rig.shell.update(cx, |shell, _| {
+        shell.session_calls.remove("s1");
+    });
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "composer-resume");
+    assert_eq!(resume_mode(&mut rig.script), Some(None));
 }

@@ -4,7 +4,8 @@ mod common;
 
 use common::{assert_conflict, project_row, workspace_row};
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
+    AgentAccountRow, AgentSessionRow, BotRow, RunExit, RunExitReason, RunMode, Store, StoreError,
+    StoredActivity, TeamRow, new_id,
 };
 
 /// A store with one project and one workspace; returns the store and the workspace id.
@@ -664,4 +665,75 @@ fn a_seen_mark_survives_reopening_the_store() {
     };
     let reopened = Store::open(&path).unwrap();
     assert_eq!(seen_at(&reopened, &id), Some(12));
+}
+
+fn account_row(kind: &str) -> AgentAccountRow {
+    AgentAccountRow {
+        id: new_id(),
+        kind: kind.to_owned(),
+        label: "work".to_owned(),
+        created_at: 1,
+        identity: None,
+        state: "unknown".to_owned(),
+        origin: "sign_in".to_owned(),
+    }
+}
+
+#[test]
+fn used_kinds_unite_sessions_accounts_pending_sign_ins_account_history_and_bots() {
+    let (store, workspace) = store_with_workspace();
+    assert!(store.used_agent_kinds().unwrap().is_empty());
+
+    let mut session = session_row(&workspace, 1);
+    session.kind = "from-session".to_owned();
+    store.insert_agent_session(&session).unwrap();
+    store
+        .insert_agent_account(&account_row("from-account"))
+        .unwrap();
+    store
+        .insert_pending_sign_in(&account_row("from-pending"))
+        .unwrap();
+    // A forgotten session whose kept account is gone: only the account history remembers the kind.
+    let mut forgotten = session_row(&workspace, 2);
+    forgotten.kind = "from-history".to_owned();
+    store.insert_agent_session(&forgotten).unwrap();
+    let kept = account_row("from-history");
+    store.insert_agent_account(&kept).unwrap();
+    store.delete_agent_account(&kept.id).unwrap();
+    store.delete_agent_session(&forgotten.id).unwrap();
+    let team = TeamRow {
+        id: new_id(),
+        name: "parsers".to_owned(),
+        purpose: "Ships the parser".to_owned(),
+        character: "triangle".to_owned(),
+        access: "full".to_owned(),
+        workspaces: false,
+        created_at: 1,
+    };
+    store.insert_team(&team).unwrap();
+    store
+        .insert_bot(&BotRow {
+            id: new_id(),
+            team_id: team.id.clone(),
+            name: "builder".to_owned(),
+            job: "Writes the parser".to_owned(),
+            kind: "from-bot".to_owned(),
+            model: None,
+            effort: None,
+            lead: false,
+            created_at: 1,
+        })
+        .unwrap();
+
+    let kinds: Vec<String> = store.used_agent_kinds().unwrap().into_iter().collect();
+    assert_eq!(
+        kinds,
+        [
+            "from-account",
+            "from-bot",
+            "from-history",
+            "from-pending",
+            "from-session"
+        ]
+    );
 }

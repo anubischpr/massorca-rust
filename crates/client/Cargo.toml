@@ -7,12 +7,17 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The local service: its socket, autostart and the profile's host store. The phone builds without it (decision 0080).
+default = ["local"]
+local = ["dep:interprocess", "dep:massorca-process", "dep:massorca-profile", "dep:windows-sys"]
+
 [dependencies]
-massorca-process.workspace = true
+massorca-process = { workspace = true, optional = true }
 getrandom.workspace = true
-interprocess.workspace = true
+interprocess = { workspace = true, optional = true }
 massorca-net.workspace = true
-massorca-profile.workspace = true
+massorca-profile = { workspace = true, optional = true }
 massorca-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,7 +26,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
+windows-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

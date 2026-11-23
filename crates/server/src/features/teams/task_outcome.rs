@@ -41,7 +41,7 @@ async fn react(state: &Arc<AppState>, change: Change) {
     let (session_id, outcome) = match change {
         Change::Updated(session) => (session.id.clone(), observed_outcome(&session)),
         Change::Forgotten(id) => (id, None),
-        Change::Account(_) => return,
+        Change::Account(_) | Change::Queue(_) => return,
     };
     let linked = blocking_state(state, move |store, _agents| {
         latch_linked(store, &session_id, outcome).map_err(store_error)

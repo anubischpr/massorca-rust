@@ -170,9 +170,14 @@ impl Agents {
         if !undecided || (origin != ORIGIN_SIGN_IN && origin != ORIGIN_IMPORT) {
             return;
         }
-        let files =
-            credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
-        let kind_program = self.startable_kind(kind).ok();
+        let files = credentials::account_files_present(
+            self.profile_dir(),
+            self.kind_packages(),
+            kind,
+            account,
+        )
+        .unwrap_or(false);
+        let kind_program = self.runnable_kind(kind).ok();
         let verdict = kind_program
             .as_ref()
             .and_then(|(decl, program)| self.check_account_home(decl, program, account, None));
