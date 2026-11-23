@@ -85,7 +85,12 @@ fn a_paired_device_runs_commands_on_its_host_and_cannot_list_devices() {
     let client = Sandbox::new();
     let _service = start_server(&server);
 
-    let stored = accept_ok(&client, &pair_offer(&server, &[]), "srv", "laptop");
+    let stored = accept_ok(
+        &client,
+        &pair_offer(&server, &["--standard"]),
+        "srv",
+        "laptop",
+    );
     assert_eq!(stored["name"], "srv");
     assert_eq!(stored["device_name"], "laptop");
 
@@ -209,7 +214,12 @@ fn a_revoked_device_is_forgotten_and_an_active_one_is_refused() {
     let server = Sandbox::new();
     let client = Sandbox::new();
     let _service = start_server(&server);
-    accept_ok(&client, &pair_offer(&server, &[]), "srv", "laptop");
+    accept_ok(
+        &client,
+        &pair_offer(&server, &["--standard"]),
+        "srv",
+        "laptop",
+    );
     accept_ok(&client, &pair_offer(&server, &["--admin"]), "adm", "desk");
 
     let refused = client
@@ -244,6 +254,57 @@ fn a_revoked_device_is_forgotten_and_an_active_one_is_refused() {
         .filter_map(|device| device["name"].as_str())
         .collect();
     assert_eq!(names, vec!["desk"]);
+}
+
+/// A paired device is its owner: full access by default. A reduced device, from the advanced `--standard` offer, is
+/// raised to full access with `device grant` without pairing again.
+#[test]
+fn a_default_offer_gives_full_access_and_grant_raises_a_reduced_device() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let _service = start_server(&server);
+    let full = accept_ok(&client, &pair_offer(&server, &[]), "srv", "laptop");
+    assert_eq!(
+        full["scopes"],
+        json!(["read", "workspace", "host-admin", "device-admin"]),
+        "{full}"
+    );
+    let me = client.json_ok("client", &["--host", "srv", "device", "whoami"]);
+    assert_eq!(
+        me["scopes"],
+        json!(["read", "workspace", "host-admin", "device-admin"])
+    );
+
+    accept_ok(
+        &client,
+        &pair_offer(&server, &["--standard"]),
+        "small",
+        "phone",
+    );
+    let denied = client
+        .run("client", &with_json(&["--host", "small", "device", "list"]))
+        .code(1);
+    assert_eq!(
+        single_document(&denied)["error"]["code"],
+        "permission.denied"
+    );
+
+    let granted = client.json_ok("client", &["--host", "srv", "device", "grant", "phone"]);
+    assert_eq!(
+        granted["scopes"],
+        json!(["read", "workspace", "host-admin", "device-admin"])
+    );
+    let listed = client.json_ok("client", &["--host", "small", "device", "list"]);
+    assert_eq!(listed["devices"].as_array().map(Vec::len), Some(2));
+
+    client.json_ok("client", &["--host", "srv", "device", "revoke", "phone"]);
+    let revoked = client
+        .run(
+            "client",
+            &with_json(&["--host", "srv", "device", "grant", "phone"]),
+        )
+        .code(1);
+    assert_eq!(single_document(&revoked)["error"]["code"], "device.revoked");
 }
 
 #[test]

@@ -340,9 +340,12 @@ pub enum PairCommand {
 
 #[derive(Debug, Args)]
 pub struct PairOfferArgs {
-    /// The new device may also manage hosts and devices (host-admin and device-admin).
-    #[arg(long)]
+    /// Accepted for compatibility: a new device gets full access by default.
+    #[arg(long, conflicts_with = "standard")]
     pub admin: bool,
+    /// Advanced: a reduced device that can read and work in workspaces but not manage hosts or devices.
+    #[arg(long)]
+    pub standard: bool,
     /// Seconds the offer stays valid: 1 to 3600. The service default is 600.
     #[arg(long, value_name = "SECS")]
     pub ttl: Option<u32>,
@@ -372,6 +375,11 @@ pub enum DeviceCommand {
     /// Removes a revoked device from the list. Needs host-admin; an active device is refused.
     Forget {
         /// Device id, or its name when exactly one revoked device has it.
+        device: String,
+    },
+    /// Gives a paired device full access, every scope, from its next connection. Needs host-admin.
+    Grant {
+        /// Device id, or its name when that is unique.
         device: String,
     },
     /// Shows the device this command runs as.
