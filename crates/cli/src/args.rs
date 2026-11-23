@@ -366,6 +366,11 @@ pub enum DeviceCommand {
         /// Device id, or its name when that is unique.
         device: String,
     },
+    /// Removes a revoked device from the list. Needs host-admin; an active device is refused.
+    Forget {
+        /// Device id, or its name when exactly one revoked device has it.
+        device: String,
+    },
     /// Shows the device this command runs as.
     Whoami,
 }
@@ -396,6 +401,8 @@ pub enum HostCommand {
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
     AddSsh(HostAddSshArgs),
+    /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
+    Memory,
 }
 
 #[derive(Debug, Args)]

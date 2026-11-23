@@ -177,13 +177,9 @@ pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 /// read has answered on it, there are no teams and nothing can change.
 pub fn teams_view(state: &StoreState) -> TeamsState {
     match &state.teams {
-        Some(records) if state.connection.is_connected() => live_teams(
-            &state.team_ids,
-            LOCAL_HOST,
-            records,
-            &state.team_bots,
-            &state.agent_kinds,
-        ),
+        Some(records) if state.connection.is_connected() => {
+            live_teams(&state.team_ids, LOCAL_HOST, records, &state.agent_kinds)
+        }
         _ => TeamsState::unavailable(),
     }
 }

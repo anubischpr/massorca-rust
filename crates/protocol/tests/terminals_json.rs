@@ -27,6 +27,7 @@ fn sample_terminal() -> terminals::Terminal {
         cwd: "/work/app/feat-x".to_owned(),
         created_at_ms: 1_767_225_600_000_i64,
         exit: None,
+        holds_secrets: false,
     }
 }
 

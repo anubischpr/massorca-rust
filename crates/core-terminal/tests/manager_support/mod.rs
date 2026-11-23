@@ -88,6 +88,7 @@ pub fn spec(workspace: &str, cwd: &Path) -> CreateSpec {
         size: SIZE,
         title: None,
         request_id: None,
+        holds_secrets: false,
     }
 }
 

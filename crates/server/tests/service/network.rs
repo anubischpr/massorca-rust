@@ -10,11 +10,13 @@ use massorca_core_store::Store;
 use massorca_net::TlsIdentity;
 use massorca_protocol::methods::agents;
 use massorca_protocol::methods::devices::{
-    self, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret, WhoAmI,
+    self, DeviceInfo, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret,
+    WhoAmI,
 };
 use massorca_protocol::methods::extensions::{
     ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams,
 };
+use massorca_protocol::methods::host::{self, HostMemory};
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
@@ -31,7 +33,7 @@ fn peer() -> PeerInfo {
 }
 
 /// A service listening on an ephemeral loopback port.
-async fn start_listening(home: &Path) -> RunningService {
+pub(super) async fn start_listening(home: &Path) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -57,7 +59,7 @@ async fn start_listening(home: &Path) -> RunningService {
     panic!("the network listener did not start");
 }
 
-async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
+pub(super) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
     let owner = connect(home, "server").await;
     let created: PairingCreated = owner
         .call(
@@ -70,13 +72,13 @@ async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
 }
 
 /// A client profile with its own hosts list.
-fn client_side() -> (TempHome, Hosts) {
+pub(super) fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)
 }
 
-async fn pair(
+pub(super) async fn pair(
     hosts: &Hosts,
     offer: &Offer,
     name: &str,
@@ -226,6 +228,68 @@ async fn scopes_limit_a_device_and_admin_widens_them() {
     assert_eq!(
         list.devices.iter().filter(|device| device.current).count(),
         1
+    );
+    stop(running).await;
+}
+
+/// Only a revoked device can be forgotten, only with host-admin, and a forgotten device leaves the list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_device_is_forgotten_by_a_host_admin_and_leaves_the_list() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let (standard, laptop) = pair(&hosts, &offer(home.path(), false, None).await, "plain")
+        .await
+        .unwrap();
+    let owner = connect(home.path(), "server").await;
+    let forget = |device: &str| devices::DeviceForgetParams {
+        device: device.to_owned(),
+    };
+
+    let active = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("an active device is refused");
+    assert_eq!(remote_code(&active), codes::DEVICE_NOT_REVOKED);
+    let by_name = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget("laptop"))
+        .await
+        .expect_err("a name that only an active device has is refused");
+    assert_eq!(remote_code(&by_name), codes::DEVICE_NOT_REVOKED);
+    let denied = standard
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("a standard device has no host-admin");
+    assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED);
+
+    let _: DeviceInfo = owner
+        .call(
+            devices::REVOKE,
+            &devices::DeviceRevokeParams {
+                device: laptop.device_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let forgotten: DeviceInfo = owner
+        .call(devices::FORGET, &forget("laptop"))
+        .await
+        .expect("a revoked device is forgotten by name");
+    assert_eq!(forgotten.id, laptop.device_id);
+    let list: DeviceList = owner.call(devices::LIST, &()).await.unwrap();
+    assert!(list.devices.is_empty(), "{list:?}");
+    let again = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("gone");
+    assert_eq!(remote_code(&again), codes::DEVICE_NOT_FOUND);
+
+    let refused = Client::connect_host(&hosts, "plain", &peer())
+        .await
+        .expect_err("a forgotten device is still refused");
+    assert!(
+        matches!(refused, ClientError::Handshake { .. }),
+        "{refused:?}"
     );
     stop(running).await;
 }
@@ -414,6 +478,40 @@ async fn a_hello_without_auth_gets_no_service() {
         .await
         .unwrap();
     assert!(closed.is_none(), "{closed:?}");
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_may_read_host_memory() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let standard_set = Scopes::STANDARD.names();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|device| device.scopes == standard_set)
+        .expect("the paired device holds the standard scopes");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("the narrowed device reconnects");
+
+    let memory: HostMemory = reader
+        .call(host::MEMORY, &())
+        .await
+        .expect("host.memory needs only Read");
+    assert!(memory.service.bytes > 0, "{memory:?}");
+    assert!(memory.total_bytes >= memory.service.bytes, "{memory:?}");
     stop(running).await;
 }
 
