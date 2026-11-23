@@ -376,6 +376,46 @@ mod tests {
     }
 
     #[test]
+    fn the_danger_zone_names_what_removal_deletes_and_what_stays() {
+        let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
+        entry.uninstall.storage = true;
+        entry.uninstall.cli_binaries = vec!["claude".to_owned()];
+        let found = items(&[], &[entry], &[]);
+        let body = crate::model::marketplace::uninstall_body(&found[0]);
+        assert_eq!(
+            body,
+            "Name of acme.notes is removed from this computer. Its package files are deleted. Its data is deleted. The claude CLI it installed stays on this computer."
+        );
+    }
+
+    #[test]
+    fn advanced_rows_name_the_install_source_and_checksum_once_installed() {
+        use massorca_protocol::methods::extensions::{InstalledInfo, SourceKind, SourceRef};
+
+        let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
+        entry.installed = Some(InstalledInfo {
+            version: "1.0.0".to_owned(),
+            source: SourceRef {
+                kind: SourceKind::Dir,
+                reference: "notes".to_owned(),
+            },
+            sha256: "abc123".to_owned(),
+            installed_at_ms: 0,
+            cli: Vec::new(),
+        });
+        let found = items(&[], &[entry], &[]);
+        let rows = crate::model::marketplace::advanced_rows(&found[0]);
+        assert!(
+            rows.contains(&("Installed from", "Folder notes".to_owned())),
+            "{rows:?}"
+        );
+        assert!(
+            rows.contains(&("Checksum", "abc123".to_owned())),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
     fn the_information_part_names_the_risk_of_a_package() {
         let mut entry = package("acme.notes", "extensions", ExtensionState::Available);
         entry.risk.level = RiskLevel::High;
