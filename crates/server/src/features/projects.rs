@@ -1,4 +1,4 @@
-//! `project.add`, `project.list`, `project.show` and `project.remove` (capability `projects/1`) over the workspace domain.
+//! `project.add`, `project.list`, `project.show`, `project.inspect` and `project.remove` (capability `projects/1`) over the workspace domain.
 
 use std::sync::Arc;
 
@@ -7,7 +7,8 @@ use massorca_protocol::methods::events::{
     TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectList, ProjectRef, ProjectRemoveParams,
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectList,
+    ProjectRef, ProjectRemoveParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
@@ -49,6 +50,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         registries.methods.register(
             Owner::Core,
+            projects::INSPECT,
+            capabilities::PROJECTS,
+            Permission::Read,
+            inspect,
+        )?,
+        registries.methods.register(
+            Owner::Core,
             projects::REMOVE,
             capabilities::PROJECTS,
             Permission::Workspace,
@@ -73,6 +81,14 @@ async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ProjectList, ErrorBo
 async fn show(ctx: RequestCtx, params: ProjectRef) -> Result<Project, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_project(&params.project)).await
+}
+
+async fn inspect(
+    ctx: RequestCtx,
+    params: ProjectInspectParams,
+) -> Result<ProjectInspection, ErrorBody> {
+    let domain = shared(&ctx);
+    blocking(move || domain.inspect_project(&params.path)).await
 }
 
 async fn remove(ctx: RequestCtx, params: ProjectRemoveParams) -> Result<Project, ErrorBody> {

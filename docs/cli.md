@@ -40,9 +40,10 @@ machine.
 | `config get <KEY> [--owner OWNER]` | Shows one setting and whether it still has its default value. |
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
-| `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. |
+| `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. When neither is given and the directory is not inside a repository, a warning on stderr says it was added as a plain folder (text mode only). |
 | `project list` | Lists every project, ordered by name. |
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
+| `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
 | `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |

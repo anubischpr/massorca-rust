@@ -10,6 +10,8 @@ pub const LIST: &str = "project.list";
 pub const SHOW: &str = "project.show";
 /// Params: [`ProjectRemoveParams`]. Result: [`Project`].
 pub const REMOVE: &str = "project.remove";
+/// Params: [`ProjectInspectParams`]. Result: [`ProjectInspection`]. Read-only: what `project.add` would register.
+pub const INSPECT: &str = "project.inspect";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +48,24 @@ pub struct ProjectRemoveParams {
     /// Also forgets the project's workspace records. No file, folder, worktree or branch is touched.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub forget_workspaces: bool,
+}
+
+/// Params of `project.inspect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInspectParams {
+    pub path: String,
+}
+
+/// Result of `project.inspect`: what `project.add` without a kind would register for a path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInspection {
+    /// The path a project would be registered at: the repository's main worktree, or the folder itself.
+    pub path: String,
+    /// The kind `project.add` without a kind would register.
+    pub kind: ProjectKind,
+    /// The id of the project already registered at `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered: Option<String>,
 }
 
 /// Result of `project.list`.

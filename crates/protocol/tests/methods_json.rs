@@ -186,6 +186,32 @@ fn project_add_params_carry_set_options() {
 }
 
 #[test]
+fn project_inspect_params_and_inspection_have_the_documented_shape() {
+    assert_wire(
+        &projects::ProjectInspectParams {
+            path: "/repos/app/src".to_owned(),
+        },
+        &json!({ "path": "/repos/app/src" }),
+    );
+    assert_wire(
+        &projects::ProjectInspection {
+            path: "/notes".to_owned(),
+            kind: projects::ProjectKind::Folder,
+            registered: None,
+        },
+        &json!({ "path": "/notes", "kind": "folder" }),
+    );
+    assert_wire(
+        &projects::ProjectInspection {
+            path: "/repos/app".to_owned(),
+            kind: projects::ProjectKind::Git,
+            registered: Some("p1".to_owned()),
+        },
+        &json!({ "path": "/repos/app", "kind": "git", "registered": "p1" }),
+    );
+}
+
+#[test]
 fn project_kind_uses_snake_case_names() {
     assert_wire(&projects::ProjectKind::Git, &json!("git"));
     assert_wire(&projects::ProjectKind::Folder, &json!("folder"));

@@ -1,6 +1,6 @@
 //! Human-readable lines for projects and workspaces: key-value blocks and aligned tables.
 
-use massorca_protocol::methods::projects::{Project, ProjectKind};
+use massorca_protocol::methods::projects::{Project, ProjectInspection, ProjectKind};
 use massorca_protocol::methods::workspaces::{
     UnregisteredWorktree, Workspace, WorkspaceKind, WorkspaceRemoved, WorkspaceState,
 };
@@ -64,6 +64,27 @@ pub fn project_line(project: &Project, verb: &str) -> String {
         project_kind(project.kind),
         project.path
     )
+}
+
+/// The warning `project add` prints when a directory without a kind became a plain folder.
+pub fn plain_folder_warning(path: &str) -> String {
+    format!("warning: {path} is not a git repository; it was added as a plain folder")
+}
+
+/// What `project add` without a kind would register, and the project already registered there.
+pub fn inspection_lines(inspection: &ProjectInspection) -> Vec<String> {
+    let kind = match inspection.kind {
+        ProjectKind::Git => "git repository".to_owned(),
+        ProjectKind::Folder => {
+            "not a git repository; it would be added as a plain folder".to_owned()
+        }
+        ProjectKind::Unknown => "unknown kind".to_owned(),
+    };
+    let mut lines = vec![format!("{}: {kind}", inspection.path)];
+    if let Some(id) = &inspection.registered {
+        lines.push(format!("already registered as {id}"));
+    }
+    lines
 }
 
 /// What `project rm --forget-workspaces` dropped. No file, folder, worktree or branch is touched.
