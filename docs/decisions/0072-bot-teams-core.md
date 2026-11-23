@@ -391,6 +391,11 @@ Caller scope:
 - A manual run (`team.routine_run`) receives vault secrets only when the caller
   and the routine are both host-admin, so a caller with less scope cannot widen
   what a routine may do.
+- An edit, a pause or a resume writes only while the stored routine still equals
+  the one it read; otherwise it reads the routine again and reapplies itself, at
+  most five times, then answers `team.routine_changed`. Two concurrent changes
+  both survive, and no change can restore a `starts_as_admin` another caller
+  cleared or a schedule another caller set.
 
 Zones:
 

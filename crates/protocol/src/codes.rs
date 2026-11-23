@@ -208,6 +208,8 @@ pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
 /// The service stopped after a routine run was claimed and before its start recorded an outcome. It is not retried.
 pub const TEAM_ROUTINE_RUN_INTERRUPTED: &str = "team.routine_run_interrupted";
+/// Other calls kept changing the routine while this edit was made; read it again and retry.
+pub const TEAM_ROUTINE_CHANGED: &str = "team.routine_changed";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";

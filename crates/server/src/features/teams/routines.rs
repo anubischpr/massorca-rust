@@ -27,6 +27,9 @@ use super::routine_run::{prepare_run, routine_grant, start_run};
 use super::task_start::{Changes, publish_changes};
 use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
 
+/// How many times an edit rereads a routine another call changed before it gives up.
+const EDIT_ATTEMPTS: usize = 5;
+
 /// The runs `team.routine_runs` returns when no limit is given, and the most it returns.
 const DEFAULT_RUN_LIMIT: usize = 50;
 const MAX_RUN_LIMIT: usize = 500;
@@ -133,7 +136,7 @@ async fn update(ctx: RequestCtx, params: RoutineUpdateParams) -> Result<Routine,
     let host = HostZone::read();
     let known = host.clone();
     let row = blocking(&ctx, move |store, _agents| {
-        update_routine(store, params, admin, now_ms(), &known)
+        update_routine(store, &params, admin, now_ms(), &known)
     })
     .await?;
     publish(&ctx, TOPIC_TEAM_CHANGED, &row.team_id);
@@ -281,27 +284,46 @@ fn add_routine(
 
 fn update_routine(
     store: &Store,
-    params: RoutineUpdateParams,
+    params: &RoutineUpdateParams,
     admin: bool,
     now: i64,
     host: &HostZone,
 ) -> Result<TeamRoutineRow, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
-    let mut row = selectors::routine(store, &team, &params.routine)?;
-    if let Some(selector) = params.bot {
-        row.bot_id = Some(selectors::bot(store, &team, &selector)?.id);
+    let id = selectors::routine(store, &team, &params.routine)?.id;
+    let bot_id = params
+        .bot
+        .as_deref()
+        .map(|selector| selectors::bot(store, &team, selector).map(|bot| bot.id))
+        .transpose()?;
+    edit_routine(store, &id, |row| {
+        apply_update(row, params, bot_id.as_deref(), admin, now, host)
+    })
+}
+
+/// Applies the fields `params` gives to `row`, and the caller's scope, then schedules the next run.
+fn apply_update(
+    row: &mut TeamRoutineRow,
+    params: &RoutineUpdateParams,
+    bot_id: Option<&str>,
+    admin: bool,
+    now: i64,
+    host: &HostZone,
+) -> Result<(), ErrorBody> {
+    if let Some(bot_id) = bot_id {
+        row.bot_id = Some(bot_id.to_owned());
     }
-    if let Some(name) = params.name {
-        row.name = non_blank(&name, "the routine name")?;
+    if let Some(name) = &params.name {
+        row.name = non_blank(name, "the routine name")?;
     }
-    if let Some(prompt) = params.prompt {
-        row.prompt = non_blank(&prompt, "the routine prompt")?;
+    if let Some(prompt) = &params.prompt {
+        row.prompt = non_blank(prompt, "the routine prompt")?;
     }
-    if let Some(time) = params.time {
+    if let Some(time) = &params.time {
         row.time = time.trim().to_owned();
     }
-    if let Some(zone) = params.zone {
-        row.zone = optional_text(Some(zone));
+    if let Some(zone) = &params.zone {
+        row.zone = optional_text(Some(zone.clone()));
         host.allow(row.zone.as_deref())?;
     }
     let cadence = match params.cadence {
@@ -315,6 +337,7 @@ fn update_routine(
     let month_day = params.month_day.map(i64::from).or(row.month_day);
     let run_date = params
         .run_date
+        .as_deref()
         .map(|date| date.trim().to_owned())
         .or_else(|| row.run_date.clone());
     let (weekday, month_day, run_date) = keep_for(&cadence, weekday, month_day, run_date);
@@ -327,12 +350,33 @@ fn update_routine(
     row.next_run_at = if row.paused {
         None
     } else {
-        next_run_after(&row, now)?
+        next_run_after(row, now)?
     };
-    if !store.update_routine(&row).map_err(store_error)? {
-        return Err(vanished());
+    Ok(())
+}
+
+/// Applies `change` to the routine as stored now and writes it only while the stored row is unchanged. When another
+/// call changed it meanwhile, it reads the routine again and reapplies `change`, so no concurrent edit is reverted.
+fn edit_routine(
+    store: &Store,
+    id: &str,
+    mut change: impl FnMut(&mut TeamRoutineRow) -> Result<(), ErrorBody>,
+) -> Result<TeamRoutineRow, ErrorBody> {
+    for _ in 0..EDIT_ATTEMPTS {
+        let old = store
+            .get_routine(id)
+            .map_err(store_error)?
+            .ok_or_else(vanished)?;
+        let mut new = old.clone();
+        change(&mut new)?;
+        if store.update_routine_if(&old, &new).map_err(store_error)? {
+            return Ok(new);
+        }
     }
-    Ok(row)
+    Err(ErrorBody::new(
+        codes::TEAM_ROUTINE_CHANGED,
+        "other calls kept changing the routine; read it and try again",
+    ))
 }
 
 fn remove_routine(store: &Store, params: &RoutineRef) -> Result<TeamRoutineRow, ErrorBody> {
@@ -352,17 +396,18 @@ fn set_paused(
     now: i64,
 ) -> Result<TeamRoutineRow, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
-    let mut row = selectors::routine(store, &team, &params.routine)?;
+    let id = selectors::routine(store, &team, &params.routine)?.id;
+    edit_routine(store, &id, |row| pause_change(row, paused, now))
+}
+
+fn pause_change(row: &mut TeamRoutineRow, paused: bool, now: i64) -> Result<(), ErrorBody> {
     row.paused = paused;
     row.next_run_at = if paused {
         None
     } else {
-        next_run_after(&row, now)?
+        next_run_after(row, now)?
     };
-    if !store.update_routine(&row).map_err(store_error)? {
-        return Err(vanished());
-    }
-    Ok(row)
+    Ok(())
 }
 
 fn run_now(
@@ -560,7 +605,10 @@ mod tests {
         RoutineAddParams, RoutineCadence, RoutineUpdateParams,
     };
 
-    use super::{HostZone, add_routine, keep_for, next_run_after, routine_view, update_routine};
+    use super::{
+        HostZone, add_routine, edit_routine, keep_for, next_run_after, pause_change, routine_view,
+        update_routine,
+    };
 
     /// 2026-11-23 12:00 UTC.
     const NOW: i64 = 1_795_435_200_000;
@@ -646,7 +694,7 @@ mod tests {
             zone: Some(String::new()),
             ..update_params()
         };
-        let refused = update_routine(&store, clear, true, NOW, &unknown).unwrap_err();
+        let refused = update_routine(&store, &clear, true, NOW, &unknown).unwrap_err();
         assert_eq!(refused.code, codes::REQUEST_INVALID_PARAMS);
     }
 
@@ -672,6 +720,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(routine_view(&named, &host).zone_used, None);
+    }
+
+    /// A pause that read the routine before another caller's edit landed rereads it, so it keeps that edit, including
+    /// the lowered `starts_as_admin`.
+    #[test]
+    fn a_pause_racing_an_edit_by_another_caller_keeps_that_edit() {
+        let store = team_store();
+        let host = HostZone::of("Europe/Madrid", true);
+        let routine =
+            add_routine(&store, add_params(Some("Europe/Madrid")), true, NOW, &host).unwrap();
+        let retime = RoutineUpdateParams {
+            time: Some("10:00".to_owned()),
+            ..update_params()
+        };
+
+        let mut raced = false;
+        let paused = edit_routine(&store, &routine.id, |row| {
+            if !raced {
+                raced = true;
+                update_routine(&store, &retime, false, NOW, &host).unwrap();
+            }
+            pause_change(row, true, NOW)
+        })
+        .unwrap();
+
+        let stored = store.get_routine(&routine.id).unwrap().unwrap();
+        assert_eq!(stored, paused);
+        assert!(stored.paused);
+        assert_eq!(stored.time, "10:00");
+        assert!(!stored.starts_as_admin, "the other caller lowered it");
     }
 
     /// A daily routine at `time` in `zone`.

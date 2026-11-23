@@ -124,6 +124,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::TEAM_ROUTINE_RUN_INTERRUPTED,
         "team.routine_run_interrupted",
     ),
+    (codes::TEAM_ROUTINE_CHANGED, "team.routine_changed"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),

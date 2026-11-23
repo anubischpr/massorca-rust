@@ -167,10 +167,11 @@ fn pausing_clears_the_next_run_and_a_paused_routine_is_never_due() {
     let routine = routine(&team.id, None, Some(100));
     store.insert_routine(&routine).unwrap();
 
-    let mut paused = store.get_routine(&routine.id).unwrap().unwrap();
+    let stored = store.get_routine(&routine.id).unwrap().unwrap();
+    let mut paused = stored.clone();
     paused.paused = true;
     paused.next_run_at = None;
-    assert!(store.update_routine(&paused).unwrap());
+    assert!(store.update_routine_if(&stored, &paused).unwrap());
 
     assert_eq!(next_run_at(&store, &routine.id), None);
     assert!(store.get_routine(&routine.id).unwrap().unwrap().paused);
@@ -347,6 +348,27 @@ fn only_runs_pending_from_before_a_start_are_marked_interrupted() {
             .settled_at,
         None
     );
+}
+
+#[test]
+fn an_edit_made_from_a_stale_row_writes_nothing() {
+    let store = store();
+    let team = team(&store);
+    let routine = routine(&team.id, None, Some(100));
+    store.insert_routine(&routine).unwrap();
+    let stale = store.get_routine(&routine.id).unwrap().unwrap();
+    let mut lowered = stale.clone();
+    lowered.starts_as_admin = false;
+    lowered.time = "10:00".to_owned();
+    assert!(store.update_routine_if(&stale, &lowered).unwrap());
+
+    let mut paused = stale.clone();
+    paused.paused = true;
+    paused.next_run_at = None;
+    assert!(!store.update_routine_if(&stale, &paused).unwrap());
+
+    let kept = store.get_routine(&routine.id).unwrap().unwrap();
+    assert_eq!(kept, lowered);
 }
 
 #[test]

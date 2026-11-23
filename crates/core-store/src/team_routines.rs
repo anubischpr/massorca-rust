@@ -167,24 +167,43 @@ impl Store {
         )
     }
 
-    /// Writes every field a routine edit or a pause or resume changes. Returns whether a row changed.
-    pub fn update_routine(&self, row: &TeamRoutineRow) -> Result<bool, StoreError> {
+    /// Writes an edit, a pause or a resume made from `old`, only while the stored row still equals `old`. Returns
+    /// `false`, and writes nothing, when another call changed or removed the routine since `old` was read; the caller
+    /// reads it again and reapplies its change, so a concurrent edit is never reverted.
+    pub fn update_routine_if(
+        &self,
+        old: &TeamRoutineRow,
+        new: &TeamRoutineRow,
+    ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE team_routines SET bot_id = ?2, name = ?3, prompt = ?4, cadence = ?5, time = ?6, weekday = ?7, month_day = ?8, run_date = ?9, zone = ?10, paused = ?11, starts_as_admin = ?12, next_run_at = ?13 WHERE id = ?1",
+            "UPDATE team_routines SET bot_id = ?2, name = ?3, prompt = ?4, cadence = ?5, time = ?6, weekday = ?7, month_day = ?8, run_date = ?9, zone = ?10, paused = ?11, starts_as_admin = ?12, next_run_at = ?13 \
+             WHERE id = ?1 AND bot_id IS ?14 AND name = ?15 AND prompt = ?16 AND cadence = ?17 AND time = ?18 AND weekday IS ?19 AND month_day IS ?20 AND run_date IS ?21 AND zone IS ?22 AND paused = ?23 AND starts_as_admin = ?24 AND next_run_at IS ?25",
             params![
-                row.id,
-                row.bot_id,
-                row.name,
-                row.prompt,
-                row.cadence,
-                row.time,
-                row.weekday,
-                row.month_day,
-                row.run_date,
-                row.zone,
-                row.paused,
-                row.starts_as_admin,
-                row.next_run_at
+                old.id,
+                new.bot_id,
+                new.name,
+                new.prompt,
+                new.cadence,
+                new.time,
+                new.weekday,
+                new.month_day,
+                new.run_date,
+                new.zone,
+                new.paused,
+                new.starts_as_admin,
+                new.next_run_at,
+                old.bot_id,
+                old.name,
+                old.prompt,
+                old.cadence,
+                old.time,
+                old.weekday,
+                old.month_day,
+                old.run_date,
+                old.zone,
+                old.paused,
+                old.starts_as_admin,
+                old.next_run_at
             ],
         )?;
         Ok(changed > 0)
