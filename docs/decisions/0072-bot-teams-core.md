@@ -247,13 +247,17 @@ The workspace domain lets one agent write in a workspace at a time
   own git worktree for that task. That worktree is made through the path
   delegation uses for child agents, and the result comes back as a branch. A
   task that only reads runs in the main checkout, as in pv96.
-- **What is not built yet:** a team project has no code source yet, so no task
-  reaches either project case today. Both come with the follow-up that lets a
-  team project name its repository or folder.
+- **What is not built yet:** a team project can name its code source, but
+  `task.start` does not use that link yet, so no task reaches either project
+  case today. Both come in a follow-up.
 - **Who owns the run:** the host that runs the agent owns the run. A card
   follows its session in the `live`, `unverifiable` and `exited` terms. An
   unverifiable session counts as running, and losing contact never moves a
   card to Done or to a failure.
+- **Who starts the run:** the run is started with the scope of the caller of
+  `task.start`, never as the service. It gets the vault's variables only when
+  that caller holds host-admin scope, as `agent.start` does (decision 0071).
+  A paired device with standard scopes starts a run without them.
 - **Delivery:** the built-in kinds take the prompt on their command line, so
   the prompt is delivered once the agent starts, and only then is the session
   linked. A kind whose prompt mode is `none` gets its prompt at its first idle,

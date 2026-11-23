@@ -579,7 +579,7 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
 /// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
-fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
     if is_host_admin(ctx) {
         SecretGrant::Provide
     } else {
