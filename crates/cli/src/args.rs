@@ -60,6 +60,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Starts the MassOrca desktop app on this profile and returns at once.
+    Open,
     /// Reads, changes and resets settings. `config` is an older name for it.
     #[command(alias = "config")]
     Settings {

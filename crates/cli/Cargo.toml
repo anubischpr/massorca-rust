@@ -22,6 +22,13 @@ path = "src/bin/fake_agent.rs"
 test = false
 doc = false
 
+# The stand-in for the desktop app in the tests of `massorca open`; never shipped.
+[[bin]]
+name = "massorca-fake-desktop"
+path = "src/bin/fake_desktop.rs"
+test = false
+doc = false
+
 # The fake vendor CLI and installer for the extension tests (decision 0062). An example, not a binary: `cargo test`
 # builds it next to the test binaries, while `cargo build --release` and the installers never ship it.
 [[example]]
