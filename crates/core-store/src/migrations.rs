@@ -273,6 +273,26 @@ ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 C
 "#,
         foreign_keys_off: false,
     },
+    // Only a kept account counts as one the kind had (decision 0059): a row is recorded when it is inserted already decided
+    // (an import or a migrated home) or when its pending sign-in is cleared. A sign-in deleted while still pending was
+    // never kept and leaves no record. Rows recorded by the earlier trigger cannot tell a kept sign-in from a discarded
+    // one, so they are left as they are.
+    Migration {
+        sql: r#"
+DROP TRIGGER agent_accounts_record_kind;
+CREATE TRIGGER agent_accounts_record_kind AFTER INSERT ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+CREATE TRIGGER agent_accounts_record_kept_sign_in AFTER UPDATE OF sign_in_pending ON agent_accounts
+WHEN NEW.sign_in_pending = 0
+BEGIN
+    INSERT OR IGNORE INTO agent_account_history (kind) VALUES (NEW.kind);
+END;
+"#,
+        foreign_keys_off: false,
+    },
     // Team memory (decision 0072): lines a team or one of its bots keeps for later tasks. A bot-less line is the team's
     // scope. A team's or a bot's removal removes its lines.
     Migration {

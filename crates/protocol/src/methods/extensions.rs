@@ -444,7 +444,12 @@ pub enum CliPlanState {
         path: Option<String>,
     },
     /// The vendor's command for the host OS runs, exactly this argv.
-    WillRun { command: Vec<String> },
+    WillRun {
+        command: Vec<String>,
+        /// npm also runs the install scripts of the package and its dependencies. Absent from older peers.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        runs_package_scripts: bool,
+    },
     /// No command fits: the package registers, and the CLI stays missing.
     Unsupported,
     /// A state from a newer peer that this build does not know; never sent by this build.
@@ -544,6 +549,21 @@ mod tests {
             serde_json::from_value(json!({ "agent": "a", "binary": "a", "action": "later" }))
                 .expect("a removal");
         assert_eq!(removal.action, CliRemovalAction::Unknown);
+    }
+
+    #[test]
+    fn a_will_run_plan_from_an_older_peer_has_no_package_scripts() {
+        let plan: CliPlan = serde_json::from_value(
+            json!({ "agent": "a", "state": "will_run", "command": ["winget", "install", "x"] }),
+        )
+        .expect("a plan from an older peer");
+        assert_eq!(
+            plan.state,
+            CliPlanState::WillRun {
+                command: vec!["winget".into(), "install".into(), "x".into()],
+                runs_package_scripts: false,
+            }
+        );
     }
 
     #[test]

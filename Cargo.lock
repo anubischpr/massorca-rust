@@ -3658,6 +3658,7 @@ name = "massorca-core-terminal"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "massorca-host-stats",
  "massorca-process",
  "portable-pty",
  "rustix",
@@ -3748,6 +3749,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "massorca-host-stats"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "massorca-process",
+ "win32job",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "massorca-net"
 version = "0.1.0"
 dependencies = [
@@ -3821,6 +3832,7 @@ dependencies = [
  "massorca-core-watch",
  "massorca-core-workspace",
  "massorca-ext-package",
+ "massorca-host-stats",
  "massorca-net",
  "massorca-process",
  "massorca-profile",

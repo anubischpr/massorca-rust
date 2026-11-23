@@ -49,6 +49,7 @@ fn start_server(server: &Sandbox) -> ChildGuard {
 
 /// Kind `fake`, team `alpha` with bots `mara` and `tomas`, and a global secret `TEAM_TOKEN`, all as the owner.
 fn prepare(server: &Sandbox) {
+    server.prepare_profile(SERVER);
     let dir = server.profile_dir(SERVER).join("agents").join("kinds");
     fs::create_dir_all(&dir).expect("create the kinds directory");
     let kind = json!({

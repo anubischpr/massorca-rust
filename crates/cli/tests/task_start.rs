@@ -14,6 +14,7 @@ const UNTIL_SECS: &str = "60";
 
 /// Declares kind `fake`, which runs the fake agent with an argv prompt and reports its activity.
 fn declare_fake(sandbox: &Sandbox) {
+    sandbox.prepare_profile("default");
     let kind = json!({
         "id": "fake",
         "name": "Fake agent",
