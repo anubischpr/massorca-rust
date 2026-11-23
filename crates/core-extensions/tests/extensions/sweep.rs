@@ -167,3 +167,18 @@ fn a_link_under_pkgs_is_not_followed() {
     assert!(fs::symlink_metadata(&package_link).is_ok());
     assert!(fs::symlink_metadata(&version_link).is_ok());
 }
+
+#[test]
+fn without_a_lockfile_only_staging_folders_are_removed() {
+    let (s, path) = installed();
+    leftover(&s, "pkgs/acme.kit/.staging-1-0");
+    fs::remove_file(s.service.layout().lock_path()).expect("the lockfile goes");
+
+    let removed = s.service.sweep_leftovers().expect("sweeps");
+
+    assert_eq!(removed, ["pkgs/acme.kit/.staging-1-0"]);
+    assert!(
+        s.exists(&path),
+        "a version folder stays when no lockfile says it is unused"
+    );
+}

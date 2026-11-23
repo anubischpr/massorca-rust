@@ -16,9 +16,11 @@ const STAGING_PREFIX: &str = ".staging-";
 impl Extensions {
     /// Removes the leftovers under `pkgs/` and returns their profile-relative paths. Only call it while no install is
     /// in flight: an install's version folder is unreferenced until its lockfile commit. Nothing is removed when the
-    /// lockfile cannot be read. A failed removal does not stop the others; the first failure is returned after them.
+    /// lockfile cannot be read. Without a lockfile only staging folders go: a profile copied without it keeps its
+    /// packages. A failed removal does not stop the others; the first failure is returned after them.
     pub fn sweep_leftovers(&self) -> Result<Vec<String>, Error> {
         let _changes = self.lock_changes();
+        let versions = self.layout.lock_path().exists();
         let lockfile = self.read_lockfile()?;
         let kept: BTreeSet<&str> = lockfile
             .packages
@@ -47,7 +49,7 @@ impl Extensions {
             if !is_extension_id(&id) || !package.file_type().is_ok_and(|kind| kind.is_dir()) {
                 continue;
             }
-            sweep.package(&package.path(), &id, &kept);
+            sweep.package(&package.path(), &id, versions.then_some(&kept));
         }
         sweep.finish()
     }
@@ -65,7 +67,7 @@ impl Sweep {
     }
 
     /// Sweeps one `pkgs/<id>/` folder, then removes it when nothing is left in it.
-    fn package(&mut self, dir: &Path, id: &str, kept: &BTreeSet<&str>) {
+    fn package(&mut self, dir: &Path, id: &str, kept: Option<&BTreeSet<&str>>) {
         let children = match fs::read_dir(dir) {
             Ok(children) => children,
             Err(error) => return self.fail(Error::io("cannot list", dir)(error)),
@@ -83,7 +85,8 @@ impl Sweep {
             };
             let rel = format!("pkgs/{id}/{name}");
             let ours = name.starts_with(STAGING_PREFIX)
-                || (is_version_folder(&name) && !kept.contains(rel.as_str()));
+                || (is_version_folder(&name)
+                    && kept.is_some_and(|kept| !kept.contains(rel.as_str())));
             if !ours || !child.file_type().is_ok_and(|kind| kind.is_dir()) {
                 continue;
             }

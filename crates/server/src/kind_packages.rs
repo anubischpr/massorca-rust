@@ -70,7 +70,7 @@ pub(crate) fn prepare_builtin_agents(extensions: &Extensions, store: &Store, pro
             tracing::info!(paths = ?removed, "extension install leftovers removed");
         }
         Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "extension install leftovers were not all removed"),
+        Err(error) => tracing::warn!(%error, "extension install leftovers were not swept"),
     }
     match extensions.refresh_builtins() {
         Ok(refreshed) if !refreshed.is_empty() => {
