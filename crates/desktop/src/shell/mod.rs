@@ -162,6 +162,12 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
+    /// Each session's composer, kept so its draft survives redraws and switches between sessions.
+    session_composers: HashMap<String, session_view::SessionComposer>,
+    /// The call in flight for each session, if any: one at a time per session.
+    session_calls: HashMap<String, session_view::SessionCall>,
+    /// Why the last stop or resume of each session was refused, shown above its composer.
+    session_notices: HashMap<String, String>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -399,6 +405,9 @@ impl Shell {
             debug_page: None,
             start_composers: HashMap::new(),
             start_pending: None,
+            session_composers: HashMap::new(),
+            session_calls: HashMap::new(),
+            session_notices: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
