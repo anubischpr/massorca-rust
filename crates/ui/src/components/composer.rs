@@ -57,6 +57,8 @@ pub fn bind_keys(cx: &mut App) {
 pub struct AccessMode {
     pub name: SharedString,
     pub icon: IconName,
+    /// The mode lifts the agent's permission prompts: the chip carries a warning glyph while it is selected.
+    pub bypass: bool,
 }
 
 /// A file or image attached to the next message.
@@ -102,6 +104,8 @@ pub struct Composer {
     attachments: Vec<Attachment>,
     access: Vec<AccessMode>,
     access_index: usize,
+    /// A caption after the access chip, such as a mode waiting for the next resume.
+    access_note: Option<SharedString>,
     agent_name: SharedString,
     voice: bool,
     /// Whether the attach button, its menu and dropped files are offered.
@@ -175,6 +179,7 @@ impl Composer {
             attachments: Vec::new(),
             access,
             access_index: 0,
+            access_note: None,
             agent_name: "Claude".into(),
             voice: true,
             attach_offered: true,
@@ -468,10 +473,12 @@ mod tests {
             AccessMode {
                 name: "Ask for approval".into(),
                 icon: IconName::Lock,
+                bypass: false,
             },
             AccessMode {
                 name: "Workspace write".into(),
                 icon: IconName::Shield,
+                bypass: false,
             },
         ]
     }
