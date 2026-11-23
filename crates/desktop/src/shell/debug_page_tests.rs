@@ -5,10 +5,11 @@ use super::service_tests::{draw, rig};
 use super::*;
 use crate::data::SampleDataSource;
 use crate::launch_options::DebugPage;
+use crate::model::canvas::Canvas;
 use crate::model::navigation::{Mode, Navigation, Page};
 use crate::model::settings_sections::SettingsSection;
 use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, UnavailableTeams};
-use crate::service::fixtures::team;
+use crate::service::fixtures::{agent, team};
 use crate::service::{StoreUpdate, TeamsRead};
 use gpui::{Entity, TestAppContext, VisualTestContext};
 use massorca_ui::{Appearance, Theme};
@@ -131,4 +132,96 @@ fn an_add_host_request_opens_the_hosts_dialog_without_data(cx: &mut TestAppConte
     draw(cx);
     assert_eq!(navigation(&shell, cx).page, Page::Settings);
     assert!(shell.read_with(cx, |shell, _| shell.add_host.is_some()));
+}
+
+#[gpui::test]
+fn the_session_page_opens_the_newest_session_once_the_service_lists_them(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::Session));
+    rig.updates
+        .send(StoreUpdate::AgentsResync(vec![
+            agent("s-old", "w1", 1),
+            agent("s-new", "w1", 9),
+        ]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, active) = shell.read_with(cx, |shell, _| {
+        (
+            shell.model().canvas(),
+            shell.model().snapshot().active_session.clone(),
+        )
+    });
+    assert!(matches!(canvas, Canvas::Session(_)), "{canvas:?}");
+    assert_eq!(active.as_deref(), Some("s-new"));
+}
+
+#[gpui::test]
+fn a_delegate_request_opens_the_form_under_the_newest_session(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::Delegate));
+    rig.updates
+        .send(StoreUpdate::AgentsResync(vec![agent("s", "w1", 10)]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.delegate.is_some()),
+        "the delegate form opens under the session"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .model()
+            .snapshot()
+            .active_session
+            .clone()),
+        Some("s".to_owned())
+    );
+}
+
+#[gpui::test]
+fn a_bring_back_request_opens_the_confirm_for_the_child_it_finds(cx: &mut TestAppContext) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::BringBack));
+    let mut child = agent("c", "w1", 20);
+    child.parent_id = Some("s".to_owned());
+    rig.updates
+        .send(StoreUpdate::AgentsResync(vec![agent("s", "w1", 10), child]))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .bring_back
+            .as_ref()
+            .map(|confirm| confirm.prompt.child.clone())),
+        Some("c".to_owned())
+    );
+}
+
+#[gpui::test]
+fn the_session_page_waits_for_the_session_list_then_opens_the_start_page_without_sessions(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = rig(cx, &[("p1", "alpha")]);
+    let shell = rig.shell.clone();
+    shell.update(cx, |shell, _| shell.start_debug_page(DebugPage::Session));
+    cx.run_until_parked();
+    draw(cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.debug_page.is_some()),
+        "the request waits while the session list is still arriving"
+    );
+    rig.updates
+        .send(StoreUpdate::AgentsResync(Vec::new()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.model().canvas()),
+        Canvas::Workspace("w1".to_owned())
+    );
 }

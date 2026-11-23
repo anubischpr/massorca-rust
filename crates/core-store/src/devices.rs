@@ -107,8 +107,20 @@ impl Store {
         Ok(())
     }
 
+    /// Replaces an active device's permission classes, as their wire names (`device.grant`). A revoked device is left
+    /// as it is. Returns whether an active device was changed.
+    pub fn grant_device_scopes(&self, id: &str, scopes: &[String]) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE devices SET scopes = ?2 WHERE id = ?1 AND revoked_at IS NULL",
+            params![id, scopes.join(",")],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Replaces a device's permission classes, as their wire names. The pairing flow sets them once; this lets a test hold
-    /// a paired device to a narrower set. Returns whether the device exists.
+    /// a paired device to a narrower set. Returns whether the device exists. Test-only: built under `cfg(test)` or the
+    /// `test-support` feature, so production code cannot call it.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_device_scopes(&self, id: &str, scopes: &[String]) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
             "UPDATE devices SET scopes = ?2 WHERE id = ?1",

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::methods::projects::ProjectKind;
 use crate::methods::tasks::{CardState, Column};
 
 /// Params: [`TeamCreateParams`]. Result: [`Team`].
@@ -35,6 +36,12 @@ pub const PROJECT_UPDATE: &str = "team.project_update";
 pub const PROJECT_REMOVE: &str = "team.project_rm";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
+/// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
+pub const MEMORY_LIST: &str = "team.memory_list";
+/// Params: [`TeamMemoryAddParams`]. Result: [`TeamMemoryLine`].
+pub const MEMORY_ADD: &str = "team.memory_add";
+/// Params: [`TeamMemoryRemoveParams`]. Result: [`TeamMemoryLine`], the removed line.
+pub const MEMORY_REMOVE: &str = "team.memory_rm";
 
 /// The shape a team is drawn with. Cosmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -199,7 +206,7 @@ pub struct BotRemoveParams {
     pub unassign: bool,
 }
 
-/// A project of a team, with its own Board and Brief. Its code source is not recorded yet.
+/// A project of a team, with its own Board and Brief, and the Workspaces project its code comes from when linked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamProject {
     pub id: String,
@@ -208,6 +215,15 @@ pub struct TeamProject {
     pub goal: String,
     pub brief: String,
     pub created_at_ms: i64,
+    /// The Workspaces project the code comes from, by id. Unset when no project is linked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
+    /// The name of the linked project. Unset when the link is absent or the project is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project_name: Option<String>,
+    /// Whether the linked project is a git repository or a folder. Unset like `source_project_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<ProjectKind>,
 }
 
 /// Params of `team.project_add`.
@@ -219,6 +235,9 @@ pub struct TeamProjectAddParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// A Workspaces project (id, exact name or path) the code comes from. Unset or blank links none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 
 /// Params of `team.project_update`. Only the fields given change.
@@ -232,6 +251,9 @@ pub struct TeamProjectUpdateParams {
     pub goal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// The Workspaces project (id, exact name or path) the code comes from. An empty value clears the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 
 /// Params of `team.project_rm`. The project's tasks stay on the team's Board without a project.
@@ -282,10 +304,82 @@ pub struct BoardCard {
     pub last_known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The workspace the last start ran in: the task's own worktree, a linked folder, or the team folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// The branch of the task's own worktree, where its result is; set only for a linked git project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// When the task last changed, Unix milliseconds.
     pub at_ms: i64,
 }
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// Where a memory line came from: a bot during a task, or the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySource {
+    Task,
+    Person,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A line of a team's memory, in the team scope or in one bot's. Lists are newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryLine {
+    pub id: String,
+    pub team_id: String,
+    /// The bot whose scope the line is in; absent for the team scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// At most 500 characters.
+    pub text: String,
+    pub source: MemorySource,
+    /// The task that wrote a `task` line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub created_at_ms: i64,
+}
+
+/// Params of `team.memory_list`. Without `bot`, the lines of the whole team; with it, only that bot's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryListParams {
+    pub team: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+}
+
+/// Result of `team.memory_list`, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryList {
+    pub lines: Vec<TeamMemoryLine>,
+}
+
+/// Params of `team.memory_add`. A `task` makes the line a task line; without it, the owner wrote the line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryAddParams {
+    pub team: String,
+    /// The bot whose scope the line joins: id, or exact name within the team. The team scope when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+    pub text: String,
+    /// The team's task that wrote the line: its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+}
+
+/// Params of `team.memory_rm`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryRemoveParams {
+    pub team: String,
+    /// The line's id.
+    pub line: String,
 }

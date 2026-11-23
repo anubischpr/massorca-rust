@@ -219,3 +219,18 @@ fn deleting_a_team_removes_its_bots_and_keeps_other_teams() {
     assert_eq!(store.get_bot(&bruno.id).unwrap(), Some(bruno));
     assert_eq!(store.get_team(&other.id).unwrap(), Some(other));
 }
+
+#[test]
+fn a_teams_folder_workspace_is_recorded_once_set() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    assert_eq!(store.team_workspace(&team.id).unwrap(), None);
+    assert!(store.set_team_workspace(&team.id, "workspace-1").unwrap());
+    assert_eq!(
+        store.team_workspace(&team.id).unwrap().as_deref(),
+        Some("workspace-1")
+    );
+    assert_eq!(store.team_workspace("missing").unwrap(), None);
+    assert!(!store.set_team_workspace("missing", "workspace-2").unwrap());
+}

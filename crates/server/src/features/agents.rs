@@ -22,12 +22,13 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use tokio::sync::{broadcast, mpsc};
 
 use super::agent_redaction::{for_caller, is_host_admin, watch_item_for};
+use super::teams::start_gate;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
-use crate::features::NoParams;
+use crate::features::{NoParams, sees_account_details};
 use crate::method::{StreamSource, encode};
 use crate::owner::Owner;
-use crate::permission::{Permission, authorize};
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -238,7 +239,12 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
 async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
-    let session = on_agents(&ctx, move |agents| agents.resume(&params.session, grant)).await?;
+    let session = on_agents(&ctx, move |agents| {
+        // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
+        let _gate = start_gate();
+        agents.resume(&params.session, grant)
+    })
+    .await?;
     Ok(for_caller(&ctx, session))
 }
 
@@ -469,12 +475,27 @@ async fn credentials_import(
     .await
 }
 
-/// Deprecated (0056): the kind's active account's files, names and sizes only.
+/// Deprecated (0056): the kind's active account's files, names and sizes only. Below `workspace` the home is left
+/// empty and a refusal keeps its code but not its message, which may name the home ([`sees_account_details`]).
 async fn credentials_show(
     ctx: RequestCtx,
     params: CredentialsKindRef,
 ) -> Result<CredentialsShown, ErrorBody> {
-    on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await
+    let kind = params.kind.clone();
+    let shown = on_agents(&ctx, move |agents| agents.credentials_show(&params.kind)).await;
+    if sees_account_details(&ctx.principal) {
+        return shown;
+    }
+    match shown {
+        Ok(mut shown) => {
+            shown.home = String::new();
+            Ok(shown)
+        }
+        Err(error) => Err(ErrorBody::new(
+            error.code,
+            format!("the credential home of agent kind {kind} cannot be shown"),
+        )),
+    }
 }
 
 /// Deprecated (0056): removes the kind's active account. Refused while a run of the kind is live.
@@ -494,12 +515,13 @@ async fn accounts_list(
     ctx: RequestCtx,
     params: AccountsListParams,
 ) -> Result<AccountsList, ErrorBody> {
-    on_agents(&ctx, move |agents| {
-        agents
-            .accounts_list(&params.kind)
-            .map(|accounts| AccountsList { accounts })
+    let accounts = on_agents(&ctx, move |agents| agents.accounts_list(&params.kind)).await?;
+    Ok(AccountsList {
+        accounts: accounts
+            .into_iter()
+            .map(|account| account_for_caller(&ctx.principal, account))
+            .collect(),
     })
-    .await
 }
 
 /// Sign-in: a new account and the terminal that runs the kind's login (decision 0059).
@@ -507,10 +529,12 @@ async fn accounts_add(
     ctx: RequestCtx,
     params: AccountsAddParams,
 ) -> Result<AccountsAdded, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let mut added = on_agents(&ctx, move |agents| {
         agents.accounts_add(&params.kind, params.label)
     })
-    .await
+    .await?;
+    added.account = account_for_caller(&ctx.principal, added.account);
+    Ok(added)
 }
 
 /// Import into a new account from a directory the person names (decision 0059).
@@ -518,20 +542,25 @@ async fn accounts_import(
     ctx: RequestCtx,
     params: AccountsImportParams,
 ) -> Result<AccountsImported, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let mut imported = on_agents(&ctx, move |agents| {
         agents.accounts_import(&params.kind, &params.from, params.label)
     })
-    .await
+    .await?;
+    imported.account = imported
+        .account
+        .map(|account| account_for_caller(&ctx.principal, account));
+    Ok(imported)
 }
 
 async fn accounts_activate(
     ctx: RequestCtx,
     params: AccountsActivateParams,
 ) -> Result<AccountSummary, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let account = on_agents(&ctx, move |agents| {
         agents.accounts_activate(&params.kind, &params.account, params.project.as_deref())
     })
-    .await
+    .await?;
+    Ok(account_for_caller(&ctx.principal, account))
 }
 
 async fn accounts_remove(
@@ -548,10 +577,20 @@ async fn accounts_check(
     ctx: RequestCtx,
     params: AccountsCheckParams,
 ) -> Result<AccountSummary, ErrorBody> {
-    on_agents(&ctx, move |agents| {
+    let account = on_agents(&ctx, move |agents| {
         agents.accounts_check(&params.kind, params.account.as_deref())
     })
-    .await
+    .await?;
+    Ok(account_for_caller(&ctx.principal, account))
+}
+
+/// An account as `principal` may see it: without its identity below `workspace` ([`sees_account_details`]). Every
+/// `agent.accounts.*` answer that carries an account passes through here.
+fn account_for_caller(principal: &Principal, mut account: AccountSummary) -> AccountSummary {
+    if !sees_account_details(principal) {
+        account.identity = None;
+    }
+    account
 }
 
 /// Refuses with `agent.busy` while any session of `kind` has a run that has not exited: replacing or removing its home
@@ -579,7 +618,7 @@ fn refuse_live_runs(agents: &Agents, kind: &str) -> Result<(), AgentError> {
 
 /// Runs one agents call on the blocking pool and maps its refusal to the protocol error.
 /// Whether a run started by this caller receives the vault's variables: only for a host-admin caller (decision 0071).
-fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
+pub(crate) fn secret_grant(ctx: &RequestCtx) -> SecretGrant {
     if is_host_admin(ctx) {
         SecretGrant::Provide
     } else {

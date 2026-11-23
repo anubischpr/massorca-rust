@@ -34,6 +34,9 @@ pub const WORKSPACE_IGNORED_FILES: &str = "workspace.ignored_files";
 /// A directory git does not recognise as its worktree; removal needs `forget_orphan`.
 pub const WORKSPACE_ORPHAN: &str = "workspace.orphan";
 pub const WORKSPACE_MAIN_WORKTREE: &str = "workspace.main_worktree";
+/// A workspace has a live terminal or agent run, or is being removed: a removal whose runs did not stop stays
+/// `removing`, and a project with such a workspace cannot be forgotten.
+pub const WORKSPACE_BUSY: &str = "workspace.busy";
 pub const BRANCH_EXISTS: &str = "branch.exists";
 pub const BRANCH_NOT_FOUND: &str = "branch.not_found";
 /// A branch name git does not accept.
@@ -52,6 +55,9 @@ pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
 /// A request path is absolute, has a `..` segment or a NUL, so it could leave the workspace.
 pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
+/// A caller without `workspace` permission asked for a git read that could not be made to start no program the
+/// repository names, such as a hooks folder that is not empty (decision 0078).
+pub const GIT_UNSAFE_FOR_CALLER: &str = "git.unsafe_for_caller";
 /// A revision does not resolve to a commit.
 pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
 /// A discard named untracked files without `delete_untracked`; `data.paths` lists them.
@@ -129,6 +135,8 @@ pub const PAIRING_TOO_MANY_OFFERS: &str = "pairing.too_many_offers";
 pub const DEVICE_NOT_FOUND: &str = "device.not_found";
 /// `device.forget` on a device that is still active; revoke it first.
 pub const DEVICE_NOT_REVOKED: &str = "device.not_revoked";
+/// `device.grant` on a revoked device; pair it again instead.
+pub const DEVICE_REVOKED: &str = "device.revoked";
 pub const TERMINAL_NOT_FOUND: &str = "terminal.not_found";
 /// Input or resize sent to a terminal whose process has already ended.
 pub const TERMINAL_EXITED: &str = "terminal.exited";
@@ -195,7 +203,11 @@ pub const TEAM_NOT_FOUND: &str = "team.not_found";
 /// Another team has this name.
 pub const TEAM_NAME_IN_USE: &str = "team.name_in_use";
 pub const TEAM_PROJECT_NOT_FOUND: &str = "team.project_not_found";
+/// `task.start` found the Bot teams folder already added as a project that is not a folder project.
+pub const TEAM_FOLDER_TAKEN: &str = "team.folder_taken";
 pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
+/// The team has no memory line with this id.
+pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
@@ -203,9 +215,17 @@ pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
 pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
 /// The bot owns open tasks; it can be removed only with `unassign`.
 pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
+/// `task.start` for a bot whose agent is still working on another task. The task stays where it was.
+pub const BOT_BUSY: &str = "bot.busy";
 pub const TASK_NOT_FOUND: &str = "task.not_found";
 /// The task's agent session still runs; stop it first.
 pub const TASK_RUNNING: &str = "task.running";
+/// `task.start` on a task that already has a session or an outcome; reopen it first.
+pub const TASK_STARTED: &str = "task.started";
+/// `task.start` on a task without a bot.
+pub const TASK_NO_BOT: &str = "task.no_bot";
+/// The task changed between the call reading it and writing it; read it again and retry.
+pub const TASK_CHANGED: &str = "task.changed";
 
 /// Reserved namespace for extension error codes; core never defines codes under it.
 pub const EXTENSION_PREFIX: &str = "extension.";

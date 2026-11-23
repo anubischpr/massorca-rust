@@ -121,8 +121,9 @@ The capability is `teams/1`.
 - **Events:**
   - `team.changed`, with the team id, for a team, bot or project change;
   - `task.changed`, with the task id, when a task is created, updated, started,
-    finished, done, reopened or removed. The service also publishes it when a
-    linked session's `agent.changed` changes the task's column.
+    finished, done, reopened or removed. The service also publishes it on every
+    `agent.changed` of a linked session, which can change the task's state or
+    column.
 
 ### CLI
 
@@ -156,3 +157,174 @@ These later items call `task.create` and the methods above.
 - `task.start` depends on the agents domain landing on main. Teams, bots,
   projects, tasks and the Board land first, and `task.start` follows in its
   own slice once agent sessions are on main.
+
+## Amendment 2026-11-22: Team memory
+
+A memory line belongs to a team. It is in the team scope, or in one bot's scope
+of that team. A line written during a task names the task and has the source
+`task`. A line the owner wrote has the source `person`. Each line keeps its
+creation time.
+
+A line is at most 500 characters. Surrounding spaces are removed first, and a
+blank line is refused. The count is in Unicode scalar values. The owner lists
+and removes lines. Bots and the owner add them.
+
+A task start reads 40 lines per scope: the newest 40 team-scope lines, and the
+newest 40 lines of the bot that starts the task. The store provides this read
+as `memory_for_start`. Task start does not read it yet. The next PR, which adds
+`task.start`, puts these lines in the bot's prompt.
+
+Methods:
+
+- `team.memory_list` takes `{ team, bot? }`. Without `bot` it lists every line
+  of the team. With `bot` it lists only that bot's lines. Newest first.
+- `team.memory_add` takes `{ team, bot?, text, task? }`. A given `task` makes
+  the line a `task` line. The task must belong to the team.
+- `team.memory_rm` takes `{ team, line }` and returns the removed line.
+
+Adds and removes publish `team.changed` with the team id. Refusals use
+`request.invalid_params` for a blank or long text, `team.not_found`,
+`bot.not_found`, `task.not_found`, and `team.memory_not_found`.
+
+CLI:
+
+```
+massorca team memory list <team> [--bot <bot>]
+massorca team memory add <team> <text> [--bot <bot>] [--task <task>]
+massorca team memory rm <team> <line>
+```
+
+Team files and the Engram link stay out of this change (AUTO-31).
+
+## Amendment 2026-11-22: a team project's source
+
+A team project can now name the Workspaces project its code comes from. This
+amends the "code source" that the core decision left out of scope.
+
+- **The link.** `source_project` holds the Workspaces project id. While that
+  project exists, the wire also returns `source_project_name` and `source_kind`
+  (`git` or `folder`). All three are left out when no project is linked.
+- **How it is set.** `team.project_add` and `team.project_update` take an
+  optional `source_project`: a Workspaces project id, exact name or path. The
+  Workspaces domain resolves it. An unknown project is refused with
+  `project.not_found`, and nothing changes.
+- **How it is cleared.** `team.project_update` with an empty `source_project`
+  clears the link. Leaving the field out keeps the link.
+- **When the Workspaces project is removed.** The link is cleared. The column
+  is a foreign key with `ON DELETE SET NULL`, so no dangling id is kept. The
+  team project keeps its id, name, goal, brief and Board.
+- **Storage.** Migration step 15 adds `team_projects.source_project_id`. Rows
+  from before it read as no link.
+- **CLI.** `massorca team project add|update <team> <name> --source <project>`
+  sets the link. On update, an empty `--source` clears it. `team project list`
+  shows the linked project's name in a fourth column, or `-`.
+- **Not in this change.** Starting a task on a linked project comes in the next
+  PR. A git project gets one worktree per task. A folder project runs the task
+  in the folder itself. Read-only tasks run in the main checkout.
+
+## Amendment 2026-11-22: where a task runs
+
+The workspace domain lets one agent write in a workspace at a time
+(`agent.workspace_busy`). A team's bots must still be able to work at once.
+
+- **A task with no project:** the bot works in the team's folder workspace,
+  `<workspaces root>/bot-teams/<team id>`. Every team folder belongs to one
+  folder project named "Bot teams", made on the first start. The team's
+  workspace is stored on the team and made again if it was removed.
+- **A team folder has several writers.** This is a property a folder
+  workspace can have and a worktree cannot. A folder has no git index to
+  corrupt, and the team's bots seeing each other's files is the point of a
+  team folder. Every other workspace keeps one writer and
+  `agent.workspace_busy`. pv96 ran a team's bots in one shared folder in the
+  same way.
+- **A busy bot:** a bot works on one task at a time. Another of its tasks still
+  running blocks a second start, and so does one whose session cannot be
+  verified. That start is refused with `bot.busy`. The task stays Open with the
+  reason in `error`, and nothing is queued. Starts are serialised, so two
+  starts for one bot cannot both find it free.
+- **A task on a team project that is a plain folder:** it runs in that
+  folder, with several writers. The project's folder workspace at its own path
+  is reused, or made when it has none, and is marked as shared.
+- **A task on a team project that is a git repository:** the bot works in its
+  own git worktree, made through the same Workspaces entry delegation uses for
+  a child agent. The Workspaces domain picks the base: the project's base
+  branch once projects have one, otherwise the main checkout's `HEAD`. The
+  main checkout's uncommitted changes are not carried, and the task prompt
+  says so. The result is that worktree's branch; the owner merges it.
+- **Worktree names:** as in pv96, the worktree and its branch are named after
+  the task title: a lowercase ASCII slug of at most 40 characters, then `-`
+  and 6 characters of the start attempt (`child-<6>` when the title has no
+  letters or digits). Every start makes a new worktree; a retry of the same
+  pending attempt finds its own.
+- **Cleanup:** none. `task.done`, `task.reopen`, `task.rm` and removing the
+  team leave the worktree and its branch. The owner removes them with
+  `workspace rm`, which keeps a branch that is not merged.
+- **Where the result is:** a task and a Board card carry optional
+  `workspace_id` (where the last start ran) and `branch` (set only for a task's
+  own worktree). Migration step 17 adds both columns.
+- **No source:** a task with no project, or whose project links no source or a
+  removed one, runs in the team folder.
+- **Read-only tasks: deferred.** pv96 runs a task that only reads in the main
+  checkout. Here a git project's main checkout has no workspace row, so no
+  agent can run there yet. That needs a Workspaces change of its own.
+- **Who owns the run:** the host that runs the agent owns the run. A card
+  follows its session in the `live`, `unverifiable` and `exited` terms. An
+  unverifiable session counts as running, and losing contact never moves a
+  card to Done or to a failure.
+- **Who starts the run:** the run is started with the scope of the caller of
+  `task.start`, never as the service. It gets the vault's variables only when
+  that caller holds host-admin scope, as `agent.start` does (decision 0071).
+  A paired device with standard scopes starts a run without them.
+- **Delivery:** the built-in kinds take the prompt on their command line, so
+  the prompt is delivered once the agent starts, and only then is the session
+  linked. A kind whose prompt mode is `none` gets its prompt at its first idle,
+  and the agents domain drops that prompt after 120 s. Such a kind's task can
+  show Running with a prompt it never received.
+- **Error code:** a task and a Board card carry `error_code` next to `error`.
+  It is the protocol code of the failed start, such as `agent.not_installed`,
+  `bot.busy` or `agent.credentials_invalid`, so a client can show its own
+  sentence. The field is optional and additive. A start that links a session
+  clears it, and so does `task.reopen`.
+- **Targeted task writes:** `task.update` writes only the title, body, bot and
+  project, so it never overwrites a session link that a start wrote after it
+  read the task. `task.done` and `task.reopen` write only if the task still has
+  the session they read. Otherwise they are refused: with `task.running` when
+  the task now runs, and with `task.changed` ("the task changed; try again")
+  otherwise.
+- **Waiting for a start:** `task.rm`, `task.done`, `task.reopen`, a bot change
+  in `task.update`, and `agent.resume` take one start gate. Each one checks
+  whether the task runs and writes under that gate, so no start links and no
+  resume revives a session between the check and the write. A task whose
+  session runs cannot be removed, finished, reopened or change bot; each is
+  refused with `task.running`. The gate is one for every team, so starts in
+  different teams also wait for each other. Starts are short, so this is
+  accepted for now.
+- **A task finished during its start:** the link is written only while the task
+  has no session and no outcome. When it finds an outcome, the start stops the
+  session it spawned and records `task.changed` on the task.
+- **Start attempt:** a start stores an attempt id on the task before it starts
+  the agent, and the agent request is keyed by it. The id is cleared once the
+  attempt is settled: the session is linked, or the start failed with nothing
+  left running. A retry after a start that left a run behind uses the same id,
+  so it finds that run instead of starting a second one.
+- **Stop on failure:** when a start spawned a session but cannot link it, it
+  stops that session at once, and records the error on the task if the task
+  still exists. A session that is not linked never keeps running. A start that
+  fails after the spawn point is treated the same way: the session is found by
+  its agent request id and stopped. When that stop fails, the attempt is kept.
+  The bot then stays busy while that run lives, and a retry names the same
+  run. A read that fails after a successful link is reported to the caller
+  and never stops the linked run.
+- **Known gap:** the agents domain stores the request id after the terminal
+  spawns. A service crash between the two lets a retry start a second process.
+  That is the agents domain's start order and is tracked there.
+- **A taken team path:** the "Bot teams" project must be a folder project. When
+  `<workspaces root>/bot-teams` was already added as another kind of project,
+  the start is refused with `team.folder_taken`, recorded on the task like
+  other failed starts. Nothing is written inside that project.
+- **Older hosts:** `task.start` joined `teams/1` without a new capability, so a
+  host from before it answers `method.not_found`. `massorca task start` shows
+  that answer as "this host is too old to run tasks; update it".
+- The bot's model and effort are not passed yet, because `agent.start` has no
+  field for them.
+- **Done latch:** a task whose session reports Done with an outcome keeps that outcome in `outcome` once the host can see the run; an unverifiable run latches nothing, so the Board keeps Done after the session is forgotten. Every change of a linked session publishes `task.changed`, and a session that finished before `task.start` linked it latches at the link.

@@ -210,6 +210,8 @@ impl Service {
             started_at_ms,
             activity: Activity::default(),
         });
+        // Subscribed before the first request is served, so no agent change is missed (decision 0072).
+        let outcome_changes = state.agent_changes.subscribe();
         service_json::write(&profile, &server_version, started_at_ms)?;
 
         // Terminals end as soon as shutdown is requested, alongside the connections' grace period.
@@ -218,6 +220,11 @@ impl Service {
             terminals_signal.wait().await;
             let _ = tokio::task::spawn_blocking(move || terminals.shutdown()).await;
         });
+        let outcomes_stop = tokio::spawn(features::follow_task_outcomes(
+            Arc::clone(&state),
+            outcome_changes,
+            signal.clone(),
+        ));
         let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
@@ -231,6 +238,7 @@ impl Service {
             )
             .await;
             let _ = terminals_stop.await;
+            let _ = outcomes_stop.await;
         });
         timings.mark("serving");
         timings.report();
@@ -269,7 +277,8 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
 }
 
 async fn open_store(path: PathBuf) -> Result<Store, ServiceError> {
-    let opened = tokio::task::spawn_blocking(move || Store::open(path))
+    let parts = StartTimings::part_logger();
+    let opened = tokio::task::spawn_blocking(move || Store::open_observed(path, parts))
         .await
         .map_err(io::Error::other)?;
     Ok(opened?)

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use massorca_core_terminal::EnvValue;
 use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 use serde_json::{Value, json};
 
@@ -65,7 +66,7 @@ pub struct LaunchPlan {
     pub program: PathBuf,
     pub args: Vec<String>,
     /// Set on top of the terminal environment, in this order of precedence: the caller's values win.
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, EnvValue>,
     /// Inherited variables the run must not see.
     pub remove_env: Vec<String>,
     /// Files to write before the run starts.
@@ -266,21 +267,19 @@ fn quote_for_shell(path: &str) -> String {
 
 /// The run's own variables, the credential home when there is one, the provided ones, then the caller's; and what to
 /// strip. A provided name in `strip_env` is set, not stripped: the vault granted it.
-fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, String>, Vec<String>) {
+fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<String>) {
     let mut env = BTreeMap::new();
-    env.insert(ENV_SESSION.to_owned(), input.session_id.to_owned());
-    env.insert(ENV_TOKEN.to_owned(), input.token.to_owned());
-    env.insert(ENV_KIND.to_owned(), input.decl.id.clone());
+    let value = |text: &str| EnvValue::new(text.to_owned());
+    env.insert(ENV_SESSION.to_owned(), value(input.session_id));
+    env.insert(ENV_TOKEN.to_owned(), value(input.token));
+    env.insert(ENV_KIND.to_owned(), value(&input.decl.id));
     env.insert(
         ENV_BIN.to_owned(),
-        input.massorca_bin.to_string_lossy().into_owned(),
+        value(&input.massorca_bin.to_string_lossy()),
     );
     let mut remove_env = Vec::new();
     if let (Some(home), Some(credentials)) = (input.credential_home, &input.decl.credentials) {
-        env.insert(
-            credentials.home_env.clone(),
-            home.to_string_lossy().into_owned(),
-        );
+        env.insert(credentials.home_env.clone(), value(&home.to_string_lossy()));
         remove_env = credentials
             .strip_env
             .iter()
@@ -291,11 +290,11 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, String>, Vec<String
     for (name, value) in input.provided_env.iter() {
         env.retain(|existing, _| !same_name(existing, name));
         remove_env.retain(|stripped| !same_name(stripped, name));
-        env.insert(name.to_owned(), value.to_owned());
+        env.insert(name.to_owned(), EnvValue::new(value.to_owned()));
     }
-    for (name, value) in input.caller_env {
+    for (name, caller_value) in input.caller_env {
         env.retain(|existing, _| !same_name(existing, name));
-        env.insert(name.clone(), value.clone());
+        env.insert(name.clone(), value(caller_value));
     }
     (env, remove_env)
 }
@@ -535,10 +534,10 @@ mod tests {
     #[test]
     fn the_run_environment_names_the_session_and_the_binary() {
         let plan = Fixture::new(fake(json!({ "mode": "argv" }))).first(None);
-        assert_eq!(plan.env[ENV_SESSION], "s-1");
-        assert_eq!(plan.env[ENV_TOKEN], "t0k3n");
-        assert_eq!(plan.env[ENV_KIND], "fake");
-        assert_eq!(plan.env[ENV_BIN], "/opt/mass orca/massorca");
+        assert_eq!(plan.env[ENV_SESSION].as_str(), "s-1");
+        assert_eq!(plan.env[ENV_TOKEN].as_str(), "t0k3n");
+        assert_eq!(plan.env[ENV_KIND].as_str(), "fake");
+        assert_eq!(plan.env[ENV_BIN].as_str(), "/opt/mass orca/massorca");
         assert!(plan.remove_env.is_empty());
     }
 
@@ -552,7 +551,7 @@ mod tests {
         fixture.home = Some(PathBuf::from("/data/profiles/default/agents/homes/claude"));
         let with = fixture.first(None);
         assert_eq!(
-            with.env["CLAUDE_CONFIG_DIR"],
+            with.env["CLAUDE_CONFIG_DIR"].as_str(),
             "/data/profiles/default/agents/homes/claude"
         );
         assert_eq!(
@@ -574,8 +573,8 @@ mod tests {
             ("CLAUDE_CONFIG_DIR".to_owned(), "/elsewhere".to_owned()),
         ]);
         let plan = fixture.first(None);
-        assert_eq!(plan.env["ANTHROPIC_API_KEY"], "explicit");
-        assert_eq!(plan.env["CLAUDE_CONFIG_DIR"], "/elsewhere");
+        assert_eq!(plan.env["ANTHROPIC_API_KEY"].as_str(), "explicit");
+        assert_eq!(plan.env["CLAUDE_CONFIG_DIR"].as_str(), "/elsewhere");
         assert!(
             !plan
                 .remove_env
@@ -605,9 +604,13 @@ mod tests {
         fixture.provided = provided(&[("API_URL", "from-vault"), ("SHARED", "from-vault")]);
         fixture.caller_env = BTreeMap::from([("SHARED".to_owned(), "from-caller".to_owned())]);
         let plan = fixture.first(None);
-        assert_eq!(plan.env["API_URL"], "from-vault");
-        assert_eq!(plan.env["SHARED"], "from-caller", "the caller wins");
-        assert_eq!(plan.env["CLAUDE_CONFIG_DIR"], "/home-dir");
+        assert_eq!(plan.env["API_URL"].as_str(), "from-vault");
+        assert_eq!(
+            plan.env["SHARED"].as_str(),
+            "from-caller",
+            "the caller wins"
+        );
+        assert_eq!(plan.env["CLAUDE_CONFIG_DIR"].as_str(), "/home-dir");
     }
 
     #[test]
@@ -616,7 +619,7 @@ mod tests {
         fixture.home = Some(PathBuf::from("/home-dir"));
         fixture.provided = provided(&[("ANTHROPIC_API_KEY", "granted")]);
         let plan = fixture.first(None);
-        assert_eq!(plan.env["ANTHROPIC_API_KEY"], "granted");
+        assert_eq!(plan.env["ANTHROPIC_API_KEY"].as_str(), "granted");
         assert!(
             !plan
                 .remove_env

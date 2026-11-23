@@ -58,3 +58,25 @@ fn revoking_is_recorded_once_and_touch_updates_last_seen() {
     assert_eq!(stored.revoked_at, Some(30));
     assert_eq!(stored.scopes, ["read", "workspace"]);
 }
+
+#[test]
+fn a_grant_widens_an_active_device_and_leaves_a_revoked_one() {
+    let store = Store::open_in_memory().unwrap();
+    let active = device("laptop", "sha256:a");
+    let revoked = device("phone", "sha256:b");
+    store.insert_device(&active).unwrap();
+    store.insert_device(&revoked).unwrap();
+    store.revoke_device(&revoked.id, 30).unwrap();
+    let all: Vec<String> = ["read", "workspace", "host-admin", "device-admin"]
+        .map(str::to_owned)
+        .to_vec();
+
+    assert!(store.grant_device_scopes(&active.id, &all).unwrap());
+    assert!(!store.grant_device_scopes(&revoked.id, &all).unwrap());
+    assert!(!store.grant_device_scopes("missing", &all).unwrap());
+    assert_eq!(store.get_device(&active.id).unwrap().unwrap().scopes, all);
+    assert_eq!(
+        store.get_device(&revoked.id).unwrap().unwrap().scopes,
+        ["read", "workspace"]
+    );
+}

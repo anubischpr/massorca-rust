@@ -30,6 +30,7 @@ use massorca_protocol::methods::agents::{
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
 };
+use massorca_protocol::methods::workspaces::{Workspace, WorkspaceState};
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
@@ -212,6 +213,9 @@ struct Inner {
     /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
     /// held.
     merging: Mutex<HashSet<String>>,
+    /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
+    /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
+    sign_in_timeout: Duration,
 }
 
 /// A run whose exit the service has not seen yet.
@@ -282,6 +286,11 @@ impl Agents {
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
+                sign_in_timeout: crate::sign_in::sign_in_timeout_from(
+                    std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
+                        .ok()
+                        .as_deref(),
+                ),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -305,6 +314,11 @@ impl Agents {
     /// The terminal manager the runs and sign-ins are created in.
     pub(crate) fn terminals(&self) -> &TerminalManager {
         &self.inner.config.terminals
+    }
+
+    /// How long a sign-in terminal may stay open with no result (decision 0059).
+    pub(crate) fn sign_in_timeout(&self) -> Duration {
+        self.inner.sign_in_timeout
     }
 
     /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.
@@ -386,6 +400,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&params.workspace)?;
+        refuse_removing(&workspace)?;
         self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
@@ -408,6 +423,7 @@ impl Agents {
             }
         }
         if !params.read_only
+            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
         {
             let mut error = AgentError::new(
@@ -537,6 +553,7 @@ impl Agents {
             .config
             .workspaces
             .show_workspace(&row.workspace_id)?;
+        refuse_removing(&workspace)?;
         self.refuse_while_merging(&workspace.id)?;
         if workspace.missing {
             return Err(AgentError::new(
@@ -545,6 +562,7 @@ impl Agents {
             ));
         }
         if !row.read_only
+            && !self.inner.config.workspaces.shares_writers(&workspace.id)?
             && let Some(holder) = self.live_writer(&workspace.id)?
         {
             let mut error = AgentError::new(
@@ -1297,8 +1315,19 @@ fn activity_of(stored: &StoredActivity) -> Option<Activity> {
     serde_json::from_value(value).ok()
 }
 
+/// No run starts in a workspace being removed: its removal stops the runs it finds, and must find them all.
+fn refuse_removing(workspace: &Workspace) -> Result<(), AgentError> {
+    if workspace.state == WorkspaceState::Removing {
+        return Err(AgentError::new(
+            codes::WORKSPACE_NOT_FOUND,
+            format!("workspace `{}` is being removed", workspace.name),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use massorca_core_git::Git;
     use massorca_core_store::{
         ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState,
@@ -1310,7 +1339,7 @@ mod tests {
     use super::*;
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
-    pub(super) fn service() -> (Agents, String, tempfile::TempDir) {
+    pub(crate) fn service() -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {

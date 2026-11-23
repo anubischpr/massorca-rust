@@ -1,7 +1,7 @@
 //! The extension service of one profile: review, install, enable, disable and remove. Every change is serialised by
 //! one lock, and `lock.json` is committed last, so a failed change leaves nothing registered.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -14,6 +14,7 @@ use massorca_ext_package::manifest::agent::{CliOs, is_vendor_program};
 use massorca_ext_package::manifest::{self, Manifest};
 use massorca_profile::Profile;
 
+use crate::agents::catalogue_agent_kinds;
 use crate::catalogue;
 use crate::error::Error;
 use crate::hooks::Hooks;
@@ -21,7 +22,7 @@ use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, curre
 use crate::layout::Layout;
 use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile};
 use crate::review::{self, CliPlan, PlanState, Review};
-use crate::source::{self, Files, Source};
+use crate::source::{self, Files, LoadedPackage, Source};
 
 /// The extension service of one profile.
 pub struct Extensions {
@@ -123,12 +124,7 @@ impl Extensions {
         let builtin = matches!(source, Source::Catalogue(_));
         displaced(&lockfile, &manifest.id, builtin)?;
         self.check_kind_conflicts(&lockfile, manifest, builtin)?;
-        let kinds: Vec<String> = manifest
-            .contributes
-            .agent_adapters
-            .iter()
-            .map(|adapter| adapter.id.clone())
-            .collect();
+        let kinds = agent_kind_ids(manifest);
         self.refuse_if_busy(&manifest.id)?;
         self.check_installing_kinds(&manifest.id, &kinds)?;
 
@@ -147,13 +143,25 @@ impl Extensions {
         }
 
         let busy = self.mark_busy(&manifest.id, kinds)?;
-        let version = manifest.version.to_string();
-        let rel = Layout::package_rel_path(&manifest.id, &version, &package.sha256);
+        self.unpack_staged(package, busy, plan, expected, builtin)
+    }
+
+    /// Unpacks a checked package and checks the folder against the reviewed hash. Callers hold the change lock.
+    fn unpack_staged(
+        &self,
+        package: LoadedPackage,
+        busy: Busy,
+        plan: Vec<CliPlan>,
+        consent: String,
+        builtin: bool,
+    ) -> Result<Staged, Error> {
+        let version = package.manifest.version.to_string();
+        let rel = Layout::package_rel_path(&package.manifest.id, &version, &package.sha256);
         let dir = self.layout.resolve(&rel);
         let files_sha256 = source::canonical_sha256(&package.files);
-        self.unpack(&manifest.id, &package.files, &dir)?;
-        if let Err(error) = check_unpacked(&manifest.id, &dir, &files_sha256) {
-            self.remove_unpacked(&manifest.id, &dir);
+        self.unpack(&package.manifest.id, &package.files, &dir)?;
+        if let Err(error) = check_unpacked(&package.manifest.id, &dir, &files_sha256) {
+            self.remove_unpacked(&package.manifest.id, &dir);
             return Err(error);
         }
         Ok(Staged {
@@ -166,7 +174,7 @@ impl Extensions {
             files_sha256,
             source: package.source,
             sha256: package.sha256,
-            consent: expected,
+            consent,
             builtin,
         })
     }
@@ -174,46 +182,13 @@ impl Extensions {
     /// Records the install under the change lock, after its vendor command ran. Whatever fails here removes the
     /// unpacked folder, so nothing is registered.
     fn commit(&self, staged: Staged, ran: Result<Vec<LockCli>, Error>) -> Result<LockEntry, Error> {
-        let Staged {
-            _busy,
-            manifest,
-            version,
-            rel,
-            dir,
-            files_sha256,
-            source,
-            sha256,
-            consent,
-            builtin,
-            plan: _,
-        } = staged;
         let _changes = self.lock_changes();
         let committed = ran.and_then(|cli| {
             let mut lockfile = self.read_lockfile()?;
-            let displaced = displaced(&lockfile, &manifest.id, builtin)?;
-            self.check_kind_conflicts(&lockfile, &manifest, builtin)?;
-            let entry = LockEntry {
-                id: manifest.id.clone(),
-                version,
-                source,
-                sha256,
-                files_sha256: Some(files_sha256),
-                path: rel.clone(),
-                enabled: true,
-                consent,
-                installed_at_ms: now_ms(),
-                cli,
-                agent_kinds: manifest
-                    .contributes
-                    .agent_adapters
-                    .iter()
-                    .map(|adapter| adapter.id.clone())
-                    .collect(),
-                extra: Default::default(),
-            };
-            lockfile
-                .packages
-                .retain(|package| package.id != manifest.id);
+            let displaced = displaced(&lockfile, &staged.manifest.id, staged.builtin)?;
+            self.check_kind_conflicts(&lockfile, &staged.manifest, staged.builtin)?;
+            let entry = staged.entry(cli, false);
+            lockfile.packages.retain(|package| package.id != entry.id);
             lockfile.packages.push(entry.clone());
             lockfile.write(&self.layout.lock_path())?;
             Ok((entry, displaced))
@@ -221,7 +196,7 @@ impl Extensions {
         match committed {
             Ok((entry, displaced)) => {
                 if let Some(old) = displaced
-                    && old.path != rel
+                    && old.path != entry.path
                 {
                     // The displaced entry left the lockfile with this install, so its folder is only litter now.
                     let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
@@ -229,9 +204,165 @@ impl Extensions {
                 Ok(entry)
             }
             Err(error) => {
-                self.remove_unpacked(&manifest.id, &dir);
+                self.remove_unpacked(&staged.manifest.id, &staged.dir);
                 Err(error)
             }
+        }
+    }
+
+    /// Adopts the built-in agent packages that declare one of `used_kinds`, once per profile (decision 0063). Each is
+    /// registered enabled, with no vendor command, no program lookup and no consent: the build vouches for it. One
+    /// lockfile write records them and the run, so a later call changes nothing. Returns the adopted package ids in
+    /// catalogue order.
+    pub fn adopt_builtin_agents(
+        &self,
+        used_kinds: &BTreeSet<String>,
+    ) -> Result<Vec<String>, Error> {
+        let _changes = self.lock_changes();
+        let mut lockfile = self.read_lockfile()?;
+        if lockfile.has_migration(BUILTIN_AGENTS_MIGRATION) {
+            return Ok(Vec::new());
+        }
+        let mut staged: Vec<Staged> = Vec::new();
+        for id in adoption_ids(used_kinds, &lockfile) {
+            match self.stage_built_in(&lockfile, &id) {
+                Ok(next) => staged.push(next),
+                Err(error) => {
+                    self.remove_staged(&staged);
+                    return Err(error);
+                }
+            }
+        }
+        let entries: Vec<LockEntry> = staged
+            .iter()
+            .map(|next| next.entry(Vec::new(), true))
+            .collect();
+        let replaced: Vec<String> = lockfile
+            .packages
+            .iter()
+            .filter(|entry| entries.iter().any(|new| new.id == entry.id))
+            .map(|entry| entry.path.clone())
+            .collect();
+        lockfile
+            .packages
+            .retain(|entry| !entries.iter().any(|new| new.id == entry.id));
+        lockfile.packages.extend(entries.iter().cloned());
+        lockfile.record_migration(BUILTIN_AGENTS_MIGRATION);
+        if let Err(error) = lockfile.write(&self.layout.lock_path()) {
+            self.remove_staged(&staged);
+            return Err(error);
+        }
+        for path in replaced {
+            if !entries.iter().any(|entry| entry.path == path) {
+                // The unvouched entry left the lockfile with this write, so its folder is only litter now.
+                let _ = fs::remove_dir_all(self.layout.resolve(&path));
+            }
+        }
+        Ok(entries.into_iter().map(|entry| entry.id).collect())
+    }
+
+    /// Brings every built-in install whose files predate this build's embedded package up to date, in place
+    /// (decision 0063). Its enabled state, consent, CLI registrations, install time and adoption mark are kept, and no
+    /// vendor command or program lookup runs. One lockfile write records every package that staged; a package that
+    /// fails to stage stays as it was, and its first error is returned after that write. Returns the refreshed
+    /// package ids in lockfile order.
+    pub fn refresh_builtins(&self) -> Result<Vec<String>, Error> {
+        let _changes = self.lock_changes();
+        let mut lockfile = self.read_lockfile()?;
+        let mut outdated: Vec<LockEntry> = Vec::new();
+        for entry in &lockfile.packages {
+            // Only the first entry of an id is ever read, so only it is refreshed.
+            if catalogue::is_outdated_builtin_install(entry)
+                && !outdated.iter().any(|old| old.id == entry.id)
+            {
+                outdated.push(entry.clone());
+            }
+        }
+        let mut staged: Vec<(LockEntry, Staged)> = Vec::new();
+        let mut failed: Option<Error> = None;
+        for old in outdated {
+            match self.stage_refresh(&lockfile, &old) {
+                Ok(Some(next)) => staged.push((old, next)),
+                Ok(None) => {}
+                Err(error) => {
+                    failed.get_or_insert(error);
+                }
+            }
+        }
+        if staged.is_empty() {
+            return failed.map_or(Ok(Vec::new()), Err);
+        }
+        for (old, next) in &staged {
+            let fresh = LockEntry {
+                enabled: old.enabled,
+                consent: old.consent.clone(),
+                installed_at_ms: old.installed_at_ms,
+                extra: old.extra.clone(),
+                ..next.entry(old.cli.clone(), old.adopted)
+            };
+            if let Some(slot) = lockfile
+                .packages
+                .iter_mut()
+                .find(|entry| entry.id == old.id)
+            {
+                *slot = fresh;
+            }
+        }
+        if let Err(error) = lockfile.write(&self.layout.lock_path()) {
+            for (_, next) in &staged {
+                self.remove_unpacked(&next.manifest.id, &next.dir);
+            }
+            return Err(error);
+        }
+        for (old, _) in &staged {
+            // The outdated files left the lockfile with this write, so their folder is only litter now.
+            let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+        }
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(staged.into_iter().map(|(old, _)| old.id).collect()),
+        }
+    }
+
+    /// Unpacks the embedded package that replaces an outdated built-in install. `None` when the new folder would be the
+    /// old one: unpacking replaces the target folder, which here is the install's only copy.
+    fn stage_refresh(&self, lockfile: &Lockfile, old: &LockEntry) -> Result<Option<Staged>, Error> {
+        let package = source::load(&Source::Catalogue(old.id.clone()), None)?;
+        let rel = Layout::package_rel_path(
+            &package.manifest.id,
+            &package.manifest.version.to_string(),
+            &package.sha256,
+        );
+        if rel == old.path {
+            return Ok(None);
+        }
+        self.stage_loaded_built_in(lockfile, package).map(Some)
+    }
+
+    /// Checks and unpacks one built-in package for adoption. Callers hold the change lock.
+    fn stage_built_in(&self, lockfile: &Lockfile, id: &str) -> Result<Staged, Error> {
+        let package = source::load(&Source::Catalogue(id.to_owned()), None)?;
+        self.stage_loaded_built_in(lockfile, package)
+    }
+
+    /// Checks and unpacks a loaded built-in package. Callers hold the change lock.
+    fn stage_loaded_built_in(
+        &self,
+        lockfile: &Lockfile,
+        package: LoadedPackage,
+    ) -> Result<Staged, Error> {
+        self.check_kind_conflicts(lockfile, &package.manifest, true)?;
+        let kinds = agent_kind_ids(&package.manifest);
+        let id = package.manifest.id.clone();
+        self.check_installing_kinds(&id, &kinds)?;
+        let busy = self.mark_busy(&id, kinds)?;
+        self.unpack_staged(package, busy, Vec::new(), String::new(), true)
+    }
+
+    /// Deletes the folders of packages staged for an adoption that did not commit.
+    fn remove_staged(&self, staged: &[Staged]) {
+        for next in staged {
+            self.remove_unpacked(&next.manifest.id, &next.dir);
         }
     }
 
@@ -452,6 +583,27 @@ struct Staged {
     builtin: bool,
 }
 
+impl Staged {
+    /// The lock entry this install records, with what its vendor commands did for each CLI.
+    fn entry(&self, cli: Vec<LockCli>, adopted: bool) -> LockEntry {
+        LockEntry {
+            id: self.manifest.id.clone(),
+            version: self.version.clone(),
+            source: self.source.clone(),
+            sha256: self.sha256.clone(),
+            files_sha256: Some(self.files_sha256.clone()),
+            path: self.rel.clone(),
+            enabled: true,
+            consent: self.consent.clone(),
+            installed_at_ms: now_ms(),
+            cli,
+            agent_kinds: agent_kind_ids(&self.manifest),
+            adopted,
+            extra: Default::default(),
+        }
+    }
+}
+
 /// Marks one package busy while its install or removal runs without the change lock. Dropping it clears the mark.
 pub(crate) struct Busy {
     installing: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
@@ -465,6 +617,35 @@ impl Drop for Busy {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.id);
     }
+}
+
+/// The agent kind ids a package declares, as its lock entry records them.
+fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
+    manifest
+        .contributes
+        .agent_adapters
+        .iter()
+        .map(|adapter| adapter.id.clone())
+        .collect()
+}
+
+/// The built-in packages an adoption registers: those declaring a used kind and not installed as built-ins, in catalogue
+/// order.
+fn adoption_ids(used_kinds: &BTreeSet<String>, lockfile: &Lockfile) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for kind in catalogue_agent_kinds() {
+        let installed = lockfile
+            .get(&kind.package_id)
+            // An outdated built-in is still the person's install: refresh_builtins updates it, adoption must not reset it.
+            .is_some_and(|entry| {
+                catalogue::is_builtin_install(entry)
+                    || catalogue::is_outdated_builtin_install(entry)
+            });
+        if used_kinds.contains(&kind.kind_id) && !installed && !ids.contains(&kind.package_id) {
+            ids.push(kind.package_id);
+        }
+    }
+    ids
 }
 
 /// The lock entry an install of `id` displaces. Only the built-in replaces a first-party entry the catalogue does not
@@ -520,6 +701,9 @@ fn note_remaining_cli(log: &Path, command: &[String]) {
 }
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The lockfile migration that adopts the built-in agent packages (decision 0063).
+const BUILTIN_AGENTS_MIGRATION: &str = "builtin-agents";
 
 pub(crate) fn describe(exit: Exit) -> String {
     match (exit.timed_out, exit.code) {

@@ -28,7 +28,7 @@ pub struct SpawnSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: PathBuf,
-    pub env: Vec<(String, String)>,
+    pub env: Vec<(String, crate::EnvValue)>,
     pub size: PtySize,
 }
 
@@ -90,8 +90,9 @@ pub fn spawn(spec: &SpawnSpec) -> Result<Spawned, PtyError> {
     command.args(&spec.args);
     command.cwd(&spec.cwd);
     command.env_clear();
+    // portable-pty copies each value into its own map, which this side cannot zero (decision 0071).
     for (name, value) in &spec.env {
-        command.env(name, value);
+        command.env(name, value.as_str());
     }
     let mut child = pair
         .slave

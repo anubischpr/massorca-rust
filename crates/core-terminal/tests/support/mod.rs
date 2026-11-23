@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use massorca_core_terminal::EnvValue;
 use massorca_core_terminal::pty::{
     ExitInfo, PtyChild, PtyMaster, PtyReader, PtySize, SpawnSpec, Spawned, spawn,
 };
@@ -29,7 +30,7 @@ pub fn shell_program() -> PathBuf {
 }
 
 /// The environment a terminal really gets, built from this process's environment.
-pub fn terminal_env() -> Vec<(String, String)> {
+pub fn terminal_env() -> Vec<(String, EnvValue)> {
     let extra = std::collections::BTreeMap::new();
     build_environment(
         &EnvSnapshot::current(),
@@ -44,7 +45,12 @@ pub fn terminal_env() -> Vec<(String, String)> {
     )
 }
 
-pub fn spec(program: PathBuf, args: &[&str], cwd: &Path, env: Vec<(String, String)>) -> SpawnSpec {
+pub fn spec(
+    program: PathBuf,
+    args: &[&str],
+    cwd: &Path,
+    env: Vec<(String, EnvValue)>,
+) -> SpawnSpec {
     SpawnSpec {
         program,
         args: args.iter().map(|arg| (*arg).to_owned()).collect(),
