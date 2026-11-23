@@ -152,6 +152,7 @@ async fn secrets_never_reach_logs_or_error_text() {
             &PairingCreateParams {
                 ttl_secs: None,
                 admin: false,
+                standard: false,
             },
         )
         .await

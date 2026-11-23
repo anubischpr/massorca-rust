@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use massorca_core_store::{DeviceRow, now_ms};
 use massorca_protocol::methods::devices::{
-    self, DeviceForgetParams, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus,
-    PairingCreateParams, PairingCreated, WhoAmI,
+    self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
+    NetworkStatus, PairingCreateParams, PairingCreated, WhoAmI,
 };
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -49,6 +49,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::DEVICES,
             Permission::HostAdmin,
             forget,
+        )?,
+        methods.register(
+            Owner::Core,
+            devices::GRANT,
+            capabilities::DEVICES,
+            Permission::HostAdmin,
+            grant,
         )?,
         methods.register(
             Owner::Core,
@@ -148,29 +155,50 @@ fn not_revoked(device: &str) -> ErrorBody {
     )
 }
 
+/// The device a selector names: its id, or its name when exactly one device has it.
+fn find_device(rows: &[DeviceRow], selector: &str) -> Result<DeviceRow, ErrorBody> {
+    let by_id = rows.iter().find(|row| row.id == selector);
+    let named: Vec<_> = rows.iter().filter(|row| row.name == selector).collect();
+    match (by_id, named.as_slice()) {
+        (Some(row), _) => Ok(row.clone()),
+        (None, [row]) => Ok((*row).clone()),
+        (None, []) => Err(ErrorBody::new(
+            codes::DEVICE_NOT_FOUND,
+            format!("no device {selector:?}"),
+        )),
+        (None, _) => Err(ErrorBody::new(
+            codes::SELECTOR_AMBIGUOUS,
+            format!("several devices are named {selector:?}; use the id"),
+        )),
+    }
+}
+
+/// Gives an active device every scope (decision 0041, owner direction of 2026-11-22). It applies from the device's
+/// next connection.
+async fn grant(ctx: RequestCtx, params: DeviceGrantParams) -> Result<DeviceInfo, ErrorBody> {
+    let rows = store_blocking::run(&ctx.state, |store| store.list_devices()).await?;
+    let row = find_device(&rows, &params.device)?;
+    if row.revoked_at.is_some() {
+        return Err(ErrorBody::new(
+            codes::DEVICE_REVOKED,
+            format!("device {:?} is revoked; pair it again instead", row.name),
+        ));
+    }
+    let id = row.id.clone();
+    let scopes = Scopes::ADMIN.names();
+    store_blocking::run(&ctx.state, move |store| {
+        store.set_device_scopes(&id, &scopes)
+    })
+    .await?;
+    tracing::info!(device = %row.id, "a device was granted full access");
+    let id = row.id.clone();
+    let stored = store_blocking::run(&ctx.state, move |store| store.get_device(&id)).await?;
+    Ok(info(stored.unwrap_or(row), None))
+}
+
 async fn revoke(ctx: RequestCtx, params: DeviceRevokeParams) -> Result<DeviceInfo, ErrorBody> {
     let rows = store_blocking::run(&ctx.state, |store| store.list_devices()).await?;
-    let by_id = rows.iter().find(|row| row.id == params.device);
-    let named: Vec<_> = rows
-        .iter()
-        .filter(|row| row.name == params.device)
-        .collect();
-    let row = match (by_id, named.as_slice()) {
-        (Some(row), _) => row.clone(),
-        (None, [row]) => (*row).clone(),
-        (None, []) => {
-            return Err(ErrorBody::new(
-                codes::DEVICE_NOT_FOUND,
-                format!("no device {:?}", params.device),
-            ));
-        }
-        (None, _) => {
-            return Err(ErrorBody::new(
-                codes::SELECTOR_AMBIGUOUS,
-                format!("several devices are named {:?}; use the id", params.device),
-            ));
-        }
-    };
+    let row = find_device(&rows, &params.device)?;
     if ctx.principal.device_id() != Some(row.id.as_str()) {
         authorize(&ctx.principal, Permission::DeviceAdmin)?;
     }
@@ -227,10 +255,11 @@ async fn pairing_create(
             format!("ttl_secs is 1 to {}", MAX_TTL.as_secs()),
         ));
     }
-    let scopes = if params.admin {
-        Scopes::ADMIN
-    } else {
+    // Full access is the default (owner direction of 2026-11-22); a reduced offer is asked for explicitly.
+    let scopes = if params.standard {
         Scopes::STANDARD
+    } else {
+        Scopes::ADMIN
     };
     let secret = network.pairing.create(ttl, scopes, Instant::now())?;
     let expires_at_ms = now_ms() + i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);

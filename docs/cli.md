@@ -56,10 +56,11 @@ the `--home` flag but never `MASSORCA_HOME`, because its unit is for another mac
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
-| `pair offer [--admin] [--ttl <SECS>]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. `--admin` adds `host-admin` and `device-admin`. |
+| `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
 | `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
+| `device grant <DEVICE>` | Gives a paired device full access, every scope, from its next connection, so a reduced device does not have to pair again. Needs host-admin. A revoked device is refused with `device.revoked`. |
 | `device forget <DEVICE>` | Removes a revoked device from `device list`. Takes the id, or a name that exactly one revoked device has. Needs host-admin. An active device is refused with `device.not_revoked`. A forgotten device stays refused: its key is no longer known. |
 | `device whoami` | Shows the principal this command runs as, its scopes and its device. |
 | `server status` | Shows the listeners, the server pin, the active devices and the pending offers. Without `--host`, also this computer's Tailscale state. |
@@ -292,7 +293,7 @@ The server's owner makes an offer, and the other computer accepts it:
 
 ```sh
 # on the server
-massorca pair offer --admin
+massorca pair offer
 # on the other computer, reading the offer from stdin
 massorca pair accept - --name vps
 ```

@@ -59,7 +59,9 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let params = PairingCreateParams {
                 ttl_secs: None,
-                admin: false,
+                // Full access, which older services grant only when asked.
+                admin: true,
+                standard: false,
             };
             let result = service.create_offer(params).await;
             let _ = this.update(cx, |shell, cx| {

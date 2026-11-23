@@ -139,6 +139,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("device"),
         ),
         command(
+            "device.grant",
+            "Give a paired device full access",
+            "device.grant",
+            selector("device"),
+        ),
+        command(
             "device.whoami",
             "Show who this connection acts as",
             "device.whoami",
