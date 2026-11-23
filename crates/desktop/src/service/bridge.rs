@@ -28,7 +28,7 @@ use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
 use massorca_protocol::methods::projects::{Project, ProjectAddParams, ProjectRef};
 use massorca_protocol::methods::tasks::Task;
-use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams};
+use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
 use massorca_protocol::methods::workspaces::{
     Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
     WorkspaceRemoved,
@@ -241,7 +241,7 @@ impl ServiceHandle {
             .await
     }
 
-    /// `team.bot_add`. The bot is listed once the service's answer is folded in.
+    /// `team.bot_add`. The bot is listed by the read that follows the answer.
     pub async fn add_bot(&self, params: BotAddParams) -> Result<Bot, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::AddBot { params, reply }))
             .await
@@ -257,6 +257,40 @@ impl ServiceHandle {
     pub async fn reopen_task(&self, task: String) -> Result<Task, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::TaskReopen { task, reply }))
             .await
+    }
+
+    /// `team.project_update` with a new brief. The brief shows when the read that follows the answer lands.
+    pub async fn save_brief(
+        &self,
+        team: String,
+        project: String,
+        brief: String,
+    ) -> Result<TeamProject, Refusal> {
+        self.ask(|reply| {
+            Command::Team(TeamCommand::SaveBrief {
+                team,
+                project,
+                brief,
+                reply,
+            })
+        })
+        .await
+    }
+
+    /// `team.project_rm`. The project leaves the team when the read that follows the answer lands.
+    pub async fn delete_project(
+        &self,
+        team: String,
+        project: String,
+    ) -> Result<TeamProject, Refusal> {
+        self.ask(|reply| {
+            Command::Team(TeamCommand::DeleteProject {
+                team,
+                project,
+                reply,
+            })
+        })
+        .await
     }
 
     /// `workspace.remove`. Pass the flags of the waivers the user confirmed.

@@ -5,6 +5,7 @@
 use std::time::{Duration, Instant};
 
 use super::agent_sessions::{session_state, sessions_by_workspace};
+use super::hosts::{HostTone, host_state};
 use super::shell::{
     AgentState, HostGroup, HostReach, ProjectGroup, ServiceNotice, ServiceStatus, ServiceTone,
     ShellSnapshot, StatusBarModel, WorkspaceRow,
@@ -55,11 +56,12 @@ pub fn service_snapshot(state: &StoreState, now: Instant) -> ShellSnapshot {
         status: StatusBarModel {
             waiting: count_in(state, AgentState::Waiting),
             running: count_in(state, AgentState::Running),
-            memory: "-".to_owned(),
+            // No service reports memory or open ports yet, so their items stay hidden.
+            memory: None,
             terminals: super::terminals::running_count(state),
-            ports: 0,
-            hosts_total: 1,
-            hosts_unreachable: u32::from(!state.connection.is_connected()),
+            ports: None,
+            hosts_total: u32::try_from(state.hosts.len() + 1).unwrap_or(u32::MAX),
+            hosts_unreachable: unreachable_hosts(state, now),
         },
         session_title: None,
         active_session: None,
@@ -77,6 +79,18 @@ fn count_in(state: &StoreState, wanted: AgentState) -> u32 {
         .filter(|session| session_state(session) == wanted)
         .count();
     u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// The hosts that cannot be reached: This PC while its link is down, and each paired host whose last
+/// check found it unreachable. A host still being checked is not counted.
+fn unreachable_hosts(state: &StoreState, now: Instant) -> u32 {
+    let paired = state
+        .hosts
+        .iter()
+        .filter(|entry| host_state(entry, now).tone == HostTone::Unreachable)
+        .count();
+    let this_pc = usize::from(!state.connection.is_connected());
+    u32::try_from(paired + this_pc).unwrap_or(u32::MAX)
 }
 
 /// Connected, or unreachable for as long as the link has been down (honest state: show the age).
@@ -163,13 +177,9 @@ pub const NOTICE_TICK: Duration = Duration::from_secs(1);
 /// read has answered on it, there are no teams and nothing can change.
 pub fn teams_view(state: &StoreState) -> TeamsState {
     match &state.teams {
-        Some(records) if state.connection.is_connected() => live_teams(
-            &state.team_ids,
-            LOCAL_HOST,
-            records,
-            &state.team_bots,
-            &state.agent_kinds,
-        ),
+        Some(records) if state.connection.is_connected() => {
+            live_teams(&state.team_ids, LOCAL_HOST, records, &state.agent_kinds)
+        }
         _ => TeamsState::unavailable(),
     }
 }
@@ -181,9 +191,10 @@ mod tests {
     use crate::model::shell::AgentState;
     use crate::model::sidebar::{SidebarContent, TreeRow, sidebar_content};
     use crate::service::{
-        StoreUpdate,
+        HostEntry, HostLink, StoreUpdate,
         fixtures::{agent, project, workspace},
     };
+    use massorca_client::HostRecord;
     use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
 
     fn connected() -> ConnectionState {
@@ -330,6 +341,82 @@ mod tests {
             snapshot.projects[0].hosts[0].reach,
             HostReach::Connected
         ));
+    }
+
+    #[test]
+    fn a_live_snapshot_reports_no_memory_or_ports() {
+        let now = Instant::now();
+        let status = service_snapshot(&loaded(now), now).status;
+        assert_eq!(status.memory_text(), None);
+        assert_eq!(status.ports_text(), None);
+        assert_eq!(status.bot_teams_ports_text(), None);
+    }
+
+    fn paired(name: &str, link: HostLink) -> HostEntry {
+        HostEntry {
+            record: HostRecord {
+                name: name.into(),
+                server: format!("{name}-server"),
+                addresses: vec!["100.64.0.10:7347".into()],
+                pin: "sha256:test".into(),
+                device_id: "dev-1".into(),
+                device_name: "laptop".into(),
+                scopes: vec!["read".into()],
+                paired_at_ms: 1,
+            },
+            link,
+            last_connected: None,
+        }
+    }
+
+    fn served() -> HostLink {
+        HostLink::Connected {
+            server: "vps-server".into(),
+            version: "0.1.0".into(),
+        }
+    }
+
+    #[test]
+    fn the_hosts_item_counts_this_pc_and_each_paired_host_and_names_the_unreachable_ones() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.hosts = vec![
+            paired("nas", HostLink::Unreachable("timed out".into())),
+            paired("vps", served()),
+        ];
+        let status = service_snapshot(&state, now).status;
+        assert_eq!(status.hosts_total, 3);
+        assert_eq!(status.hosts_unreachable, 1);
+        assert_eq!(status.hosts_text(), "1 of 3 hosts unreachable");
+        assert_eq!(status.bot_teams_hosts_text(), "1 host unreachable");
+    }
+
+    #[test]
+    fn a_host_still_being_checked_is_not_counted_as_unreachable() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.hosts = vec![paired("nas", HostLink::Checking), paired("vps", served())];
+        let status = service_snapshot(&state, now).status;
+        assert_eq!(status.hosts_total, 3);
+        assert_eq!(status.hosts_unreachable, 0);
+        assert_eq!(status.hosts_text(), "3 hosts");
+    }
+
+    #[test]
+    fn a_local_link_that_is_down_counts_this_pc_as_unreachable_beside_the_paired_hosts() {
+        let now = Instant::now();
+        let mut state = loaded(now);
+        state.apply(
+            StoreUpdate::Connection(ConnectionState::Unreachable {
+                reason: "The service is not running.".into(),
+            }),
+            now,
+        );
+        state.hosts = vec![paired("vps", served())];
+        let status = service_snapshot(&state, now).status;
+        assert_eq!(status.hosts_total, 2);
+        assert_eq!(status.hosts_unreachable, 1);
+        assert_eq!(status.hosts_text(), "1 of 2 hosts unreachable");
     }
 
     #[test]

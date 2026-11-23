@@ -2,8 +2,8 @@
 //! the network listeners of the service.
 
 use massorca_protocol::methods::devices::{
-    self, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams,
-    PairingCreated,
+    self, DeviceForgetParams, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus,
+    PairingCreateParams, PairingCreated,
 };
 
 use crate::client::Client;
@@ -21,6 +21,14 @@ impl Client {
         params: &DeviceRevokeParams,
     ) -> Result<DeviceInfo, ClientError> {
         self.call(devices::REVOKE, params).await
+    }
+
+    /// `device.forget`: removes a revoked device from the list, and answers with it. Needs host-admin.
+    pub async fn device_forget(
+        &self,
+        params: &DeviceForgetParams,
+    ) -> Result<DeviceInfo, ClientError> {
+        self.call(devices::FORGET, params).await
     }
 
     /// `pairing.create`: an offer another device can redeem once, before it expires.

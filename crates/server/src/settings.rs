@@ -70,6 +70,9 @@ pub struct SettingDecl {
     pub kind: SettingKind,
     pub default: Value,
     pub description: String,
+    /// Old names this setting still answers to. A read falls back to a value stored under one of them; a write stores
+    /// only the canonical key and removes the old rows.
+    pub aliases: Vec<String>,
 }
 
 impl SettingDecl {
@@ -96,6 +99,11 @@ impl SettingsRegistry {
         if !names::is_valid(&decl.key) {
             return Err(RegistrationError::InvalidName { name: decl.key });
         }
+        if let Some(alias) = decl.aliases.iter().find(|alias| !names::is_valid(alias)) {
+            return Err(RegistrationError::InvalidName {
+                name: alias.clone(),
+            });
+        }
         let slot = slot(&decl.owner, &decl.key);
         let owner = decl.owner.clone();
         self.entries.register(owner, slot, decl)
@@ -106,6 +114,13 @@ impl SettingsRegistry {
         self.entries
             .get(&slot(owner, key))
             .map(|entry| entry.value.clone())
+    }
+
+    /// The declaration `owner` made under an old name listed in its `aliases`.
+    pub fn find_by_alias(&self, owner: &Owner, alias: &str) -> Option<SettingDecl> {
+        self.declarations()
+            .into_iter()
+            .find(|decl| &decl.owner == owner && decl.aliases.iter().any(|known| known == alias))
     }
 
     /// Every declaration, ordered by owner and then key.

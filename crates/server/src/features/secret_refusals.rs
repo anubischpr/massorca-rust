@@ -40,6 +40,9 @@ pub(crate) fn refusal(error: VaultError) -> ErrorBody {
             Some(json!({ "scope": scope, "name": name, "linked": linked })),
         ),
         VaultError::InvalidName => (codes::SECRET_INVALID_NAME, None),
+        VaultError::ReservedName { name } => {
+            (codes::SECRET_RESERVED_NAME, Some(json!({ "name": name })))
+        }
         VaultError::InvalidScope => (codes::SECRET_INVALID_SCOPE, None),
         VaultError::TooLarge => (codes::SECRET_TOO_LARGE, None),
         VaultError::InvalidReason => (codes::SECRET_INVALID_REASON, None),

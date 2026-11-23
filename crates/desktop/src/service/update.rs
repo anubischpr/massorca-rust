@@ -13,7 +13,6 @@ use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
-use massorca_protocol::methods::teams::Bot;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -52,8 +51,6 @@ pub enum StoreUpdate {
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
-    /// A bot this desktop added, as the service answered it; its team lists it from now on.
-    TeamBot(Bot),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
@@ -197,8 +194,6 @@ pub struct StoreState {
     pub team_read: u64,
     /// The numbers the pages give the ids of the teams, their cards and their bots.
     pub team_ids: TeamIds,
-    /// The bots this desktop added, as the service answered them.
-    pub team_bots: Vec<Bot>,
     /// The hosts this computer paired with, by name.
     pub hosts: Vec<HostEntry>,
     /// The devices paired with this computer's service, once listed.
@@ -230,7 +225,6 @@ impl Default for StoreState {
             teams: None,
             team_read: 0,
             team_ids: TeamIds::default(),
-            team_bots: Vec::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
@@ -304,11 +298,6 @@ impl StoreState {
             StoreUpdate::AgentKindsResync(kinds) => self.agent_kinds = kinds,
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
-            StoreUpdate::TeamBot(bot) => {
-                self.team_ids.register_bot(&bot);
-                self.team_bots.retain(|known| known.id != bot.id);
-                self.team_bots.push(bot);
-            }
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
@@ -480,6 +469,8 @@ pub(crate) mod fixtures {
             },
             activity: None,
             result: None,
+            holds_secrets: false,
+            secrets_withheld: None,
         }
     }
 
@@ -551,6 +542,8 @@ pub(crate) mod fixtures {
                 project_id: None,
                 columns: Vec::new(),
             },
+            bots: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
