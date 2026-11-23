@@ -5,7 +5,7 @@
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentKind, AgentSession, BringBackResult,
+    AgentBringBackParams, AgentKind, AgentSession, AgentStartParams, BringBackResult,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -34,6 +34,13 @@ pub(super) async fn list_kinds(client: &Client) -> Result<Vec<AgentKind>, Client
 }
 
 impl ServiceHandle {
+    /// `agent.start`: starts a session in a workspace. The store takes it from the answer, so the answer
+    /// is the only place the new session comes from.
+    pub async fn agent_start(&self, params: AgentStartParams) -> Result<AgentSession, Refusal> {
+        self.ask(|reply| Command::AgentStart { params, reply })
+            .await
+    }
+
     /// `agent.bring_back`: merges a finished child into its parent and tells the parent run about it. The
     /// store changes through the refetch that follows, not from this answer.
     pub async fn agent_bring_back(
@@ -42,6 +49,28 @@ impl ServiceHandle {
     ) -> Result<BringBackResult, Refusal> {
         self.ask(|reply| Command::BringBack { params, reply }).await
     }
+}
+
+/// Starts a session on its own task. The store hears of the session before the caller does, so the caller
+/// never opens a session the store does not list yet.
+pub(super) fn spawn_start(
+    client: &Client,
+    params: AgentStartParams,
+    reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    updates: &mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let client = client.clone();
+    let updates = updates.clone();
+    tokio::spawn(async move {
+        let result = client
+            .agent_start(&params)
+            .await
+            .map_err(|error| Refusal::from(&error));
+        if let Ok(session) = &result {
+            let _ = updates.send(StoreUpdate::AgentChanged(session.clone()));
+        }
+        let _ = reply.send(result);
+    });
 }
 
 /// Runs a bring-back on its own task, then refetches the tree the child belongs to whatever the answer, so the

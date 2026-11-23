@@ -17,7 +17,9 @@ use gpui::{
 };
 
 use crate::components::menu::MenuView;
-use crate::components::model_picker::{Choice, ModelPicker, ModelPickerEvent, PickerState};
+use crate::components::model_picker::{
+    AgentOption, Choice, ModelPicker, ModelPickerEvent, PickerState, RowRef,
+};
 use crate::components::popover::TriggerBounds;
 use crate::components::text_editing::text_area::{TextArea, TextAreaEvent, TextAreaKey};
 use crate::icon::IconName;
@@ -123,6 +125,8 @@ pub struct Composer {
     attach_trigger: TriggerBounds,
     attach_menu: Option<(Entity<MenuView>, Subscription)>,
     _subscriptions: Vec<Subscription>,
+    /// The picker's events, kept apart because the owner can rebuild the picker.
+    _picker_events: Subscription,
 }
 
 impl std::fmt::Debug for Composer {
@@ -180,7 +184,8 @@ impl Composer {
             access_menu: None,
             attach_trigger: TriggerBounds::default(),
             attach_menu: None,
-            _subscriptions: vec![text_events, picker_events],
+            _subscriptions: vec![text_events],
+            _picker_events: picker_events,
         }
     }
 
@@ -240,6 +245,47 @@ impl Composer {
 
     pub fn set_enter_inserts_newline(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.enter_inserts_newline = enabled;
+        cx.notify();
+    }
+
+    /// Why sending is off right now, or `None` when it is on; Enter and the primary button follow it.
+    pub fn set_send_unavailable(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.send_unavailable != reason {
+            self.send_unavailable = reason;
+            cx.notify();
+        }
+    }
+
+    /// The reason the last send failed, shown above the text.
+    pub fn error_reason(&self) -> Option<&SharedString> {
+        self.error.as_ref()
+    }
+
+    /// Replaces the agents the picker offers. The chosen model stays when the new list still offers it;
+    /// otherwise the first model offered is chosen.
+    pub fn set_picker_agents(&mut self, agents: Vec<AgentOption>, cx: &mut Context<Self>) {
+        let (choice, favourites) = {
+            let state = self.picker.read(cx).state();
+            if state.agents() == agents.as_slice() {
+                return;
+            }
+            (state.choice().clone(), state.favourites().to_vec())
+        };
+        let mut state = PickerState::new(agents, choice.clone()).with_favourites(favourites);
+        if state.locate(choice.model.as_ref()).is_none() {
+            let first = state
+                .agents()
+                .iter()
+                .position(|agent| !agent.models.is_empty());
+            if let Some(agent) = first {
+                state.select_model(RowRef { agent, model: 0 });
+            }
+        }
+        self.picker = cx.new(|cx| ModelPicker::new(state, cx));
+        self._picker_events = cx.subscribe(&self.picker, |_, _, event: &ModelPickerEvent, cx| {
+            let ModelPickerEvent::Changed(choice) = event;
+            cx.emit(ComposerEvent::ModelChanged(choice.clone()));
+        });
         cx.notify();
     }
 
@@ -561,5 +607,70 @@ mod tests {
         focus_and_draw(&composer, cx);
         cx.simulate_input("q");
         assert_eq!(action(cx), PrimaryAction::Queue);
+    }
+
+    fn offered(kind: AgentKind, model: &str) -> AgentOption {
+        AgentOption {
+            kind,
+            availability: AgentAvailability::Ready,
+            list: ModelList::Loaded,
+            models: vec![ModelOption {
+                id: model.into(),
+                name: model.into(),
+                efforts: Vec::new(),
+                default_effort: 0,
+                fast: false,
+            }],
+        }
+    }
+
+    fn chosen_model(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
+        composer.read_with(cx, |composer, cx| {
+            composer
+                .picker()
+                .read(cx)
+                .state()
+                .choice()
+                .model
+                .to_string()
+        })
+    }
+
+    #[gpui::test]
+    fn a_new_agent_list_keeps_a_choice_it_still_offers_and_takes_the_first_otherwise(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_agents(
+                vec![
+                    offered(AgentKind::Codex, "codex"),
+                    offered(AgentKind::Claude, "opus"),
+                ],
+                cx,
+            )
+        });
+        assert_eq!(chosen_model(&composer, cx), "opus");
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_agents(vec![offered(AgentKind::Codex, "codex")], cx)
+        });
+        assert_eq!(chosen_model(&composer, cx), "codex");
+    }
+
+    #[gpui::test]
+    fn sending_stays_off_while_a_reason_is_set_and_follows_the_reason(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_send_unavailable(Some("Choose an agent.".into()), cx)
+        });
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_input("hi");
+        cx.simulate_keystrokes("enter");
+        assert!(events.borrow().is_empty());
+        assert_eq!(draft_of(&composer, cx), "hi");
+        composer.update(cx, |composer, cx| composer.set_send_unavailable(None, cx));
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Send("hi".into())]);
     }
 }

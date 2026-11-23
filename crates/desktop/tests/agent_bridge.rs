@@ -2,6 +2,7 @@
 //! agent sessions and the agent kinds the service lists reach the store on connect, the way workspaces and
 //! terminals do.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,9 @@ use massorca_desktop::model::agent_sessions::bring_back_refusal;
 use massorca_desktop::service::{ServiceBridge, StoreState, StoreUpdate, connect_options};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentBringBackParams, PackageState};
+use massorca_protocol::methods::agents::{AgentBringBackParams, AgentStartParams, PackageState};
+use massorca_protocol::methods::projects::ProjectAddParams;
+use massorca_protocol::methods::workspaces::WorkspaceCreateParams;
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -182,6 +185,138 @@ async fn a_bring_back_the_service_refuses_arrives_with_its_code_and_a_plain_sent
     .expect("the refetch after the write reports the session gone");
     assert_eq!(gone, child);
 
+    drop(bridge);
+    stop_service(service).await;
+}
+
+/// Runs git in `dir` with a fixed identity, and fails when git does.
+fn git(dir: &Path, args: &[&str]) {
+    let output = massorca_process::command("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn repo(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("the repository directory");
+    git(dir, &["init", "-q"]);
+    std::fs::write(dir.join("README.md"), "hello\n").expect("a readme");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+}
+
+/// Declares kind `fake`, which runs the platform shell: the fake agent is a binary of the CLI crate, which
+/// this crate's tests cannot start, and the terminal test uses the same shell.
+fn declare_fake_kind(home: &Path) {
+    let dir = profile(home).dir().join("agents").join("kinds");
+    std::fs::create_dir_all(&dir).expect("the kinds folder");
+    let program = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+    let kind = format!(r#"{{"id":"fake","name":"Fake agent","program":["{program}"]}}"#);
+    std::fs::write(dir.join("fake.json"), kind).expect("the kind file");
+}
+
+#[tokio::test]
+async fn an_agent_session_starts_in_a_workspace_through_the_bridge_and_reports_its_terminal() {
+    let home = temp_home();
+    let repo_dir = home.path().with_file_name("repo");
+    repo(&repo_dir);
+    declare_fake_kind(home.path());
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentKindsResync(kinds) =
+                updates.recv().await.expect("the bridge is alive")
+                && kinds.iter().any(|kind| kind.id == "fake" && kind.detected)
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the declared kind is listed once the bridge connects");
+
+    let project = handle
+        .add_project(ProjectAddParams {
+            path: repo_dir.display().to_string(),
+            name: Some("demo".to_owned()),
+            kind: None,
+            workspaces_root: repo_dir
+                .parent()
+                .map(|parent| parent.join("demo-worktrees").display().to_string()),
+        })
+        .await
+        .expect("the project is added");
+    let workspace = handle
+        .create_workspace(WorkspaceCreateParams {
+            project: project.id,
+            name: "main".to_owned(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            path: None,
+            request_id: None,
+        })
+        .await
+        .expect("the workspace is created");
+
+    let session = handle
+        .agent_start(AgentStartParams {
+            workspace: workspace.id.clone(),
+            kind: "fake".to_owned(),
+            prompt: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            read_only: false,
+            title: None,
+            cols: Some(100),
+            rows: Some(30),
+            request_id: None,
+        })
+        .await
+        .expect("the session starts");
+    assert_eq!(session.kind, "fake");
+    assert_eq!(session.workspace_id, workspace.id);
+    let terminal = session
+        .terminal_id
+        .clone()
+        .expect("the session has its terminal");
+    // The started session reaches the store as a change, not only through a later refetch.
+    let changed = timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentChanged(changed) =
+                updates.recv().await.expect("the bridge is alive")
+                && changed.id == session.id
+            {
+                return changed;
+            }
+        }
+    })
+    .await
+    .expect("the session reaches the store");
+    assert_eq!(changed.terminal_id.as_deref(), Some(terminal.as_str()));
+
+    handle
+        .close_terminal(&terminal)
+        .await
+        .expect("the session's terminal closes");
     drop(bridge);
     stop_service(service).await;
 }

@@ -180,6 +180,8 @@ pub struct StoreState {
     pub agent_kinds: Vec<AgentKind>,
     /// True once the first full list arrived, so an empty tree can tell "none" from "not yet".
     pub loaded: bool,
+    /// True once the agent session list arrived, so a debug page for sessions waits for it.
+    pub agents_answered: bool,
     /// When the link last stopped being connected, while it is not.
     pub down_since: Option<Instant>,
     /// The git state of each workspace the store holds, by workspace id.
@@ -212,6 +214,7 @@ impl Default for StoreState {
             agents: Vec::new(),
             agent_kinds: Vec::new(),
             loaded: false,
+            agents_answered: false,
             down_since: None,
             git: BTreeMap::new(),
             teams: None,
@@ -278,6 +281,7 @@ impl StoreState {
             StoreUpdate::AgentsResync(mut sessions) => {
                 sessions.sort_by(agent_order);
                 self.agents = sessions;
+                self.agents_answered = true;
             }
             StoreUpdate::AgentChanged(session) => {
                 replace_by(&mut self.agents, session, |s| s.id.clone());
