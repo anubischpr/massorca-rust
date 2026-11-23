@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::ProjectKind;
 
-use crate::fixture::{Fixture, branch_exists, canonical, expect_code, project_add, text};
+use crate::fixture::{Fixture, branch_exists, canonical, expect_code, project_add, run_git, text};
 
 #[test]
 fn a_path_inside_a_repository_registers_the_toplevel_as_a_git_project() {
@@ -323,6 +323,106 @@ fn a_default_root_that_is_not_absolute_is_refused_when_a_project_would_take_it()
         codes::REQUEST_INVALID_PARAMS,
     );
     assert!(fx.workspaces.list_projects().expect("list").is_empty());
+}
+
+#[test]
+fn a_linked_worktree_registers_the_main_repository() {
+    let fx = Fixture::new();
+    let linked = add_linked_worktree(&fx, "linked");
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&linked))
+        .expect("add project");
+
+    assert_eq!(project.kind, ProjectKind::Git);
+    assert_eq!(project.name, "repo");
+    assert_eq!(project.path, text(&canonical(&fx.repo())));
+    assert_eq!(fx.workspaces.list_projects().expect("list").len(), 1);
+}
+
+#[test]
+fn a_folder_inside_a_linked_worktree_registers_the_main_repository() {
+    let fx = Fixture::new();
+    let linked = add_linked_worktree(&fx, "linked");
+    let nested = linked.join("src");
+    fs::create_dir_all(&nested).expect("create nested dir");
+
+    let project = fx
+        .workspaces
+        .add_project(project_add(&nested))
+        .expect("add project");
+
+    assert_eq!(project.path, text(&canonical(&fx.repo())));
+}
+
+#[test]
+fn a_linked_worktree_is_a_duplicate_once_its_main_repository_is_registered() {
+    let fx = Fixture::new();
+    let linked = add_linked_worktree(&fx, "linked");
+    fx.repo_project();
+
+    expect_code(
+        fx.workspaces.add_project(project_add(&linked)),
+        codes::PROJECT_EXISTS,
+    );
+    assert_eq!(fx.workspaces.list_projects().expect("list").len(), 1);
+}
+
+#[test]
+fn the_main_repository_is_a_duplicate_once_a_linked_worktree_registered_it() {
+    let fx = Fixture::new();
+    let linked = add_linked_worktree(&fx, "linked");
+    fx.workspaces
+        .add_project(project_add(&linked))
+        .expect("add through the linked worktree");
+
+    expect_code(
+        fx.workspaces.add_project(project_add(&fx.repo())),
+        codes::PROJECT_EXISTS,
+    );
+    expect_code(
+        fx.workspaces.add_project(project_add(&linked)),
+        codes::PROJECT_EXISTS,
+    );
+    assert_eq!(fx.workspaces.list_projects().expect("list").len(), 1);
+}
+
+#[test]
+fn a_linked_worktree_of_a_bare_repository_is_refused_because_it_has_no_main_worktree() {
+    let fx = Fixture::new();
+    let bare = fx.path("bare.git");
+    run_git(
+        &fx.repo(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            text(&fx.repo()).as_str(),
+            text(&bare).as_str(),
+        ],
+    );
+    let linked = fx.path("linked");
+    run_git(
+        &bare,
+        &["worktree", "add", "-q", text(&linked).as_str(), "main"],
+    );
+
+    expect_code(
+        fx.workspaces.add_project(project_add(&linked)),
+        codes::REQUEST_INVALID_PARAMS,
+    );
+    assert!(fx.workspaces.list_projects().expect("list").is_empty());
+}
+
+/// Adds a linked worktree `name` beside the main repository, on a new branch of the same name.
+fn add_linked_worktree(fx: &Fixture, name: &str) -> PathBuf {
+    let linked = fx.path(name);
+    run_git(
+        &fx.repo(),
+        &["worktree", "add", "-q", "-b", name, text(&linked).as_str()],
+    );
+    linked
 }
 
 #[test]

@@ -2,7 +2,8 @@
 
 mod harness;
 
-use harness::{Sandbox, execute, git_repo, single_document, stdout_text, with_json};
+use harness::{Sandbox, execute, git, git_repo, single_document, stdout_text, with_json};
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 #[test]
@@ -146,6 +147,32 @@ fn adding_the_same_project_twice_and_showing_an_unknown_one_are_refused() {
         single_document(&unknown)["error"]["code"],
         "project.not_found"
     );
+}
+
+#[test]
+fn a_linked_worktree_registers_and_names_its_main_repository() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let linked = sandbox.home().join("linked-wt");
+    let linked_text = linked.to_string_lossy().into_owned();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked-wt",
+            linked_text.as_str(),
+        ],
+    );
+
+    sandbox
+        .run("default", &["project", "add", linked_text.as_str()])
+        .success()
+        .stdout(contains("added project repo (git) at "))
+        .stdout(contains("linked-wt").not());
 }
 
 #[test]
