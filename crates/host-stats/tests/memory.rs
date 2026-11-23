@@ -3,7 +3,9 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use massorca_host_stats::{METRIC, Metric, descendants, memory_of, processes, sample_memory};
+#[cfg(unix)]
+use massorca_host_stats::descendants;
+use massorca_host_stats::{METRIC, Metric, memory_of, processes, sample_memory};
 
 /// Set in the child's environment: the `sleeper` test then sleeps instead of returning.
 const SLEEPER_ENV: &str = "MASSORCA_HOST_STATS_SLEEPER";
@@ -56,7 +58,8 @@ fn eventually<T>(what: &str, mut attempt: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// A pid no process holds: the largest a pid can be on Linux and macOS, and far above any Windows pid in use.
+/// A pid no process holds: above Linux's largest `pid_max` (2^22), macOS's largest pid (99998), and any Windows pid in
+/// use.
 const NO_SUCH_PID: u32 = 0x3FFF_FFF0;
 
 #[test]
@@ -90,9 +93,37 @@ fn a_started_child_uses_memory_and_is_listed_under_this_process() {
         .expect("the child is in the process table");
     assert_eq!(entry.parent, Some(std::process::id()));
     assert!(!entry.name.is_empty(), "{entry:?}");
-    let tree = descendants(std::process::id(), &table);
-    assert!(tree.contains(&std::process::id()), "{tree:?}");
-    assert!(tree.contains(&child.pid()), "{tree:?}");
+    #[cfg(unix)]
+    {
+        let tree = descendants(std::process::id(), &table);
+        assert!(tree.contains(&std::process::id()), "{tree:?}");
+        assert!(tree.contains(&child.pid()), "{tree:?}");
+    }
+}
+
+/// A job holding the sleeper is listed and read through the job, and only its members are read.
+#[cfg(windows)]
+#[test]
+fn a_job_lists_and_reads_its_members() {
+    use std::os::windows::io::AsRawHandle;
+
+    let job = win32job::Job::create_with_limit_info(
+        win32job::ExtendedLimitInfo::new().limit_kill_on_job_close(),
+    )
+    .expect("a job");
+    let child = Sleeper::start();
+    job.assign_process(child.0.as_raw_handle() as isize)
+        .expect("the sleeper joins the job");
+
+    let members = massorca_host_stats::job_members(&job).expect("the job is listed");
+    assert_eq!(members, [child.pid()]);
+    let sample = eventually("the sleeper is read through its job", || {
+        massorca_host_stats::sample_job(&job).filter(|sample| !sample.processes.is_empty())
+    });
+    assert_eq!(sample.processes.len(), 1, "{sample:?}");
+    assert_eq!(sample.processes[0].pid, child.pid());
+    assert!(sample.processes[0].bytes > 0);
+    assert_eq!(sample.unreadable, 0);
 }
 
 #[test]

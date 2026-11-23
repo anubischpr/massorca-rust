@@ -71,3 +71,12 @@ pub fn sample_memory(pids: &[u32]) -> MemorySample {
         unreadable,
     }
 }
+
+/// Reads every process of a terminal's job (Windows). Each process is checked to be in `job` on the handle that reads
+/// it, so a pid reused after the listing is not read. `None` when the job cannot be listed; then the job's memory is
+/// unknown, not zero.
+#[cfg(windows)]
+#[must_use]
+pub fn sample_job(job: &win32job::Job) -> Option<MemorySample> {
+    sys::sample_job(job)
+}

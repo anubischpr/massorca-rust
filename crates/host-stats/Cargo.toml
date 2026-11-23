@@ -24,5 +24,8 @@ windows-sys = { workspace = true, features = [
 [dev-dependencies]
 massorca-process.workspace = true
 
+[target.'cfg(windows)'.dev-dependencies]
+win32job.workspace = true
+
 [lints]
 workspace = true

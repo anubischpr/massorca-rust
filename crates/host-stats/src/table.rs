@@ -1,7 +1,5 @@
 //! The live process table: pids, parents and names.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use crate::sys;
 
 /// One live process.
@@ -12,6 +10,8 @@ pub struct ProcessInfo {
     pub parent: Option<u32>,
     /// The program's name, without its directory.
     pub name: String,
+    /// Linux: the session id, which groups a terminal's processes. `None` elsewhere.
+    pub session: Option<u32>,
 }
 
 /// Every live process this user can see, in one pass. Ended processes (Unix zombies) are left out. Empty when the
@@ -21,10 +21,21 @@ pub fn processes() -> Vec<ProcessInfo> {
     sys::process_table()
 }
 
-/// `root` and every process below it in `table`, by parent id, in pid order. `root` is included only when it is in
+/// The pids in a terminal's job (Windows), however many there are. `None` when the job cannot be listed.
+#[cfg(windows)]
+#[must_use]
+pub fn job_members(job: &win32job::Job) -> Option<Vec<u32>> {
+    sys::job_members(job)
+}
+
+/// `root` and every process below it in `table`, by parent id, in pid order. Unix only: Windows parent ids may name a
+/// parent that exited, whose pid another process now holds. `root` is included only when it is in
 /// the table. A cycle (a reused pid named as a parent) is walked once.
+#[cfg(any(unix, test))]
 #[must_use]
 pub fn descendants(root: u32, table: &[ProcessInfo]) -> Vec<u32> {
+    use std::collections::{BTreeMap, BTreeSet};
+
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for process in table {
         if let Some(parent) = process.parent.filter(|parent| *parent != process.pid) {
@@ -55,6 +66,7 @@ mod tests {
             pid,
             parent,
             name: format!("p{pid}"),
+            session: None,
         }
     }
 

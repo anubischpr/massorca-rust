@@ -35,7 +35,8 @@ pub(crate) fn process_table() -> Vec<ProcessInfo> {
 }
 
 /// The name between the first `(` and the last `)`, so a name with spaces or parentheses cannot shift the fields
-/// after it (`proc(5)`): the state, then the parent. Ended processes (`Z`, `X`) are left out.
+/// after it (`proc(5)`): the state, the parent, the process group, then the session. Ended processes (`Z`, `X`) are
+/// left out.
 fn parse_stat(pid: u32, stat: &str) -> Option<ProcessInfo> {
     let open = stat.find('(')?;
     let close = stat.rfind(')')?;
@@ -46,10 +47,13 @@ fn parse_stat(pid: u32, stat: &str) -> Option<ProcessInfo> {
         return None;
     }
     let parent: u32 = fields.next()?.parse().ok()?;
+    let _group = fields.next()?;
+    let session: u32 = fields.next()?.parse().ok()?;
     Some(ProcessInfo {
         pid,
         parent: (parent != 0).then_some(parent),
         name,
+        session: Some(session),
     })
 }
 
@@ -73,6 +77,7 @@ mod tests {
                 pid: 43,
                 parent: Some(42),
                 name: "my (odd) name".to_owned(),
+                session: Some(99),
             })
         );
         assert_eq!(
@@ -81,6 +86,7 @@ mod tests {
                 pid: 1,
                 parent: None,
                 name: "init".to_owned(),
+                session: Some(1),
             })
         );
         assert_eq!(parse_stat(44, "44 (gone) Z 42 44 99 0 -1"), None);

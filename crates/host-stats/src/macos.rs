@@ -55,6 +55,7 @@ pub(crate) fn process_table() -> Vec<ProcessInfo> {
                 } else {
                     name
                 },
+                session: None,
             })
         })
         .collect()
