@@ -23,7 +23,7 @@ mod workspaces;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
-pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, StoredActivity};
+pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity};
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;

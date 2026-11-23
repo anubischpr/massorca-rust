@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use crate::credentials;
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id, now_ms,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
+    now_ms,
 };
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
@@ -24,8 +25,9 @@ use massorca_core_terminal::{
 };
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::{
-    AccountsChanged, Activity, AgentHookParams, AgentKinds, AgentSession, AgentStartParams,
-    Execution, MAX_HOOK_PAYLOAD_BYTES, PromptReceipt, ReceiptKind,
+    AccountsChanged, Activity, ActivityState, AgentHookParams, AgentKinds, AgentModeSet,
+    AgentSession, AgentStartParams, Execution, MAX_HOOK_PAYLOAD_BYTES, ModeApplied, ModeSource,
+    PromptReceipt, ReceiptKind,
 };
 use massorca_protocol::methods::terminals::{
     DEFAULT_COLS, DEFAULT_ROWS, ExitReason, TerminalExit, TerminalState,
@@ -37,6 +39,7 @@ use serde_json::{Value, json};
 use crate::catalog::Catalog;
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
+use crate::modes;
 use crate::paths;
 use crate::prompt;
 use crate::provided_env::{
@@ -226,9 +229,15 @@ pub(crate) struct LiveRun {
     prompt: PromptRules,
     /// A first prompt given at launch, held until the run's first `idle`.
     pending: Option<PendingPrompt>,
+    /// The live switch of a mode with no launch arguments, typed at the run's first `idle` before the first prompt
+    /// (decision 0083, D3).
+    pending_switch: Option<PendingPrompt>,
     /// A prompt was typed since the run's last accepted hook report, so the next one waits for a report (decision
     /// 0058). Only a kind with a status mechanism sets it: nothing reports back otherwise.
     typed_since_report: bool,
+    /// A mode switch is being typed into the run (decision 0083, R7): every other input waits for it, `force` or not, so
+    /// two writes never interleave in the terminal.
+    switching: bool,
     /// The account the run uses, when its kind has one (decision 0059). A removal of that account is refused meanwhile.
     pub(crate) account: Option<String>,
 }
@@ -409,6 +418,8 @@ impl Agents {
             ));
         }
         let (decl, program) = self.startable_kind(&params.kind)?;
+        let mode = modes::plan_start(&decl, params.permission_mode.as_deref())?
+            .with_caller_args(&params.args);
         if let Some(prompt) = &params.prompt {
             launch::check_prompt(prompt)?;
             // A kind that takes no prompt at launch gets it at its first idle, which only a status mechanism reports.
@@ -455,6 +466,7 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
+            mode_args: &mode.args,
             caller_args: &params.args,
             provided_env: &provided,
             holds_secrets,
@@ -472,7 +484,9 @@ impl Agents {
                 rules: HookRules::of(&decl),
                 prompt: PromptRules::of(&decl),
                 pending: plan.pending_prompt.as_deref().map(PendingPrompt::new),
+                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
+                switching: false,
                 account: access.account.clone(),
             },
         );
@@ -505,6 +519,8 @@ impl Agents {
             result: None,
             brought_back_at: None,
             holds_secrets,
+            mode: mode.mode,
+            pending_permission_mode: None,
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
@@ -526,7 +542,15 @@ impl Agents {
     /// its run is live; `agent.resume_unavailable` when the kind is no longer declared, has no resume form, or the
     /// agent's ref is not known; `agent.not_installed` when no program of the kind resolves; `agent.workspace_busy` when
     /// another session writes in the workspace.
-    pub fn resume(&self, selector: &str, grant: SecretGrant) -> Result<AgentSession, AgentError> {
+    /// The run's permission mode is `permission_mode`, or the one decision 0083 (D6) keeps: a mode `set_mode` stored for
+    /// this resume, else the last one unless it is a bypass, else the kind's default; an unknown id is
+    /// `agent.mode_unknown`.
+    pub fn resume(
+        &self,
+        selector: &str,
+        permission_mode: Option<&str>,
+        grant: SecretGrant,
+    ) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
@@ -548,6 +572,12 @@ impl Agents {
             .clone()
             .ok_or_else(|| resume_unavailable(&row.id, "its agent ref is not known"))?;
         let (decl, program) = self.resumable_kind(&row)?;
+        let (mode, still_pending) = modes::plan_resume(
+            &decl,
+            permission_mode,
+            &row.mode,
+            row.pending_permission_mode.as_deref(),
+        )?;
         let workspace = self
             .inner
             .config
@@ -602,6 +632,7 @@ impl Agents {
             profile_dir: self.profile_dir(),
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
+            mode_args: &mode.args,
             caller_args: &[],
             provided_env: &provided,
             holds_secrets,
@@ -618,7 +649,9 @@ impl Agents {
                 rules: HookRules::of(&decl),
                 prompt: PromptRules::of(&decl),
                 pending: None,
+                pending_switch: mode.switch_at_idle.as_deref().map(PendingPrompt::new),
                 typed_since_report: false,
+                switching: false,
                 account: access.account.clone(),
             },
         );
@@ -633,9 +666,13 @@ impl Agents {
                 live.remove(&row.id);
                 remove_dir(&run_dir);
             })?;
-        let restarted = self
-            .store()
-            .restart_agent_session(&row.id, &terminal_id, holds_secrets);
+        let restarted = self.store().restart_agent_session(
+            &row.id,
+            &terminal_id,
+            holds_secrets,
+            &mode.mode,
+            still_pending.as_deref(),
+        );
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -778,11 +815,27 @@ impl Agents {
         let session = self.view_with(&mut live, row)?;
         // The run's first `idle` sends the first prompt it was given at launch (0054). The text leaves the run under the
         // lock and is written after the lock is released; taking it counts as typing it (decision 0058).
+        // A mode's live switch held for this idle goes first, so the prompt runs in the mode (decision 0083, D3). While it
+        // is typed the run is marked as switching, as `set_mode` marks it, so a prompt or switch meanwhile is refused.
+        let has_terminal = session.terminal_id.is_some();
         let first = if first_idle {
             live.get_mut(&params.session).and_then(|run| {
-                let pending = run.pending.take()?;
-                run.typed_since_report = true;
-                Some((run.prompt.clone(), pending.text))
+                let switch = run.pending_switch.take().map(|switch| {
+                    prompt::input_bytes(&switch.text, PasteMode::Plain, &run.prompt.submit)
+                });
+                let switching = switch.is_some() && has_terminal;
+                if switching {
+                    run.switching = true;
+                }
+                let text = run.pending.take().map(|pending| {
+                    prompt::input_bytes(&pending.text, run.prompt.paste, &run.prompt.submit)
+                });
+                // Only a prompt counts as typed (decision 0058): a mode switch starts no turn for a report to answer.
+                if text.is_some() {
+                    run.typed_since_report = true;
+                }
+                let chunks: Vec<Vec<u8>> = switch.into_iter().chain(text).collect();
+                (!chunks.is_empty()).then_some((chunks, switching))
             })
         } else {
             None
@@ -790,8 +843,8 @@ impl Agents {
         let terminal = session.terminal_id.clone();
         self.notify(Change::Updated(Box::new(session)));
         drop(live);
-        if let (Some((rules, text)), Some(terminal)) = (first, terminal) {
-            self.deliver_first_prompt(&params.session, &terminal, &rules, &text);
+        if let (Some((chunks, switching)), Some(terminal)) = (first, terminal) {
+            self.deliver_first_input(&params.session, &terminal, chunks, switching);
         }
         Ok(())
     }
@@ -820,16 +873,8 @@ impl Agents {
                 return Err(not_live(&session.id));
             };
             let state = session.activity.as_ref().map(|activity| activity.state);
-            // A run that has taken a prompt since its last report is not ready either: its agent may not have read that
-            // prompt yet, so a second one would land on the same idle (decision 0058).
-            if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
-                return Err(AgentError::new(
-                    codes::AGENT_BUSY,
-                    format!(
-                        "session {} is not ready for a prompt: wait for its agent to report, or use force",
-                        session.id
-                    ),
-                ));
+            if let Some(refusal) = input_refusal(run, &session.id, state, force) {
+                return Err(refusal);
             }
             let bytes = prompt::input_bytes(text, run.prompt.paste, &run.prompt.submit);
             let Some(terminal) = session.terminal_id.clone() else {
@@ -854,28 +899,166 @@ impl Agents {
         })
     }
 
-    /// Types a first prompt on a thread of its own. The write can wait for the agent to read, and the agent waits for the
-    /// hook report that carried this `idle` to return, so the report must not wait for the write (0054).
-    fn deliver_first_prompt(&self, session: &str, terminal: &str, rules: &PromptRules, text: &str) {
-        let bytes = prompt::input_bytes(text, rules.paste, &rules.submit);
-        let terminals = self.inner.config.terminals.clone();
+    /// Switches a session's permission mode (decision 0083). When the session's run is live and the mode declares a live
+    /// switch, the switch is typed into the run's terminal and the mode is recorded as chosen but unconfirmed: nothing
+    /// confirms the agent took it (`ModeApplied::Live`). Otherwise the mode waits as `pending_permission_mode` for the next
+    /// resume, and the running mode is left as it is (`ModeApplied::NextResume`); a pending bypass mode is used only by a
+    /// resume that names it. A live switch waits for the run to be ready, as a prompt does (`agent.busy`). A mode a resume
+    /// could not apply is refused with `agent.mode_unavailable`, a session its kind cannot resume with
+    /// `agent.resume_unavailable`, and an unknown mode with `agent.mode_unknown`.
+    ///
+    /// A kind with no status mechanism cannot say when its agent is between prompts, so a live switch into it needs
+    /// `force` (R8); without it the call is refused with `agent.mode_unavailable`. While the switch is typed the run is
+    /// marked as switching, and every other prompt or switch is refused with `agent.busy` (R7).
+    pub fn set_mode(
+        &self,
+        selector: &str,
+        mode: &str,
+        force: bool,
+    ) -> Result<AgentModeSet, AgentError> {
+        let row = self.resolve(selector)?;
+        let decl = self.declared_kind(&row.kind)?;
+        let declared = modes::declared(&decl, mode)?;
+        let live_text = declared
+            .live_switch
+            .as_ref()
+            .map(|switch| switch.text.clone());
+        let typed = {
+            let mut live = lock(&self.inner.status);
+            let row = self.reload(&row.id)?;
+            let session = self.view_with(&mut live, row)?;
+            let switchable = live.contains_key(&session.id) && session.terminal_id.is_some();
+            match (switchable, live_text) {
+                (true, Some(text)) => {
+                    let terminal = session.terminal_id.clone().unwrap_or_default();
+                    let Some(run) = live.get_mut(&session.id) else {
+                        return Err(not_live(&session.id));
+                    };
+                    let state = session.activity.as_ref().map(|activity| activity.state);
+                    if let Some(refusal) = input_refusal(run, &session.id, state, false) {
+                        return Err(refusal);
+                    }
+                    if !run.prompt.has_status && !force {
+                        return Err(AgentError::new(
+                            codes::AGENT_MODE_UNAVAILABLE,
+                            format!(
+                                "kind {} reports no activity, so MassOrca cannot tell whether session {} is in the middle of a prompt, and typing {mode}'s switch now could land inside it; switch with force (agent mode --force) once you know the agent is waiting for input",
+                                decl.id, session.id
+                            ),
+                        ));
+                    }
+                    run.switching = true;
+                    // A mode switch starts no turn, so no report answers it: it leaves the typed-since-report flag
+                    // alone, or the next prompt would wait for a report that never comes.
+                    let bytes = prompt::input_bytes(&text, PasteMode::Plain, &run.prompt.submit);
+                    Some((terminal, bytes))
+                }
+                _ => {
+                    modes::applies_at_resume(&decl, declared)?;
+                    if !decl.resumable() {
+                        return Err(resume_unavailable(
+                            &session.id,
+                            &format!(
+                                "kind {} cannot resume it and has no live switch to mode {mode} for this run",
+                                decl.id
+                            ),
+                        ));
+                    }
+                    self.store()
+                        .set_agent_session_pending_mode(&session.id, Some(mode))?;
+                    let session = self.view_with(&mut live, self.reload(&session.id)?)?;
+                    self.notify(Change::Updated(Box::new(session.clone())));
+                    return Ok(AgentModeSet {
+                        applied: ModeApplied::NextResume,
+                        session,
+                    });
+                }
+            }
+        };
+        // Typed outside the status lock, as a prompt is: the write can wait for the agent to read. The run stays marked as
+        // switching until the write is done, whatever its outcome.
+        let written =
+            typed.map(|(terminal, bytes)| self.inner.config.terminals.input(&terminal, &bytes));
+        self.end_switching(&row.id);
+        let mut live = lock(&self.inner.status);
+        if let Some(Err(error)) = written {
+            return Err(match error {
+                TerminalError::Exited | TerminalError::NotFound => not_live(&row.id),
+                other => AgentError::from(other),
+            });
+        }
+        let switched = RunMode {
+            permission_mode: Some(mode.to_owned()),
+            source: Some(modes::SOURCE_CHOSEN.to_owned()),
+            confirmed: false,
+        };
+        self.store().set_agent_session_mode(&row.id, &switched)?;
+        let session = self.view_with(&mut live, self.reload(&row.id)?)?;
+        self.notify(Change::Updated(Box::new(session.clone())));
+        Ok(AgentModeSet {
+            applied: ModeApplied::Live,
+            session,
+        })
+    }
+
+    /// The declaration of `id`: declared and valid, whether or not its program is installed now.
+    fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
+        let catalog = Catalog::load(self.profile_dir());
+        let entry = catalog.find(id).ok_or_else(|| {
+            AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {id}"))
+        })?;
+        entry.valid().cloned().ok_or_else(|| {
+            AgentError::new(
+                codes::AGENT_NOT_INSTALLED,
+                format!("agent kind {id} is invalid: {}", entry.problems.join("; ")),
+            )
+        })
+    }
+
+    /// Types what a run held for its first `idle` (a mode's live switch, then the first prompt) on a thread of its own,
+    /// in that order. The write can wait for the agent to read, and the agent waits for the hook report that carried this
+    /// `idle` to return, so the report must not wait for the write (0054).
+    /// The run's switching mark, if the first idle set one, is cleared once the writes are done, whatever their outcome.
+    fn deliver_first_input(
+        &self,
+        session: &str,
+        terminal: &str,
+        chunks: Vec<Vec<u8>>,
+        switching: bool,
+    ) {
+        let agents = self.clone();
         let terminal = terminal.to_owned();
         let owner = session.to_owned();
-        let logged = owner.clone();
         let spawned = thread::Builder::new()
             .name("agent-first-prompt".to_owned())
             .spawn(move || {
-                if let Err(error) = terminals.input(&terminal, &bytes) {
-                    let error = AgentError::from(error);
-                    tracing::warn!(
-                        session = %owner,
-                        code = error.code,
-                        "the first prompt could not be typed into the run's terminal"
-                    );
+                for bytes in chunks {
+                    if let Err(error) = agents.inner.config.terminals.input(&terminal, &bytes) {
+                        let error = AgentError::from(error);
+                        tracing::warn!(
+                            session = %owner,
+                            code = error.code,
+                            "the first input could not be typed into the run's terminal"
+                        );
+                        break;
+                    }
+                }
+                if switching {
+                    agents.end_switching(&owner);
                 }
             });
         if let Err(error) = spawned {
-            tracing::warn!(session = %logged, %error, "the first prompt has no thread to be typed on");
+            tracing::warn!(session = %session, %error, "the first prompt has no thread to be typed on");
+            if switching {
+                self.end_switching(session);
+            }
+        }
+    }
+
+    /// Clears the run's switching mark (decision 0083, R7).
+    fn end_switching(&self, session: &str) {
+        if let Some(run) = lock(&self.inner.status).get_mut(session) {
+            run.switching = false;
         }
     }
 
@@ -886,7 +1069,7 @@ impl Agents {
         for id in expire_first_prompts(&mut live, Instant::now()) {
             tracing::warn!(
                 session = %id,
-                "the first prompt was dropped: the agent reported no idle state in time"
+                "the first input was dropped: the agent reported no idle state in time"
             );
         }
         let ids: Vec<String> = live.keys().cloned().collect();
@@ -1168,6 +1351,47 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         result: row.result,
         holds_secrets: row.holds_secrets,
         secrets_withheld: None,
+        permission_mode: row.mode.permission_mode,
+        mode_confirmed: row.mode.confirmed,
+        mode_source: row.mode.source.as_deref().map(mode_source_of),
+        pending_permission_mode: row.pending_permission_mode,
+    }
+}
+
+/// Why `run` takes no input now, if it does not (decisions 0058, 0083): a mode switch is being typed into it, whatever
+/// `force` says (R7); or, without `force`, its agent has not reported ready, or has not answered the last prompt yet, so
+/// a second one would land on the same idle.
+fn input_refusal(
+    run: &LiveRun,
+    session: &str,
+    state: Option<ActivityState>,
+    force: bool,
+) -> Option<AgentError> {
+    if run.switching {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "session {session} is switching its permission mode; try again once the switch is typed"
+            ),
+        ));
+    }
+    if !force && (!prompt::ready(run.prompt.has_status, state) || run.typed_since_report) {
+        return Some(AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "session {session} is not ready for a prompt: wait for its agent to report, or use force"
+            ),
+        ));
+    }
+    None
+}
+
+/// A stored mode source in wire form; a value a newer build wrote reads as `unknown`.
+fn mode_source_of(stored: &str) -> ModeSource {
+    match stored {
+        modes::SOURCE_VENDOR_DEFAULT => ModeSource::VendorDefault,
+        modes::SOURCE_CHOSEN => ModeSource::Chosen,
+        _ => ModeSource::Unknown,
     }
 }
 
@@ -1209,12 +1433,14 @@ fn tokens_match(expected: &str, given: &str) -> bool {
 fn expire_first_prompts(live: &mut LiveRuns, now: Instant) -> Vec<String> {
     let mut expired = Vec::new();
     for (id, run) in live.iter_mut() {
-        if run
-            .pending
-            .as_ref()
-            .is_some_and(|pending| now >= pending.due)
-        {
-            run.pending = None;
+        let mut dropped = false;
+        for held in [&mut run.pending, &mut run.pending_switch] {
+            if held.as_ref().is_some_and(|pending| now >= pending.due) {
+                *held = None;
+                dropped = true;
+            }
+        }
+        if dropped {
             expired.push(id.clone());
         }
     }
@@ -1413,6 +1639,8 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&stale).unwrap();
         agents
@@ -1461,6 +1689,39 @@ pub(crate) mod tests {
     }
 
     /// A first prompt is dropped once its wait has ended; a run still inside its wait keeps it (0054).
+    /// The window a switch is being typed in is only as long as one terminal write, so a race with a real prompt is not
+    /// deterministic; the rule that refuses one is tested here on its own instead.
+    #[test]
+    fn a_run_typing_a_mode_switch_refuses_every_other_input_even_forced() {
+        let run = |switching| LiveRun {
+            token: "t".to_owned(),
+            rules: HookRules::default(),
+            prompt: PromptRules {
+                has_status: true,
+                paste: PasteMode::Plain,
+                submit: "\r".to_owned(),
+            },
+            pending: None,
+            pending_switch: None,
+            typed_since_report: false,
+            switching,
+            account: None,
+        };
+        let idle = Some(ActivityState::Idle);
+        assert!(input_refusal(&run(false), "s", idle, false).is_none());
+        for force in [false, true] {
+            let refused = input_refusal(&run(true), "s", idle, force).expect("refused");
+            assert_eq!(refused.code, codes::AGENT_BUSY);
+            assert!(refused.message.contains("switching"), "{}", refused.message);
+        }
+        let working = Some(ActivityState::Working);
+        assert!(input_refusal(&run(false), "s", working, false).is_some());
+        assert!(
+            input_refusal(&run(false), "s", working, true).is_none(),
+            "force types anyway"
+        );
+    }
+
     #[test]
     fn a_first_prompt_is_dropped_only_once_its_wait_has_ended() {
         let now = Instant::now();
@@ -1476,7 +1737,12 @@ pub(crate) mod tests {
                 text: "later".to_owned(),
                 due,
             }),
+            pending_switch: Some(PendingPrompt {
+                text: "/mode wild".to_owned(),
+                due,
+            }),
             typed_since_report: false,
+            switching: false,
             account: None,
         };
         let mut live: LiveRuns = HashMap::new();
@@ -1488,7 +1754,12 @@ pub(crate) mod tests {
             vec!["late".to_owned()]
         );
         assert!(live["waiting"].pending.is_some());
+        assert!(live["waiting"].pending_switch.is_some());
         assert!(live["late"].pending.is_none());
+        assert!(
+            live["late"].pending_switch.is_none(),
+            "a held mode switch expires with the prompt"
+        );
     }
 
     /// A resume of a session that does not exist is refused as not found (0054).
@@ -1496,7 +1767,7 @@ pub(crate) mod tests {
     fn a_resume_of_an_unknown_session_is_not_found() {
         let (agents, _workspace_id, _profile) = service();
         let error = agents
-            .resume("no-such-session", SecretGrant::Provide)
+            .resume("no-such-session", None, SecretGrant::Provide)
             .unwrap_err();
         assert_eq!(error.code, codes::AGENT_NOT_FOUND);
     }
@@ -1522,6 +1793,8 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         let end = RunExit {
@@ -1540,7 +1813,7 @@ pub(crate) mod tests {
         assert!(
             agents
                 .store()
-                .restart_agent_session(&row.id, "t-2", false)
+                .restart_agent_session(&row.id, "t-2", false, &RunMode::default(), None)
                 .unwrap()
         );
         let mut live: LiveRuns = HashMap::new();
@@ -1555,7 +1828,9 @@ pub(crate) mod tests {
                     submit: "\r".to_owned(),
                 },
                 pending: None,
+                pending_switch: None,
                 typed_since_report: false,
+                switching: false,
                 account: None,
             },
         );
@@ -1593,10 +1868,14 @@ pub(crate) mod tests {
             result: None,
             brought_back_at: None,
             holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
 
-        let error = agents.resume(&row.id, SecretGrant::Provide).unwrap_err();
+        let error = agents
+            .resume(&row.id, None, SecretGrant::Provide)
+            .unwrap_err();
         assert_eq!(error.code, codes::AGENT_RESUME_UNAVAILABLE, "{error}");
     }
 }

@@ -1005,6 +1005,7 @@ mod tests {
             read_only: true,
             token: None,
             request_id: None,
+            permission_mode: None,
         };
         let (reply, mut answer) = oneshot::channel();
         refuse_while_down(Command::Delegate { params, reply });

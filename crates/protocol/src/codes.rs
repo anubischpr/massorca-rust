@@ -197,6 +197,10 @@ pub const AGENT_CREDENTIALS_INVALID: &str = "agent.credentials_invalid";
 pub const AGENT_ACCOUNT_NOT_FOUND: &str = "agent.account_not_found";
 /// The run's vault secrets could not be given to it; the message names the cause and variable names, never a value.
 pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
+/// The kind declares no permission mode of that id, or none at all; the data names the kind, the mode and the known ids.
+pub const AGENT_MODE_UNKNOWN: &str = "agent.mode_unknown";
+/// The mode has no launch arguments and its live switch cannot be sent at start, because the kind reports no idle state.
+pub const AGENT_MODE_UNAVAILABLE: &str = "agent.mode_unavailable";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";

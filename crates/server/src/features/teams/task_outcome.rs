@@ -195,6 +195,10 @@ mod tests {
             result: None,
             holds_secrets: false,
             secrets_withheld: None,
+            permission_mode: None,
+            mode_confirmed: false,
+            mode_source: None,
+            pending_permission_mode: None,
         }))
     }
 

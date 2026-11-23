@@ -11,10 +11,11 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams,
+    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -36,6 +37,10 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     let agents_cap = capabilities::AGENTS;
     Ok(vec![
         registries.capabilities.register(agents_cap, Owner::Core)?,
+        // Permission modes (decision 0083) ride on the agent methods; the capability tells a client they are there.
+        registries
+            .capabilities
+            .register(capabilities::AGENT_MODES, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -84,6 +89,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             resume,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::SET_MODE,
+            capabilities::AGENT_MODES,
+            Permission::Workspace,
+            set_mode,
         )?,
         methods.register(
             Owner::Core,
@@ -235,17 +247,30 @@ async fn forget(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession
     Ok(for_caller(&ctx, session))
 }
 
-/// Starts a new run of an exited session, which keeps its id (0054).
-async fn resume(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+/// Starts a new run of an exited session, which keeps its id (0054), in the mode decision 0083 gives it.
+async fn resume(ctx: RequestCtx, params: AgentResumeParams) -> Result<AgentSession, ErrorBody> {
     require_admin_for_session(&ctx, params.session.clone()).await?;
     let grant = secret_grant(&ctx);
     let session = on_agents(&ctx, move |agents| {
         // A resume can revive a task's session, so it waits for task starts and for done, reopen and bot changes.
         let _gate = start_gate();
-        agents.resume(&params.session, grant)
+        agents.resume(&params.session, params.permission_mode.as_deref(), grant)
     })
     .await?;
     Ok(for_caller(&ctx, session))
+}
+
+/// Switches a session's permission mode, live or at its next resume (decision 0083). A live switch types into the run's
+/// terminal, so a run holding vault secrets needs host-admin scope, as a prompt does. A bypass mode needs no more than
+/// the method's own permission.
+async fn set_mode(ctx: RequestCtx, params: AgentSetModeParams) -> Result<AgentModeSet, ErrorBody> {
+    require_admin_for_session(&ctx, params.session.clone()).await?;
+    let mut set = on_agents(&ctx, move |agents| {
+        agents.set_mode(&params.session, &params.permission_mode, params.force)
+    })
+    .await?;
+    set.session = for_caller(&ctx, set.session);
+    Ok(set)
 }
 
 /// Types a prompt into a run's terminal (0054). The text is never logged.

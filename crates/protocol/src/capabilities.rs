@@ -15,6 +15,9 @@ pub const TERMINALS: &str = "terminals/1";
 pub const BINARY_FRAMES: &str = "binary-frames/1";
 /// Agent methods (`agent.*`) and the agent watch stream (decision 0057).
 pub const AGENTS: &str = "agents/1";
+/// Agent permission modes (decision 0083): `permission_mode` on `agent.start`, `agent.delegate` and `agent.resume`, the
+/// session's `permission_mode` and `mode_confirmed`, and `agent.set_mode`.
+pub const AGENT_MODES: &str = "agent-modes/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";

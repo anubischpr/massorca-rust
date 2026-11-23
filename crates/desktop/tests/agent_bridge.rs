@@ -178,6 +178,7 @@ async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_
             read_only: true,
             token: None,
             request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
+            permission_mode: None,
         })
         .await
         .expect_err("a parent the service does not have is refused");
@@ -385,6 +386,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             cols: Some(100),
             rows: Some(30),
             request_id: None,
+            permission_mode: None,
         })
         .await
         .expect("the session starts")

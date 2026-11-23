@@ -50,6 +50,7 @@ pub fn delegate_params(
         read_only: draft.read_only,
         token: None,
         request_id: Some(request_id.to_owned()),
+        permission_mode: None,
     })
 }
 

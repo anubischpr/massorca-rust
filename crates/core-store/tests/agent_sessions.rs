@@ -4,7 +4,7 @@ mod common;
 
 use common::{assert_conflict, project_row, workspace_row};
 use massorca_core_store::{
-    AgentSessionRow, RunExit, RunExitReason, Store, StoreError, StoredActivity, new_id,
+    AgentSessionRow, RunExit, RunExitReason, RunMode, Store, StoreError, StoredActivity, new_id,
 };
 
 /// A store with one project and one workspace; returns the store and the workspace id.
@@ -34,6 +34,8 @@ fn session_row(workspace_id: &str, created_at: i64) -> AgentSessionRow {
         result: None,
         brought_back_at: None,
         holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
     }
 }
 
@@ -301,7 +303,7 @@ fn a_restart_moves_an_exited_session_to_a_new_terminal_and_clears_its_exit_and_a
     let terminal = new_id();
     assert!(
         store
-            .restart_agent_session(&row.id, &terminal, false)
+            .restart_agent_session(&row.id, &terminal, false, &RunMode::default(), None)
             .unwrap()
     );
     let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
@@ -320,7 +322,7 @@ fn a_live_session_is_not_restarted() {
 
     assert!(
         !store
-            .restart_agent_session(&row.id, &new_id(), false)
+            .restart_agent_session(&row.id, &new_id(), false, &RunMode::default(), None)
             .unwrap()
     );
     assert_eq!(store.get_agent_session(&row.id).unwrap(), Some(row));
@@ -417,7 +419,11 @@ fn the_secrets_mark_is_sticky_across_restarts() {
     row.exit = exited();
     store.insert_agent_session(&row).unwrap();
 
-    assert!(store.restart_agent_session(&row.id, "t-1", true).unwrap());
+    assert!(
+        store
+            .restart_agent_session(&row.id, "t-1", true, &RunMode::default(), None)
+            .unwrap()
+    );
     assert!(
         store
             .get_agent_session(&row.id)
@@ -429,8 +435,88 @@ fn the_secrets_mark_is_sticky_across_restarts() {
         .set_agent_session_exit(&row.id, "t-1", exited().as_ref().unwrap())
         .unwrap();
     // A later restart without secrets keeps the mark: the scrollback may still hold them.
-    assert!(store.restart_agent_session(&row.id, "t-2", false).unwrap());
+    assert!(
+        store
+            .restart_agent_session(&row.id, "t-2", false, &RunMode::default(), None)
+            .unwrap()
+    );
     let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
     assert_eq!(restarted.terminal_id.as_deref(), Some("t-2"));
     assert!(restarted.holds_secrets);
+}
+
+#[test]
+fn a_session_keeps_its_mode_its_source_and_a_pending_mode_apart() {
+    let (store, workspace) = store_with_workspace();
+    let mut row = session_row(&workspace, 10);
+    row.mode = RunMode {
+        permission_mode: Some("careful".to_owned()),
+        source: Some("chosen".to_owned()),
+        confirmed: true,
+    };
+    store.insert_agent_session(&row).unwrap();
+    assert_eq!(store.get_agent_session(&row.id).unwrap().unwrap(), row);
+
+    assert!(
+        store
+            .set_agent_session_pending_mode(&row.id, Some("wild"))
+            .unwrap()
+    );
+    let pending = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(pending.mode, row.mode, "the running mode is untouched");
+    assert_eq!(pending.pending_permission_mode.as_deref(), Some("wild"));
+
+    let switched = RunMode {
+        permission_mode: Some("wild".to_owned()),
+        source: Some("chosen".to_owned()),
+        confirmed: false,
+    };
+    assert!(store.set_agent_session_mode(&row.id, &switched).unwrap());
+    let read = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(read.mode, switched);
+    assert_eq!(read.pending_permission_mode, None, "a switch ends the wait");
+    assert!(
+        !store
+            .set_agent_session_mode("no-such-session", &switched)
+            .unwrap()
+    );
+
+    let plain = session_row(&workspace, 11);
+    store.insert_agent_session(&plain).unwrap();
+    let read = store.get_agent_session(&plain.id).unwrap().unwrap();
+    assert_eq!(
+        read.mode,
+        RunMode::default(),
+        "a kind with no modes has none"
+    );
+}
+
+#[test]
+fn a_restart_takes_the_new_run_s_mode_and_the_wait_it_keeps() {
+    let (store, workspace) = store_with_workspace();
+    let mut row = session_row(&workspace, 10);
+    row.exit = Some(RunExit {
+        code: Some(0),
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: 20,
+    });
+    store.insert_agent_session(&row).unwrap();
+    store
+        .set_agent_session_pending_mode(&row.id, Some("wild"))
+        .unwrap();
+
+    let vendor = RunMode {
+        permission_mode: None,
+        source: Some("vendor_default".to_owned()),
+        confirmed: false,
+    };
+    assert!(
+        store
+            .restart_agent_session(&row.id, "t-2", false, &vendor, Some("wild"))
+            .unwrap()
+    );
+    let restarted = store.get_agent_session(&row.id).unwrap().unwrap();
+    assert_eq!(restarted.mode, vendor);
+    assert_eq!(restarted.pending_permission_mode.as_deref(), Some("wild"));
 }

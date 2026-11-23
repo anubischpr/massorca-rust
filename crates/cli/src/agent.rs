@@ -9,8 +9,9 @@ use std::time::Duration;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{Client, ClientError, Subscription};
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentStartParams, AgentWatchEvent, AgentWatchParams,
+    ActivityState, AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentResumeParams,
+    AgentSession, AgentSessionList, AgentSetModeParams, AgentStartParams, AgentWatchEvent,
+    AgentWatchParams,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 
@@ -49,6 +50,20 @@ pub enum AgentCommand {
     Resume {
         /// Session id, or a unique prefix of at least 8 characters.
         session: String,
+        /// The run's permission mode. Without it: a mode set for this resume, else the last one unless it was a bypass
+        /// mode, else the kind's default.
+        #[arg(long, value_name = "MODE")]
+        mode: Option<String>,
+    },
+    /// Switches a session's permission mode: at once where the kind has a live switch, otherwise at its next resume.
+    Mode {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+        /// One of the kind's permission modes, as `agent kinds` lists them.
+        mode: String,
+        /// Type the switch into an agent whose kind reports no activity, so it may be in the middle of a prompt.
+        #[arg(long)]
+        force: bool,
     },
     /// Forgets a session whose run has ended.
     Forget {
@@ -103,6 +118,9 @@ pub struct AgentDelegateArgs {
     /// The child session's title; the first line of the prompt by default.
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
+    /// The child's permission mode, one its kind lists in `agent kinds`; the kind's default otherwise, never the parent's.
+    #[arg(long, value_name = "MODE")]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -196,6 +214,9 @@ pub struct AgentStartArgs {
     /// Title of the session.
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
+    /// The permission mode, one the kind lists in `agent kinds`; the kind's default otherwise. A bypass mode must be named.
+    #[arg(long, value_name = "MODE")]
+    pub mode: Option<String>,
     /// Arguments passed to the agent after its own, given after `--`.
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
@@ -262,6 +283,7 @@ pub async fn execute(
                     cols: None,
                     rows: None,
                     request_id: None,
+                    permission_mode: args.mode,
                 })
                 .await?;
             output.success(&started, &agent_text::session_details(&started));
@@ -310,9 +332,28 @@ pub async fn execute(
             let lines = [format!("handed to the terminal: {} bytes", receipt.bytes)];
             output.success(&receipt, &lines);
         }
-        AgentCommand::Resume { session } => {
-            let resumed = client.agent_resume(&session).await?;
+        AgentCommand::Resume { session, mode } => {
+            let resumed = client
+                .agent_resume_with(&AgentResumeParams {
+                    session,
+                    permission_mode: mode,
+                })
+                .await?;
             output.success(&resumed, &agent_text::session_details(&resumed));
+        }
+        AgentCommand::Mode {
+            session,
+            mode,
+            force,
+        } => {
+            let set = client
+                .agent_set_mode(&AgentSetModeParams {
+                    session,
+                    permission_mode: mode,
+                    force,
+                })
+                .await?;
+            output.success(&set, &agent_text::mode_set_lines(&set));
         }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;
@@ -346,6 +387,7 @@ pub async fn execute(
                     title: args.title,
                     read_only: args.read_only,
                     request_id: None,
+                    permission_mode: args.mode,
                 })
                 .await?;
             let mut lines = agent_text::session_details(&delegated.session);

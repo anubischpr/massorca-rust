@@ -1,8 +1,8 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, BringBackResult,
-    Execution, Outcome, PackageState,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentSession, AgentTree,
+    BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
 };
 
 use crate::terminal;
@@ -100,6 +100,20 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
     }
+    if let Some(mode) = &session.permission_mode {
+        // A mode no launch argument carried is only requested until something confirms it (decision 0083).
+        let state = if session.mode_confirmed {
+            ""
+        } else {
+            " (requested)"
+        };
+        lines.push(format!("mode: {mode}{state}"));
+    } else if session.mode_source == Some(ModeSource::VendorDefault) {
+        lines.push("mode: the CLI's default".to_owned());
+    }
+    if let Some(pending) = &session.pending_permission_mode {
+        lines.push(format!("next resume mode: {pending}"));
+    }
     if session.read_only {
         lines.push("read only: yes".to_owned());
     }
@@ -115,6 +129,28 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if session.brought_back_at_ms.is_some() {
         lines.push("brought back: yes".to_owned());
     }
+    lines
+}
+
+/// What `agent mode` did: when the mode applies, then the session.
+pub fn mode_set_lines(set: &AgentModeSet) -> Vec<String> {
+    let session = &set.session;
+    let applied = match set.applied {
+        ModeApplied::Live => format!(
+            "switched to {} in the running session (requested: no hook confirms it)",
+            session.permission_mode.as_deref().unwrap_or_default()
+        ),
+        ModeApplied::NextResume => format!(
+            "{} applies at the next resume",
+            session
+                .pending_permission_mode
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        ModeApplied::Unknown => "mode set".to_owned(),
+    };
+    let mut lines = vec![applied];
+    lines.extend(session_details(session));
     lines
 }
 
