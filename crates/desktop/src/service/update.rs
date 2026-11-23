@@ -6,13 +6,12 @@ use std::time::Instant;
 
 use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use massorca_protocol::methods::agents::{AccountSummary, AgentKind, AgentSession};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
-use massorca_protocol::methods::teams::Bot;
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -50,8 +49,6 @@ pub enum StoreUpdate {
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
-    /// A bot this desktop added, as the service answered it; its team lists it from now on.
-    TeamBot(Bot),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
     /// What a probe or a call learned about one paired host's connection.
@@ -65,6 +62,11 @@ pub enum StoreUpdate {
     Network(Result<NetworkStatus, Refusal>),
     /// What the vault reads learned; each part replaces what it names.
     Secrets(SecretsUpdate),
+    /// One kind's accounts, or why they could not be listed. Replaces what was held for that kind.
+    Accounts {
+        kind: String,
+        result: Result<Vec<AccountSummary>, Refusal>,
+    },
 }
 
 /// How a paired host's connection stands, as the last probe or call found it.
@@ -188,8 +190,6 @@ pub struct StoreState {
     pub team_read: u64,
     /// The numbers the pages give the ids of the teams, their cards and their bots.
     pub team_ids: TeamIds,
-    /// The bots this desktop added, as the service answered them.
-    pub team_bots: Vec<Bot>,
     /// The hosts this computer paired with, by name.
     pub hosts: Vec<HostEntry>,
     /// The devices paired with this computer's service, once listed.
@@ -198,6 +198,8 @@ pub struct StoreState {
     pub network: Option<Result<NetworkStatus, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
+    /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
+    pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
 }
 
 impl Default for StoreState {
@@ -215,11 +217,11 @@ impl Default for StoreState {
             teams: None,
             team_read: 0,
             team_ids: TeamIds::default(),
-            team_bots: Vec::new(),
             hosts: Vec::new(),
             devices: None,
             network: None,
             secrets: SecretsState::default(),
+            accounts: BTreeMap::new(),
         }
     }
 }
@@ -285,11 +287,6 @@ impl StoreState {
             StoreUpdate::AgentKindsResync(kinds) => self.agent_kinds = kinds,
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
-            StoreUpdate::TeamBot(bot) => {
-                self.team_ids.register_bot(&bot);
-                self.team_bots.retain(|known| known.id != bot.id);
-                self.team_bots.push(bot);
-            }
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
                 if let Some(entry) = self
@@ -310,6 +307,9 @@ impl StoreState {
             }
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
+            }
+            StoreUpdate::Accounts { kind, result } => {
+                self.accounts.insert(kind, result);
             }
         }
     }
@@ -438,6 +438,8 @@ pub(crate) mod fixtures {
             },
             activity: None,
             result: None,
+            holds_secrets: false,
+            secrets_withheld: None,
         }
     }
 
@@ -509,6 +511,8 @@ pub(crate) mod fixtures {
                 project_id: None,
                 columns: Vec::new(),
             },
+            bots: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }

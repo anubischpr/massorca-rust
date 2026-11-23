@@ -1,7 +1,7 @@
-//! `massorca device list|revoke|whoami`: the devices paired with the service (decision 0041).
+//! `massorca device list|revoke|forget|whoami`: the devices paired with the service (decision 0041).
 
 use massorca_protocol::methods::devices::{
-    self, DeviceInfo, DeviceList, DeviceRevokeParams, WhoAmI,
+    self, DeviceForgetParams, DeviceInfo, DeviceList, DeviceRevokeParams, WhoAmI,
 };
 
 use crate::args::DeviceCommand;
@@ -35,6 +35,12 @@ pub async fn execute(
             let revoked: DeviceInfo = client.call(devices::REVOKE, &params).await?;
             let line = format!("revoked {} ({})", revoked.name, revoked.id);
             output.success(&revoked, &[line]);
+        }
+        DeviceCommand::Forget { device } => {
+            let params = DeviceForgetParams { device };
+            let forgotten: DeviceInfo = client.call(devices::FORGET, &params).await?;
+            let line = format!("forgot {} ({})", forgotten.name, forgotten.id);
+            output.success(&forgotten, &[line]);
         }
         DeviceCommand::Whoami => {
             let me: WhoAmI = client.call(devices::WHOAMI, &()).await?;
