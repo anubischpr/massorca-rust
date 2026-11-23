@@ -150,7 +150,10 @@ impl Client {
         params: &TerminalAttachParams,
     ) -> Result<TerminalAttachment, ClientError> {
         let subscription = self.subscribe(terminals::ATTACH, params).await?;
-        Ok(TerminalAttachment::new(subscription))
+        Ok(match params.since {
+            Some(since) => TerminalAttachment::resumed(subscription, since),
+            None => TerminalAttachment::new(subscription),
+        })
     }
 
     /// `terminal.input`: types `bytes` into a terminal.

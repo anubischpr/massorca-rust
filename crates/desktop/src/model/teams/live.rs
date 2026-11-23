@@ -91,6 +91,7 @@ fn live_team(
     Some(Team {
         id: TeamId(ids.get(&record.team.id)?),
         name: record.team.name.clone(),
+        character: record.team.character,
         purpose: record.team.purpose.clone(),
         host: host.to_owned(),
         reach: HostReach::Connected,

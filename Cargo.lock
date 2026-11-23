@@ -3542,6 +3542,7 @@ dependencies = [
  "massorca-protocol",
  "massorca-server",
  "predicates",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -3551,6 +3552,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "vt100",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

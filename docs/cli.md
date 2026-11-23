@@ -143,6 +143,12 @@ connect and disconnect on their own.
   anything. It puts the local terminal in raw mode, resizes the terminal to the local size,
   and restores the local terminal on every exit. It prints the terminal's exit and returns
   0 when the terminal ends. `--json` is refused, because the output is the terminal's.
+- When the connection drops or the service stops, `terminal attach` keeps the session. It
+  prints `[connection lost (...); unverifiable until it returns, ...]`, retries with the
+  same backoff as the watches, and attaches again from the output already shown, so nothing
+  is shown twice or skipped. If the service no longer holds that output, the screen is
+  redrawn and it says so. Typing while out of contact is not sent, and it says so; `Ctrl+]`
+  still detaches. A refusal, such as a revoked device, ends the attach with its reason.
 - `terminal kill` and `terminal close` end the processes; stopping the service ends every
   terminal and nothing is restored on the next start.
 
