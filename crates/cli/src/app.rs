@@ -136,6 +136,13 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
             let target = globals.target()?;
             block_on(host::memory::execute(&target, autostart, output))
         }
+        // `host ports` reads a service too, so `--host` picks the host whose listening ports are read.
+        Commands::Host {
+            command: HostCommand::Ports,
+        } => {
+            let target = globals.target()?;
+            block_on(host::ports::execute(&target, autostart, output))
+        }
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))

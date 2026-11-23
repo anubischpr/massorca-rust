@@ -3,6 +3,7 @@
 use super::Shell;
 use super::marketplace::{self, MarketplaceFrame};
 use super::pairing::{self, PairingFrame};
+use super::session_view::{self, SessionFrame};
 use super::settings::{self, SettingsFrame};
 use super::setup;
 use super::start_page::{self, StartFrame};
@@ -45,6 +46,8 @@ pub(super) struct PageFrames<'a> {
     pub marketplace: Option<MarketplaceFrame>,
     /// The Pairing page's state and fields (D-PR-01).
     pub pairing: PairingFrame,
+    /// The open session's view, while the Canvas shows a session.
+    pub session: Option<SessionFrame>,
 }
 
 pub(super) fn canvas(
@@ -175,9 +178,15 @@ fn conversation(
             theme,
         )
         .into_any_element(),
-        Canvas::Session(title) => {
-            placeholder(&title, "The conversation is not built yet.", theme).into_any_element()
-        }
+        Canvas::Session(_) => match pages.session {
+            Some(frame) => session_view::session_page(frame, cx),
+            None => placeholder(
+                "Session",
+                "This session is not listed by the service.",
+                theme,
+            )
+            .into_any_element(),
+        },
         Canvas::Team(page) => {
             placeholder(page.title(), "This page is not built yet.", theme).into_any_element()
         }

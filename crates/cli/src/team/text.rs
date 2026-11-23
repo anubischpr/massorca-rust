@@ -1,6 +1,8 @@
 //! The text lines of the `team` commands. JSON output is the protocol document itself.
 
-use massorca_protocol::methods::teams::{Board, Bot, Team, TeamCharacter, TeamProject};
+use massorca_protocol::methods::teams::{
+    Board, Bot, MemorySource, Team, TeamCharacter, TeamMemoryLine, TeamProject,
+};
 
 /// `created team alpha (id)`, or the verb the command used.
 pub fn team_line(team: &Team, verb: &str) -> String {
@@ -92,6 +94,34 @@ pub fn board_lines(board: &Board) -> Vec<String> {
         }
     }
     lines
+}
+
+/// One memory line per row: its scope (the bot, or `team`), its source, its text, and its id.
+pub fn memory_table(lines: &[TeamMemoryLine]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            format!(
+                "{}\t{}\t{}\t{}",
+                line.bot_id.as_deref().unwrap_or("team"),
+                source_word(line.source),
+                line.text,
+                line.id
+            )
+        })
+        .collect()
+}
+
+pub fn memory_line(line: &TeamMemoryLine, verb: &str) -> String {
+    format!("{verb} memory line {} in team {}", line.id, line.team_id)
+}
+
+fn source_word(source: MemorySource) -> &'static str {
+    match source {
+        MemorySource::Task => "task",
+        MemorySource::Person => "person",
+        MemorySource::Unknown => "unknown",
+    }
 }
 
 fn character_word(character: TeamCharacter) -> &'static str {
