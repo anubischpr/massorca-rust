@@ -1,17 +1,101 @@
 //! Linux: `/proc/<pid>/status` for the resident set, `/proc/<pid>/stat` for the table and for each process's identity.
 //! No `unsafe`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io;
+use std::path::Path;
 
-use crate::{Listening, ProcessInfo, ProcessTable};
+use crate::proc_net::{self, Family};
+use crate::{Listening, ListeningSocket, ProcessInfo, ProcessTable};
 
-/// Not read yet: the socket table of Linux is read in the next change. Until then no port is known here.
-pub(crate) fn listening_sockets(
-    _table: &[ProcessInfo],
-    _pids: &BTreeSet<u32>,
-) -> Option<Listening> {
-    None
+/// The LISTEN sockets of the processes `pids`: the tables of `/proc/net/tcp` and `/proc/net/tcp6` name each socket's
+/// inode, and each process's descriptors name the inodes it holds. Only the processes asked about have their
+/// descriptors read. `None` when `/proc/net/tcp` cannot be read.
+pub(crate) fn listening_sockets(table: &[ProcessInfo], pids: &BTreeSet<u32>) -> Option<Listening> {
+    let mut listeners = proc_net::listeners(&read_table("/proc/net/tcp", false)?, Family::V4);
+    listeners.extend(proc_net::listeners(
+        &read_table("/proc/net/tcp6", true)?,
+        Family::V6,
+    ));
+    let (owners, unreadable) = socket_owners(table, pids);
+    let sockets = listeners
+        .into_iter()
+        .filter_map(|listener| {
+            let pid = *owners.get(&listener.inode)?;
+            Some(ListeningSocket {
+                pid,
+                address: listener.address,
+                port: listener.port,
+            })
+        })
+        .collect();
+    Some(Listening {
+        sockets,
+        unreadable,
+    })
+}
+
+/// A `/proc/net/tcp*` table's text. A missing IPv6 table is no sockets, since a kernel built without IPv6 has none;
+/// any other failure leaves the table unreadable.
+fn read_table(path: &str, absent_is_empty: bool) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(error) if absent_is_empty && error.kind() == io::ErrorKind::NotFound => {
+            Some(String::new())
+        }
+        Err(_) => None,
+    }
+}
+
+/// The pid that holds each socket inode among `pids` (the lowest pid when several hold it: the one that created it
+/// after a fork is the lowest), and the asked pids whose descriptors could not be read.
+fn socket_owners(
+    table: &[ProcessInfo],
+    pids: &BTreeSet<u32>,
+) -> (BTreeMap<u64, u32>, BTreeSet<u32>) {
+    let listed: BTreeMap<u32, &ProcessInfo> = table.iter().map(|info| (info.pid, info)).collect();
+    let mut owners = BTreeMap::new();
+    let mut unreadable = BTreeSet::new();
+    for &pid in pids {
+        match listed.get(&pid).and_then(|info| socket_inodes(info)) {
+            Some(inodes) => {
+                for inode in inodes {
+                    owners.entry(inode).or_insert(pid);
+                }
+            }
+            None => {
+                unreadable.insert(pid);
+            }
+        }
+    }
+    (owners, unreadable)
+}
+
+/// The socket inodes `listed`'s process holds. `None` when the process is no longer the one listed, or its descriptors
+/// cannot be read; the identity is checked before and after the read, so a reused pid is never read (decision 0081).
+fn socket_inodes(listed: &ProcessInfo) -> Option<Vec<u64>> {
+    if !still_listed(listed) {
+        return None;
+    }
+    let entries = fs::read_dir(format!("/proc/{}/fd", listed.pid)).ok()?;
+    let inodes = entries
+        .filter_map(Result::ok)
+        // A descriptor that closed since the listing is no longer a socket to read.
+        .filter_map(|entry| fs::read_link(entry.path()).ok())
+        .filter_map(|target| socket_inode(&target))
+        .collect();
+    still_listed(listed).then_some(inodes)
+}
+
+/// The inode of a descriptor's link target, `socket:[inode]`.
+fn socket_inode(target: &Path) -> Option<u64> {
+    target
+        .to_str()?
+        .strip_prefix("socket:[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
 }
 
 /// The resident set of `pid` in bytes, with no identity check. Only for a process whose identity is the caller's own.

@@ -1,8 +1,6 @@
 //! The listening-socket reader against real sockets: this test process listens, and a child it starts listens to nothing
-//! (decision 0081).
-
-// The Linux reader is in the next change; until then this file runs on Windows only.
-#![cfg(windows)]
+//! (decision 0081). macOS has no socket reader yet, so these run on Windows and Linux.
+#![cfg(any(windows, target_os = "linux"))]
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
 use std::process::Child;
@@ -45,7 +43,6 @@ impl Drop for Sleeper {
     }
 }
 
-#[cfg(windows)]
 #[test]
 fn a_listener_of_this_process_is_read_with_its_address_and_port() {
     let own = std::process::id();
@@ -63,7 +60,6 @@ fn a_listener_of_this_process_is_read_with_its_address_and_port() {
     );
 }
 
-#[cfg(windows)]
 #[test]
 fn an_ipv6_listener_is_read_when_the_host_has_ipv6() {
     let own = std::process::id();
@@ -83,7 +79,6 @@ fn an_ipv6_listener_is_read_when_the_host_has_ipv6() {
     );
 }
 
-#[cfg(windows)]
 #[test]
 fn a_process_that_listens_to_nothing_has_no_sockets() {
     let child = Sleeper::start();
