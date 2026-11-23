@@ -2,6 +2,9 @@
 //! read on this host when asked. Nothing is pushed; clients poll.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use massorca_core_agents::sessions::Agents;
 use massorca_core_store::now_ms;
@@ -19,7 +22,11 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
+/// How long one sample is shared: concurrent and repeated calls within it get the same figures (decision 0081).
+const SAMPLE_TTL: Duration = Duration::from_secs(1);
+
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
+    let memory_samples = Arc::new(SampleCache::default());
     Ok(vec![
         registries
             .capabilities
@@ -29,25 +36,109 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             host::MEMORY,
             capabilities::HOST,
             Permission::Read,
-            memory,
+            move |ctx: RequestCtx, _params: NoParams| {
+                let samples = Arc::clone(&memory_samples);
+                async move { memory(&samples, &ctx).await }
+            },
         )?,
     ])
 }
 
 /// Samples on the blocking pool: listing processes and reading each one are system calls, never a spawned program.
-async fn memory(ctx: RequestCtx, _params: NoParams) -> Result<HostMemory, ErrorBody> {
+/// A sample taken less than `SAMPLE_TTL` ago is answered again, with the time it was taken.
+async fn memory(
+    samples: &SampleCache<HostMemory>,
+    ctx: &RequestCtx,
+) -> Result<HostMemory, ErrorBody> {
     let terminals = ctx.state.terminals.clone();
     let agents = ctx.state.agents.clone();
-    match tokio::task::spawn_blocking(move || sample(&terminals, &agents)).await {
-        Ok(answer) => answer,
-        Err(error) => {
-            tracing::error!(error = %error, "the host memory sample did not finish");
-            Err(ErrorBody::new(
-                codes::INTERNAL,
-                "the memory sample did not finish",
-            ))
+    samples
+        .get_or_sample(Instant::now(), move || async move {
+            match tokio::task::spawn_blocking(move || sample(&terminals, &agents)).await {
+                Ok(answer) => answer,
+                Err(error) => {
+                    tracing::error!(error = %error, "the host memory sample did not finish");
+                    Err(ErrorBody::new(
+                        codes::INTERNAL,
+                        "the memory sample did not finish",
+                    ))
+                }
+            }
+        })
+        .await
+}
+
+/// The last sample of one host figure, shared for `SAMPLE_TTL` so that concurrent and repeated calls get one sample
+/// instead of rescanning every process each time. The lock is held while a sample is taken, so a call that arrives
+/// meanwhile waits for it and shares it. A failed sample is not kept: the next call tries again.
+#[derive(Debug)]
+pub(crate) struct SampleCache<T> {
+    last: tokio::sync::Mutex<Option<Sampled<T>>>,
+}
+
+#[derive(Debug)]
+struct Sampled<T> {
+    at: Instant,
+    value: T,
+}
+
+impl<T> Default for SampleCache<T> {
+    fn default() -> Self {
+        Self {
+            last: tokio::sync::Mutex::new(None),
         }
     }
+}
+
+impl<T: Clone> SampleCache<T> {
+    /// The sample taken less than `SAMPLE_TTL` before `now` when there is one; otherwise a new one from `take`, kept.
+    pub(crate) async fn get_or_sample<E, Fut>(
+        &self,
+        now: Instant,
+        take: impl FnOnce() -> Fut,
+    ) -> Result<T, E>
+    where
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut last = self.last.lock().await;
+        if let Some(sampled) = last.as_ref()
+            && now.saturating_duration_since(sampled.at) < SAMPLE_TTL
+        {
+            return Ok(sampled.value.clone());
+        }
+        let value = take().await?;
+        *last = Some(Sampled {
+            at: now,
+            value: value.clone(),
+        });
+        Ok(value)
+    }
+}
+
+/// One terminal's wire entry, and how many of its processes could not be read. A live terminal always runs at least
+/// its shell, so a terminal whose processes cannot be listed, or of which none was read, is `unverifiable` with no
+/// bytes: never reported as using zero.
+fn entry_of(terminal: TerminalSample, sessions: &HashMap<String, String>) -> (TerminalMemory, u32) {
+    let session_id = sessions.get(&terminal.terminal_id).cloned();
+    let (processes, bytes, unreadable, unverifiable) = match &terminal.sample {
+        Some(sample) if !sample.processes.is_empty() => (
+            u32::try_from(sample.processes.len()).unwrap_or(u32::MAX),
+            sample.total_bytes(),
+            sample.unreadable,
+            false,
+        ),
+        Some(sample) => (0, 0, sample.unreadable, true),
+        None => (0, 0, 0, true),
+    };
+    let entry = TerminalMemory {
+        terminal_id: terminal.terminal_id,
+        workspace_id: terminal.workspace_id,
+        session_id,
+        processes,
+        bytes,
+        unverifiable,
+    };
+    (entry, unreadable)
 }
 
 fn sample(terminals: &TerminalManager, agents: &Agents) -> Result<HostMemory, ErrorBody> {
@@ -77,32 +168,6 @@ fn sample(terminals: &TerminalManager, agents: &Agents) -> Result<HostMemory, Er
         unreadable,
         sampled_at_ms: now_ms(),
     })
-}
-
-/// One terminal's wire entry, and how many of its processes could not be read. A live terminal always runs at least
-/// its shell, so a terminal whose processes cannot be listed, or of which none was read, is `unverifiable` with no
-/// bytes: never reported as using zero.
-fn entry_of(terminal: TerminalSample, sessions: &HashMap<String, String>) -> (TerminalMemory, u32) {
-    let session_id = sessions.get(&terminal.terminal_id).cloned();
-    let (processes, bytes, unreadable, unverifiable) = match &terminal.sample {
-        Some(sample) if !sample.processes.is_empty() => (
-            u32::try_from(sample.processes.len()).unwrap_or(u32::MAX),
-            sample.total_bytes(),
-            sample.unreadable,
-            false,
-        ),
-        Some(sample) => (0, 0, sample.unreadable, true),
-        None => (0, 0, 0, true),
-    };
-    let entry = TerminalMemory {
-        terminal_id: terminal.terminal_id,
-        workspace_id: terminal.workspace_id,
-        session_id,
-        processes,
-        bytes,
-        unverifiable,
-    };
-    (entry, unreadable)
 }
 
 /// The agent session whose current run uses each terminal. A session's row names only its current run's terminal,
@@ -191,5 +256,80 @@ mod tests {
         assert_eq!((entry.processes, entry.bytes), (2, 15));
         assert_eq!(entry.session_id.as_deref(), Some("s-1"));
         assert_eq!(unreadable, 1);
+    }
+}
+
+#[cfg(test)]
+mod sample_cache_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    use super::{SAMPLE_TTL, SampleCache};
+
+    /// A take that counts itself: the value it returns is the number of samples taken so far.
+    async fn take_counted(taken: &AtomicUsize) -> Result<usize, ()> {
+        Ok(taken.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    #[tokio::test]
+    async fn a_sample_is_shared_for_the_ttl_and_taken_again_after_it() {
+        let cache = SampleCache::default();
+        let taken = AtomicUsize::new(0);
+        let start = Instant::now();
+
+        let first = cache.get_or_sample(start, || take_counted(&taken)).await;
+        let shared = cache
+            .get_or_sample(start + SAMPLE_TTL / 2, || take_counted(&taken))
+            .await;
+        assert_eq!(first, Ok(1));
+        assert_eq!(shared, Ok(1), "a call within the ttl takes no new sample");
+        assert_eq!(taken.load(Ordering::SeqCst), 1);
+
+        let later = cache
+            .get_or_sample(start + SAMPLE_TTL, || take_counted(&taken))
+            .await;
+        assert_eq!(later, Ok(2), "a sample older than the ttl is taken again");
+    }
+
+    #[tokio::test]
+    async fn concurrent_calls_share_one_sample_and_a_failed_one_is_not_kept() {
+        let cache = Arc::new(SampleCache::default());
+        let taken = Arc::new(AtomicUsize::new(0));
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let taken = Arc::clone(&taken);
+                tokio::spawn(async move {
+                    cache
+                        .get_or_sample(Instant::now(), || async {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            take_counted(&taken).await
+                        })
+                        .await
+                })
+            })
+            .collect();
+        for call in calls {
+            assert_eq!(call.await.expect("the call finishes"), Ok(1));
+        }
+        assert_eq!(
+            taken.load(Ordering::SeqCst),
+            1,
+            "one sample for eight calls"
+        );
+
+        let failed: Result<usize, &str> = cache
+            .get_or_sample(Instant::now() + SAMPLE_TTL * 5, || async {
+                Err("no sample")
+            })
+            .await;
+        assert_eq!(failed, Err("no sample"));
+        let retried = cache
+            .get_or_sample(Instant::now() + SAMPLE_TTL * 5, || async {
+                Ok::<_, &str>(9)
+            })
+            .await;
+        assert_eq!(retried, Ok(9), "a failed sample is not kept");
     }
 }
