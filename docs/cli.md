@@ -23,7 +23,7 @@ letters, digits, `-` or `_`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
 `service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands except
-`host memory` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
+`host memory` and `host ports` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
 `service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
 machine.
 
@@ -69,7 +69,8 @@ machine.
 | `host remove <NAME> [--keep-device] [--uninstall --ssh <TARGET>]` | Forgets a host. Unless `--keep-device`, revokes this device on the server when the host answers. `--uninstall` also stops and removes the service over SSH; if that fails the host is kept, so the command can be run again. |
 | `host status [<NAME>]` | Connects to one host, or to every host, within 10 seconds and reports `connected`, `unreachable`, `refused`, `identity_mismatch` or `error`. A single named host that does not answer exits 4. |
 | `host discover` | Lists the online Tailscale peers and whether each answers on port 7347. Without a tailnet it says why and lists nothing. |
-| `host memory` | Shows the memory of the service and of each live terminal's processes (agent runs included), read on the host that runs them: the total, the service, then one row per terminal with its workspace, agent session, process count and memory. Working set on Windows, resident set on Linux and macOS (decision 0081). Sizes use binary units: `N KB` under 1 MiB, `x.y MB` under 1 GiB, `x.yz GB` above. A size that rounds up to the next unit is shown in it (`1.0 MB`, not `1024 KB`). Processes that could not be read are counted, not added. A terminal whose processes cannot be listed or read shows `-` and `unverifiable` instead of a size and is not in the total. Works with `--host`. A service that cannot be reached or is lost mid-call (`service.unavailable`, `service.disconnected`, `host.unreachable`, `client.io`) prints `unverifiable` (`memory.unverifiable`) and exits 4, never a size; other failures, such as `host.identity_mismatch` or a refused handshake, keep their own code. |
+| `host memory` | Shows the memory of the service and of each live terminal's processes (agent runs included), read on the host that runs them: the total, the service, then one row per terminal with its workspace, agent session, process count and memory. Working set on Windows, resident set on Linux and macOS (decision 0081). Sizes use binary units: `N KB` under 1 MiB, `x.y MB` under 1 GiB, `x.yz GB` above. A size that rounds up to the next unit is shown in it (`1.0 MB`, not `1024 KB`). Processes that could not be read are counted, not added. A terminal counts its session on Linux and its parent tree on macOS, so a process that started its own session (Linux) or was reparented away (macOS) is not counted (decision 0081, D6). A terminal whose processes cannot be listed or read shows `-` and `unverifiable` instead of a size and is not in the total. A terminal with some processes read and some not shows its size with `(partial)`: that size covers only the processes read, the total counts it so, and a line says how many terminals are partial. Works with `--host`. A service that cannot be reached or is lost mid-call (`service.unavailable`, `service.disconnected`, `host.unreachable`, `client.io`) prints `unverifiable` (`memory.unverifiable`) and exits 4, never a size; other failures, such as `host.identity_mismatch` or a refused handshake, keep their own code. |
+| `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
 | `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
@@ -335,7 +336,7 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 | 1 | The service answered with an error, or local data could not be used. The code is printed. |
 | 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
-| 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable`, with the original code in `data.cause`; identity mismatches and refusals keep their code. |
+| 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable` (`host ports`: `ports.unverifiable`), with the original code in `data.cause`; identity mismatches and refusals keep their code. |
 
 ## Logs and files
 
@@ -354,12 +355,13 @@ own:
 | `--page <NAME>` | Open one page or dialog once the data it shows has arrived. An unknown name exits with status 2 before the window opens, and the error lists the valid names. |
 
 The page names are `workspace`, `settings-general`, `settings-hosts`, `settings-vault`, `pairing`,
-`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team` and `add-bot`.
+`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team`, `add-bot` and `session`.
 
 A page waits while the service is still answering. When the service has answered without the data
 a page or dialog needs, it opens its parent page instead, and stderr says why. `replace-secret` and
 `remove-secret` need an owned secret (parent: Settings, Vault). `board` and `add-bot` need a team, and
-`new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home).
+`new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home). `session` opens the newest agent
+session, or the first workspace's start page when there is none.
 
 `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused, so a page can be checked
 without showing it:
