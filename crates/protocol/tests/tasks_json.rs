@@ -53,6 +53,8 @@ fn a_task_names_its_origin_outcome_and_column_and_leaves_out_unset_fields() {
         outcome: Some(Outcome::Failure),
         error: None,
         error_code: None,
+        workspace_id: None,
+        branch: None,
         column: Column::Waiting,
         state: CardState::Stuck,
         last_known: false,

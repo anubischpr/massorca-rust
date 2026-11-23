@@ -130,8 +130,10 @@ fn start_task(
             .map(drop)
             .map_err(ErrorBody::from)
     };
-    let workspace = match prepare(store, agents, workspaces, &team, &bot, &row, changes) {
-        Ok(workspace) => workspace,
+    let place = match prepare(
+        store, agents, workspaces, &team, &bot, &row, &attempt, changes,
+    ) {
+        Ok(place) => place,
         Err(error) => {
             // Nothing was spawned, so the attempt is settled.
             store
@@ -140,8 +142,17 @@ fn start_task(
             return Err(record_failure(store, &row, error, changes)?);
         }
     };
+    store
+        .set_task_place(
+            &row.id,
+            &place.workspace.id,
+            place.branch().map(String::as_str),
+            now_ms(),
+        )
+        .map_err(store_error)?;
+    changes.task = Some(row.id.clone());
     let request = request_id(&row.id, &attempt);
-    let session = match spawn(agents, &workspace, &team, &bot, &row, &request, grant) {
+    let session = match spawn(agents, &place, &team, &bot, &row, &request, grant) {
         Ok(session) => session,
         Err(error) => {
             return Err(after_failed_start(
@@ -188,7 +199,22 @@ fn after_failed_start(
     }
 }
 
-/// A free bot and the team's folder workspace.
+/// Where a start runs a task.
+struct Place {
+    workspace: Workspace,
+    /// The task has its own git worktree, so its result is that worktree's branch.
+    own_worktree: bool,
+}
+
+impl Place {
+    fn branch(&self) -> Option<&String> {
+        self.workspace.branch.as_ref().filter(|_| self.own_worktree)
+    }
+}
+
+/// A free bot and the workspace the task runs in: its own worktree of a linked git project, a linked folder, or the
+/// team's folder when the task's project links no source (or its source was removed).
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     store: &Store,
     agents: &Agents,
@@ -196,16 +222,162 @@ fn prepare(
     team: &TeamRow,
     bot: &BotRow,
     task: &TaskRow,
+    attempt: &str,
+    changes: &mut Changes,
+) -> Result<Place, ErrorBody> {
+    refuse_busy_bot(store, agents, bot, task)?;
+    if let Some(place) = linked_place(store, workspaces, task, attempt, changes)? {
+        return Ok(place);
+    }
+    Ok(Place {
+        workspace: team_folder(store, workspaces, team, changes)?,
+        own_worktree: false,
+    })
+}
+
+/// The workspace of the task's linked project source, or `None` when the task has no project or it links no source.
+fn linked_place(
+    store: &Store,
+    workspaces: &Workspaces,
+    task: &TaskRow,
+    attempt: &str,
+    changes: &mut Changes,
+) -> Result<Option<Place>, ErrorBody> {
+    let Some(project_id) = task.project_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(source) = store
+        .get_team_project(project_id)
+        .map_err(store_error)?
+        .and_then(|project| project.source_project_id)
+    else {
+        return Ok(None);
+    };
+    let Some(project) = unless_missing(workspaces.show_project(&source), codes::PROJECT_NOT_FOUND)?
+    else {
+        return Ok(None);
+    };
+    let place = match project.kind {
+        ProjectKind::Git => Place {
+            workspace: task_worktree(workspaces, &project.id, task, attempt, changes)?,
+            own_worktree: true,
+        },
+        ProjectKind::Folder => Place {
+            workspace: linked_folder(workspaces, &project.id, &project.path, changes)?,
+            own_worktree: false,
+        },
+        // A kind this build does not know runs in the team folder rather than guess how to share it.
+        ProjectKind::Unknown => return Ok(None),
+    };
+    Ok(Some(place))
+}
+
+/// The task's own worktree, made the way delegation makes a child's: through the Workspaces entry, which picks the
+/// project's base. Named after the task title and the attempt, so a retry of one attempt finds its worktree and a
+/// later start makes a new one.
+fn task_worktree(
+    workspaces: &Workspaces,
+    project: &str,
+    task: &TaskRow,
+    attempt: &str,
     changes: &mut Changes,
 ) -> Result<Workspace, ErrorBody> {
-    refuse_busy_bot(store, agents, bot, task)?;
-    team_folder(store, workspaces, team, changes)
+    let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+        project: project.to_owned(),
+        name: worktree_name(&task.title, attempt),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        path: None,
+        request_id: Some(format!("task.worktree:{}:{attempt}", task.id)),
+    })?;
+    changes.workspace = Some(workspace.id.clone());
+    Ok(workspace)
+}
+
+/// A folder project's workspace at the project's own path, made when it has none; shared by several writers.
+fn linked_folder(
+    workspaces: &Workspaces,
+    project: &str,
+    path: &str,
+    changes: &mut Changes,
+) -> Result<Workspace, ErrorBody> {
+    let found = workspaces
+        .list_workspaces(Some(project))?
+        .into_iter()
+        .find(|workspace| workspace.path == path);
+    let workspace = match found {
+        Some(workspace) => workspace,
+        None => {
+            let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+                project: project.to_owned(),
+                name: TEAMS_FOLDER.to_owned(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                path: None,
+                request_id: Some(format!("team.linked_folder:{project}")),
+            })?;
+            changes.workspace = Some(workspace.id.clone());
+            workspace
+        }
+    };
+    workspaces.share_writers(&workspace.id)?;
+    Ok(workspace)
+}
+
+/// Longest title part of a task worktree's name.
+const WORKTREE_SLUG_MAX_CHARS: usize = 40;
+
+/// `<title slug>-<6 characters of the attempt>`, or `child-<6>` when the title has no letters or digits, as a delegated
+/// child's worktree is named.
+pub(crate) fn worktree_name(title: &str, attempt: &str) -> String {
+    let mut slug = String::new();
+    for ch in title.chars().map(fold_accent) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug
+        .trim_matches('-')
+        .chars()
+        .take(WORKTREE_SLUG_MAX_CHARS)
+        .collect();
+    let slug = slug.trim_end_matches('-');
+    let suffix: String = attempt
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(6)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if slug.is_empty() {
+        format!("child-{suffix}")
+    } else {
+        format!("{slug}-{suffix}")
+    }
+}
+
+/// The base letter of a common accented Latin letter; any other character as it is.
+fn fold_accent(ch: char) -> char {
+    match ch {
+        'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'Á' | 'À' | 'Â' | 'Ä' | 'Ã' | 'Å' => 'a',
+        'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'Ó' | 'Ò' | 'Ô' | 'Ö' | 'Õ' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => 'u',
+        'ñ' | 'Ñ' => 'n',
+        'ç' | 'Ç' => 'c',
+        'ý' | 'ÿ' | 'Ý' => 'y',
+        other => other,
+    }
 }
 
 /// Starts the bot's agent. A failure here is a start that spawned nothing.
 fn spawn(
     agents: &Agents,
-    workspace: &Workspace,
+    place: &Place,
     team: &TeamRow,
     bot: &BotRow,
     task: &TaskRow,
@@ -214,9 +386,9 @@ fn spawn(
 ) -> Result<String, ErrorBody> {
     let session = agents.start(
         AgentStartParams {
-            workspace: workspace.id.clone(),
+            workspace: place.workspace.id.clone(),
             kind: bot.kind.clone(),
-            prompt: Some(prompt(team, bot, task)),
+            prompt: Some(prompt(team, bot, task, place.branch().map(String::as_str))),
             args: Vec::new(),
             env: BTreeMap::new(),
             read_only: false,
@@ -452,7 +624,7 @@ fn path_text(path: &Path) -> Result<String, ErrorBody> {
 }
 
 /// The bot's first prompt: who it is, its team and job, then the task.
-pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow) -> String {
+pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow, branch: Option<&str>) -> String {
     let mut text = format!(
         "You are {}, a bot in the team {}.\nYour job: {}\n",
         bot.name, team.name, bot.job
@@ -463,6 +635,12 @@ pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow) -> String {
     text.push_str(&format!("\nTask: {}\n", task.title));
     if !task.body.is_empty() {
         text.push_str(&format!("\n{}\n", task.body));
+    }
+    if let Some(branch) = branch {
+        text.push_str(&format!(
+            "\nYou work in your own git worktree on the branch {branch}. It was made from the project's base, without \
+             the uncommitted changes of the main checkout. Commit your work on this branch; the owner merges it.\n"
+        ));
     }
     text
 }
@@ -502,6 +680,8 @@ mod tests {
             outcome: None,
             error: None,
             error_code: None,
+            workspace_id: None,
+            branch: None,
             created_at: 1,
             updated_at: 1,
         };
@@ -813,5 +993,48 @@ mod tests {
 
         assert!(stopped.borrow().is_empty());
         assert_eq!(attempt_of(&store, &task), None);
+    }
+
+    #[test]
+    fn a_task_worktree_is_named_after_its_title_and_attempt() {
+        assert_eq!(
+            worktree_name("Parse the Headers!", "AbC123xyz"),
+            "parse-the-headers-abc123"
+        );
+        assert_eq!(
+            worktree_name("Añadir créditos", "a1b2c3d4"),
+            "anadir-creditos-a1b2c3"
+        );
+        assert_eq!(worktree_name("¿?", "a1b2c3d4"), "child-a1b2c3");
+        let long = worktree_name(&"word ".repeat(20), "a1b2c3d4");
+        let slug = long.strip_suffix("-a1b2c3").expect("suffix");
+        assert!(slug.len() <= WORKTREE_SLUG_MAX_CHARS, "{long}");
+        assert!(!slug.ends_with('-'), "{long}");
+    }
+
+    #[test]
+    fn a_task_in_its_own_worktree_is_told_its_branch_and_what_it_does_not_carry() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let team = store.get_team(&task.team_id).expect("read").expect("team");
+        let bot = BotRow {
+            id: new_id(),
+            team_id: team.id.clone(),
+            name: "mara".to_owned(),
+            job: "Writes the parser".to_owned(),
+            kind: "fake".to_owned(),
+            model: None,
+            effort: None,
+            lead: false,
+            created_at: 1,
+        };
+
+        let own = prompt(&team, &bot, &task, Some("parse-a1b2c3"));
+        assert!(own.contains("branch parse-a1b2c3"), "{own}");
+        assert!(
+            own.contains("uncommitted changes of the main checkout"),
+            "{own}"
+        );
+        assert!(!prompt(&team, &bot, &task, None).contains("worktree"));
     }
 }
