@@ -33,7 +33,10 @@ lineage) comes later; the model must not block it.
   given (`origin/main`). An existing local branch is used only with
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
   given. Create carries an optional client request id; repeating the same id
-  returns the first result instead of creating twice.
+  returns the first result instead of creating twice. A git project may set
+  its own base (`massorca project set-base`), which sits between an explicit
+  base and the repository default: a create that names no base starts from it,
+  and clearing it restores the default. A folder project has none.
 - **Interrupted create.** A create that stops after `worktree add` and before
   its row is stored leaves a worktree that git registers and no row records.
   The same create (same project, name, path and branch) adopts it: it stores

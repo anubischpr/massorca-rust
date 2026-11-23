@@ -273,6 +273,13 @@ ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 C
 "#,
         foreign_keys_off: false,
     },
+    // A project's base branch, which a new workspace starts from when it names none (WS-04).
+    Migration {
+        sql: r#"
+ALTER TABLE projects ADD COLUMN base_ref TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

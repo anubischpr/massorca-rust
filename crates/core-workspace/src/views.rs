@@ -18,6 +18,7 @@ pub(crate) fn project(row: &ProjectRow) -> Project {
         name: row.name.clone(),
         workspaces_root: row.workspaces_root.clone(),
         added_at_ms: row.added_at,
+        base_ref: row.base_ref.clone(),
     }
 }
 

@@ -476,6 +476,7 @@ pub(crate) mod fixtures {
             name: name.into(),
             workspaces_root: format!("/repos/{name}-worktrees"),
             added_at_ms: 1,
+            base_ref: None,
         }
     }
 

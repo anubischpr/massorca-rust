@@ -10,6 +10,8 @@ pub const LIST: &str = "project.list";
 pub const SHOW: &str = "project.show";
 /// Params: [`ProjectRef`]. Result: [`Project`].
 pub const REMOVE: &str = "project.remove";
+/// Params: [`ProjectSetBaseParams`]. Result: [`Project`].
+pub const SET_BASE: &str = "project.set_base";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +41,14 @@ pub struct ProjectRef {
     pub project: String,
 }
 
+/// Params of `project.set_base`. A `None` base clears the project's base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSetBaseParams {
+    /// Selected as `project.show` selects: id, then exact name, then path.
+    pub project: String,
+    pub base: Option<String>,
+}
+
 /// Result of `project.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectList {
@@ -54,4 +64,7 @@ pub struct Project {
     pub name: String,
     pub workspaces_root: String,
     pub added_at_ms: i64,
+    /// The base a new workspace starts from when it names none; absent when the project has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
 }

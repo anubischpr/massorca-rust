@@ -2,7 +2,7 @@
 
 mod harness;
 
-use harness::{Sandbox, execute, git_repo, single_document, stdout_text, with_json};
+use harness::{Sandbox, execute, git, git_repo, single_document, stdout_text, with_json};
 use predicates::str::contains;
 
 #[test]
@@ -118,6 +118,54 @@ fn git_on_a_plain_directory_is_refused_with_exit_1() {
         single_document(&outcome)["error"]["code"],
         "project.not_git"
     );
+}
+
+#[test]
+fn a_project_base_is_set_shown_and_cleared_as_text_and_json() {
+    let sandbox = Sandbox::new();
+    sandbox.prepare_profile("default");
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    git(&repo, &["branch", "develop"]);
+    let repo_text = repo.to_string_lossy().into_owned();
+    sandbox.json_ok("default", &["project", "add", repo_text.as_str()]);
+
+    sandbox
+        .run("default", &["project", "set-base", "repo", "develop"])
+        .success()
+        .stdout(contains("project repo base is develop"));
+    let shown = sandbox
+        .run("default", &["project", "show", "repo"])
+        .success();
+    assert!(stdout_text(&shown).contains("base: develop"));
+    let listed = sandbox.run("default", &["project", "list"]).success();
+    assert!(stdout_text(&listed).contains("develop"));
+    let set = sandbox.json_ok("default", &["project", "set-base", "repo", "develop"]);
+    assert_eq!(set["base_ref"], "develop");
+
+    sandbox
+        .run("default", &["project", "set-base", "repo", "--clear"])
+        .success()
+        .stdout(contains("project repo has no base"));
+    let cleared = sandbox.json_ok("default", &["project", "set-base", "repo", "--clear"]);
+    assert!(cleared.get("base_ref").is_none(), "{cleared}");
+
+    let unresolved = sandbox
+        .run(
+            "default",
+            &with_json(&["project", "set-base", "repo", "no-such-branch"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&unresolved)["error"]["code"],
+        "base.not_found"
+    );
+    sandbox
+        .run(
+            "default",
+            &["project", "set-base", "repo", "develop", "--clear"],
+        )
+        .failure();
 }
 
 #[test]
