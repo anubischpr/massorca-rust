@@ -21,6 +21,8 @@ mod git_tests;
 mod secrets_tests;
 
 #[cfg(test)]
+pub(crate) use accounts::AccountCommand;
+#[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
 pub use connection::{

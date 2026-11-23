@@ -4,8 +4,8 @@
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
 use crate::model::marketplace::{
-    AccountState, AccountView, MarketplaceItem, MarketplaceItemId, Part, account_views,
-    advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
+    AccountActivity, AccountState, AccountView, MarketplaceItem, MarketplaceItemId, Part,
+    advanced_rows, connection_rows, information, parts, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -178,11 +178,23 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     .empty("No accounts yet. Add one to use this agent.")
     .add_account(add);
     let agent = item.agent_kind.clone().unwrap_or_default();
-    for view in account_views(&frame.snapshot, &agent) {
+    let activity = AccountActivity {
+        busy: Some(&frame.busy),
+        signing_in: None,
+    };
+    for view in connection_rows(&frame.snapshot, &agent, activity) {
         list = list.account(account_row(frame, view));
     }
     let mut body = div().flex().flex_col().gap(px(SPACE_3)).min_w_0();
-    if let Some((None, message)) = &frame.error {
+    let listing = frame
+        .list_refusals
+        .iter()
+        .find(|(kind, _)| *kind == agent)
+        .map(|(_, message)| message);
+    if let Some(message) = listing.or(match &frame.error {
+        Some((None, message)) => Some(message),
+        _ => None,
+    }) {
         body = body.child(alert(message, cx));
     }
     part_section(
@@ -193,7 +205,7 @@ fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> Any
     )
 }
 
-/// One account row, with the actions its state allows: Make active only while it is not active.
+/// One account row, with the actions its state allows: none while busy, Make active only while it is not active.
 fn account_row(frame: &MarketplaceFrame, view: AccountView) -> AccountRow {
     let account = view.id;
     let shell = &frame.shell;
@@ -203,23 +215,28 @@ fn account_row(frame: &MarketplaceFrame, view: AccountView) -> AccountRow {
         account_status(view.state),
     )
     .identity(view.signed_in)
+    .busy(view.busy)
     .active(view.active)
-    .used_by(view.used_by)
-    .check(shell_button(
-        shell,
-        SharedString::from(format!("marketplace-check-{}", account.0)),
-        "Check now",
-        ButtonVariant::Ghost,
-        move |shell, cx| shell.check_marketplace_account(account, cx),
-    ))
-    .remove(shell_button(
-        shell,
-        SharedString::from(format!("marketplace-remove-{}", account.0)),
-        "Remove",
-        ButtonVariant::Ghost,
-        move |shell, cx| shell.remove_marketplace_account(account, cx),
-    ));
-    if !view.active {
+    .used_by(view.used_by);
+    if view.can_check {
+        row = row.check(shell_button(
+            shell,
+            SharedString::from(format!("marketplace-check-{}", account.0)),
+            "Check now",
+            ButtonVariant::Ghost,
+            move |shell, cx| shell.check_marketplace_account(account, cx),
+        ));
+    }
+    if view.can_remove {
+        row = row.remove(shell_button(
+            shell,
+            SharedString::from(format!("marketplace-remove-{}", account.0)),
+            "Remove",
+            ButtonVariant::Ghost,
+            move |shell, cx| shell.remove_marketplace_account(account, cx),
+        ));
+    }
+    if view.can_make_active {
         row = row.make_active(shell_button(
             shell,
             SharedString::from(format!("marketplace-make-active-{}", account.0)),
@@ -254,6 +271,7 @@ fn alert(message: &str, cx: &App) -> AnyElement {
     let theme = *cx.theme();
     div()
         .id("marketplace-connection-alert")
+        .debug_selector(|| "marketplace-connection-alert".to_owned())
         .role(Role::Alert)
         .aria_label(message.to_owned())
         .text_style(TYPE_BODY_SM)

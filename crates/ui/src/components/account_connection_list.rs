@@ -55,14 +55,18 @@ impl AccountStatus {
     }
 }
 
-/// What a row says after its label, for screen readers: state, Active, identity and use.
+/// The word a busy account shows in place of its state.
+const BUSY: &str = "Busy";
+
+/// What a row says after its label, for screen readers: state (or Busy), Active, identity and use.
 fn row_description(
     status: AccountStatus,
+    busy: bool,
     active: bool,
     identity: Option<&str>,
     used_by: Option<&str>,
 ) -> String {
-    let mut parts = vec![status.word()];
+    let mut parts = vec![if busy { BUSY } else { status.word() }];
     if active {
         parts.push("Active");
     }
@@ -136,6 +140,7 @@ pub struct AccountRow {
     id: ElementId,
     label: SharedString,
     status: AccountStatus,
+    busy: bool,
     identity: Option<SharedString>,
     active: bool,
     used_by: Option<SharedString>,
@@ -167,6 +172,7 @@ impl AccountRow {
             id: id.into(),
             label: label.into(),
             status,
+            busy: false,
             identity: None,
             active: false,
             used_by: None,
@@ -180,6 +186,12 @@ impl AccountRow {
     /// Where the account is signed in, such as "user@example.com".
     pub fn identity(mut self, text: impl Into<SharedString>) -> Self {
         self.identity = Some(text.into());
+        self
+    }
+
+    /// A busy account is signing in or being decided: its badge says "Busy" in place of the state.
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
         self
     }
 
@@ -226,6 +238,7 @@ impl RenderOnce for AccountRow {
         let p = &theme.palette;
         let description = SharedString::from(row_description(
             self.status,
+            self.busy,
             self.active,
             self.identity.as_deref(),
             self.used_by.as_deref(),
@@ -271,7 +284,11 @@ impl RenderOnce for AccountRow {
             .gap(px(SPACE_2))
             .min_w_0()
             .child(details)
-            .child(Badge::text(self.status.word()).tone(self.status.tone()));
+            .child(if self.busy {
+                Badge::text(BUSY).tone(BadgeTone::Info)
+            } else {
+                Badge::text(self.status.word()).tone(self.status.tone())
+            });
 
         let mut actions = div()
             .flex()
@@ -403,6 +420,7 @@ mod tests {
         assert_eq!(
             row_description(
                 AccountStatus::SignedIn,
+                false,
                 true,
                 Some("user@example.com"),
                 Some("Used by Project one"),
@@ -410,8 +428,12 @@ mod tests {
             "Signed in, Active, user@example.com, Used by Project one"
         );
         assert_eq!(
-            row_description(AccountStatus::Expired, false, None, None),
+            row_description(AccountStatus::Expired, false, false, None, None),
             "Expired"
+        );
+        assert_eq!(
+            row_description(AccountStatus::NeedsSignIn, true, false, None, None),
+            "Busy"
         );
     }
 

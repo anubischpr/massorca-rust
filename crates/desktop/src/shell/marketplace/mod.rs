@@ -1,6 +1,7 @@
 //! The Marketplace pages: the catalogue and its views, and each item's page (D-EX-01, 7.2, 7.4).
 //! Installs and agent accounts go through the source trait, and the snapshot always follows it.
 
+mod accounts;
 mod catalogue;
 mod dialogs;
 mod item;
@@ -12,6 +13,8 @@ use crate::model::marketplace::{
     AccountId, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
+use std::collections::BTreeSet;
+
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
     prelude::*, px,
@@ -19,6 +22,8 @@ use gpui::{
 use massorca_ui::components::search_field::SearchField;
 use massorca_ui::tokens::SPACE_6;
 
+use accounts::AccountWrite;
+pub(super) use accounts::AccountsUi;
 pub(super) use dialogs::dialog;
 
 /// The uninstall confirm on screen: the item, and the refusal to show in it, if any.
@@ -37,6 +42,10 @@ pub(super) struct MarketplaceFrame {
     advanced_open: bool,
     /// A refused change, with the account it concerns (None for the whole Connection part).
     error: Option<(Option<AccountId>, String)>,
+    /// The accounts the service refused as busy.
+    busy: BTreeSet<AccountId>,
+    /// Why a kind's accounts could not be listed, by kind.
+    list_refusals: Vec<(String, String)>,
     shell: WeakEntity<Shell>,
 }
 
@@ -45,6 +54,7 @@ pub(super) fn frame(
     shell: &Shell,
     page: MarketplacePage,
     weak: WeakEntity<Shell>,
+    cx: &App,
 ) -> MarketplaceFrame {
     MarketplaceFrame {
         snapshot: shell.model.marketplace().clone(),
@@ -53,6 +63,8 @@ pub(super) fn frame(
         search: shell.marketplace_search.clone(),
         advanced_open: shell.model.marketplace_advanced_open(),
         error: shell.marketplace_error.clone(),
+        busy: shell.marketplace_accounts.busy.clone(),
+        list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
         shell: weak,
     }
 }
@@ -152,11 +164,15 @@ impl Shell {
         account: AccountId,
         cx: &mut Context<Self>,
     ) {
-        self.report_account(account, cx, |source| source.activate_account(account));
+        if !self.write_service_account(account, AccountWrite::Activate, cx) {
+            self.report_account(account, cx, |source| source.activate_account(account));
+        }
     }
 
     pub(super) fn check_marketplace_account(&mut self, account: AccountId, cx: &mut Context<Self>) {
-        self.report_account(account, cx, |source| source.check_account(account));
+        if !self.write_service_account(account, AccountWrite::Check, cx) {
+            self.report_account(account, cx, |source| source.check_account(account));
+        }
     }
 
     pub(super) fn remove_marketplace_account(
@@ -164,7 +180,9 @@ impl Shell {
         account: AccountId,
         cx: &mut Context<Self>,
     ) {
-        self.report_account(account, cx, |source| source.remove_account(account));
+        if !self.write_service_account(account, AccountWrite::Remove, cx) {
+            self.report_account(account, cx, |source| source.remove_account(account));
+        }
     }
 
     pub(super) fn sign_in_open_page(&mut self, cx: &mut Context<Self>) {
