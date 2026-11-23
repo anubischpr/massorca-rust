@@ -77,6 +77,8 @@ mod debug_focus_tests;
 #[cfg(test)]
 mod debug_page_tests;
 #[cfg(test)]
+mod marketplace_accounts_tests;
+#[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
@@ -179,6 +181,8 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// What the Connection part knows beyond the service's account lists.
+    marketplace_accounts: marketplace::AccountsUi,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -271,6 +275,7 @@ impl Shell {
                 shell
                     .marketplace
                     .follow_agent_kinds(&store.read(cx).state().agent_kinds);
+                shell.follow_service_accounts(store.read(cx).state());
                 shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();
@@ -402,6 +407,7 @@ impl Shell {
             marketplace_code,
             marketplace_error: None,
             marketplace_uninstall: None,
+            marketplace_accounts: marketplace::AccountsUi::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
@@ -632,7 +638,7 @@ impl Render for Shell {
             .then(|| project_sidebar::project_body(self, &shell, cx));
         let marketplace = match self.model.canvas() {
             Canvas::Page(Page::Marketplace(page)) => {
-                Some(marketplace::frame(self, page, shell.clone()))
+                Some(marketplace::frame(self, page, shell.clone(), cx))
             }
             _ => None,
         };

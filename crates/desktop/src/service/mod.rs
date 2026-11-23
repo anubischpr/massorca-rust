@@ -2,6 +2,7 @@
 //! runtime, the connection states, the updates the UI folds into its store, and the typed
 //! refusals that pick a dialog.
 
+mod accounts;
 mod agents;
 mod bridge;
 mod connection;
@@ -20,6 +21,8 @@ mod git_tests;
 mod secrets_tests;
 
 #[cfg(test)]
+pub(crate) use accounts::AccountCommand;
+#[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
 pub use connection::{
@@ -32,7 +35,9 @@ pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
-pub use teams::{TeamIds, TeamRecord, TeamsRead};
+#[cfg(test)]
+pub(crate) use teams::TeamCommand;
+pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]
 pub(crate) use terminals::{TerminalCommand, TerminalWrite};

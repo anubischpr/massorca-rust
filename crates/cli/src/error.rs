@@ -83,6 +83,7 @@ impl From<ClientError> for CliError {
             ClientError::HostNotFound(_) => "host.not_found",
             ClientError::HostExists(_) => "host.exists",
             ClientError::HostUnreadable { .. } => "host.unreadable",
+            ClientError::HostsBusy(_) => "host.busy",
             ClientError::InvalidHostName(_) => "host.invalid_name",
         };
         Self::new(code, message, exit_code)
