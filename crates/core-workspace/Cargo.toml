@@ -12,11 +12,11 @@ dunce.workspace = true
 icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 massorca-core-git.workspace = true
 massorca-core-store.workspace = true
-massorca-process.workspace = true
 massorca-protocol.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+massorca-process.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
 

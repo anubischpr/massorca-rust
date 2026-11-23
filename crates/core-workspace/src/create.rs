@@ -103,7 +103,7 @@ impl Workspaces {
             ),
             StoreKind::Git => {
                 let repo = Path::new(&project.path);
-                let segment = self.branch_prefix.segment(repo)?;
+                let segment = self.branch_prefix.segment(&self.git, repo)?;
                 let branches: HashSet<String> = self
                     .git
                     .branches(repo)?
@@ -142,7 +142,7 @@ impl Workspaces {
             Some(explicit) => explicit.to_owned(),
             None if params.existing_branch => params.name.clone(),
             None => {
-                let segment = self.branch_prefix.segment(repo)?;
+                let segment = self.branch_prefix.segment(&self.git, repo)?;
                 branch_prefix::branch_name(segment.as_deref(), &params.name)
             }
         };

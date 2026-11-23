@@ -8,6 +8,7 @@ mod base;
 mod branch;
 mod classify;
 mod commit;
+mod config;
 mod diff;
 mod error;
 mod git;

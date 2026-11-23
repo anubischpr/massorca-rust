@@ -1,8 +1,8 @@
 //! The branch prefix of a new workspace: none, the git username, or custom text (ADR 0008).
 
-use std::ffi::OsString;
 use std::path::Path;
 
+use massorca_core_git::Git;
 use massorca_protocol::codes;
 
 use crate::error::DomainError;
@@ -34,10 +34,10 @@ impl BranchPrefix {
     }
 
     /// The segment before the `/` of a new branch created in `repo`; `None` means no prefix.
-    pub(crate) fn segment(&self, repo: &Path) -> Result<Option<String>, DomainError> {
+    pub(crate) fn segment(&self, git: &Git, repo: &Path) -> Result<Option<String>, DomainError> {
         match self {
             Self::None => Ok(None),
-            Self::GitUsername => Ok(git_username(repo)),
+            Self::GitUsername => git_username(git, repo),
             Self::Custom(text) => {
                 let segment = normalised_prefix(text);
                 if segment.is_empty() {
@@ -90,15 +90,19 @@ fn prefix_is_valid(prefix: &str) -> bool {
 
 /// The username git config names for the repository: an explicit login key first, then a
 /// `user.name` that is a plain token.
-fn git_username(repo: &Path) -> Option<String> {
-    ["github.user", "user.username"]
-        .into_iter()
-        .find_map(|key| git_config(repo, key).and_then(|raw| configured_login(&raw)))
-        .or_else(|| {
-            git_config(repo, "user.name")
-                .map(|name| name.trim().to_owned())
-                .filter(|name| is_branch_safe(name))
-        })
+fn git_username(git: &Git, repo: &Path) -> Result<Option<String>, DomainError> {
+    for key in ["github.user", "user.username"] {
+        if let Some(login) = git
+            .config_get(repo, key)?
+            .and_then(|raw| configured_login(&raw))
+        {
+            return Ok(Some(login));
+        }
+    }
+    Ok(git
+        .config_get(repo, "user.name")?
+        .map(|name| name.trim().to_owned())
+        .filter(|name| is_branch_safe(name)))
 }
 
 /// What a configured login names, if a branch can carry it.
@@ -129,31 +133,6 @@ fn is_branch_safe(value: &str) -> bool {
         && !value.contains("..")
         && !value.ends_with('.')
         && !value.ends_with(".lock")
-}
-
-/// The value `key` holds in `repo`'s configuration, or `None` when it is unset or git cannot run.
-fn git_config(repo: &Path, key: &str) -> Option<String> {
-    let output = massorca_process::command(git_binary())
-        .arg("-C")
-        .arg(repo)
-        .args(["config", "--get", key])
-        // Why: a GIT_DIR inherited from a git hook would point the read at another repository.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// The git binary core-git runs: `MASSORCA_GIT` when set, else `git` on the path.
-fn git_binary() -> OsString {
-    std::env::var_os("MASSORCA_GIT")
-        .filter(|path| !path.is_empty())
-        .unwrap_or_else(|| OsString::from("git"))
 }
 
 #[cfg(test)]
