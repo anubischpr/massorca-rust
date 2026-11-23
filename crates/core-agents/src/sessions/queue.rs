@@ -57,6 +57,7 @@ impl Agents {
             text: text.to_owned(),
             request_id: request_id.map(str::to_owned),
             at: now_ms(),
+            host_admin: false,
         })?;
         self.notify(Change::Queue(row.id.clone()));
         let shown = self.queued_item(&mut live, &row.id, &stored.id)?;
@@ -544,6 +545,7 @@ mod tests {
                     text: format!("prompt {index}"),
                     request_id: None,
                     at: now_ms(),
+                    host_admin: false,
                 })
                 .unwrap();
         }

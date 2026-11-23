@@ -51,6 +51,7 @@ fn queue(store: &Store, session: &str, text: &str, request_id: Option<&str>) -> 
             text: text.to_owned(),
             request_id: request_id.map(str::to_owned),
             at: 10,
+            host_admin: false,
         })
         .unwrap()
 }
@@ -115,6 +116,7 @@ fn a_request_id_is_unique_within_its_session_only() {
         text: "again".to_owned(),
         request_id: Some("req-1".to_owned()),
         at: 11,
+        host_admin: false,
     });
     assert_conflict(
         again.map(|_| ()),
@@ -134,6 +136,7 @@ fn a_request_id_is_unique_within_its_session_only() {
         text: "same id elsewhere".to_owned(),
         request_id: Some("req-1".to_owned()),
         at: 11,
+        host_admin: false,
     });
     assert!(
         elsewhere.is_ok(),
@@ -275,9 +278,70 @@ fn a_prompt_must_belong_to_a_session() {
         text: "orphan".to_owned(),
         request_id: None,
         at: 1,
+        host_admin: false,
     });
     assert!(
         matches!(orphan, Err(StoreError::Constraint { .. })),
         "{orphan:?}"
+    );
+}
+
+#[test]
+fn a_queued_prompt_keeps_whether_its_caller_held_host_admin() {
+    let (store, session) = store_with_session();
+    let admin = store
+        .insert_queued_prompt(&NewQueuedPrompt {
+            id: new_id(),
+            session_id: session.clone(),
+            text: "by an admin".to_owned(),
+            request_id: None,
+            at: 10,
+            host_admin: true,
+        })
+        .unwrap();
+
+    assert!(admin.host_admin);
+    assert!(
+        store
+            .get_queued_prompt(&admin.id)
+            .unwrap()
+            .unwrap()
+            .host_admin
+    );
+    assert!(!queue(&store, &session, "by anyone", None).host_admin);
+}
+
+#[test]
+fn delivered_request_ids_are_kept_up_to_the_limit_per_session() {
+    let (store, session) = store_with_session();
+    store
+        .record_delivered_request(&session, "req-1", 1, 2)
+        .unwrap();
+    store
+        .record_delivered_request(&session, "req-2", 2, 2)
+        .unwrap();
+    store
+        .record_delivered_request(&session, "req-2", 3, 2)
+        .unwrap();
+    assert_eq!(
+        store.find_delivered_request(&session, "req-2").unwrap(),
+        Some(2),
+        "a repeated id keeps its first time"
+    );
+
+    store
+        .record_delivered_request(&session, "req-3", 4, 2)
+        .unwrap();
+    assert_eq!(
+        store.find_delivered_request(&session, "req-1").unwrap(),
+        None
+    );
+    assert_eq!(
+        store.find_delivered_request(&session, "req-2").unwrap(),
+        Some(2)
+    );
+    assert_eq!(
+        store.find_delivered_request(&session, "req-3").unwrap(),
+        Some(4)
     );
 }
