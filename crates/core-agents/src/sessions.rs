@@ -881,6 +881,18 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, true)
+    }
+
+    /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
+    /// pauses; a system prompt, such as a bring-back's, does not (decision 0084, D5).
+    pub(crate) fn send_prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+        lift_queue_pauses: bool,
+    ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
@@ -916,8 +928,10 @@ impl Agents {
                 TerminalError::Exited | TerminalError::NotFound => not_live(&session_id),
                 other => AgentError::from(other),
             })?;
-        // An accepted prompt lifts the session's queue pauses (decision 0084, D5).
-        self.lift_pauses(&session_id);
+        // An accepted prompt from the person lifts the session's queue pauses (decision 0084, D5).
+        if lift_queue_pauses {
+            self.lift_pauses(&session_id);
+        }
         Ok(PromptReceipt {
             receipt: ReceiptKind::HandedToTerminal,
             bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -1144,6 +1158,8 @@ impl Agents {
     /// A session whose run already ended is returned as it is.
     pub fn stop(&self, selector: &str, force: bool) -> Result<AgentSession, AgentError> {
         let row = self.resolve(selector)?;
+        // The person's stop pauses the queue before the run is killed, so a grace-period idle cannot deliver (decision 0084, D5).
+        self.pause_queue_stopped(&row.id);
         if row.exit.is_none()
             && let Some(terminal) = &row.terminal_id
         {
@@ -1161,8 +1177,6 @@ impl Agents {
                 Err(error) => return Err(error.into()),
             }
         }
-        // The person's stop pauses the queue (decision 0084, D5).
-        self.pause_queue_stopped(&row.id);
         let row = self.reload(&row.id)?;
         self.view(row)
     }

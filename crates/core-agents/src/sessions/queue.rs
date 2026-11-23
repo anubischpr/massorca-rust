@@ -70,7 +70,6 @@ impl Agents {
     /// The session's queue, head first (decision 0084).
     pub fn queue_list(&self, selector: &str) -> Result<AgentQueueList, AgentError> {
         let row = self.resolve(selector)?;
-        self.require_queue_kind(&row.kind)?;
         let mut live = lock(&self.inner.status);
         let items = self.queue_items(&mut live, &row.id)?;
         Ok(AgentQueueList {
@@ -83,8 +82,6 @@ impl Agents {
     /// is refused with `agent.busy`.
     pub fn queue_edit(&self, id: &str, text: &str) -> Result<QueuedPrompt, AgentError> {
         launch::check_prompt(text)?;
-        let session = self.queue_session(id)?;
-        self.require_queue_kind_of(&session)?;
         let mut live = lock(&self.inner.status);
         let row = self.queue_row(id)?;
         if row.state == QueuedState::Sending {
@@ -99,8 +96,6 @@ impl Agents {
     /// Removes a waiting or failed prompt from its queue and returns it as it was. A prompt being sent is refused with
     /// `agent.busy`.
     pub fn queue_remove(&self, id: &str) -> Result<QueuedPrompt, AgentError> {
-        let session = self.queue_session(id)?;
-        self.require_queue_kind_of(&session)?;
         let mut live = lock(&self.inner.status);
         let row = self.queue_row(id)?;
         if row.state == QueuedState::Sending {
@@ -135,12 +130,6 @@ impl Agents {
             codes::AGENT_QUEUE_UNAVAILABLE,
             format!("agent kind {kind} reports no activity, so it has no prompt queue"),
         ))
-    }
-
-    /// Refuses a session whose kind has no queue (see [`Agents::require_queue_kind`]), by the session's id.
-    fn require_queue_kind_of(&self, session: &str) -> Result<(), AgentError> {
-        let kind = self.reload(session)?.kind;
-        self.require_queue_kind(&kind)
     }
 
     /// The queued prompt `id`.
@@ -303,7 +292,6 @@ impl Agents {
     /// workspace, and when the run is not live. On success the prompt leaves the queue and the session's pauses lift.
     pub fn queue_send_now(&self, id: &str) -> Result<QueuedPrompt, AgentError> {
         let session = self.queue_session(id)?;
-        self.require_queue_kind_of(&session)?;
         let (delivery, shown) = {
             let mut live = lock(&self.inner.status);
             let item = self.queue_row(id)?;
@@ -327,14 +315,6 @@ impl Agents {
             if let Some(refusal) = input_refusal(run, &session, state, true) {
                 return Err(refusal);
             }
-            if run.delivering {
-                return Err(AgentError::new(
-                    codes::AGENT_BUSY,
-                    format!(
-                        "session {session} is typing another queued prompt; try again once it is typed"
-                    ),
-                ));
-            }
             let delivery = self.start_sending(run, &item, terminal)?;
             (delivery, shown)
         };
@@ -349,7 +329,6 @@ impl Agents {
     /// queue as it is then.
     pub fn queue_resume(&self, selector: &str) -> Result<AgentQueueList, AgentError> {
         let row = self.resolve(selector)?;
-        self.require_queue_kind(&row.kind)?;
         self.lift_pauses(&row.id);
         self.drain_queue(&row.id);
         let mut live = lock(&self.inner.status);
@@ -736,5 +715,73 @@ mod tests {
 
         assert_eq!(texts(&agents.queue_list(&session).unwrap()), ["two"]);
         assert_eq!(*seen.lock().unwrap(), vec![Change::Queue(session)]);
+    }
+
+    #[test]
+    fn a_failed_prompt_can_be_edited_and_removed() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let failed = agents.queue_add(&session, "one", None).unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&failed.id, QueuedState::Failed, Some("gone"), now_ms())
+            .unwrap();
+
+        let edited = agents.queue_edit(&failed.id, "edited").unwrap();
+        assert_eq!(
+            edited.state,
+            QueueState::Failed,
+            "editing keeps the failure"
+        );
+        assert_eq!(edited.text, "edited");
+        assert_eq!(edited.reason.as_deref(), Some("gone"));
+        let removed = agents.queue_remove(&failed.id).unwrap();
+        assert_eq!(removed.state, QueueState::Failed);
+        assert!(agents.queue_list(&session).unwrap().items.is_empty());
+    }
+
+    #[test]
+    fn items_of_a_kind_that_lost_its_queue_stay_listable_and_removable() {
+        let (agents, workspace, _profile) = service();
+        let row = AgentSessionRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            workspace_id: workspace,
+            parent_id: None,
+            title: None,
+            read_only: false,
+            agent_ref: None,
+            terminal_id: None,
+            request_id: None,
+            created_at: now_ms(),
+            exit: None,
+            activity: None,
+            result: None,
+            brought_back_at: None,
+            holds_secrets: false,
+            mode: RunMode::default(),
+            pending_permission_mode: None,
+        };
+        agents.store().insert_agent_session(&row).unwrap();
+        let kept = agents
+            .store()
+            .insert_queued_prompt(&massorca_core_store::NewQueuedPrompt {
+                id: new_id(),
+                session_id: row.id.clone(),
+                text: "kept".to_owned(),
+                request_id: None,
+                at: now_ms(),
+                host_admin: false,
+            })
+            .unwrap();
+
+        assert_eq!(texts(&agents.queue_list(&row.id).unwrap()), ["kept"]);
+        assert_eq!(agents.queue_remove(&kept.id).unwrap().id, kept.id);
+        let error = agents.queue_add(&row.id, "later", None).unwrap_err();
+        assert_eq!(
+            error.code,
+            codes::AGENT_QUEUE_UNAVAILABLE,
+            "only add is refused"
+        );
     }
 }

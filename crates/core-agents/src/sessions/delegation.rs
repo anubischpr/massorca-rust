@@ -252,7 +252,7 @@ impl Agents {
             )
         } else {
             let text = bring_back_prompt(&child, &child_workspace.name, merge_commit.as_deref());
-            match self.prompt(&parent.id, &text, false) {
+            match self.send_prompt(&parent.id, &text, false, false) {
                 Ok(_) => (true, None),
                 Err(error) => (
                     false,

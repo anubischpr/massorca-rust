@@ -308,3 +308,37 @@ fn a_service_restart_pauses_the_queue_as_restarted() {
     assert_eq!(after["items"][0]["state"], "waiting", "{after}");
     assert_eq!(after["items"][0]["reason"], "paused_restarted", "{after}");
 }
+
+#[test]
+fn a_bring_back_prompt_does_not_lift_a_pause_the_person_set() {
+    let sandbox = sandbox();
+    let session = id_of(&start_busy(&sandbox));
+    queue_add(&sandbox, &session, "one");
+    stop(&sandbox, &session);
+    assert_eq!(
+        queue_list(&sandbox, &session)["items"][0]["reason"],
+        "paused_stopped"
+    );
+    sandbox.json_ok("default", &["agent", "resume", &session]);
+    until(&sandbox, &session, "idle");
+
+    let child = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "delegate",
+            "--from",
+            &session,
+            "--prompt",
+            "look",
+            "--read-only",
+        ],
+    );
+    let child_id = id_of(&child);
+    until(&sandbox, &child_id, "done");
+    sandbox.json_ok("default", &["agent", "bring-back", &child_id, "--no-merge"]);
+
+    let held = queue_list(&sandbox, &session);
+    assert_eq!(held["items"][0]["reason"], "paused_stopped", "{held}");
+    stop(&sandbox, &session);
+}
