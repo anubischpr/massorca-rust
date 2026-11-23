@@ -64,6 +64,13 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - No keyboard shortcut for Back exists in `shell/actions.rs`, so none was added.
 - Owner decision: a page whose artboard draws Back keeps it. Full pages keep the Back that their artboards show, labelled or icon.
 
+**Superseded by owner ruling (branch `desktop/status-bar-memory`)**
+- A7 is superseded. The Memory label is restored: "Memory 1.22 GB" (`sh-empty-app`). The copy follows the artboards: "Agents: idle" with no agent running, "2 hosts", "1 of 2 hosts unreachable" (`sh-host-unreachable`), and in Bot Teams "Terminals 0", "Ports 0", "1 host unreachable" (`bt-board`).
+- Not changed in this branch: the grouping. `sh-empty-app` puts Memory, terminals and ports at the left with hosts at the right. `ws-start` and `ws-session` keep agents at the left and the rest at the right, as the code does. The code keeps the Workspaces grouping; the owner decides the start page grouping.
+- Artboard conflict for the owner: `ws-start`, `ws-session` and every `bt-*` status bar draw "1.22 GB" with no label. The label is applied in every mode.
+- The live status view has no memory source and reads "Memory -" until the service reports one.
+- Owner decision: the Memory label stays in every mode. The status bar keeps the grouping it has now.
+
 **Cannot match yet**
 - A1 start frame: sample data and "not listed by the service" heading. Open (L4).
 - A3 Conversation: page not built.
@@ -166,6 +173,11 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - F1 Conference room: needs live agents.
 - F4 skills picker: not listed as fixed.
 - F6 team characters: accepted in decision 0027 (#104).
+
+**Superseded in part by owner ruling (branch `desktop/board-header`)**
+- F2 is updated. The Board header is one 56 px row: "Board", the team pill and "Tasks come from the Conference room", with Filter at its end (`bt-board` `.head`). The header and the columns keep a 20 px inset. The columns start 16 px under the header, at y 108 at 1440×900 (`bt-board`); before this they started at y 140.
+- F6 is updated for the team pill. It draws the team's character, a triangle for Desarrollo (`bt-board`). The pill is the same on the Board, Files, Memory and project pages (A59). Square, circle, diamond, hexagon and star: no artboard source, owner review. No artboard draws them; their outlines are built on the artboard's 24-unit grid and are kept as built.
+- Still open: the Bot Teams home and the gallery draw the generic users avatar (`Avatar::team`). The sidebar team row is not changed on this branch.
 - N39 dashed "Nightly summary" border: `board_column.rs`. Open (L4).
 
 ## Palette and quick open
@@ -265,6 +277,7 @@ Every resolution here is measured in the artboards, which settle conflicts first
 | N14 | Keep the "Delete ignored files" variant? No spec line exists. |
 | Copy without a spec source | PR #102 says the list is in this report. It is not in the PR description and is not reproduced here. |
 | Agent list and neutral swatches in Settings | Named in the brief. No PR description names them. Source needed. |
+| Team shapes: square, circle, diamond, hexagon, star | No artboard source, owner review. Kept as built. |
 | G-71 | Keep running hides a terminal's pane, and its tab stays in the Work panel strip. The spec says the pane closes (D-TM-04, A9, app-flow J5 step 4). No screen lists kept terminals (app-flow G6), and this report does not invent one. Confirm that the tab stays, or name the screen that lists kept terminals. |
 
 ## Real-window and Linux results

@@ -50,6 +50,7 @@ pub mod skeleton;
 pub mod splitter;
 pub mod switch;
 pub mod table;
+pub mod team_character;
 pub mod terminal_surface;
 pub mod text_editing;
 pub mod text_field;

@@ -36,6 +36,12 @@ pub const PROJECT_UPDATE: &str = "team.project_update";
 pub const PROJECT_REMOVE: &str = "team.project_rm";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
+/// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
+pub const MEMORY_LIST: &str = "team.memory_list";
+/// Params: [`TeamMemoryAddParams`]. Result: [`TeamMemoryLine`].
+pub const MEMORY_ADD: &str = "team.memory_add";
+/// Params: [`TeamMemoryRemoveParams`]. Result: [`TeamMemoryLine`], the removed line.
+pub const MEMORY_REMOVE: &str = "team.memory_rm";
 
 /// The shape a team is drawn with. Cosmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -304,4 +310,67 @@ pub struct BoardCard {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// Where a memory line came from: a bot during a task, or the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySource {
+    Task,
+    Person,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A line of a team's memory, in the team scope or in one bot's. Lists are newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryLine {
+    pub id: String,
+    pub team_id: String,
+    /// The bot whose scope the line is in; absent for the team scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// At most 500 characters.
+    pub text: String,
+    pub source: MemorySource,
+    /// The task that wrote a `task` line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub created_at_ms: i64,
+}
+
+/// Params of `team.memory_list`. Without `bot`, the lines of the whole team; with it, only that bot's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryListParams {
+    pub team: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+}
+
+/// Result of `team.memory_list`, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryList {
+    pub lines: Vec<TeamMemoryLine>,
+}
+
+/// Params of `team.memory_add`. A `task` makes the line a task line; without it, the owner wrote the line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryAddParams {
+    pub team: String,
+    /// The bot whose scope the line joins: id, or exact name within the team. The team scope when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+    pub text: String,
+    /// The team's task that wrote the line: its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+}
+
+/// Params of `team.memory_rm`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemoryRemoveParams {
+    pub team: String,
+    /// The line's id.
+    pub line: String,
 }

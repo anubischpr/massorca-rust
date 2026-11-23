@@ -34,9 +34,10 @@ const PHASE1_METHODS: [&str; 15] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
-const DEVICE_METHODS: [&str; 5] = [
+const DEVICE_METHODS: [&str; 6] = [
     "device.list",
     "device.revoke",
+    "device.forget",
     "device.whoami",
     "pairing.create",
     "network.status",
@@ -72,7 +73,7 @@ const AGENT_METHODS: [&str; 14] = [
 ];
 
 /// The Bot Teams methods this build registers (capability `teams/1`).
-const TEAM_METHODS: [&str; 21] = [
+const TEAM_METHODS: [&str; 24] = [
     "team.create",
     "team.list",
     "team.show",
@@ -87,6 +88,9 @@ const TEAM_METHODS: [&str; 21] = [
     "team.project_update",
     "team.project_rm",
     "team.board",
+    "team.memory_list",
+    "team.memory_add",
+    "team.memory_rm",
     "task.create",
     "task.list",
     "task.show",

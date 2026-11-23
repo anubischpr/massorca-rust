@@ -43,7 +43,7 @@ use settings_planned::planned_row;
 
 #[path = "settings_vault.rs"]
 mod settings_vault;
-use settings_vault::{secret_scopes, secret_status_row};
+use settings_vault::vault_page;
 
 /// The navigation column's width (`layout.settings.nav`, 232 px, owner 2026-11-13).
 const NAV_WIDTH: f32 = 232.0;
@@ -52,6 +52,8 @@ const NAV_WIDTH: f32 = 232.0;
 pub(super) struct SettingsFrame<'a> {
     pub model: &'a SettingsModel,
     pub search: &'a Entity<SearchField>,
+    /// The vault page's search over names; the text it settles on becomes `model.vault_query`.
+    pub vault_search: &'a Entity<SearchField>,
     /// The state of This PC's service, for the Hosts section.
     pub connection: ConnectionState,
     /// Each paired remote host by name, with the state its last check left (D-HO-07).
@@ -194,13 +196,13 @@ fn hit_summary(hits: &[Hit], selected: SettingsSection, theme: &Theme) -> impl I
 fn sections(frame: &SettingsFrame<'_>, hits: &[Hit], cx: &mut App) -> Vec<AnyElement> {
     if frame.model.query.trim().is_empty() {
         let section = frame.model.section;
+        if section == SettingsSection::Vault {
+            return vault_page(frame, cx);
+        }
         let listed: Vec<(usize, &'static RowSpec)> = rows(section).iter().enumerate().collect();
         let mut groups = vec![group(section, &listed, frame, cx)];
         if section == SettingsSection::Agents {
             groups.push(installed_agents(frame));
-        }
-        if section == SettingsSection::Vault {
-            groups.extend(secret_scopes(frame));
         }
         return groups;
     }
@@ -355,7 +357,6 @@ fn row(
                 frame,
             )),
         ),
-        RowBody::SecretVault => secret_status_row(row, frame, &theme),
     };
     match control {
         Some(control) => row.control(control).into_any_element(),

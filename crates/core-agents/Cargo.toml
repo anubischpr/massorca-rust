@@ -11,6 +11,7 @@ publish.workspace = true
 massorca-process.workspace = true
 massorca-core-store.workspace = true
 massorca-core-terminal.workspace = true
+massorca-core-vault.workspace = true
 massorca-core-workspace.workspace = true
 massorca-protocol.workspace = true
 serde.workspace = true
@@ -19,6 +20,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

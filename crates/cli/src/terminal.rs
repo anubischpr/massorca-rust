@@ -163,7 +163,7 @@ pub async fn execute(
         // Checked before connecting, so a refused attach never starts the service.
         terminal_attach::require_terminal()?;
         let client = connect(target, autostart).await?;
-        return terminal_attach::attach(&client, terminal).await;
+        return terminal_attach::attach(target, &client, terminal).await;
     }
 
     let client = connect(target, autostart).await?;
