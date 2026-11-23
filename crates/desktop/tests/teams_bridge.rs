@@ -14,7 +14,7 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
-use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams};
+use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams, TeamProjectAddParams};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -442,5 +442,339 @@ async fn a_card_is_finished_and_reopened_through_the_service() {
         })
     })
     .await;
+    stop_service(service).await;
+}
+
+/// Params of a bot named Nora, who reviews and runs as Claude.
+fn nora(team: &str, lead: bool) -> BotAddParams {
+    BotAddParams {
+        team: team.to_owned(),
+        name: "Nora".to_owned(),
+        job: "Reviews".to_owned(),
+        kind: "claude".to_owned(),
+        model: None,
+        effort: None,
+        lead,
+    }
+}
+
+#[tokio::test]
+async fn a_bot_with_no_card_is_listed_from_the_first_read() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .team_bot_add(&nora(&team.id, true))
+        .await
+        .expect("the bot is added");
+
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    let view = teams_view(&state);
+    let team = &view.teams()[0];
+    assert!(team.tasks.is_empty(), "the bot owns no card");
+    assert_eq!(team.lead_name(), Some("Nora"));
+    let bot = &team.bots[0];
+    assert_eq!(
+        (bot.role.as_str(), bot.agent),
+        ("Reviews", Some(Agent::Claude))
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_bot_added_through_another_client_reaches_the_store_without_a_request() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+
+    client
+        .team_bot_add(&nora(&team.id, false))
+        .await
+        .expect("the bot is added");
+    until(&mut updates, &mut state, "the bot to be listed", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.bots.iter().any(|bot| bot.name == "Nora"))
+    })
+    .await;
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let project = client
+        .team_project_add(&TeamProjectAddParams {
+            team: team.id.clone(),
+            name: "Checkout".to_owned(),
+            goal: Some("Ship checkout".to_owned()),
+            brief: Some("Checkout copy".to_owned()),
+        })
+        .await
+        .expect("the project is added");
+    client
+        .task_create(&TaskCreateParams {
+            team: team.id.clone(),
+            title: "Draft the page".to_owned(),
+            body: None,
+            bot: None,
+            project: Some(project.id.clone()),
+            origin: None,
+        })
+        .await
+        .expect("the task is created");
+
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be listed",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    let view = teams_view(&state);
+    let project = &view.teams()[0].projects[0];
+    assert_eq!(project.brief, "Checkout copy");
+    let titles: Vec<&str> = project
+        .tasks
+        .iter()
+        .map(|task| task.title.as_str())
+        .collect();
+    assert_eq!(titles, ["Draft the page"]);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_added_through_another_client_reaches_the_store_without_a_request() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    let (_bridge, _handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+
+    client
+        .team_project_add(&TeamProjectAddParams {
+            team: team.id.clone(),
+            name: "Checkout".to_owned(),
+            goal: None,
+            brief: None,
+        })
+        .await
+        .expect("the project is added");
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be listed",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    stop_service(service).await;
+}
+
+/// The service's ids of the team that lists the project `name`, and of that project, as the store numbered them.
+fn keys_of(state: &StoreState, name: &str) -> (String, String) {
+    let view = teams_view(state);
+    let team = view
+        .teams()
+        .iter()
+        .find(|team| team.projects.iter().any(|project| project.name == name))
+        .expect("the project is listed");
+    let project = team
+        .projects
+        .iter()
+        .find(|project| project.name == name)
+        .expect("the project is listed");
+    let team_key = state
+        .team_ids
+        .key(team.id.0)
+        .expect("the team is numbered")
+        .to_owned();
+    let project_key = state
+        .team_ids
+        .key(project.id.0)
+        .expect("the project is numbered")
+        .to_owned();
+    (team_key, project_key)
+}
+
+/// A team named Ops with one project named Checkout, briefed "Old brief", and a bridge that has read it.
+async fn team_with_checkout(
+    home: &Path,
+) -> (
+    ServiceBridge,
+    ServiceHandle,
+    UnboundedReceiver<StoreUpdate>,
+    StoreState,
+) {
+    let client = client_of(home).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    client
+        .team_project_add(&TeamProjectAddParams {
+            team: team.id.clone(),
+            name: "Checkout".to_owned(),
+            goal: None,
+            brief: Some("Old brief".to_owned()),
+        })
+        .await
+        .expect("the project is added");
+    let (bridge, handle, mut updates) = bridge_for(home);
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be listed",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    (bridge, handle, updates, state)
+}
+
+#[tokio::test]
+async fn a_brief_saved_through_the_bridge_is_read_back() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates, mut state) = team_with_checkout(home.path()).await;
+    let (team_key, project_key) = keys_of(&state, "Checkout");
+
+    handle
+        .save_brief(team_key, project_key, "New brief".to_owned())
+        .await
+        .expect("the brief is saved");
+    until(
+        &mut updates,
+        &mut state,
+        "the new brief to be read",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.brief == "New brief")
+            })
+        },
+    )
+    .await;
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_project_deleted_through_the_bridge_leaves_the_read_and_a_second_delete_is_refused() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates, mut state) = team_with_checkout(home.path()).await;
+    let (team_key, project_key) = keys_of(&state, "Checkout");
+
+    handle
+        .delete_project(team_key.clone(), project_key.clone())
+        .await
+        .expect("the project is deleted");
+    until(
+        &mut updates,
+        &mut state,
+        "the project to leave the read",
+        |state| {
+            teams_view(state)
+                .teams()
+                .iter()
+                .all(|team| team.projects.is_empty())
+        },
+    )
+    .await;
+    let refusal = handle
+        .delete_project(team_key, project_key)
+        .await
+        .expect_err("a project that is gone is refused");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
+        "{refusal:?}"
+    );
     stop_service(service).await;
 }

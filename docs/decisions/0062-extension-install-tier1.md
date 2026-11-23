@@ -317,10 +317,22 @@ fixed with a test, except where a row says otherwise.
   Windows device (`COM¹`, `LPT²`, superscript digits included), and a folder changed after review are each refused.
   The lockfile is validated before it is written.
 - **Uninstall confirmation (V2).** `remove --uninstall-cli` runs the uninstall only after `--yes`, or `--uninstall-consent` with the fingerprint the refusal prints. A refusal changes nothing. The built-in review names no internal variable (V3); a third-party kind keeps naming its credential variables.
-- **Gentle Shell (open question for the owner).** The npm package and the binary name are unconfirmed and not shipped:
-  the package declares no vendor command, so it only detects and registers. Its binary stays `gentle-shell` as the
-  kind file has it. Its kind file reads `PI_CODING_AGENT_DIR` for credentials; the kind file is unchanged byte for byte
-  and that variable stays internal until a source is cited. No user-visible text names the unconfirmed package.
+- **Gentle Shell (closed 2026-11-22).** The vendor's reference names the standalone npm install as recommended, and the
+  package `gentle-pi` exposes the binary `gentle-shell` (https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md,
+  and `bin` in its package.json). The package declares `npm install -g gentle-pi` on every OS and verifies with
+  `gentle-shell --version`, which the reference documents. The Pi runtime is an optional peer dependency and the
+  package runs a `postinstall` script, so a host without Pi installs the package but fails verify, and nothing is
+  registered on that attempt. npm leaves the launcher on `PATH`, so a later install finds it and registers it without
+  running anything: verify runs only after a vendor installer, because running a found program would break the review's
+  "nothing runs" promise. A session started with that CLI then fails when the program runs. The same holds for every
+  built-in that declares verify. No uninstall is declared: the vendor's own is `gentle-shell self-uninstall`, which is not on the program
+  allowlist, and the vendor says npm removal on Windows is not verified yet. The npm name appears only inside the quoted
+  install command; every user-visible name is "Gentle Shell".
+  A Gentle Shell the vendor's bundle installer put on the machine (a generated `gentle-shell.cmd` launcher in a bundle
+  folder on `PATH`, with its own runtime) resolves like any program, so the install registers it and runs nothing.
+- **Package scripts.** When the planned command is `npm install`, the review's plan carries `runs_package_scripts` (an
+  optional wire field older peers omit), and the CLI says that npm also runs the install scripts of the package and
+  its dependencies, which the review cannot show. It applies to every built-in that installs with npm, not only Gentle Shell.
 
 #### Third-party vendor commands (refused in tier 1)
 
@@ -354,10 +366,10 @@ Checked against the vendor pages on 2026-11-22. Each package's `cli` block recor
 | `massorca.codex` | all | `npm install -g @openai/codex` (no verify, no uninstall: not documented) | https://github.com/openai/codex | 2026-11-22 |
 | `massorca.antigravity` | Windows | `powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 \| iex"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
 | `massorca.antigravity` | Linux, macOS | `bash -c "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh \| bash"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
-| `massorca.gentle-shell` | all | none (detect and register only; see the open question above) | https://github.com/Gentleman-Programming/gentle-shell | 2026-11-22 |
+| `massorca.gentle-shell` | all | `npm install -g gentle-pi`, verify `gentle-shell --version` (no uninstall: see above) | https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/readme-reference.md | 2026-11-22 |
 
 Uninstall commands, where documented: Claude `winget uninstall Anthropic.ClaudeCode`, `npm uninstall -g
-@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Antigravity and Codex document none.
+@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Antigravity and Codex document none; Gentle Shell's own uninstall is off the allowlist.
 
 ## Alternatives
 

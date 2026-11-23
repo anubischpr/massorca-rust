@@ -11,7 +11,9 @@ use tokio::runtime::Builder;
 
 use crate::agent;
 use crate::agent_hook;
-use crate::args::{Cli, Commands, PairCommand, ProfileCommand, ServerCommand, ServiceCommand};
+use crate::args::{
+    Cli, Commands, HostCommand, PairCommand, ProfileCommand, ServerCommand, ServiceCommand,
+};
 use crate::config;
 use crate::device;
 use crate::error::CliError;
@@ -126,6 +128,13 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
                     block_on(server_status::execute(&target, autostart, output))
                 }
             }
+        }
+        // Unlike the other `host` commands it reads a service, so `--host` picks the host whose memory is read.
+        Commands::Host {
+            command: HostCommand::Memory,
+        } => {
+            let target = globals.target()?;
+            block_on(host::memory::execute(&target, autostart, output))
         }
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
