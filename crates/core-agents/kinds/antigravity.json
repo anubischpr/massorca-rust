@@ -6,5 +6,34 @@
   "args": [],
   "prompt": { "mode": "flag", "flag": "--prompt-interactive", "paste": "plain", "submit": "\r" },
   "resume": ["--conversation", "{ref}"],
-  "status": { "mechanism": "none" }
+  "status": { "mechanism": "none" },
+  "permission_modes": [
+    {
+      "id": "auto",
+      "label": "auto",
+      "description": "Approves workspace edits and runs commands in the sandbox; where the account or platform cannot, agy runs in default.",
+      "args": ["--mode=auto"],
+      "may_fall_back": true
+    },
+    {
+      "id": "accept-edits",
+      "label": "accept-edits",
+      "description": "Approves file edits in the workspace; still asks before terminal commands.",
+      "args": ["--mode=accept-edits"]
+    },
+    {
+      "id": "plan",
+      "label": "plan",
+      "description": "Analyses and outlines steps before writing code.",
+      "args": ["--mode=plan"]
+    },
+    {
+      "id": "always-proceed",
+      "label": "always-proceed",
+      "description": "Overrides permissions in every mode.",
+      "args": ["--dangerously-skip-permissions"],
+      "bypass": true
+    }
+  ],
+  "default_permission_mode": "auto"
 }

@@ -31,12 +31,42 @@ pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
         &["ID", "NAME", "OWNER", "INSTALLED", "DETECTED", "PATH"],
         rows,
     );
+    for kind in kinds
+        .iter()
+        .filter(|kind| !kind.permission_modes.is_empty())
+    {
+        lines.push(format!("modes: {}: {}", kind.id, modes_text(kind)));
+    }
     for kind in kinds {
         for problem in &kind.problems {
             lines.push(format!("problem: {}: {problem}", kind.id));
         }
     }
     lines
+}
+
+/// `id (Label, default, bypass, live, may fall back)` for each mode, in declared order (decision 0083).
+fn modes_text(kind: &AgentKind) -> String {
+    kind.permission_modes
+        .iter()
+        .map(|mode| {
+            let mut marks = vec![mode.label.as_str()];
+            if kind.default_permission_mode.as_deref() == Some(mode.id.as_str()) {
+                marks.push("default");
+            }
+            if mode.bypass {
+                marks.push("bypass");
+            }
+            if mode.live_switch {
+                marks.push("live");
+            }
+            if mode.may_fall_back {
+                marks.push("may fall back");
+            }
+            format!("{} ({})", mode.id, marks.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The package state of a kind, `unknown` for a value this build does not know.

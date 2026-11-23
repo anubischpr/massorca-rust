@@ -500,6 +500,8 @@ pub(crate) mod fixtures {
                 imported: false,
             },
             problems: Vec::new(),
+            permission_modes: Vec::new(),
+            default_permission_mode: None,
         }
     }
 

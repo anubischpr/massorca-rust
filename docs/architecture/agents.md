@@ -53,7 +53,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
     },
     "result_field": "result"
   },
-  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] }
+  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] },
+  "permission_modes": [
+    { "id": "careful", "label": "Careful", "args": ["--mode", "careful"] },
+    {
+      "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true,
+      "live_switch": { "type": "input", "text": "/mode wild" }
+    }
+  ],
+  "default_permission_mode": "careful"
 }
 ```
 
@@ -69,6 +77,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
   import: the declaration has no optional flag.
+- `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
+  mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
+  kind's own `args`), an optional deterministic `live_switch` typed into a running session,
+  and `bypass` when it lifts the vendor's prompts or sandbox. Ids are unique; the default is
+  one of them and never a bypass mode; a bypass mode has its own `args` or `live_switch`; a
+  mode with neither can only be the default. `may_fall_back` marks a mode the vendor may
+  start another mode in without failing. `default_permission_mode` names the mode the vendor
+  CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
+  as a session's mode. The built-in modes and their sources are in decision 0083.
 
 ## Session record (`AgentSession`)
 
@@ -90,7 +107,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
 | `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |

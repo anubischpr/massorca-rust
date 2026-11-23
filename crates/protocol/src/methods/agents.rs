@@ -104,6 +104,36 @@ pub struct AgentKind {
     /// Why the declaration is invalid. A kind with problems is listed but never started.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+    /// The permission modes the kind declares (decision 0083), in declared order. Absent from an older peer: none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub permission_modes: Vec<PermissionMode>,
+    /// The id of the mode the vendor CLI starts in by itself, for display only (decision 0083). It is informational: the
+    /// vendor's real default may differ by CLI version, so it must never be shown as a session's mode. A session in the
+    /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_permission_mode: Option<String>,
+}
+
+/// One permission mode of a kind, as `agent.kinds` lists it (decision 0083). How the mode is passed stays in the
+/// declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionMode {
+    /// The vendor's own id of the mode, as `agent.start` and `agent.set_mode` take it.
+    pub id: String,
+    /// The vendor's name for the mode.
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The mode lifts the vendor's permission prompts or sandbox. It is never the default and must always be named.
+    #[serde(default)]
+    pub bypass: bool,
+    /// A running session can switch to the mode at once (`agent.set_mode` replies `live`); otherwise a switch applies at
+    /// the next resume.
+    #[serde(default)]
+    pub live_switch: bool,
+    /// The vendor may start a run asked for this mode in another one without failing, so it is never confirmed.
+    #[serde(default)]
+    pub may_fall_back: bool,
 }
 
 /// The decoded form of [`AgentKind`]. Only the fallback for an absent `detected` lives here: an `agents/1` peer
@@ -126,6 +156,10 @@ struct AgentKindWire {
     credentials: KindCredentials,
     #[serde(default)]
     problems: Vec<String>,
+    #[serde(default)]
+    permission_modes: Vec<PermissionMode>,
+    #[serde(default)]
+    default_permission_mode: Option<String>,
 }
 
 impl From<AgentKindWire> for AgentKind {
@@ -143,6 +177,8 @@ impl From<AgentKindWire> for AgentKind {
             status_mechanism: wire.status_mechanism,
             credentials: wire.credentials,
             problems: wire.problems,
+            permission_modes: wire.permission_modes,
+            default_permission_mode: wire.default_permission_mode,
         }
     }
 }
