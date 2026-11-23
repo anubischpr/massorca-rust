@@ -238,8 +238,10 @@ mod tests {
     }
 
     fn waiter_in(job: &Job) -> Waiter {
+        // An interactive cmd waits on its open stdin and starts no child, so nothing it runs can be outside the job.
         let child = massorca_process::command("cmd.exe")
-            .args(["/d", "/c", "ping -n 60 127.0.0.1 >nul"])
+            .args(["/d", "/q", "/k"])
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .spawn()
             .expect("cmd starts");
