@@ -485,7 +485,7 @@ fn a_tampered_package_shows_its_problem_on_its_page_and_on_its_catalogue_card(
             .model()
             .marketplace()
             .item(id)
-            .and_then(|item| problem_alert(item))
+            .and_then(problem_alert)
             .map(|alert| alert.tone)
     });
     assert_eq!(tone, Some(ProblemTone::Danger));
