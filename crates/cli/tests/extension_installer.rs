@@ -124,6 +124,14 @@ fn uninstall_cli_needs_its_confirmation_then_runs_the_uninstaller() {
     assert_eq!(refused["code"], "extension.consent_required");
     assert!(refused["data"]["fingerprint"].is_string(), "{refused}");
     assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.ends_with(
+                "This removes the CLI from this computer, so it stops working outside MassOrca too."
+            )),
+        "{refused}"
+    );
+    assert!(
         host.has_cli("claude"),
         "nothing was uninstalled without confirmation"
     );
