@@ -219,6 +219,8 @@ impl Extensions {
         used_kinds: &BTreeSet<String>,
     ) -> Result<Vec<String>, Error> {
         let _changes = self.lock_changes();
+        // An outdated built-in counts as installed, so adoption never resets its state.
+        self.refresh_builtins_locked()?;
         let mut lockfile = self.read_lockfile()?;
         if lockfile.has_migration(BUILTIN_AGENTS_MIGRATION) {
             return Ok(Vec::new());
@@ -259,6 +261,66 @@ impl Extensions {
             }
         }
         Ok(entries.into_iter().map(|entry| entry.id).collect())
+    }
+
+    /// Brings every built-in install whose files predate this build's embedded package up to date, in place
+    /// (decision 0063). Its enabled state, consent, CLI registrations, install time and adoption mark are kept, and no
+    /// vendor command or program lookup runs. One lockfile write records them all. Returns the refreshed package ids
+    /// in lockfile order.
+    pub fn refresh_builtins(&self) -> Result<Vec<String>, Error> {
+        let _changes = self.lock_changes();
+        self.refresh_builtins_locked()
+    }
+
+    /// [`Self::refresh_builtins`] for callers that hold the change lock.
+    fn refresh_builtins_locked(&self) -> Result<Vec<String>, Error> {
+        let mut lockfile = self.read_lockfile()?;
+        let outdated: Vec<LockEntry> = lockfile
+            .packages
+            .iter()
+            .filter(|entry| catalogue::is_outdated_builtin_install(entry))
+            .cloned()
+            .collect();
+        if outdated.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut staged: Vec<Staged> = Vec::new();
+        for old in &outdated {
+            match self.stage_built_in(&lockfile, &old.id) {
+                Ok(next) => staged.push(next),
+                Err(error) => {
+                    self.remove_staged(&staged);
+                    return Err(error);
+                }
+            }
+        }
+        for (old, next) in outdated.iter().zip(&staged) {
+            let fresh = LockEntry {
+                enabled: old.enabled,
+                consent: old.consent.clone(),
+                installed_at_ms: old.installed_at_ms,
+                extra: old.extra.clone(),
+                ..next.entry(old.cli.clone(), old.adopted)
+            };
+            if let Some(slot) = lockfile
+                .packages
+                .iter_mut()
+                .find(|entry| entry.id == old.id)
+            {
+                *slot = fresh;
+            }
+        }
+        if let Err(error) = lockfile.write(&self.layout.lock_path()) {
+            self.remove_staged(&staged);
+            return Err(error);
+        }
+        for (old, next) in outdated.iter().zip(&staged) {
+            if old.path != next.rel {
+                // The outdated files left the lockfile with this write, so their folder is only litter now.
+                let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+            }
+        }
+        Ok(outdated.into_iter().map(|entry| entry.id).collect())
     }
 
     /// Checks and unpacks one built-in package for adoption. Callers hold the change lock.

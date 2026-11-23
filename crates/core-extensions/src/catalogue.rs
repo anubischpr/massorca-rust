@@ -82,6 +82,15 @@ pub(crate) fn is_builtin_install(entry: &crate::lockfile::LockEntry) -> bool {
         })
 }
 
+/// A built-in catalogue install whose files predate the package this build embeds: same source and id, another hash.
+/// [`crate::Extensions::refresh_builtins`] brings it up to date.
+pub(crate) fn is_outdated_builtin_install(entry: &crate::lockfile::LockEntry) -> bool {
+    entry.source.kind == crate::lockfile::SourceKind::Catalogue
+        && entry.source.reference == entry.id
+        && find(&entry.id).is_some()
+        && !is_builtin_install(entry)
+}
+
 /// A lockfile entry under a first-party id (publisher `massorca` or `massorca.*`) that the built-in catalogue does not
 /// vouch for. It is never shown as a built-in, never runs its kinds, and never blocks a built-in install.
 pub(crate) fn is_unvouched_first_party(entry: &crate::lockfile::LockEntry) -> bool {

@@ -85,6 +85,31 @@ and credential-home folders. Kind ids that are not built-in are ignored.
 Both lockfile fields are additive. An older service keeps unknown fields on
 write, so it still works.
 
+### Built-ins after an upgrade
+
+A built-in counts as installed only while its lock entry's hash equals the
+package this build embeds. A new build that changes a built-in package, such as
+a kind declaration gaining fields, would otherwise turn every existing install of
+it into an unvouched first-party entry. That entry is hidden, and its kinds stop
+running.
+
+`Extensions::refresh_builtins` prevents that. The server calls it at every
+start, before adoption, and adoption also runs it first.
+
+- **Which entries.** It looks for catalogue-sourced entries of a catalogue id
+  whose hash differs from the embedded package.
+- **What it rewrites.** For each one, it unpacks the embedded package and
+  rewrites the entry in place: new version, hash and folder.
+- **What it keeps.** Its enabled state, consent, CLI registrations, install time,
+  adoption mark and unknown fields stay as they were.
+- **What it never does.** It runs no vendor command, resolves no program and
+  asks for no consent, because the build vouches for the files.
+- **Writes and cleanup.** One lockfile write covers every refreshed entry; the
+  old folders are deleted after it.
+- **Failure.** A failure leaves the lockfile unchanged.
+- **Other sources.** An entry under a first-party id from any other source is
+  left alone; it stays unvouched.
+
 ### Compiled-in copies
 
 Under 0059, the copies compiled into `core-agents` (`crates/core-agents/kinds/`)
