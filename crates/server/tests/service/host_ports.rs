@@ -87,6 +87,10 @@ async fn listed(client: &Client, terminal: &str, port: u16) -> HostPorts {
     }
 }
 
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS reads no socket table yet (decision 0081)"
+)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals_status() {
     let home = temp_home();
@@ -204,6 +208,20 @@ async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     drop(own);
+    drop(client);
+    stop(running).await;
+}
+
+/// macOS reads no socket table yet (decision 0081): the answer is unverifiable, and it lists no port rather than none.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn macos_answers_host_ports_as_unverifiable_and_lists_none() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let ports = client.host_ports().await.expect("host.ports");
+    assert!(ports.unverifiable, "{ports:?}");
+    assert!(ports.ports.is_empty(), "{ports:?}");
     drop(client);
     stop(running).await;
 }
