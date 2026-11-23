@@ -28,8 +28,9 @@ lineage) comes later; the model must not block it.
   optional `locked` (its reason, `""` when none) and `prunable` (git's reason)
   fields; `prunable` needs Git 2.31 and stays absent on older git, and `missing`
   still comes from the directory.
-- **Create a worktree.** Branch defaults to the sanitized name. Base defaults
-  to the repository's default branch: what `origin/HEAD` points at, else
+- **Create a worktree.** Branch defaults to the cleaned name, behind the branch
+  prefix (see Names). Base defaults to the repository's default branch: what
+  `origin/HEAD` points at, else
   `origin/main`, `origin/master`, `main`, `master`, and `HEAD` only when none
   exists (GIT-13). A named base is resolved in the namespace it implies, so a
   tag of the same name never wins: a name with a `/` is a remote-tracking
@@ -98,10 +99,32 @@ lineage) comes later; the model must not block it.
   that is a path must be absolute; a relative one is refused with
   `request.invalid_params`, because it would resolve against the service's own
   directory.
-- **Names.** Workspace and project names refuse Windows device names (`CON`,
-  `NUL`, `COM1`, ..., with or without an extension, in any case). A project name
-  also refuses a colon, a trailing dot or space, and `.` or `..`. A default
-  workspaces root and a project's root must be absolute.
+- **Names.** A typed workspace name is cleaned first: accents fold (`é` to `e`,
+  `ß` to `ss`, `æ` to `ae`, `ø` to `o`, `œ` to `oe`, `ł` to `l`, `đ` to `d`),
+  every other character outside `[A-Za-z0-9._-]` becomes `-`, runs of `-` and of
+  `.` collapse, and leading or trailing `.` and `-` go. The cleaned name is the
+  stored name, the folder and the branch leaf. The reference app keeps accented
+  letters; this app keeps its ASCII set. A name is refused only when cleaning
+  cannot make it valid: nothing left, longer than 64, or a Windows device name
+  (`CON`, `NUL`, `COM1`, ..., with or without an extension, in any case). A branch
+  git refuses (`a.lock`, an explicit bad `--branch`) is refused as before. A
+  project name is not cleaned: it refuses a colon, a trailing dot or space, and
+  `.` or `..`. A default workspaces root and a project's root must be absolute.
+- **Branch prefix.** The `workspaces.branch_prefix` setting picks the prefix of a
+  branch that a create makes itself: `none` (the default), `git-username`, or
+  `custom` with the text of `workspaces.branch_prefix_custom`. A custom prefix is
+  normalised (surrounding slashes and spaces go, runs of `/` collapse), and one
+  git refuses fails the create with `config.invalid_value`. The git username is
+  `github.user`, then `user.username`, else `user.name` when it is a plain token
+  (a letter or digit first, then letters, digits, `.`, `_` or `-`); when none
+  is usable there is no prefix. The prefix never applies to a branch the request
+  names or to an existing branch. A delegated child keeps its name `<parent>-<n>`
+  and its branch (0055).
+- **Generated names.** A blank or omitted name asks for a generated one: a marine
+  creature in lowercase (`nautilus`, `seahorse`, ...), chosen at random from the
+  creatures that no workspace of the project, no local branch (under its prefix)
+  and no directory under the workspaces root takes. Once every creature is taken
+  the next tier is used (`nautilus-2`).
 - **Errors** are typed codes (`workspace.dirty`, `workspace.locked`,
   `workspace.not_found`, `workspace.name_taken`, `project.not_git`, ...), never
   classified from git's message text. One exception: `git rev-parse
@@ -112,9 +135,10 @@ lineage) comes later; the model must not block it.
 
 ## Deferred (recorded so it is not forgotten)
 
-Branch prefixes, generated names and their retirement, nested layout options, setup scripts, terminal and agent guards on
-removal, squash-merge detection, id aliases after a folder rename, remote
-hosts. Each lands with its phase and its own tests.
+Retirement of a generated name after its workspace is removed (a removed name
+can be issued again today), nested layout options, setup scripts, terminal and
+agent guards on removal, squash-merge detection, id aliases after a folder
+rename, remote hosts. Each lands with its phase and its own tests.
 
 ## Consequences
 
