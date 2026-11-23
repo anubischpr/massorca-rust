@@ -201,6 +201,13 @@ impl Sandbox {
         self.settle(profile, args, output)
     }
 
+    /// Runs a command built from [`Sandbox::command`] with extra settings, such as its own `PATH`. A failure names the
+    /// tail of the service log, as [`Sandbox::run`] does; `args` are the arguments already on the command.
+    pub fn run_prepared(&self, profile: &str, args: &[&str], command: &mut Command) -> Assert {
+        let output = self.output_of(profile, command, Stdio::null());
+        self.settle(profile, args, output)
+    }
+
     /// Runs `args` with `input` as standard input, read from a file so no pipe outlives the command.
     pub fn run_with_input(&self, profile: &str, args: &[&str], input: &[u8]) -> Assert {
         let mut file = tempfile::tempfile().expect("a temporary file for stdin");
