@@ -26,7 +26,7 @@ fn a_terminal_running_a_child_reads_the_shell_and_the_child() {
 
     let mut listed = Vec::new();
     wait_until("the shell and its child are read", || {
-        listed = manager.memory();
+        listed = manager.memory(&massorca_host_stats::processes());
         listed.iter().any(|terminal| {
             terminal.terminal_id == info.id
                 && terminal
@@ -59,7 +59,7 @@ fn a_terminal_running_a_child_reads_the_shell_and_the_child() {
     assert_eq!(killed.state, TerminalState::Exited);
     assert!(
         manager
-            .memory()
+            .memory(&massorca_host_stats::processes())
             .iter()
             .all(|terminal| terminal.terminal_id != info.id),
         "an exited terminal has no processes to read"

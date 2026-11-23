@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use crate::ProcessInfo;
+use crate::{ProcessInfo, ProcessTable};
 
 /// The resident set of `pid` in bytes, with no identity check. Only for a process whose identity is the caller's own.
 pub(crate) fn resident_bytes(pid: u32) -> Option<u64> {
@@ -45,15 +45,22 @@ fn parse_vm_rss(status: &str) -> Option<u64> {
     }
 }
 
-pub(crate) fn process_table() -> Vec<ProcessInfo> {
+pub(crate) fn process_table() -> ProcessTable {
     let Ok(entries) = fs::read_dir("/proc") else {
-        return Vec::new();
+        return ProcessTable {
+            processes: Vec::new(),
+            complete: false,
+        };
     };
-    entries
+    let processes = entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
         .filter_map(current)
-        .collect()
+        .collect();
+    ProcessTable {
+        processes,
+        complete: true,
+    }
 }
 
 /// The name between the first `(` and the last `)`, so a name with spaces or parentheses cannot shift the fields

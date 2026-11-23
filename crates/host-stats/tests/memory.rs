@@ -86,7 +86,7 @@ fn a_started_child_uses_memory_and_is_listed_under_this_process() {
     });
     assert!(bytes > 0);
 
-    let table = processes();
+    let table = processes().processes;
     let entry = table
         .iter()
         .find(|entry| entry.pid == child.pid())
@@ -156,6 +156,20 @@ fn an_exited_child_is_unreadable() {
     assert_eq!(sample.unreadable, 1);
 }
 
+/// The table says it is complete and lists this process: a short listing is never passed on as a whole one.
+#[test]
+fn the_process_table_is_complete_and_lists_this_process() {
+    let table = processes();
+    assert!(table.complete, "the process table was cut short");
+    assert!(
+        table
+            .processes
+            .iter()
+            .any(|entry| entry.pid == std::process::id()),
+        "this process is listed"
+    );
+}
+
 /// A listing that names another start time for this process is a reused pid: unreadable, never summed. The same
 /// listing, as it was taken, is read.
 #[cfg(unix)]
@@ -163,6 +177,7 @@ fn an_exited_child_is_unreadable() {
 fn a_listing_with_another_start_time_is_not_read() {
     let own = std::process::id();
     let listed = processes()
+        .processes
         .into_iter()
         .find(|entry| entry.pid == own)
         .expect("this process is listed");

@@ -22,7 +22,7 @@ use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySi
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
-use massorca_host_stats::MemorySample;
+use massorca_host_stats::{MemorySample, ProcessTable};
 
 /// Largest input accepted per call (0033).
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -657,14 +657,9 @@ impl TerminalManager {
     }
 
     /// The process memory of every terminal not yet exited, by creation time, for host memory (decision 0081). A
-    /// terminal whose wait failed (`Unverifiable`) is included. On Unix the process table is taken once for all
-    /// terminals; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
-    pub fn memory(&self) -> Vec<TerminalSample> {
-        let table = if cfg!(unix) {
-            massorca_host_stats::processes()
-        } else {
-            Vec::new()
-        };
+    /// terminal whose wait failed (`Unverifiable`) is included. `table` is the process table the caller took once for
+    /// this sample; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
+    pub fn memory(&self, table: &ProcessTable) -> Vec<TerminalSample> {
         let mut terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
             .terminals
             .values()
@@ -677,7 +672,7 @@ impl TerminalManager {
             .map(|terminal| TerminalSample {
                 terminal_id: terminal.id.clone(),
                 workspace_id: terminal.workspace_id.clone(),
-                sample: terminal.tree.memory(&table),
+                sample: terminal.tree.memory(&table.processes),
             })
             .collect()
     }

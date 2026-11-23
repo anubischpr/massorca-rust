@@ -6,7 +6,8 @@ use std::ptr;
 
 use win32job::Job;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_MORE_DATA, GetLastError, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    CloseHandle, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    STILL_ACTIVE,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -20,7 +21,7 @@ use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-use crate::{METRIC, MemorySample, ProcessInfo, ProcessMemory};
+use crate::{METRIC, MemorySample, ProcessInfo, ProcessMemory, ProcessTable};
 
 /// Room for this many pids in the first job query; a larger job is queried again with the size it reports.
 const JOB_IDS: usize = 1024;
@@ -176,14 +177,17 @@ fn job_ids(job: &Job, capacity: usize) -> Option<Vec<u32>> {
     None
 }
 
-pub(crate) fn process_table() -> Vec<ProcessInfo> {
+pub(crate) fn process_table() -> ProcessTable {
     // SAFETY: the call takes plain values and returns a new snapshot handle or INVALID_HANDLE_VALUE.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE || snapshot.is_null() {
-        return Vec::new();
+        return ProcessTable {
+            processes: Vec::new(),
+            complete: false,
+        };
     }
     let snapshot = Owned(snapshot);
-    let mut table = Vec::new();
+    let mut processes = Vec::new();
     let mut entry = PROCESSENTRY32W {
         dwSize: u32::try_from(size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX),
         ..PROCESSENTRY32W::default()
@@ -191,11 +195,17 @@ pub(crate) fn process_table() -> Vec<ProcessInfo> {
     // SAFETY: `snapshot` is an open process snapshot and `entry` a writable PROCESSENTRY32W with `dwSize` set.
     let mut more = unsafe { Process32FirstW(snapshot.0, &raw mut entry) } != 0;
     while more {
-        table.push(info_of(&entry));
+        processes.push(info_of(&entry));
         // SAFETY: as above; the call overwrites `entry` with the next process.
         more = unsafe { Process32NextW(snapshot.0, &raw mut entry) } != 0;
     }
-    table
+    // The walk ends normally only when the snapshot has no more processes; any other failure leaves the table partial.
+    // SAFETY: reads this thread's last error code; no memory of ours is touched.
+    let complete = unsafe { GetLastError() } == ERROR_NO_MORE_FILES;
+    ProcessTable {
+        processes,
+        complete,
+    }
 }
 
 fn info_of(entry: &PROCESSENTRY32W) -> ProcessInfo {

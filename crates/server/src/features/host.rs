@@ -142,18 +142,29 @@ fn entry_of(terminal: TerminalSample, sessions: &HashMap<String, String>) -> (Te
     (entry, unreadable)
 }
 
+/// A terminal of a process table that could not list every process may be missing some of its processes, so it is
+/// `partial` unless it is `unverifiable` (decision 0081).
+fn with_listing(mut entry: TerminalMemory, complete: bool) -> TerminalMemory {
+    if !complete && !entry.unverifiable {
+        entry.partial = true;
+    }
+    entry
+}
+
 fn sample(terminals: &TerminalManager, agents: &Agents) -> Result<HostMemory, ErrorBody> {
     let own_pid = std::process::id();
     // The service always reads its own process; failing to is a platform without a reader, not an empty figure.
     let own_bytes = stats::memory_of(own_pid).ok_or_else(|| {
         ErrorBody::new(codes::INTERNAL, "this host's process memory cannot be read")
     })?;
+    let table = stats::processes();
     let sessions = sessions_by_terminal(agents);
     let mut unreadable = 0u32;
     let mut total_bytes = own_bytes;
     let mut entries = Vec::new();
-    for terminal in terminals.memory() {
+    for terminal in terminals.memory(&table) {
         let (entry, skipped) = entry_of(terminal, &sessions);
+        let entry = with_listing(entry, table.complete);
         unreadable = unreadable.saturating_add(skipped);
         total_bytes = total_bytes.saturating_add(entry.bytes);
         entries.push(entry);
@@ -204,7 +215,9 @@ mod tests {
     use massorca_core_terminal::TerminalSample;
     use massorca_host_stats::{METRIC, MemorySample, ProcessMemory};
 
-    use super::entry_of;
+    use massorca_protocol::methods::host::TerminalMemory;
+
+    use super::{entry_of, with_listing};
 
     fn terminal(sample: Option<MemorySample>) -> TerminalSample {
         TerminalSample {
@@ -257,6 +270,34 @@ mod tests {
         assert_eq!((entry.processes, entry.bytes), (2, 15));
         assert_eq!(entry.session_id.as_deref(), Some("s-1"));
         assert_eq!(unreadable, 1);
+    }
+
+    #[test]
+    fn a_terminal_of_an_incomplete_listing_is_partial_unless_unverifiable() {
+        let read = TerminalMemory {
+            terminal_id: "t-1".to_owned(),
+            workspace_id: "w-1".to_owned(),
+            session_id: None,
+            processes: 1,
+            bytes: 5,
+            unverifiable: false,
+            partial: false,
+        };
+        assert!(with_listing(read.clone(), false).partial);
+        assert!(!with_listing(read, true).partial);
+        let gone = TerminalMemory {
+            terminal_id: "t-2".to_owned(),
+            workspace_id: "w-1".to_owned(),
+            session_id: None,
+            processes: 0,
+            bytes: 0,
+            unverifiable: true,
+            partial: false,
+        };
+        assert!(
+            !with_listing(gone, false).partial,
+            "an unverifiable terminal is never partial"
+        );
     }
 
     #[test]

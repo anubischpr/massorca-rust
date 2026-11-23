@@ -38,4 +38,4 @@ pub use memory::{METRIC, MemorySample, Metric, ProcessMemory, memory_of, sample_
 pub use table::descendants;
 #[cfg(windows)]
 pub use table::job_members;
-pub use table::{ProcessInfo, processes};
+pub use table::{ProcessInfo, ProcessTable, processes};

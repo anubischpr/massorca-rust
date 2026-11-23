@@ -145,7 +145,7 @@ impl ProcessTree {
         }
         #[cfg(target_os = "macos")]
         {
-            let table = massorca_host_stats::processes();
+            let table = massorca_host_stats::processes().processes;
             if lock(&self.session).reaped {
                 return Some(Vec::new());
             }

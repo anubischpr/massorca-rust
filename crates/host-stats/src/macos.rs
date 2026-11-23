@@ -4,7 +4,8 @@
 
 use std::ffi::{c_int, c_void};
 
-use crate::ProcessInfo;
+use crate::table::listed_until_it_fits;
+use crate::{ProcessInfo, ProcessTable};
 
 /// `SZOMB` in `sys/proc.h`: the process ended and waits to be reaped.
 const SZOMB: u32 = 5;
@@ -71,8 +72,9 @@ fn start_micros(info: &libc::proc_bsdinfo) -> u64 {
         .saturating_add(info.pbi_start_tvusec)
 }
 
-pub(crate) fn process_table() -> Vec<ProcessInfo> {
-    all_pids()
+pub(crate) fn process_table() -> ProcessTable {
+    let (pids, complete) = all_pids();
+    let processes = pids
         .into_iter()
         .filter_map(|pid| {
             let info = bsd_info(pid)?;
@@ -92,30 +94,45 @@ pub(crate) fn process_table() -> Vec<ProcessInfo> {
                 start: Some(start_micros(&info)),
             })
         })
-        .collect()
+        .collect();
+    ProcessTable {
+        processes,
+        complete,
+    }
 }
 
-fn all_pids() -> Vec<u32> {
-    // SAFETY: a null buffer of size 0 asks only for the number of pids; nothing is written.
-    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    let Ok(count) = usize::try_from(count) else {
-        return Vec::new();
+/// Every pid the kernel lists, and whether that is every pid it has. The listing is asked again with more room while
+/// the count grows; one that still does not fit is reported partial, never cut short silently.
+fn all_pids() -> (Vec<u32>, bool) {
+    let Some(count) = pid_count() else {
+        return (Vec::new(), false);
     };
-    let mut pids: Vec<libc::pid_t> = vec![0; count + LIST_SLACK];
-    let Ok(bytes) = c_int::try_from(pids.len() * size_of::<libc::pid_t>()) else {
-        return Vec::new();
-    };
-    // SAFETY: `pids` is a writable buffer of `bytes` bytes; the call writes at most that many and returns how many
-    // pids it wrote.
-    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<c_void>(), bytes) };
-    let Ok(filled) = usize::try_from(filled) else {
-        return Vec::new();
-    };
-    pids.truncate(filled.min(pids.len()));
-    pids.into_iter()
+    let (pids, complete) = listed_until_it_fits(count + LIST_SLACK, pids_filled);
+    let pids = pids
+        .into_iter()
         .filter_map(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid != 0)
-        .collect()
+        .collect();
+    (pids, complete)
+}
+
+/// The number of pids the kernel lists now, `None` when it cannot say.
+fn pid_count() -> Option<usize> {
+    // SAFETY: a null buffer of size 0 asks only for the number of pids; nothing is written.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    usize::try_from(count).ok()
+}
+
+/// The pids the kernel fills into `capacity` slots, `None` when the call fails.
+fn pids_filled(capacity: usize) -> Option<Vec<libc::pid_t>> {
+    let bytes = c_int::try_from(capacity.checked_mul(size_of::<libc::pid_t>())?).ok()?;
+    let mut pids: Vec<libc::pid_t> = vec![0; capacity];
+    // SAFETY: `pids` is a writable buffer of `bytes` bytes; the call writes at most that many and returns how many pids
+    // it wrote.
+    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<c_void>(), bytes) };
+    let filled = usize::try_from(filled).ok()?.min(capacity);
+    pids.truncate(filled);
+    Some(pids)
 }
 
 /// The bytes before the first NUL, as text.
