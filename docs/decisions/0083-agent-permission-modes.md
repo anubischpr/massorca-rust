@@ -11,7 +11,11 @@ about modes, so the only way to choose one was to pass the vendor's flag after `
 
 Rulings from the owner (2026-11-23): bypass modes ("yolo mode") are offered like any other mode; they are never the
 default, are marked `bypass: true`, and are chosen explicitly per start or switch; they are not gated by device scope.
-A switch that no hook confirms is reported as requested, not applied.
+A switch that no hook confirms is reported as requested, not applied. On the default (2026-11-23, superseding the first
+version of D3 and D4 for it): "When the person has chosen no mode, MassOrca passes NO mode flag and the vendor CLI starts in
+its own default, exactly as if they ran it themselves; the declared `default_mode` is the id of that vendor default so the
+chip can name it [...] and the session records "vendor default" rather than pretending a mode was set. A flag is passed
+only when the person picked a mode."
 
 ## Vendor evidence
 
@@ -20,7 +24,10 @@ installed CLI's `--help`, run with an empty temporary home (Claude Code 2.1.268,
 Gentle Shell is not installed here). A mode the documentation does not define, or whose launch form it does not give,
 is not declared.
 
-| Kind | Mode id | Label (the vendor's name) | How it is passed | Bypass |
+Defaults (the vendor CLI's own, named for display only): `claude` `auto` (`default` before 2.1.283), `codex` `auto`,
+`antigravity` `auto`, `gentle-shell` `normal`. Modes marked `may_fall_back`: `claude` `auto`, `antigravity` `auto`.
+
+| Kind | Mode id | Label (the vendor's name) | How it is passed when chosen | Bypass |
 |---|---|---|---|---|
 | `claude` | `default` | Manual | `--permission-mode default` | |
 | `claude` | `acceptEdits` | Edit automatically | `--permission-mode acceptEdits` | |
@@ -46,11 +53,13 @@ Sources and what each settled:
 
 - Claude Code, https://code.claude.com/docs/en/permission-modes (read 2026-11-23). The six modes are the values of
   `--permission-mode`; labels are the names the page gives the mode indicator ("Manual", "Edit automatically", "Plan",
-  "Auto", "Bypass permissions") and the status line ("don't ask"). `--dangerously-skip-permissions` is the same as
+  "Auto", "Bypass permissions"). The indicator table has no entry for `dontAsk`; the status bar shows "don't ask on",
+  so the label stays "Don't ask". `--dangerously-skip-permissions` is the same as
   `bypassPermissions`, which the page limits to isolated containers and VMs. Switching in a session is `Shift+Tab`,
   whose cycle depends on settings and version, so it is not declared as a live switch. The vendor's own starting mode
-  depends on the version and plan (`auto` on 2.1.283 and later, `default` before), so MassOrca names it: the declared
-  default is `default`, passed as a flag.
+  is `auto` on 2.1.283 and later and `default` before; the declared default is `auto`. `auto` may fall back: "When the
+  flag, a settings file, or the built-in default selects `auto` but auto mode isn't available to the session, Claude
+  Code starts the session in Manual instead."
 - Codex, https://learn.chatgpt.com/docs/agent-approvals-security and
   https://learn.chatgpt.com/docs/developer-commands?surface=cli (both read 2026-11-23). The first page's table of
   "common sandbox and approval combinations" names "Auto (preset)", "Safe read-only browsing", "Read-only
@@ -59,14 +68,15 @@ Sources and what each settled:
   documents `--approve-for-me` for the same review with `on-request` and `workspace-write`, and that flag is declared.
   Only "Auto" is called a preset, so the other ids come from their flag values. `--full-auto` is on neither page nor in
   the installed help and is not used. The vendor starts in "Auto" in a version-controlled folder and may start in
-  `read-only` in another; MassOrca passes "Auto" explicitly. `/permissions` is an interactive picker and is not a live
+  `read-only` in another; the declared default is `auto`. `/permissions` is an interactive picker and is not a live
   switch.
 - Antigravity CLI, https://www.antigravity.google/docs/cli/modes (read 2026-11-23; the settings page
   https://antigravity.google/docs/settings?app=cli was read by the research of the same day). The `default` mode has no
   launch flag: it is set in `settings.json`, and `--mode=default` is not accepted by 1.5.11. Since 1.5.7, `agy` starts in
   `auto` where the account and platform allow it and in `default` otherwise, and `--mode=auto` on an unsupported setup
-  runs in `default`. So `default` cannot be chosen at launch and is not declared; the declared default is `auto`, which
-  behaves as the vendor's own start. `--dangerously-skip-permissions` is a global override the page calls
+  runs in `default`. So `default` cannot be chosen at launch and is not declared; the declared default is `auto`, the
+  vendor's own start. `auto` may fall back: "Setting `agentMode` to `"auto"` or passing `--mode=auto` on an unsupported
+  setup runs in `default`." `--dangerously-skip-permissions` is a global override the page calls
   `always-proceed`. `Shift+Tab` cycles and `/config` is interactive, so no live switch is declared.
 - Gentle Shell, https://github.com/Gentleman-Programming/gentle-shell/blob/main/docs/permission-modes.md (read
   2026-11-23). Four modes, Normal the default. No launch flag is documented. `/gentle:mode <id>` switches the current
@@ -76,50 +86,65 @@ Sources and what each settled:
 ## Decision
 
 **D1, schema.** A kind declares
-`permission_modes: [{ id, label, description?, args, live_switch?: { type: "input", text }, bypass? }]` and
-`default_permission_mode`. Ids are the vendor's spelling, `[A-Za-z0-9-]{1,32}`, and unique. `args` may be empty, but a
-mode with neither `args` nor `live_switch` can only be the default. The default is one of the ids and never a bypass
-mode. A bypass mode has its own `args` or `live_switch`. A kind whose documentation defines no mode declares none.
-`agent.kinds` lists each mode's `id`, `label`, `description`, `bypass` and `live_switch` (whether one is declared); the
-arguments and switch text stay in the declaration.
+`permission_modes: [{ id, label, description?, args, live_switch?: { type: "input", text }, bypass?, may_fall_back? }]`
+and `default_permission_mode`. Ids are the vendor's spelling, `[A-Za-z0-9-]{1,32}`, and unique. `args` may be empty, but
+a mode with neither `args` nor `live_switch` can only be the default. The default is one of the ids and never a bypass
+mode. A bypass mode has its own `args` or `live_switch`. `may_fall_back` marks a mode the vendor documents starting
+another mode in without failing. A kind whose documentation defines no mode declares none. `agent.kinds` lists each
+mode's `id`, `label`, `description`, `bypass`, `live_switch` (whether one is declared) and `may_fall_back`; the arguments
+and switch text stay in the declaration.
 
 **D2, live switches.** Only a deterministic command the vendor documents is a live switch (today, Gentle Shell's
 `/gentle:mode <id>`). Cycling keys and interactive pickers are not: their result depends on state MassOrca cannot see.
 Those kinds change mode at the next resume.
 
-**D3, a mode with no launch flag.** A mode that has a live switch but no `args` is applied at start by typing its switch
-at the run's first `idle`, as a first prompt is for a kind that takes none at launch (0054); the switch goes before that
-prompt. A kind that reports no `idle` cannot do this: its default mode is recorded unconfirmed and nothing is typed,
-and naming such a mode at start is refused with `agent.mode_unavailable`. Use `agent.set_mode` once the run is up.
-Gentle Shell is such a kind today (its status mechanism is `none`).
+**D3, the default is the CLI's own.** When no mode is chosen, no mode flag is passed and nothing is typed. The session
+records `mode_source: vendor_default` and no `permission_mode`. `default_permission_mode` names the vendor's own default
+for display only; the label comes from the declaration and may lag a vendor that changes its default with a version.
+It is informational and must never be shown as a session's mode: a `vendor_default` session is labelled "the CLI's
+default". A chosen mode that has a live switch but no `args` is applied by typing its switch at the run's first `idle`,
+before a held first prompt (0054). A kind that reports no `idle` cannot do this, so such a mode is refused at start with
+`agent.mode_unavailable` (Gentle Shell today); `agent.set_mode` switches it once the run is up.
 
-**D4, `mode_confirmed`.** A session reports `permission_mode` and `mode_confirmed`. `mode_confirmed` is true when the
-mode was passed as launch arguments of the current run, and false when it was only requested: a live switch typed with
-no hook to confirm it, a mode stored for the next resume, or a default with no way to apply it. A hook payload that
-reports the mode may set it true later; no vendor documents one yet.
+**D4, `mode_confirmed`.** A session reports `permission_mode`, `mode_source` (`vendor_default` or `chosen`) and
+`mode_confirmed`. `mode_confirmed` is true only when the chosen mode was passed as launch arguments of the current run,
+no caller arguments followed (they may override it), and the mode is not `may_fall_back`. It is false for a typed live
+switch, which no hook confirms, and for the vendor's default, about which nothing is claimed. A hook payload that reports
+the mode may set it true later; no vendor documents one yet.
 
 **D5, Codex.** Codex's modes are the named combinations of its documentation, each mapped to documented flags, as listed
 above.
 
-**D6, bypass on resume.** A bypass mode is never carried over silently. A resume uses, in order: the mode the resume call
-names; a mode `agent.set_mode` stored for the next resume (an explicit choice, bypass or not); the session's last mode
-when it is not bypass; otherwise the kind's default. A delegated child never inherits its parent's mode: it gets the mode
-its delegation names, or its kind's default.
+**D6, switching and resuming.** `agent.set_mode` types a live switch into a live run and records the mode as chosen and
+unconfirmed (`applied: live`). Otherwise it stores `pending_permission_mode` and leaves the running mode and its
+confirmation alone (`applied: next_resume`); a mode a resume could not apply (only a live switch, on a kind that reports
+no `idle`) is refused with `agent.mode_unavailable`. A live switch into a kind with no status mechanism needs `force`,
+because MassOrca cannot tell whether its agent is in the middle of a prompt. While a switch is typed the run is marked as
+switching, and every other prompt or switch is refused with `agent.busy`. A resume uses, in order: the mode it names,
+which also ends any wait; the pending mode, unless it is a bypass mode, which is used only by a resume that names it and
+otherwise stays pending while the run gets the vendor's default; the last chosen mode, unless it is a bypass mode; the
+vendor's default. A bypass mode is never carried into a run without being named for it. A delegated child gets the mode
+its delegation names or the vendor's default, never its parent's; a delegation carrying a run token (an agent asking) may
+not name a bypass mode, which the person chooses through `agent.start`.
 
 **D7, errors.** A mode id the kind does not declare, or any mode for a kind that declares none, is refused with
-`agent.mode_unknown`; its data names the kind, the mode and the known ids. A mode that cannot be applied at start (D3) is
-refused with `agent.mode_unavailable`.
+`agent.mode_unknown`; its data names the kind, the mode and the known ids. `agent.mode_unavailable` refuses a mode that
+cannot be applied (D3, D6), a live switch without `force` into a kind with no status mechanism, and a bypass mode in an
+agent's own delegation.
 
-The wire is additive: `agent.kinds` gains the two kind fields (T1), `agent.start` and `agent.delegate` gain
-`permission_mode`, the session gains `permission_mode` and `mode_confirmed`, and capability `agent-modes/1` is offered
-(T2); `agent.set_mode` and the resume's `permission_mode` come with it (T3). Bypass modes are not gated by device scope:
-the existing `workspace` permission of each method applies.
+The wire is additive: `agent.kinds` gains the two kind fields and each mode's `may_fall_back` (PR A); `agent.start`,
+`agent.delegate` and `agent.resume` gain `permission_mode`, the session gains `permission_mode`, `mode_source`,
+`mode_confirmed` and `pending_permission_mode`, and `agent.set_mode` (`session`, `permission_mode`, `force?`) comes with
+capability `agent-modes/1` (PR B). Bypass modes are not gated by device scope: the existing `workspace` permission of each
+method applies.
+
+**Future work.** A saved per-kind mode preference, which would count as a chosen mode, is not part of this decision.
 
 ## Consequences
 
-- A start with no mode now passes the kind's default flag (`--permission-mode default` for Claude, the "Auto" flags
-  for Codex, `--mode=auto` for Antigravity). Before, nothing was passed and the vendor's own default applied; for Claude
-  2.1.283 and later that was `auto`, so a start that names no mode now runs in Manual.
+- A start with no mode runs exactly as before this decision: no mode flag, the vendor's own default.
+- A vendor that changes its default with a version is followed, not overridden; only the label shown for the default
+  may lag until the declaration changes.
 - The package copies of the four kind files under `packages/agents/` change with the core copies, byte for byte (0062);
   their content hash changes with them.
 - A vendor that adds or renames a mode needs a declaration change; an undeclared mode can still be passed after `--`.

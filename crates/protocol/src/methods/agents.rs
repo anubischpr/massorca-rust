@@ -107,7 +107,9 @@ pub struct AgentKind {
     /// The permission modes the kind declares (decision 0083), in declared order. Absent from an older peer: none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub permission_modes: Vec<PermissionMode>,
-    /// The mode a start gets when it names none; absent when the kind declares no modes.
+    /// The id of the mode the vendor CLI starts in by itself, for display only (decision 0083). It is informational: the
+    /// vendor's real default may differ by CLI version, so it must never be shown as a session's mode. A session in the
+    /// vendor's default has `mode_source: vendor_default` and no `permission_mode`; label it "the CLI's default".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_permission_mode: Option<String>,
 }
