@@ -454,3 +454,32 @@ massorca team routine run <team> <routine> --now
 Not in this change: one-time routines created from a Conference room (AUTO-13),
 the Calendar (AUTO-30), the desktop Routines page and the phone, which still show
 sample data, and moving routines onto the Automations engine (AUTO-01).
+
+## Amendment 2026-11-23: team access
+
+A team's access decides the permission mode its bots run in (decision 0083). It
+has two values, as in pv96, and there is no per-bot mode.
+
+- **`full`**: a task start names the bot's kind's first declared bypass mode
+  (`bypass: true`), so the agent runs without asking for permission. A kind
+  that declares no bypass mode runs in its vendor default, and `massorca task
+  start` says so on that start.
+- **`default`**: no mode is passed, and the vendor CLI starts in its own
+  default, which may ask for permission.
+- **New teams are `full`**, as in pv96: an unattended bot that stops to ask is a
+  stuck task. Decision 0083 says a bypass mode is always named, so the create
+  path names it every time. `massorca team create` and `team update` to `full`
+  print "Full access: bots run without asking for permission", with the one
+  command that turns it off. `team create --access default` makes a team without
+  it.
+- **Existing teams become `default`** (migration step 23). They were made when
+  `full` changed nothing, so they must not gain bypass silently. `massorca team
+  update TEAM --access full` turns it on.
+- `team.create` without `access` still makes a `full` team, so an older client
+  that sends none gets the new default without the sentence. `default` is a new
+  wire value: an older client reads it as unknown.
+- Not in this change: the desktop New team dialog and the team card, which will
+  name the access and offer the change in a follow-up.
+
+Decision 0083 is unchanged: a mode is still passed only when someone chose it.
+Here the owner chooses it once for the team.

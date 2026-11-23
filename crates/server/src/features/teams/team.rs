@@ -196,19 +196,23 @@ fn character_of(name: &str) -> TeamCharacter {
         .map_or(TeamCharacter::Unknown, |(character, _)| *character)
 }
 
-/// The store name of an access mode. Only `full` exists so far.
+/// The store name of an access mode.
 fn access_name(access: TeamAccess) -> Result<&'static str, ErrorBody> {
     match access {
-        TeamAccess::Full => Ok("full"),
+        TeamAccess::Full => Ok(ACCESS_FULL),
+        TeamAccess::Default => Ok("default"),
         TeamAccess::Unknown => Err(invalid("the team access is not a known mode")),
     }
 }
 
+/// The store name of full access: bots run in their kind's bypass mode.
+pub(super) const ACCESS_FULL: &str = "full";
+
 fn access_of(name: &str) -> TeamAccess {
-    if name == "full" {
-        TeamAccess::Full
-    } else {
-        TeamAccess::Unknown
+    match name {
+        ACCESS_FULL => TeamAccess::Full,
+        "default" => TeamAccess::Default,
+        _ => TeamAccess::Unknown,
     }
 }
 
