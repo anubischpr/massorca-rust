@@ -82,7 +82,7 @@ fn prepare(server: &Sandbox) {
 
 /// Pairs the `client` profile with standard scopes, as host `srv`.
 fn pair(server: &Sandbox, client: &Sandbox) {
-    let offer = server.json_ok(SERVER, &["--no-autostart", "pair", "offer"]);
+    let offer = server.json_ok(SERVER, &["--no-autostart", "pair", "offer", "--standard"]);
     let mut command = client.command("client");
     command.args([
         "--json",
