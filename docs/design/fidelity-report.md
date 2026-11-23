@@ -120,6 +120,7 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - C3 per-item counts, unpushed and nested variants: not in any PR.
 - N13 real keep flag: needs protocol.
 - N14 "Delete ignored files" variant: no spec line. Owner decision.
+- D-HO-02 Server path: the segment is built and shows a note. The pairing form is a follow-up; decision 0075 keeps it out of this dialog, and `accept_offer` already exists in the bridge.
 
 ## Settings
 
@@ -220,6 +221,16 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - G-63 wide and emoji glyphs draw as empty boxes: the spec has no fallback rule. Not located.
 - G-64 model picker trigger chip fill spans the full width: no PR claims it.
 - G-67 model picker footer "Stand…": #105 leaves it open (segment width). #107 changes the segmented control, so recheck after merge.
+
+## Artboard copy we could not keep
+
+The artboards are the spec for copy as well as layout. Where a line below differs from its artboard, the difference is deliberate.
+
+| Artboard | Artboard copy | Copy in the app | Reason | Review |
+|---|---|---|---|---|
+| `sh-add-host`, SSH key helper (D-HO-02) | "Lists the keys in your SSH config. The passphrase is asked only when needed." | "Keys from ~/.ssh. A key with a passphrase must be loaded in your SSH agent first." | The list comes from `~/.ssh`, not the SSH config. The transport runs ssh in batch mode (`BatchMode=yes`, `crates/core-remote/src/ssh.rs`), so ssh never asks for a passphrase; a key with a passphrase works only once it is loaded in the agent. | Coordinator, 2026-11-22. The app line has no spec source, so the owner confirms it. |
+
+The artboard also selects `~/.ssh/id_ed25519` in the key menu. The app keeps "Default (ssh config)" selected, so ssh's own choice applies (coordinator, 2026-11-22).
 
 ## Spec conflicts resolved
 

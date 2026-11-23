@@ -331,7 +331,10 @@ async fn revoking_ends_the_device_streams_with_the_reason() {
     .expect("the stream ends");
     let error = match ended {
         Some(Err(error)) => error,
-        other => panic!("expected the revocation, got {other:?}"),
+        other => panic!(
+            "expected the revocation, got {other:?}, connection lost: {}",
+            events.connection_lost()
+        ),
     };
     assert_eq!(error.code, codes::AUTH_DEVICE_REVOKED);
     assert!(!events.connection_lost());

@@ -11,7 +11,9 @@ use crate::components::popover::{OverlayLayer, TriggerBounds};
 use crate::icon::{Icon, IconName, IconSize};
 use crate::style::{FocusRing, StateFill, Surface};
 use crate::theme::{ActiveTheme, TextStyled};
-use crate::tokens::{RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION};
+use crate::tokens::{
+    RADIUS_MD, SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, TYPE_BODY, TYPE_CAPTION, TYPE_MONO,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, InteractiveElement,
@@ -76,6 +78,7 @@ pub struct SelectView {
     _menu_events: Option<Subscription>,
     bounds: TriggerBounds,
     layer: OverlayLayer,
+    mono: bool,
 }
 
 impl EventEmitter<SelectEvent> for SelectView {}
@@ -111,6 +114,7 @@ impl SelectView {
             _menu_events: None,
             bounds: TriggerBounds::default(),
             layer: OverlayLayer::default(),
+            mono: false,
         }
     }
 
@@ -148,6 +152,12 @@ impl SelectView {
     /// The layer the menu paints on; a select inside a dialog takes [`OverlayLayer::Dialog`].
     pub fn layer(mut self, layer: OverlayLayer) -> Self {
         self.layer = layer;
+        self
+    }
+
+    /// The value in the monospace face, for a path or an identifier.
+    pub fn mono(mut self) -> Self {
+        self.mono = true;
         self
     }
 
@@ -341,7 +351,7 @@ impl Render for SelectView {
             .rounded(px(RADIUS_MD))
             .bg(fill)
             .border_color(edge)
-            .text_style(TYPE_BODY)
+            .text_style(if self.mono { TYPE_MONO } else { TYPE_BODY })
             .text_color(text)
             .when(open, |el| el.border_2())
             .when(!open, |el| el.border_1())
