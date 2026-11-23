@@ -6,6 +6,7 @@ mod capabilities;
 mod common;
 mod concurrency;
 mod config;
+mod config_aliases;
 mod config_keys;
 mod core_methods;
 mod events;

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use massorca_core_store::{Store, StoreError};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::{ErrorBody, capabilities, codes};
@@ -35,6 +36,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             default: Value::String(default_workspace_root()?),
             description: "Folder for new workspaces when a project does not set its own root."
                 .to_owned(),
+            aliases: Vec::new(),
         })?,
         registries.methods.register(
             Owner::Core,
@@ -109,10 +111,15 @@ async fn set(ctx: RequestCtx, params: ConfigSet) -> Result<ConfigValue, ErrorBod
     }
     let json = serde_json::to_string(&params.value)
         .map_err(|error| ErrorBody::new(codes::INTERNAL, error.to_string()))?;
-    let (owner, key) = (decl.owner.to_string(), decl.key.clone());
+    let (owner, key, aliases) = (
+        decl.owner.to_string(),
+        decl.key.clone(),
+        decl.aliases.clone(),
+    );
     let before = store_blocking::run(&ctx.state, move |store| {
-        let before = store.get_setting(&owner, &key)?;
-        store.set_setting(&owner, &key, &json)?;
+        let before = stored_text(store, &owner, &key, &aliases)?;
+        let retired: Vec<&str> = aliases.iter().map(String::as_str).collect();
+        store.replace_setting(&owner, &key, &json, &retired)?;
         Ok(before)
     })
     .await?;
@@ -128,10 +135,15 @@ async fn reset(ctx: RequestCtx, params: ConfigKey) -> Result<ConfigValue, ErrorB
         params.owner.as_deref(),
         &params.key,
     )?;
-    let (owner, key) = (decl.owner.to_string(), decl.key.clone());
+    let (owner, key, aliases) = (
+        decl.owner.to_string(),
+        decl.key.clone(),
+        decl.aliases.clone(),
+    );
     let before = store_blocking::run(&ctx.state, move |store| {
-        let before = store.get_setting(&owner, &key)?;
-        store.delete_setting(&owner, &key)?;
+        let before = stored_text(store, &owner, &key, &aliases)?;
+        let retired: Vec<&str> = aliases.iter().map(String::as_str).collect();
+        store.remove_setting(&owner, &key, &retired)?;
         Ok(before)
     })
     .await?;
@@ -165,7 +177,14 @@ async fn list(ctx: RequestCtx, _params: NoParams) -> Result<ConfigList, ErrorBod
 
     let mut values = Vec::new();
     for decl in ctx.state.registries.settings.declarations() {
-        let json = stored.remove(&(decl.owner.to_string(), decl.key.clone()));
+        let owner = decl.owner.to_string();
+        let json = stored
+            .remove(&(owner.clone(), decl.key.clone()))
+            .or_else(|| {
+                decl.aliases
+                    .iter()
+                    .find_map(|alias| stored.get(&(owner.clone(), alias.clone())).cloned())
+            });
         let value = json.as_deref().map(stored_json).transpose()?;
         values.push(view(&decl, value));
     }
@@ -186,14 +205,41 @@ fn find(
         )
     };
     let owner = Owner::parse(owner_text).ok_or_else(unknown)?;
-    settings.find(&owner, key).ok_or_else(unknown)
+    settings
+        .find(&owner, key)
+        .or_else(|| settings.find_by_alias(&owner, key))
+        .ok_or_else(unknown)
 }
 
 async fn stored_value(ctx: &RequestCtx, decl: &SettingDecl) -> Result<Option<Value>, ErrorBody> {
-    let (owner, key) = (decl.owner.to_string(), decl.key.clone());
-    let json =
-        store_blocking::run(&ctx.state, move |store| store.get_setting(&owner, &key)).await?;
+    let (owner, key, aliases) = (
+        decl.owner.to_string(),
+        decl.key.clone(),
+        decl.aliases.clone(),
+    );
+    let json = store_blocking::run(&ctx.state, move |store| {
+        stored_text(store, &owner, &key, &aliases)
+    })
+    .await?;
     json.as_deref().map(stored_json).transpose()
+}
+
+/// The stored text of `key`, or of the first old name that still holds a value. The canonical row always wins.
+fn stored_text(
+    store: &Store,
+    owner: &str,
+    key: &str,
+    aliases: &[String],
+) -> Result<Option<String>, StoreError> {
+    if let Some(json) = store.get_setting(owner, key)? {
+        return Ok(Some(json));
+    }
+    for alias in aliases {
+        if let Some(json) = store.get_setting(owner, alias)? {
+            return Ok(Some(json));
+        }
+    }
+    Ok(None)
 }
 
 fn stored_json(text: &str) -> Result<Value, ErrorBody> {
