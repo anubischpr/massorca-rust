@@ -10,14 +10,14 @@ publish.workspace = true
 [dependencies]
 massorca-process.workspace = true
 dunce.workspace = true
+massorca-core-remote.workspace = true
 massorca-protocol.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
-# A job object kills every process git starts, through a safe API.
+# A job object kills every process git starts; the suspended spawn into it lives in core-remote.
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true
-windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile.workspace = true

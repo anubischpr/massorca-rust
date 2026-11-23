@@ -1,16 +1,18 @@
 //! Element tests of the workspace start page: a workspace opens its page, and the project menu of the
 //! page chooses the project's first workspace or none. A scripted handle stands in for the service.
 
+use super::start_page::split_last_segment;
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{project, workspace};
 use crate::service::{ConnectionState, Script, StoreUpdate};
-use gpui::{AppContext, TestAppContext, VisualTestContext};
+use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_protocol::methods::projects::Project;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::Composer;
+use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -222,5 +224,87 @@ fn the_page_menu_opens_over_the_start_page_and_draws(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("menu-panel").is_some(),
         "the project menu is drawn"
+    );
+}
+
+#[test]
+fn a_fact_value_cut_keeps_its_last_path_segment_whole() {
+    assert_eq!(split_last_segment("/repos/first"), ("/repos", "/first"));
+    assert_eq!(
+        split_last_segment(r"D:\projects\desktop-start-path"),
+        (r"D:\projects", r"\desktop-start-path")
+    );
+    assert_eq!(split_last_segment("/repos/first/"), ("/repos/first", "/"));
+    assert_eq!(split_last_segment("Ready"), ("", "Ready"));
+}
+
+/// The artboard's window (ws-start, 1440 x 900).
+const WINDOW_WIDTH: f32 = 1440.0;
+const WINDOW_HEIGHT: f32 = 900.0;
+/// Slack for pixel rounding in the layout checks.
+const EDGE_TOLERANCE: f32 = 1.0;
+
+#[gpui::test]
+fn a_long_path_truncates_in_its_fact_row_and_the_page_stays_in_the_window(cx: &mut TestAppContext) {
+    let (projects, mut workspaces) = two_projects();
+    // 153 characters with no space, so the text has nowhere to wrap.
+    workspaces[0].path = format!("/repos/{}/first", "segment".repeat(20));
+    let (rig, cx) = rig(cx, projects, workspaces);
+    cx.simulate_resize(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)));
+    cx.run_until_parked();
+    rig.shell
+        .update(cx, |shell, _| shell.model.open_workspace("w1"));
+    draw(cx);
+
+    let column = cx
+        .debug_bounds("start-column")
+        .expect("the start page column is drawn");
+    let value = cx
+        .debug_bounds("start-path-value")
+        .expect("the path value is drawn");
+    let column_width = f32::from(column.size.width);
+    let column_right = f32::from(column.origin.x + column.size.width);
+    let value_left = f32::from(value.origin.x);
+    let value_right = f32::from(value.origin.x + value.size.width);
+
+    assert!(
+        column_width <= LAYOUT_CONVERSATION_READING + EDGE_TOLERANCE,
+        "the column is {column_width} px wide, past its {LAYOUT_CONVERSATION_READING} px maximum"
+    );
+    assert!(
+        column_right <= WINDOW_WIDTH + EDGE_TOLERANCE,
+        "the column ends at {column_right} px, past the {WINDOW_WIDTH} px window"
+    );
+    // The value takes the control column at the row's right edge (16 px row padding, 1 px
+    // section border), so the label keeps the space to its left.
+    let row_right = column_right - SPACE_4 - 1.0;
+    let control_left = row_right - LAYOUT_SETTINGS_CONTROL_MAX;
+    assert!(
+        value_left >= control_left - EDGE_TOLERANCE && value_right <= row_right + EDGE_TOLERANCE,
+        "the value spans {value_left} to {value_right} px, outside the control column \
+         {control_left} to {row_right} px"
+    );
+    // The text itself: the head that gives way and the last segment that stays whole.
+    let head = cx
+        .debug_bounds("start-path-value-head")
+        .expect("the path's head is drawn");
+    let tail = cx
+        .debug_bounds("start-path-value-tail")
+        .expect("the path's last segment is drawn");
+    let head_left = f32::from(head.origin.x);
+    let head_right = f32::from(head.origin.x + head.size.width);
+    let tail_left = f32::from(tail.origin.x);
+    let tail_right = f32::from(tail.origin.x + tail.size.width);
+    assert!(
+        head_left >= control_left - EDGE_TOLERANCE,
+        "the path's head starts at {head_left} px, left of the control column at {control_left} px"
+    );
+    assert!(
+        head_right <= tail_left + EDGE_TOLERANCE,
+        "the path's head ends at {head_right} px, over its last segment at {tail_left} px"
+    );
+    assert!(
+        tail_right <= row_right + EDGE_TOLERANCE,
+        "the path's last segment ends at {tail_right} px, past the row at {row_right} px"
     );
 }
