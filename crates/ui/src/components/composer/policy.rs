@@ -13,6 +13,8 @@ pub struct Situation {
     pub text_empty: bool,
     /// An IME composition is active; Enter confirms the composition instead.
     pub composing: bool,
+    /// A message sent while the agent runs queues behind its turn; otherwise the button stops the run.
+    pub queueing: bool,
 }
 
 /// What the primary button in the bottom row does.
@@ -26,16 +28,15 @@ pub enum PrimaryAction {
     Disabled,
 }
 
-/// The primary button: Stop when there is nothing to send and the agent runs; otherwise Send,
-/// or Queue while the agent runs. Send is disabled while the host is unreachable (the message
-/// stays in the composer and is not queued).
+/// The primary button: Stop when there is nothing to send and the agent runs, or while it runs
+/// when the composer cannot queue; otherwise Send, or Queue while the agent runs. Send is disabled
+/// while the host is unreachable (the message stays in the composer and is not queued).
 pub fn primary_action(situation: Situation) -> PrimaryAction {
+    if situation.agent_busy && (situation.text_empty || !situation.queueing) {
+        return PrimaryAction::Stop;
+    }
     if situation.text_empty {
-        return if situation.agent_busy {
-            PrimaryAction::Stop
-        } else {
-            PrimaryAction::Disabled
-        };
+        return PrimaryAction::Disabled;
     }
     if situation.disabled || !situation.host_confirmed {
         return PrimaryAction::Disabled;
@@ -162,6 +163,7 @@ mod tests {
             disabled: false,
             text_empty,
             composing: false,
+            queueing: true,
         }
     }
 
@@ -184,6 +186,21 @@ mod tests {
             ..at(false, true, false)
         };
         assert_eq!(primary_action(archived), PrimaryAction::Disabled);
+    }
+
+    #[test]
+    fn a_composer_that_cannot_queue_stops_a_running_agent_whatever_the_draft_holds() {
+        let running = |text_empty| Situation {
+            queueing: false,
+            ..at(true, true, text_empty)
+        };
+        assert_eq!(primary_action(running(true)), PrimaryAction::Stop);
+        assert_eq!(primary_action(running(false)), PrimaryAction::Stop);
+        assert_eq!(
+            enter_action(running(false), false, false),
+            EnterAction::Nothing,
+            "Enter neither sends nor queues into a running agent"
+        );
     }
 
     #[test]

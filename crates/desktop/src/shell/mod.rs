@@ -14,6 +14,7 @@ mod project_sidebar;
 mod rail;
 mod resize_edges;
 mod service_banner;
+mod session_view;
 mod settings;
 mod settings_remove_dialog;
 mod settings_secret_dialog;
@@ -82,6 +83,8 @@ mod marketplace_accounts_tests;
 mod pairing_tests;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
 #[cfg(test)]
@@ -159,6 +162,14 @@ pub struct Shell {
     debug_page: Option<DebugPage>,
     /// Each workspace's start page composer, kept so its draft survives redraws.
     start_composers: HashMap<String, start_page::StartComposer>,
+    /// The session a start is asking the service for, until the service answers.
+    start_pending: Option<crate::model::start_page::StartingSession>,
+    /// Each session's composer, kept so its draft survives redraws and switches between sessions.
+    session_composers: HashMap<String, session_view::SessionComposer>,
+    /// The call in flight for each session, if any: one at a time per session.
+    session_calls: HashMap<String, session_view::SessionCall>,
+    /// Why the last stop or resume of each session was refused, shown above its composer.
+    session_notices: HashMap<String, String>,
     dialogs: WorkspaceDialogs,
     /// The Source control panel's state: its tab, its watch and the commit box (D-DF-02).
     source_control: SourceControl,
@@ -181,6 +192,10 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
+    /// The install review of a catalogue package on screen, if any (decision 0062).
+    marketplace_review: Option<marketplace::InstallReview>,
+    /// The last refused change to an installed package, with the item it concerns.
+    marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
     /// What the Connection part knows beyond the service's account lists.
     marketplace_accounts: marketplace::AccountsUi,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
@@ -272,10 +287,11 @@ impl Shell {
                 shell.model.refresh_teams(teams);
             }
             if !store.read(cx).is_sample() {
-                shell
-                    .marketplace
-                    .follow_agent_kinds(&store.read(cx).state().agent_kinds);
-                shell.follow_service_accounts(store.read(cx).state());
+                let state = store.read(cx).state();
+                shell.marketplace.follow_agent_kinds(&state.agent_kinds);
+                let (installed, catalogue) = state.extension_lists();
+                shell.marketplace.follow_extensions(installed, catalogue);
+                shell.follow_service_accounts(state);
                 shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();
@@ -395,6 +411,10 @@ impl Shell {
             debug_focus: None,
             debug_page: None,
             start_composers: HashMap::new(),
+            start_pending: None,
+            session_composers: HashMap::new(),
+            session_calls: HashMap::new(),
+            session_notices: HashMap::new(),
             dialogs: WorkspaceDialogs::default(),
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
@@ -407,6 +427,8 @@ impl Shell {
             marketplace_code,
             marketplace_error: None,
             marketplace_uninstall: None,
+            marketplace_review: None,
+            marketplace_item_error: None,
             marketplace_accounts: marketplace::AccountsUi::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
@@ -573,13 +595,20 @@ impl Render for Shell {
         });
         let start = start.map(|page| {
             let composer = self.start_composer(&page.id, cx);
+            let starting = self
+                .start_pending
+                .as_ref()
+                .filter(|pending| pending.workspace == page.id)
+                .map(|pending| pending.status());
             start_page::StartFrame {
                 page,
                 composer,
                 shell: shell.clone(),
                 connected,
+                starting,
             }
         });
+        let session = self.session_frame(cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
             .store
@@ -654,6 +683,7 @@ impl Render for Shell {
                 diff,
                 marketplace,
                 pairing,
+                session,
             },
             window,
             cx,
