@@ -86,12 +86,15 @@ pub(super) fn status_bar(
         ));
     }
     bar = bar.child(div().flex_1());
-    if visible.is_shown(StatusItem::Memory) {
+    let memory = status
+        .memory_text()
+        .filter(|_| visible.is_shown(StatusItem::Memory));
+    if let Some(text) = memory {
         bar = bar.child(item(
             "status-memory",
             None,
-            status.memory_text(),
-            status.memory_text(),
+            text.clone(),
+            text,
             secondary,
             theme,
         ));
@@ -111,12 +114,12 @@ pub(super) fn status_bar(
             theme,
         ));
     }
-    if visible.is_shown(StatusItem::Ports) {
-        let text = if bot_teams {
-            status.bot_teams_ports_text()
-        } else {
-            status.ports_text()
-        };
+    let ports = if bot_teams {
+        status.bot_teams_ports_text()
+    } else {
+        status.ports_text()
+    };
+    if let Some(text) = ports.filter(|_| visible.is_shown(StatusItem::Ports)) {
         bar = bar.child(item(
             "status-ports",
             Some(glyph(IconName::Plug, theme)),

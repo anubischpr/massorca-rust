@@ -115,14 +115,15 @@ pub struct UsageModel {
     pub resets_in: String,
 }
 
-/// The Status bar items (D-SH-05).
+/// The Status bar items (D-SH-05). Memory and ports are `None` when no source reports them: their
+/// items are then hidden rather than shown with a placeholder.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StatusBarModel {
     pub waiting: u32,
     pub running: u32,
-    pub memory: String,
+    pub memory: Option<String>,
     pub terminals: u32,
-    pub ports: u32,
+    pub ports: Option<u32>,
     pub hosts_total: u32,
     pub hosts_unreachable: u32,
 }
@@ -137,8 +138,10 @@ impl StatusBarModel {
     }
 
     /// The Memory item carries its label, as sh-empty-app draws it: "Memory 1.22 GB".
-    pub fn memory_text(&self) -> String {
-        format!("Memory {}", self.memory)
+    pub fn memory_text(&self) -> Option<String> {
+        self.memory
+            .as_ref()
+            .map(|memory| format!("Memory {memory}"))
     }
 
     /// The Bot Teams copy of the terminals item: a count, as bt-board draws it.
@@ -147,8 +150,8 @@ impl StatusBarModel {
     }
 
     /// The Bot Teams copy of the ports item: a count, as bt-board draws it.
-    pub fn bot_teams_ports_text(&self) -> String {
-        format!("Ports {}", self.ports)
+    pub fn bot_teams_ports_text(&self) -> Option<String> {
+        self.ports.map(|ports| format!("Ports {ports}"))
     }
 
     /// The Bot Teams copy of the hosts item: only the unreachable hosts are named, as bt-board draws it.
@@ -168,8 +171,8 @@ impl StatusBarModel {
         plural(self.terminals, "terminal", "No terminals")
     }
 
-    pub fn ports_text(&self) -> String {
-        plural(self.ports, "port", "No ports")
+    pub fn ports_text(&self) -> Option<String> {
+        self.ports.map(|ports| plural(ports, "port", "No ports"))
     }
 
     /// The agents item's tooltip, with the running count spelled out (D-SH-05).
@@ -285,9 +288,9 @@ mod tests {
         StatusBarModel {
             waiting: 1,
             running: 2,
-            memory: "1.22 GB".into(),
+            memory: Some("1.22 GB".into()),
             terminals: 2,
-            ports: 0,
+            ports: Some(0),
             hosts_total: 2,
             hosts_unreachable: 0,
         }
@@ -324,7 +327,17 @@ mod tests {
 
     #[test]
     fn the_memory_item_names_its_value() {
-        assert_eq!(status().memory_text(), "Memory 1.22 GB");
+        assert_eq!(status().memory_text(), Some("Memory 1.22 GB".into()));
+    }
+
+    #[test]
+    fn memory_and_ports_have_no_copy_without_a_source() {
+        let mut s = status();
+        s.memory = None;
+        s.ports = None;
+        assert_eq!(s.memory_text(), None);
+        assert_eq!(s.ports_text(), None);
+        assert_eq!(s.bot_teams_ports_text(), None);
     }
 
     #[test]
@@ -332,7 +345,7 @@ mod tests {
         let mut s = status();
         s.terminals = 0;
         assert_eq!(s.bot_teams_terminals_text(), "Terminals 0");
-        assert_eq!(s.bot_teams_ports_text(), "Ports 0");
+        assert_eq!(s.bot_teams_ports_text(), Some("Ports 0".into()));
         s.terminals = 2;
         assert_eq!(s.bot_teams_terminals_text(), "Terminals 2");
         assert_eq!(s.bot_teams_hosts_text(), "2 hosts");
@@ -347,7 +360,7 @@ mod tests {
         let mut s = status();
         assert_eq!(s.agents_text(), "1 waiting for you");
         assert_eq!(s.terminals_text(), "2 terminals");
-        assert_eq!(s.ports_text(), "No ports");
+        assert_eq!(s.ports_text(), Some("No ports".into()));
         assert_eq!(s.hosts_text(), "2 hosts");
         s.hosts_unreachable = 1;
         assert_eq!(s.hosts_text(), "1 of 2 hosts unreachable");
