@@ -5,6 +5,8 @@ uniffi::setup_scaffolding!();
 
 mod error;
 mod offer;
+mod store;
 
 pub use error::FfiError;
 pub use offer::{OfferSummary, parse_offer};
+pub use store::{HostStore, SealedHosts, StorageError};
