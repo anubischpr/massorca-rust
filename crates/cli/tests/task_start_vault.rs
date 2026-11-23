@@ -95,9 +95,9 @@ fn prepare(server: &Sandbox) {
         .success();
 }
 
-/// Pairs the `client` profile with standard scopes, as host `srv`.
+/// Pairs the `client` profile as a standard device (`--standard`; full access is the default), as host `srv`.
 fn pair(server: &Sandbox, client: &Sandbox) {
-    let offer = server.json_ok(SERVER, &["--no-autostart", "pair", "offer"]);
+    let offer = server.json_ok(SERVER, &["--no-autostart", "pair", "offer", "--standard"]);
     let mut command = client.command("client");
     command.args([
         "--json",
