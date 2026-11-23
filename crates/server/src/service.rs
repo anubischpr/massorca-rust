@@ -277,7 +277,8 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
 }
 
 async fn open_store(path: PathBuf) -> Result<Store, ServiceError> {
-    let opened = tokio::task::spawn_blocking(move || Store::open(path))
+    let parts = StartTimings::part_logger();
+    let opened = tokio::task::spawn_blocking(move || Store::open_observed(path, parts))
         .await
         .map_err(io::Error::other)?;
     Ok(opened?)

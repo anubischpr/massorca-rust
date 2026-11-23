@@ -336,8 +336,8 @@ impl Shell {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
-            WorkspaceMenuId::NewSession
-            | WorkspaceMenuId::OpenIn
+            WorkspaceMenuId::NewSession => self.open_new_session(id, cx),
+            WorkspaceMenuId::OpenIn
             | WorkspaceMenuId::OpenFileManager
             | WorkspaceMenuId::OpenTerminal
             | WorkspaceMenuId::OpenEditor
