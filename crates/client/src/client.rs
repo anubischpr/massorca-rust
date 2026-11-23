@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+#[cfg(feature = "local")]
 use massorca_profile::Profile;
 use massorca_protocol::methods::events::Subscribed;
 use massorca_protocol::{Message, fits_frame};
@@ -12,9 +13,11 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(feature = "local")]
 use crate::connect;
 use crate::error::ClientError;
 use crate::handshake::Welcome;
+#[cfg(feature = "local")]
 use crate::options::ConnectOptions;
 use crate::pump::{self, Pending, Shared};
 use crate::subscription::Subscription;
@@ -40,6 +43,7 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
+    #[cfg(feature = "local")]
     /// Connects to the service of `profile`. With autostart enabled and nothing listening, the service is started first.
     pub async fn connect(profile: &Profile, options: ConnectOptions) -> Result<Self, ClientError> {
         connect::connect(profile, options).await

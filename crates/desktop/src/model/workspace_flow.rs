@@ -149,6 +149,7 @@ impl CreateForm {
             branch: non_empty(&self.branch),
             base: non_empty(&self.base),
             existing_branch: self.existing_branch,
+            refresh_base: false,
             path: None,
             request_id: None,
         })

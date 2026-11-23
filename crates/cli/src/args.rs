@@ -232,6 +232,17 @@ pub enum ProjectCommand {
         #[arg(long)]
         forget_workspaces: bool,
     },
+    /// Sets the base that a project's new workspaces start from, or clears it with --clear.
+    SetBase {
+        /// Project id, name or path.
+        project: String,
+        /// A branch, remote branch or commit that resolves to a commit, such as `origin/develop`.
+        #[arg(required_unless_present = "clear")]
+        base: Option<String>,
+        /// Clears the base, so new workspaces start from the repository's default branch.
+        #[arg(long, conflicts_with = "base")]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -247,7 +258,7 @@ pub struct ProjectAddArgs {
     /// Register a git repository; fail when the directory is not inside one.
     #[arg(long)]
     pub git: bool,
-    /// Directory that holds this project's workspaces. Defaults to a folder under the workspaces default root.
+    /// Directory that holds this project's workspaces. Defaults to a folder named after the project under the workspaces default root, or to the default root itself when workspaces.layout is flat.
     #[arg(long, value_name = "DIR")]
     pub workspaces_root: Option<PathBuf>,
 }
@@ -295,6 +306,9 @@ pub struct WorkspaceCreateArgs {
     /// Check out an existing local branch instead of creating one.
     #[arg(long)]
     pub existing_branch: bool,
+    /// Fetch the base from its remote first; a failed fetch starts from the local copy.
+    #[arg(long)]
+    pub refresh_base: bool,
     /// Directory of the worktree. A relative path is taken from the current directory.
     #[arg(long, value_name = "DIR")]
     pub path: Option<PathBuf>,
@@ -312,7 +326,7 @@ pub struct WorkspaceListArgs {
 
 #[derive(Debug, Args)]
 pub struct ConfigGetArgs {
-    /// Setting key, for example workspaces.default_root.
+    /// Setting key, for example workspaces.default_root or workspaces.layout.
     pub key: String,
     /// Owner of the setting: core (default) or ext:<id>.
     #[arg(long, value_name = "OWNER")]
@@ -321,7 +335,7 @@ pub struct ConfigGetArgs {
 
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
-    /// Setting key, for example workspaces.default_root.
+    /// Setting key, for example workspaces.default_root or workspaces.layout.
     pub key: String,
     /// New value: JSON when it parses, otherwise plain text.
     #[arg(allow_hyphen_values = true)]

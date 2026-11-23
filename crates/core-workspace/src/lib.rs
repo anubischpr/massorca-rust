@@ -7,6 +7,7 @@
 
 mod create;
 mod error;
+mod layout;
 mod names;
 mod paths;
 mod projects;
@@ -18,6 +19,7 @@ mod workspaces;
 mod worktree_state;
 
 pub use error::DomainError;
+pub use layout::WorkspaceLayout;
 pub use projects::RemovedProject;
 pub use remove::RemovalWaivers;
 pub use workspaces::Workspaces;
