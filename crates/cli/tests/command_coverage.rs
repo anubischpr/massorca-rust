@@ -135,6 +135,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "git.switch",
             "git.unstage",
             "git.watch",
+            "host.memory",
             "pair.offer",
             "project.add",
             "project.list",
