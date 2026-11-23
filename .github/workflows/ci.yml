@@ -83,6 +83,8 @@ jobs:
         with:
           key: core
       - run: cargo clippy --workspace --exclude massorca-ui --exclude massorca-desktop --all-targets --locked -- -D warnings
+      # Built before any test starts a service: a test that builds it compiles dependencies while services wait (decision 0062).
+      - run: cargo build --locked -p massorca-cli --example massorca-fake-vendor
       - run: cargo test --workspace --exclude massorca-ui --exclude massorca-desktop --locked ${{ matrix.os == 'windows-latest' && '--no-fail-fast' || '' }}
 
   core-git-baseline:
