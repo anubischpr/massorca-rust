@@ -170,6 +170,15 @@ pub struct TerminalInfo {
     pub exit: Option<ExitRecord>,
 }
 
+/// One terminal's live processes (`TerminalManager::processes`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalProcesses {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The shell and what it started, in no particular order. Empty when none could be listed.
+    pub pids: Vec<u32>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TerminalError {
     #[error("no such terminal")]
@@ -643,6 +652,27 @@ impl TerminalManager {
     /// Live terminals, counting creates in progress.
     pub fn live_count(&self) -> usize {
         lock(&self.inner.registry).live
+    }
+
+    /// The processes of every terminal not yet exited, by creation time, for host memory (decision 0081). A terminal
+    /// whose wait failed (`Unverifiable`) is included. Each list comes from the terminal's process tree; see
+    /// `ProcessTree::members` for what each platform finds. Blocking: the listing reads the process table.
+    pub fn processes(&self) -> Vec<TerminalProcesses> {
+        let mut terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
+            .terminals
+            .values()
+            .cloned()
+            .collect();
+        terminals.sort_by_key(|terminal| terminal.seq);
+        terminals
+            .iter()
+            .filter(|terminal| !terminal.is_exited())
+            .map(|terminal| TerminalProcesses {
+                terminal_id: terminal.id.clone(),
+                workspace_id: terminal.workspace_id.clone(),
+                pids: terminal.tree.members(),
+            })
+            .collect()
     }
 }
 

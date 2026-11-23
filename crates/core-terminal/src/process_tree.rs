@@ -122,8 +122,11 @@ impl ProcessTree {
         }
     }
 
-    /// Live processes of the terminal, best effort; for tests and diagnostics.
-    /// Empty on macOS, and on Windows once the job is gone.
+    /// Live processes of the terminal, the shell included while it runs. Host memory reads them (decision 0081), as do
+    /// tests and diagnostics.
+    /// Windows: the job's members, exact. Linux: the session's members, exact. macOS: the shell and every process below
+    /// it by parent id, so a process that detached from the shell's tree is missed. Empty once the shell is reaped, on
+    /// Windows once the job is gone, and on other Unix platforms.
     pub fn members(&self) -> Vec<u32> {
         #[cfg(target_os = "linux")]
         {
@@ -136,7 +139,19 @@ impl ProcessTree {
                 .filter_map(|member| u32::try_from(member.pid).ok())
                 .collect()
         }
-        #[cfg(all(unix, not(target_os = "linux")))]
+        #[cfg(target_os = "macos")]
+        {
+            // Under the lock, so the shell is not reaped (and its pid reused) during the walk.
+            let session = lock(&self.session);
+            if session.reaped {
+                return Vec::new();
+            }
+            let Ok(shell) = u32::try_from(self.shell) else {
+                return Vec::new();
+            };
+            massorca_host_stats::descendants(shell, &massorca_host_stats::processes())
+        }
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         {
             Vec::new()
         }
