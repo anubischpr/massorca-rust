@@ -7,10 +7,12 @@ use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{self, ConfigSet};
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_CHANGED, TOPIC_PROJECT_REMOVED,
+    TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams,
 };
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
@@ -171,6 +173,115 @@ async fn unknown_and_invalid_project_requests_answer_typed_codes() {
 }
 
 #[tokio::test]
+async fn set_base_publishes_project_changed_and_show_reports_the_base_until_it_is_cleared() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    run_git(&repo, &["branch", "develop"]);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("add");
+    let mut events = client.subscribe_events().await.expect("subscribe");
+
+    let set: Project = client
+        .call(
+            projects::SET_BASE,
+            &ProjectSetBaseParams {
+                project: project.id.clone(),
+                base: Some("develop".to_owned()),
+            },
+        )
+        .await
+        .expect("project.set_base");
+
+    assert_eq!(set.base_ref.as_deref(), Some("develop"));
+    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes");
+    assert_eq!(
+        event,
+        ChangeEvent {
+            topic: TOPIC_PROJECT_CHANGED.to_owned(),
+            id: project.id.clone()
+        }
+    );
+    let shown: Project = client
+        .call(
+            projects::SHOW,
+            &ProjectRef {
+                project: "repo".to_owned(),
+            },
+        )
+        .await
+        .expect("show");
+    assert_eq!(shown.base_ref.as_deref(), Some("develop"));
+
+    let cleared: Project = client
+        .call(
+            projects::SET_BASE,
+            &ProjectSetBaseParams {
+                project: project.id.clone(),
+                base: None,
+            },
+        )
+        .await
+        .expect("clear the base");
+    assert_eq!(cleared.base_ref, None);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn set_base_refuses_a_folder_project_and_a_base_that_is_not_a_commit() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let folder = home.path().join("notes");
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let repo_project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("add repository");
+    let mut folder_params = add_params(&folder);
+    folder_params.kind = Some(ProjectKind::Folder);
+    let folder_project: Project = client
+        .call(projects::ADD, &folder_params)
+        .await
+        .expect("add folder");
+
+    let on_folder = client
+        .call::<_, Project>(
+            projects::SET_BASE,
+            &ProjectSetBaseParams {
+                project: folder_project.id.clone(),
+                base: Some("main".to_owned()),
+            },
+        )
+        .await
+        .expect_err("a folder has no base");
+    assert_eq!(remote_code(&on_folder), codes::REQUEST_INVALID_PARAMS);
+
+    let unresolved = client
+        .call::<_, Project>(
+            projects::SET_BASE,
+            &ProjectSetBaseParams {
+                project: repo_project.id.clone(),
+                base: Some("no-such-branch".to_owned()),
+            },
+        )
+        .await
+        .expect_err("a base that is not a commit");
+    assert_eq!(remote_code(&unresolved), codes::BASE_NOT_FOUND);
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_new_default_root_applies_to_the_next_project_without_restarting() {
     let home = temp_home();
     let repo = home.path().join("repo");
@@ -276,6 +387,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             },

@@ -1,7 +1,8 @@
 //! `massorca workspace create|list|show|rm` (alias `ws`): creating and removing workspaces through the service.
 
 use massorca_protocol::methods::workspaces::{
-    Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams,
+    BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef,
+    WorkspaceRemoveParams,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
@@ -25,10 +26,13 @@ pub async fn execute(
         WorkspaceCommand::Create(args) => {
             let params = create_params(args, paths)?;
             let created = client.workspace_create(&params).await?;
-            output.success(
-                &created,
-                &[workspace_text::workspace_line(&created, "created")],
-            );
+            let mut lines = vec![workspace_text::workspace_line(&created, "created")];
+            if let Some(BaseRefresh::Failed { reason }) = &created.base_refresh {
+                lines.push(format!(
+                    "base not refreshed, started from the local copy: {reason}"
+                ));
+            }
+            output.success(&created, &lines);
         }
         WorkspaceCommand::List(args) => {
             let list = client
@@ -93,6 +97,7 @@ fn create_params(
         branch: args.branch,
         base: args.base,
         existing_branch: args.existing_branch,
+        refresh_base: args.refresh_base,
         path,
         request_id: args.request_id,
     })

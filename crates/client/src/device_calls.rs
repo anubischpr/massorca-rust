@@ -3,7 +3,7 @@
 
 use massorca_protocol::methods::devices::{
     self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
-    NetworkStatus, PairingCreateParams, PairingCreated,
+    NetworkStatus, PairingCreateParams, PairingCreated, WhoAmI,
 };
 
 use crate::client::Client;
@@ -37,6 +37,11 @@ impl Client {
         params: &DeviceGrantParams,
     ) -> Result<DeviceInfo, ClientError> {
         self.call(devices::GRANT, params).await
+    }
+
+    /// `device.whoami`: the device this connection runs as and its scopes; no device for the local owner.
+    pub async fn device_whoami(&self) -> Result<WhoAmI, ClientError> {
+        self.call(devices::WHOAMI, &()).await
     }
 
     /// `pairing.create`: an offer another device can redeem once, before it expires.
