@@ -26,6 +26,7 @@ mod host_memory;
 mod host_ports;
 mod lifecycle;
 mod network;
+mod network_account_masking;
 mod projects;
 mod reconnect;
 mod registries;

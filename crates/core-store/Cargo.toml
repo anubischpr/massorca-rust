@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Test-only store writes (such as narrowing a device's scopes). Enabled only from other crates' dev-dependencies.
+test-support = []
+
 [dependencies]
 rusqlite.workspace = true
 thiserror.workspace = true

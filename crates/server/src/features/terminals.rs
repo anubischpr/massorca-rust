@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use massorca_core_agents::sign_in::SIGN_IN_SCOPE;
 use massorca_core_terminal::pty::PtySize;
 use massorca_core_terminal::{
     CreateSpec, ExitReason as CoreExitReason, ExitRecord, ShellChoice, TerminalError, TerminalInfo,
@@ -13,13 +14,15 @@ use massorca_protocol::methods::terminals::{
     TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
     TerminalResizeParams, TerminalState,
 };
+use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
+use crate::features::sees_account_details;
 use crate::features::workspace_domain::{blocking, shared};
 use crate::owner::Owner;
-use crate::permission::{Permission, authorize};
+use crate::permission::{Permission, Principal, authorize};
 use crate::registry::RegistrationHandle;
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
@@ -83,6 +86,13 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
     let domain = shared(&ctx);
     let selector = params.workspace;
     let workspace = blocking(move || domain.show_workspace(&selector)).await?;
+    // Its removal stops the terminals it finds, so none may start once it has begun.
+    if workspace.state == WorkspaceState::Removing {
+        return Err(ErrorBody::new(
+            codes::WORKSPACE_NOT_FOUND,
+            format!("workspace `{}` is being removed", workspace.name),
+        ));
+    }
     if workspace.missing {
         return Err(ErrorBody::new(
             codes::PATH_NOT_FOUND,
@@ -123,7 +133,7 @@ async fn list(ctx: RequestCtx, params: TerminalListParams) -> Result<TerminalLis
         .terminals
         .list(workspace_id.as_deref())
         .into_iter()
-        .map(terminal_of)
+        .map(|info| terminal_for(&ctx.principal, info))
         .collect();
     Ok(TerminalList { terminals })
 }
@@ -132,7 +142,7 @@ async fn show(ctx: RequestCtx, params: TerminalRef) -> Result<Terminal, ErrorBod
     ctx.state
         .terminals
         .get(&params.terminal)
-        .map(terminal_of)
+        .map(|info| terminal_for(&ctx.principal, info))
         .map_err(error_of)
 }
 
@@ -238,6 +248,15 @@ pub(crate) fn error_of(error: TerminalError) -> ErrorBody {
         TerminalError::Io(_) => codes::INTERNAL,
     };
     ErrorBody::new(code, error.to_string())
+}
+
+/// A terminal as `principal` may see it: a sign-in terminal's cwd is the account's home, hidden below `workspace`.
+fn terminal_for(principal: &Principal, info: TerminalInfo) -> Terminal {
+    let mut terminal = terminal_of(info);
+    if terminal.workspace_id == SIGN_IN_SCOPE && !sees_account_details(principal) {
+        terminal.cwd = String::new();
+    }
+    terminal
 }
 
 pub(crate) fn terminal_of(info: TerminalInfo) -> Terminal {
