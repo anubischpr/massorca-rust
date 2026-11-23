@@ -16,6 +16,9 @@ pub const SHOW: &str = "task.show";
 pub const UPDATE: &str = "task.update";
 /// Params: [`TaskRef`]. Result: [`Task`]. Refused while the task's agent session runs.
 pub const DONE: &str = "task.done";
+/// Params: [`TaskRef`]. Result: [`Task`], linked to the agent session that runs it. A failed start keeps the task
+/// Open with the reason in `error`.
+pub const START: &str = "task.start";
 /// Params: [`TaskRef`]. Result: [`Task`]. Clears the outcome and error; refused while the agent session runs.
 pub const REOPEN: &str = "task.reopen";
 /// Params: [`TaskRef`]. Result: [`Task`], the removed task. Refused while the agent session runs.
@@ -172,6 +175,15 @@ pub struct Task {
     /// Why the last start failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`, for the sentence a client shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The workspace the last start ran in: the task's own worktree, a linked folder, or the team folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// The branch of the task's own worktree, where its result is; set only for a linked git project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub column: Column,
     pub state: CardState,
     /// The session's terminal cannot be reached, so the state is the last one the agent reported.

@@ -160,7 +160,7 @@ pub struct TerminalEnv<'a> {
     pub massorca_home: Option<&'a str>,
     pub massorca_profile: Option<&'a str>,
     /// Caller variables, applied last; they may override anything set here.
-    pub extra: &'a BTreeMap<String, String>,
+    pub extra: &'a BTreeMap<String, crate::EnvValue>,
 }
 
 /// Variables removed from the inherited environment: colour switches that would
@@ -168,15 +168,24 @@ pub struct TerminalEnv<'a> {
 const REMOVED: [&str; 4] = ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"];
 
 /// The full environment for a terminal's program, sorted by name (0032). Values are never logged.
-pub fn build_environment(base: &EnvSnapshot, terminal: &TerminalEnv) -> Vec<(String, String)> {
-    let mut vars: BTreeMap<String, (String, String)> = BTreeMap::new();
+pub fn build_environment(
+    base: &EnvSnapshot,
+    terminal: &TerminalEnv,
+) -> Vec<(String, crate::EnvValue)> {
+    let mut vars: BTreeMap<String, (String, crate::EnvValue)> = BTreeMap::new();
     for (name, value) in &base.vars {
         if !REMOVED.iter().any(|removed| names_match(removed, name)) {
-            vars.insert(key(name), (name.clone(), value.clone()));
+            vars.insert(
+                key(name),
+                (name.clone(), crate::EnvValue::new(value.clone())),
+            );
         }
     }
     let mut set = |name: &str, value: &str| {
-        vars.insert(key(name), (name.to_owned(), value.to_owned()));
+        vars.insert(
+            key(name),
+            (name.to_owned(), crate::EnvValue::new(value.to_owned())),
+        );
     };
     set("TERM", "xterm-256color");
     set("COLORTERM", "truecolor");
@@ -191,7 +200,7 @@ pub fn build_environment(base: &EnvSnapshot, terminal: &TerminalEnv) -> Vec<(Str
         set("MASSORCA_PROFILE", profile);
     }
     for (name, value) in terminal.extra {
-        set(name, value);
+        set(name, value.as_str());
     }
     vars.into_values().collect()
 }

@@ -1,8 +1,10 @@
 //! `massorca project add|list|show|rm|set-base`: registering, unregistering and setting the base of projects through the service.
 
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectRef, ProjectSetBaseParams,
+    self, Project, ProjectAddParams, ProjectKind, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams,
 };
+use massorca_protocol::methods::workspaces::WorkspaceListParams;
 
 use crate::args::{ProjectAddArgs, ProjectCommand};
 use crate::connect::connect;
@@ -41,13 +43,29 @@ pub async fn execute(
             let shown = client.project_show(&ProjectRef { project }).await?;
             output.success(&shown, &workspace_text::project_details(&shown));
         }
-        ProjectCommand::Rm { project } => {
+        ProjectCommand::Rm {
+            project,
+            forget_workspaces,
+        } => {
             let project = paths.selector(&project)?;
-            let removed: Project = client.project_remove(&ProjectRef { project }).await?;
-            output.success(
-                &removed,
-                &[workspace_text::project_line(&removed, "removed")],
-            );
+            let forgotten = if forget_workspaces {
+                let list = WorkspaceListParams {
+                    project: Some(project.clone()),
+                };
+                Some(client.workspace_list(&list).await?.workspaces.len())
+            } else {
+                None
+            };
+            let params = ProjectRemoveParams {
+                project,
+                forget_workspaces,
+            };
+            let removed: Project = client.call(projects::REMOVE, &params).await?;
+            let mut lines = vec![workspace_text::project_line(&removed, "removed")];
+            if let Some(count) = forgotten {
+                lines.push(workspace_text::forgotten_line(count));
+            }
+            output.success(&removed, &lines);
         }
         ProjectCommand::SetBase {
             project,

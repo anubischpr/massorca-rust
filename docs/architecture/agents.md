@@ -53,7 +53,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
     },
     "result_field": "result"
   },
-  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] }
+  "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"], "strip_env": [] },
+  "permission_modes": [
+    { "id": "careful", "label": "Careful", "args": ["--mode", "careful"] },
+    {
+      "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true,
+      "live_switch": { "type": "input", "text": "/mode wild" }
+    }
+  ],
+  "default_permission_mode": "careful"
 }
 ```
 
@@ -69,6 +77,15 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 - `credentials`: optional. `files` empty means import is unsupported. `files` are plain
   names (no separator, `..`, drive or absolute path). Every declared file is required by
   import: the declaration has no optional flag.
+- `permission_modes` and `default_permission_mode` (decision 0083): optional together. Each
+  mode has the vendor's `id` and `label`, `args` that select it at launch (placed after the
+  kind's own `args`), an optional deterministic `live_switch` typed into a running session,
+  and `bypass` when it lifts the vendor's prompts or sandbox. Ids are unique; the default is
+  one of them and never a bypass mode; a bypass mode has its own `args` or `live_switch`; a
+  mode with neither can only be the default. `may_fall_back` marks a mode the vendor may
+  start another mode in without failing. `default_permission_mode` names the mode the vendor
+  CLI starts in by itself; it is informational, may differ by CLI version, and is never shown
+  as a session's mode. The built-in modes and their sources are in decision 0083.
 
 ## Session record (`AgentSession`)
 
@@ -83,24 +100,30 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
 | `execution` | `{ state: live|unverifiable|exited, exit?: { code?, signal?, reason, at_ms } }` |
 | `activity?` | `{ state: working|waiting|idle|done, outcome?, source: hook|process|output, at_ms }` |
 | `result?` | the last turn's result text (at most 16 KiB) |
+| `permission_mode?` | the mode chosen for the current or last run (decision 0083); absent when no mode was chosen (the vendor's own default) or the kind declares none |
+| `mode_source?` | `vendor_default` (no mode flag was passed) or `chosen`; absent when the kind declares no modes |
+| `mode_confirmed` | true only when the chosen mode was passed as launch arguments, no caller arguments followed, and its vendor never falls back from it; false (omitted) otherwise |
+| `pending_permission_mode?` | a mode `agent.set_mode` stored for the next resume; the running mode is unchanged |
 
 ## Wire
 
-Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
+Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083). Types in
+`crates/protocol/src/methods/agents.rs`.
 
 | Method | Permission | Params | Result |
 |---|---|---|---|
-| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems }] }` |
-| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?` | `AgentSession` |
+| `agent.kinds` | read | — | `{ kinds: [{ id, name, icon, owner, installed (deprecated: = detected), detected, package: { state, id?, version? }, program_path?, resumable, status_mechanism, credentials: { supported, imported }, problems, permission_modes?: [{ id, label, description?, bypass, live_switch, may_fall_back }], default_permission_mode? }] }` |
+| `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
 | `agent.stop` | workspace | `session`, `force?` | `AgentSession` |
 | `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
-| `agent.resume` | workspace | `session` | `AgentSession` |
+| `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
+| `agent.set_mode` | workspace | `session`, `permission_mode`, `force?` | `{ applied: live \| next_resume, session: AgentSession }` (capability `agent-modes/1`) |
 | `agent.hook` | workspace | `session`, `token`, `event`, `payload?` | `null` |
 | `agent.watch` | read | `workspace?`, `session?` | stream: `snapshot { sessions }`, then `changed { session }` |
-| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?` | `AgentSession` (the child), plus `note?` |
+| `agent.delegate` | workspace | `parent`, `prompt`, `kind?`, `name?`, `title?` (default: the first line of `prompt`, at most 80 characters), `read_only?`, `token?`, `request_id?`, `permission_mode?` (the vendor's default when absent, never the parent's) | `AgentSession` (the child), plus `note?` |
 | `agent.tree` | read | `session` | `{ root: AgentSession, children: [AgentSession] }` |
 | `agent.bring_back` | workspace | `child`, `merge?` (default true), `prompt?` (default true), `token?` | `{ child, merged, merge_commit?, prompt_delivered, note? }` |
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
@@ -119,9 +142,52 @@ Errors: `agent.not_found`, `agent.kind_not_found`, `agent.not_installed`,
 `agent.delegate_needs_git`, `agent.depth_exceeded`, `agent.parent_busy`,
 `agent.parent_dirty`, `agent.merge_conflict`, `agent.already_brought_back`,
 `agent.credentials_unsupported`, `agent.credentials_exist`,
-`agent.credentials_invalid`, `agent.account_not_found`.
+`agent.credentials_invalid`, `agent.account_not_found`, `agent.mode_unknown`,
+`agent.mode_unavailable`.
 
 Event bus topic: `agent.changed` (id = session id).
+
+## Permission modes
+
+Decision 0083. When no mode is chosen, no mode flag is passed and nothing is typed: the vendor
+CLI starts in its own default, exactly as if the person ran it, and the session records
+`mode_source: vendor_default` with no `permission_mode`. The kind's `default_permission_mode`
+is informational: it names that vendor default for display only, the vendor's real default may
+differ by CLI version, and it must never be shown as a session's mode. A `vendor_default`
+session is labelled "the CLI's default". A flag is passed only
+for a chosen mode. An id the kind does not declare, or any id for a kind that declares none,
+is refused with `agent.mode_unknown` (data: `kind`, `mode`, `known`). A chosen mode with
+launch `args` is passed after the kind's own arguments; it is `mode_confirmed` unless the mode
+is marked `may_fall_back` or the caller passed arguments after `--`, which may override it. A
+chosen mode with only a live switch is typed at the run's first `idle`, before a held first
+prompt, and stays unconfirmed; for a kind that reports no `idle` it is refused with
+`agent.mode_unavailable`. A delegated child gets the mode its delegation names or the vendor's
+default, never its parent's, so a bypass mode is never inherited. A delegation that carries a run
+token (an agent asking) is refused with `agent.mode_unavailable` when it names a bypass mode:
+a bypass mode is chosen by the person, through `agent.start`. Bypass modes are not gated
+by device scope: the method's own permission applies.
+
+`agent.set_mode` changes a session's mode. While its run is live and the mode declares a live
+switch, the switch is typed into the run's terminal once the run is ready (as a prompt waits,
+`agent.busy` otherwise), and the reply says `applied: live`; the session's mode is the new one,
+`chosen`, with `mode_confirmed` false, since no hook confirms it. A switch does not count as a
+typed prompt, because it starts no turn for a report to answer. A kind with no status mechanism
+cannot say whether its agent is in the middle of a prompt, so a live switch into it needs
+`force: true` and is refused with `agent.mode_unavailable` without it. While a switch is
+typed the run is marked as switching, and every other prompt or switch, forced or not, is
+refused with `agent.busy` until the write is done. Otherwise the mode is stored as
+`pending_permission_mode` for the next resume (`applied: next_resume`), and the running mode
+and its confirmation are left as they are. A mode a resume could not apply (only a live switch,
+on a kind that reports no `idle`) is refused with `agent.mode_unavailable`; a session whose
+kind cannot resume it, and which has no live switch to apply the mode now, with
+`agent.resume_unavailable`. Every change is written to the session row and announced as
+`agent.changed`.
+
+A resume runs in the mode it names, which also ends any wait; else in the pending mode, unless
+that is a bypass mode: a pending bypass is used only by a resume that names it, and until then
+the run gets the vendor's default and the bypass stays pending; else in the last chosen mode
+unless that is a bypass mode; else in the vendor's default. A bypass mode is never carried into
+a new run without being named again.
 
 ## Run environment
 

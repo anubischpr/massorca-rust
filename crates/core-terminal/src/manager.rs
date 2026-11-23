@@ -104,7 +104,7 @@ pub struct CreateSpec {
     /// `None` starts the default shell.
     pub shell: Option<ShellChoice>,
     /// Added to the environment last; may override anything.
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, crate::EnvValue>,
     pub size: PtySize,
     pub title: Option<String>,
     /// A repeated id returns the first terminal instead of starting another.
@@ -1238,15 +1238,16 @@ mod tests {
             crate::shell::EnvSnapshot::current(),
             "0.0.0-test",
         ));
+        // A program that prints nothing, so the output reader rarely holds the lock when the probe looks.
         let shell = if cfg!(windows) {
             ShellChoice {
                 program: "cmd.exe".to_owned(),
-                args: vec!["/d".to_owned()],
+                args: ["/d", "/c", "pause >nul"].map(str::to_owned).to_vec(),
             }
         } else {
             ShellChoice {
-                program: "sh".to_owned(),
-                args: Vec::new(),
+                program: "sleep".to_owned(),
+                args: vec!["30".to_owned()],
             }
         };
         let info = manager
@@ -1318,13 +1319,21 @@ mod tests {
             })
             .expect("create the terminal");
 
-        LOCK_FREE_AT_SERIALIZE.with(|free| free.set(None));
-        let attachment = manager
-            .attach(&info.id, None, super::QueryAnswers::Service)
-            .expect("attach");
-
-        assert_eq!(LOCK_FREE_AT_SERIALIZE.with(Cell::get), Some(true));
-        drop(attachment);
+        // The reader thread may hold the lock for a moment; attach holding it itself would fail every attempt.
+        let mut seen = Vec::new();
+        for _ in 0..20 {
+            LOCK_FREE_AT_SERIALIZE.with(|free| free.set(None));
+            let attachment = manager
+                .attach(&info.id, None, super::QueryAnswers::Service)
+                .expect("attach");
+            drop(attachment);
+            let free = LOCK_FREE_AT_SERIALIZE.with(Cell::get);
+            seen.push(free);
+            if free == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(seen.last().copied().flatten(), Some(true), "{seen:?}");
         manager.kill(&info.id, true).expect("kill");
     }
 

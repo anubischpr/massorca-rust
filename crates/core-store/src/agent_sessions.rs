@@ -62,6 +62,17 @@ pub struct StoredActivity {
     pub at: i64,
 }
 
+/// The permission mode of a session's current or last run (decision 0083).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunMode {
+    /// The mode chosen for the run; `None` when the vendor's own default applies or the kind has no modes.
+    pub permission_mode: Option<String>,
+    /// `vendor_default` or `chosen`; `None` when the kind declares no modes.
+    pub source: Option<String>,
+    /// The mode was passed as launch arguments that nothing can override, to a mode its vendor never falls back from.
+    pub confirmed: bool,
+}
+
 /// One row of `agent_sessions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionRow {
@@ -82,9 +93,13 @@ pub struct AgentSessionRow {
     pub brought_back_at: Option<i64>,
     /// The current or last run received vault secrets (decision 0071), or descends from one that did.
     pub holds_secrets: bool,
+    /// The current or last run's permission mode (decision 0083).
+    pub mode: RunMode,
+    /// A mode `agent.set_mode` chose for the next resume, kept apart from the running one.
+    pub pending_permission_mode: Option<String>,
 }
 
-const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets FROM agent_sessions";
+const SELECT_SESSIONS: &str = "SELECT id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode FROM agent_sessions";
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
     let exit = match row.get::<_, Option<RunExitReason>>("exit_reason")? {
@@ -123,6 +138,12 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<AgentSessionRow> {
         result: row.get("result")?,
         brought_back_at: row.get("brought_back_at")?,
         holds_secrets: row.get("holds_secrets")?,
+        mode: RunMode {
+            permission_mode: row.get("permission_mode")?,
+            source: row.get("mode_source")?,
+            confirmed: row.get("mode_confirmed")?,
+        },
+        pending_permission_mode: row.get("pending_permission_mode")?,
     })
 }
 
@@ -133,7 +154,7 @@ impl Store {
         let exit = row.exit.as_ref();
         let activity = row.activity.as_ref();
         self.lock().execute(
-            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            "INSERT INTO agent_sessions (id, kind, workspace_id, parent_id, title, read_only, agent_ref, terminal_id, request_id, created_at, exit_code, exit_signal, exit_reason, exited_at, activity, activity_outcome, activity_source, activity_at, result, brought_back_at, holds_secrets, permission_mode, mode_source, mode_confirmed, pending_permission_mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 row.id,
                 row.kind,
@@ -155,7 +176,11 @@ impl Store {
                 activity.map(|activity| activity.at),
                 row.result,
                 row.brought_back_at,
-                row.holds_secrets
+                row.holds_secrets,
+                row.mode.permission_mode,
+                row.mode.source,
+                row.mode.confirmed,
+                row.pending_permission_mode
             ],
         )?;
         Ok(())
@@ -246,16 +271,27 @@ impl Store {
     /// Starts a new run of an exited session (0054): the row names the new run's terminal, and its exit and activity are
     /// cleared, so the activity starts absent until the agent reports. The result and the agent ref stay. One statement,
     /// so a reader never sees the exit cleared with the old terminal. `holds_secrets` can only set the mark, never clear it
-    /// (decision 0071). Returns whether an exited row changed.
+    /// (decision 0071). The new run's permission mode replaces the stored one, and `pending` is the mode still waiting for a
+    /// later resume, if any (decision 0083). Returns whether an exited row changed.
     pub fn restart_agent_session(
         &self,
         id: &str,
         terminal_id: &str,
         holds_secrets: bool,
+        mode: &RunMode,
+        pending: Option<&str>,
     ) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
-            params![id, terminal_id, holds_secrets],
+            "UPDATE agent_sessions SET terminal_id = ?2, holds_secrets = (holds_secrets OR ?3), permission_mode = ?4, mode_source = ?5, mode_confirmed = ?6, pending_permission_mode = ?7, exit_code = NULL, exit_signal = NULL, exit_reason = NULL, exited_at = NULL, activity = NULL, activity_outcome = NULL, activity_source = NULL, activity_at = NULL WHERE id = ?1 AND exit_reason IS NOT NULL",
+            params![
+                id,
+                terminal_id,
+                holds_secrets,
+                mode.permission_mode,
+                mode.source,
+                mode.confirmed,
+                pending
+            ],
         )?;
         Ok(changed > 0)
     }
@@ -280,6 +316,30 @@ impl Store {
                 result,
                 agent_ref_if_unset
             ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Records the mode the current run was switched to (decision 0083), which also ends a wait for the next resume.
+    /// Returns whether a row matched.
+    pub fn set_agent_session_mode(&self, id: &str, mode: &RunMode) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET permission_mode = ?2, mode_source = ?3, mode_confirmed = ?4, pending_permission_mode = NULL WHERE id = ?1",
+            params![id, mode.permission_mode, mode.source, mode.confirmed],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Records the mode the next resume launches in, or clears it, leaving the running mode alone (decision 0083).
+    /// Returns whether a row matched.
+    pub fn set_agent_session_pending_mode(
+        &self,
+        id: &str,
+        pending: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET pending_permission_mode = ?2 WHERE id = ?1",
+            params![id, pending],
         )?;
         Ok(changed > 0)
     }

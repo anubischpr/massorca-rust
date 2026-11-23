@@ -38,6 +38,8 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             state: WorkspaceState::Ready,
             missing: false,
             created_at_ms: 1,
+            locked: None,
+            prunable: None,
         }],
     }]
 }

@@ -1,8 +1,8 @@
 //! Human-readable lines for agent kinds and sessions.
 
 use massorca_protocol::methods::agents::{
-    Activity, ActivitySource, ActivityState, AgentKind, AgentSession, AgentTree, BringBackResult,
-    Execution, Outcome, PackageState,
+    Activity, ActivitySource, ActivityState, AgentKind, AgentModeSet, AgentSession, AgentTree,
+    BringBackResult, Execution, ModeApplied, ModeSource, Outcome, PackageState,
 };
 
 use crate::terminal;
@@ -31,12 +31,42 @@ pub fn kinds_lines(kinds: &[AgentKind]) -> Vec<String> {
         &["ID", "NAME", "OWNER", "INSTALLED", "DETECTED", "PATH"],
         rows,
     );
+    for kind in kinds
+        .iter()
+        .filter(|kind| !kind.permission_modes.is_empty())
+    {
+        lines.push(format!("modes: {}: {}", kind.id, modes_text(kind)));
+    }
     for kind in kinds {
         for problem in &kind.problems {
             lines.push(format!("problem: {}: {problem}", kind.id));
         }
     }
     lines
+}
+
+/// `id (Label, default, bypass, live, may fall back)` for each mode, in declared order (decision 0083).
+fn modes_text(kind: &AgentKind) -> String {
+    kind.permission_modes
+        .iter()
+        .map(|mode| {
+            let mut marks = vec![mode.label.as_str()];
+            if kind.default_permission_mode.as_deref() == Some(mode.id.as_str()) {
+                marks.push("default");
+            }
+            if mode.bypass {
+                marks.push("bypass");
+            }
+            if mode.live_switch {
+                marks.push("live");
+            }
+            if mode.may_fall_back {
+                marks.push("may fall back");
+            }
+            format!("{} ({})", mode.id, marks.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The package state of a kind, `unknown` for a value this build does not know.
@@ -70,6 +100,20 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
     }
+    if let Some(mode) = &session.permission_mode {
+        // A mode no launch argument carried is only requested until something confirms it (decision 0083).
+        let state = if session.mode_confirmed {
+            ""
+        } else {
+            " (requested)"
+        };
+        lines.push(format!("mode: {mode}{state}"));
+    } else if session.mode_source == Some(ModeSource::VendorDefault) {
+        lines.push("mode: the CLI's default".to_owned());
+    }
+    if let Some(pending) = &session.pending_permission_mode {
+        lines.push(format!("next resume mode: {pending}"));
+    }
     if session.read_only {
         lines.push("read only: yes".to_owned());
     }
@@ -85,6 +129,28 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
     if session.brought_back_at_ms.is_some() {
         lines.push("brought back: yes".to_owned());
     }
+    lines
+}
+
+/// What `agent mode` did: when the mode applies, then the session.
+pub fn mode_set_lines(set: &AgentModeSet) -> Vec<String> {
+    let session = &set.session;
+    let applied = match set.applied {
+        ModeApplied::Live => format!(
+            "switched to {} in the running session (requested: no hook confirms it)",
+            session.permission_mode.as_deref().unwrap_or_default()
+        ),
+        ModeApplied::NextResume => format!(
+            "{} applies at the next resume",
+            session
+                .pending_permission_mode
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        ModeApplied::Unknown => "mode set".to_owned(),
+    };
+    let mut lines = vec![applied];
+    lines.extend(session_details(session));
     lines
 }
 

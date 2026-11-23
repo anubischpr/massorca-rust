@@ -3,7 +3,8 @@
 //! It prints `fake-agent: ...` lines, takes prompts from its arguments and then from
 //! stdin, and reports its activity through `massorca agent hook` when `MASSORCA_BIN`
 //! names that program. It prints whether a credential file exists, never its contents, and whether the
-//! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values.
+//! variables `FAKE_AGENT_PROBE_ENV` names are set, never their values. It prints the permission mode it was started in
+//! (`--mode <id>`) and every live switch it reads (`/mode <id>`, decision 0083), so tests can see which reached it.
 
 use std::env;
 use std::ffi::OsString;
@@ -55,6 +56,9 @@ const OFFLINE_MARK: &str = r#""offline":true"#;
 /// The identity `whoami` reports for a token that names none.
 const DEFAULT_IDENTITY: &str = "fake@example.com";
 
+/// A stdin line starting with this switches the permission mode; the rest of the line is the mode.
+const MODE_SWITCH: &str = "/mode ";
+
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
 
@@ -85,6 +89,12 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "crash" => return ExitCode::from(CRASH_EXIT_CODE),
+            text if text.starts_with(MODE_SWITCH) => {
+                say(&format!(
+                    "mode switched {}",
+                    text[MODE_SWITCH.len()..].trim()
+                ));
+            }
             text => {
                 if let Flow::Finish(code) = agent.handle_prompt(text, &mut input) {
                     return code;
@@ -95,12 +105,13 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [PROMPT WORDS...]`. The flags
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [PROMPT WORDS...]`. The flags
 /// count only before the first prompt word; every later word belongs to the prompt.
 #[derive(Debug, Default)]
 struct Arguments {
     session_id: Option<String>,
     resume: Option<String>,
+    mode: Option<String>,
     prompt: Option<String>,
 }
 
@@ -112,6 +123,7 @@ impl Arguments {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
+                "--mode" if words.is_empty() => parsed.mode = args.next(),
                 _ => words.push(arg),
             }
         }
@@ -157,6 +169,9 @@ impl Agent {
         }
         if let Some(id) = &arguments.resume {
             say(&format!("resumed {id}"));
+        }
+        if let Some(mode) = &arguments.mode {
+            say(&format!("mode {mode}"));
         }
         say(if credentials_found() {
             "credentials found"

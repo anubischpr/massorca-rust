@@ -16,13 +16,14 @@ mod store;
 mod tasks;
 mod team_memory;
 mod team_projects;
+mod team_routines;
 mod teams;
 mod workspaces;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
-pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, StoredActivity};
+pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity};
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;
@@ -31,9 +32,10 @@ pub use projects::{ProjectKind, ProjectRow};
 pub use secret_key_check::SecretKeyCheck;
 pub use secrets::{SecretLinkRow, SecretMeta, SecretRequestRow, SecretRow};
 pub use store::Store;
-pub use tasks::{TaskOrigin, TaskOutcome, TaskRow};
+pub use tasks::{TaskDetails, TaskOrigin, TaskOutcome, TaskRow};
 pub use team_memory::TeamMemoryRow;
 pub use team_projects::TeamProjectRow;
+pub use team_routines::{TeamRoutineRow, TeamRoutineRunRow};
 pub use teams::TeamRow;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
 

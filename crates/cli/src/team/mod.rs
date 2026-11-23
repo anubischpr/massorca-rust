@@ -1,6 +1,9 @@
-//! `massorca team ...`: teams, their bots, projects and memory, and their Boards (decision 0072).
+//! `massorca team ...`: teams, their bots, projects, memory and routines, and their Boards (decision 0072).
 
+mod routine;
 mod text;
+
+use routine::RoutineCommand;
 
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
@@ -53,6 +56,11 @@ pub enum TeamCommand {
     Memory {
         #[command(subcommand)]
         command: TeamMemoryCommand,
+    },
+    /// Lists, adds, changes, pauses, runs and removes a team's routines: schedules that start a bot on a task.
+    Routine {
+        #[command(subcommand)]
+        command: RoutineCommand,
     },
     /// Shows a team's Board: its tasks in four columns, or only one project's.
     Board {
@@ -169,6 +177,9 @@ pub struct TeamProjectAddArgs {
     /// What the project is for.
     #[arg(long, value_name = "TEXT")]
     pub goal: Option<String>,
+    /// The Workspaces project (id, name or path) the code comes from.
+    #[arg(long, value_name = "PROJECT")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -265,6 +276,9 @@ pub struct TeamProjectUpdateArgs {
     /// New Brief of the project. An empty value clears it.
     #[arg(long, value_name = "TEXT")]
     pub brief: Option<String>,
+    /// The Workspaces project (id, name or path) the code comes from. An empty value clears it.
+    #[arg(long, value_name = "PROJECT")]
+    pub source: Option<String>,
 }
 
 /// Runs one `team` subcommand against the service of `profile`.
@@ -315,6 +329,7 @@ pub async fn execute(
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
         TeamCommand::Memory { command } => run_memory(&client, command, output).await?,
+        TeamCommand::Routine { command } => routine::run(&client, command, output).await?,
         TeamCommand::Board { team, project } => {
             let board = client.team_board(&BoardParams { team, project }).await?;
             output.success(&board, &text::board_lines(&board));
@@ -404,6 +419,7 @@ async fn run_project(
                     name: args.name,
                     goal: args.goal,
                     brief: args.brief,
+                    source_project: args.source,
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "updated")]);
@@ -421,6 +437,7 @@ async fn run_project(
                     name: args.name,
                     goal: args.goal,
                     brief: None,
+                    source_project: args.source,
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "added")]);

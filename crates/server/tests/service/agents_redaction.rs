@@ -3,8 +3,8 @@
 //! started: the sessions are written to the store directly, as ended runs.
 
 use massorca_core_store::{
-    AgentSessionRow, ProjectKind, ProjectRow, RunExit, RunExitReason, Store, WorkspaceKind,
-    WorkspaceRow, WorkspaceState, new_id, now_ms,
+    AgentSessionRow, ProjectKind, ProjectRow, RunExit, RunExitReason, RunMode, Store,
+    WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, now_ms,
 };
 use massorca_protocol::methods::agents::{
     self, AgentSession, AgentSessionList, AgentSessionRef, AgentWatchEvent, AgentWatchParams,
@@ -64,6 +64,8 @@ fn seed(store: &Store) -> (String, String) {
         result: Some(RESULT.to_owned()),
         brought_back_at: None,
         holds_secrets,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
     };
     let (marked, plain) = (row(true), row(false));
     store.insert_agent_session(&marked).expect("marked session");

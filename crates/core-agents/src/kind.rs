@@ -43,6 +43,54 @@ pub struct KindDecl {
     /// Sign-in, check and sign-out of the kind's accounts (decision 0059); absent means the kind has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounts: Option<AccountsDecl>,
+    /// The permission modes the vendor documents (decision 0083); empty means the kind declares none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_modes: Vec<PermissionModeDecl>,
+    /// The mode a run gets when its caller names none. Required with modes, never a `bypass` mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_permission_mode: Option<String>,
+}
+
+/// One permission mode of a kind (decision 0083): how it is passed at launch, and how a running session switches to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionModeDecl {
+    /// The vendor's own spelling of the mode (`acceptEdits`, `accept-edits`): 1 to 32 letters, digits and `-`.
+    pub id: String,
+    /// The vendor's name for the mode.
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Launch arguments that select the mode, after the kind's own. Empty means the mode has no launch flag.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// How a running session switches to the mode, when the vendor documents a deterministic way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_switch: Option<LiveSwitchDecl>,
+    /// The mode lifts the vendor's permission prompts or sandbox: never the default, and never kept without being named.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+    /// The vendor documents that a run asked for this mode may start in another one without failing, so launch
+    /// arguments never confirm it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_fall_back: bool,
+}
+
+/// How a live switch reaches the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LiveSwitchType {
+    /// The text is typed into the run's terminal, then the kind's submit sequence.
+    Input,
+}
+
+/// A live switch: `{ "type": "input", "text": "/command mode" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveSwitchDecl {
+    #[serde(rename = "type")]
+    pub kind: LiveSwitchType,
+    pub text: String,
 }
 
 fn default_icon() -> String {
@@ -234,6 +282,18 @@ impl KindDecl {
             .is_some_and(|credentials| !credentials.files.is_empty())
     }
 
+    /// The declared mode `id`.
+    pub fn permission_mode(&self, id: &str) -> Option<&PermissionModeDecl> {
+        self.permission_modes.iter().find(|mode| mode.id == id)
+    }
+
+    /// The mode a run gets when its caller names none.
+    pub fn default_mode(&self) -> Option<&PermissionModeDecl> {
+        self.default_permission_mode
+            .as_deref()
+            .and_then(|id| self.permission_mode(id))
+    }
+
     /// Every rule the declaration breaks; empty when it is valid.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
@@ -279,7 +339,67 @@ impl KindDecl {
         if let Some(accounts) = &self.accounts {
             accounts_problems(self.credentials.as_ref(), accounts, &mut problems);
         }
+        self.mode_problems(&mut problems);
         problems
+    }
+
+    fn mode_problems(&self, problems: &mut Vec<String>) {
+        let mut seen = std::collections::HashSet::new();
+        for mode in &self.permission_modes {
+            let field = format!("permission_modes {:?}", mode.id);
+            if !valid_mode_id(&mode.id) {
+                problems.push(format!(
+                    "{field}: id must be 1 to {MAX_ID_LEN} characters of letters, digits and -"
+                ));
+            }
+            if !seen.insert(mode.id.as_str()) {
+                problems.push(format!("{field}: the id is declared twice"));
+            }
+            if mode.label.trim().is_empty() {
+                problems.push(format!("{field}: label must not be empty"));
+            }
+            no_placeholder(&format!("{field}.args"), &mode.args, problems);
+            if let Some(switch) = &mode.live_switch
+                && (switch.text.trim().is_empty() || switch.text.chars().any(char::is_control))
+            {
+                problems.push(format!(
+                    "{field}: live_switch.text must be one line of text without control characters"
+                ));
+            }
+            let selectable = !mode.args.is_empty() || mode.live_switch.is_some();
+            if mode.bypass && !selectable {
+                problems.push(format!(
+                    "{field}: a bypass mode needs its own args or live_switch"
+                ));
+            }
+            if !selectable && self.default_permission_mode.as_deref() != Some(mode.id.as_str()) {
+                problems.push(format!(
+                    "{field}: a mode with no args and no live_switch can only be the default"
+                ));
+            }
+        }
+        match (
+            &self.default_permission_mode,
+            self.permission_modes.is_empty(),
+        ) {
+            (None, false) => {
+                problems
+                    .push("default_permission_mode is required with permission_modes".to_owned());
+            }
+            (Some(_), true) => {
+                problems.push("default_permission_mode needs permission_modes".to_owned());
+            }
+            (Some(id), false) => match self.permission_mode(id) {
+                None => problems.push(format!(
+                    "default_permission_mode {id:?} is not one of the permission_modes"
+                )),
+                Some(mode) if mode.bypass => problems.push(format!(
+                    "default_permission_mode {id:?} is a bypass mode, which is never the default"
+                )),
+                Some(_) => {}
+            },
+            (None, true) => {}
+        }
     }
 
     fn prompt_problems(&self, problems: &mut Vec<String>) {
@@ -387,6 +507,14 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// A mode id: the vendor's own spelling (`acceptEdits`, `accept-edits`), `[A-Za-z0-9-]{1,32}`.
+pub fn valid_mode_id(id: &str) -> bool {
+    (1..=MAX_ID_LEN).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn valid_program(program: &str) -> bool {
@@ -754,5 +882,170 @@ mod tests {
         }));
         assert!(kind.problems().is_empty(), "{:?}", kind.problems());
         assert!(!kind.accounts_supported());
+    }
+    fn with_modes(modes: serde_json::Value, default: Option<&str>) -> Vec<String> {
+        problems_of(|value| {
+            value["permission_modes"] = modes.clone();
+            if let Some(default) = default {
+                value["default_permission_mode"] = serde_json::json!(default);
+            }
+        })
+    }
+
+    fn two_modes() -> serde_json::Value {
+        serde_json::json!([
+            { "id": "careful", "label": "Careful", "args": ["--mode", "careful"] },
+            {
+                "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true,
+                "live_switch": { "type": "input", "text": "/mode wild" }
+            }
+        ])
+    }
+
+    #[test]
+    fn declared_modes_with_a_default_that_is_not_bypass_are_valid() {
+        assert!(with_modes(two_modes(), Some("careful")).is_empty());
+        let kind = parse(serde_json::json!({
+            "id": "fake", "name": "Fake", "program": ["fake-agent"],
+            "permission_modes": two_modes(), "default_permission_mode": "careful"
+        }));
+        assert_eq!(
+            kind.default_mode().map(|mode| mode.id.as_str()),
+            Some("careful")
+        );
+        let wild = kind.permission_mode("wild").unwrap();
+        assert!(wild.bypass);
+        assert_eq!(
+            wild.live_switch,
+            Some(LiveSwitchDecl {
+                kind: LiveSwitchType::Input,
+                text: "/mode wild".to_owned()
+            })
+        );
+        assert!(
+            parse(minimal()).permission_modes.is_empty(),
+            "a kind may declare none"
+        );
+    }
+
+    #[test]
+    fn mode_ids_are_unique_and_the_default_is_one_of_them() {
+        let twice = with_modes(
+            serde_json::json!([
+                { "id": "a", "label": "A", "args": ["-a"] },
+                { "id": "a", "label": "A again", "args": ["-b"] }
+            ]),
+            Some("a"),
+        );
+        assert!(
+            twice.iter().any(|p| p.contains("declared twice")),
+            "{twice:?}"
+        );
+        let missing = with_modes(two_modes(), Some("other"));
+        assert!(
+            missing.iter().any(|p| p.contains("not one of")),
+            "{missing:?}"
+        );
+        let none = with_modes(two_modes(), None);
+        assert!(none.iter().any(|p| p.contains("is required")), "{none:?}");
+        let orphan = problems_of(|value| value["default_permission_mode"] = serde_json::json!("a"));
+        assert!(
+            orphan.iter().any(|p| p.contains("needs permission_modes")),
+            "{orphan:?}"
+        );
+        let bad_id = with_modes(
+            serde_json::json!([{ "id": "a b", "label": "A", "args": ["-a"] }]),
+            Some("a b"),
+        );
+        assert!(
+            bad_id.iter().any(|p| p.contains("id must be")),
+            "{bad_id:?}"
+        );
+    }
+
+    #[test]
+    fn the_default_is_never_a_bypass_mode() {
+        let problems = with_modes(two_modes(), Some("wild"));
+        assert!(
+            problems.iter().any(|p| p.contains("bypass mode")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_mode_must_be_selectable_and_its_switch_one_clean_line() {
+        let bypass = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe" },
+                { "id": "open", "label": "Open", "bypass": true }
+            ]),
+            Some("safe"),
+        );
+        assert!(
+            bypass.iter().any(|p| p.contains("needs its own args")),
+            "{bypass:?}"
+        );
+        let unselectable = with_modes(
+            serde_json::json!([
+                { "id": "safe", "label": "Safe", "args": ["-s"] },
+                { "id": "quiet", "label": "Quiet" }
+            ]),
+            Some("safe"),
+        );
+        assert!(
+            unselectable
+                .iter()
+                .any(|p| p.contains("can only be the default")),
+            "{unselectable:?}"
+        );
+        let control = with_modes(
+            serde_json::json!([{
+                "id": "safe", "label": "Safe",
+                "live_switch": { "type": "input", "text": "/mode safe[A" }
+            }]),
+            Some("safe"),
+        );
+        assert!(
+            control.iter().any(|p| p.contains("live_switch.text")),
+            "{control:?}"
+        );
+        let label = with_modes(
+            serde_json::json!([{ "id": "safe", "label": " ", "args": ["-s"] }]),
+            Some("safe"),
+        );
+        assert!(label.iter().any(|p| p.contains("label")), "{label:?}");
+        let placeholder = with_modes(
+            serde_json::json!([{ "id": "safe", "label": "S", "args": ["{ref}"] }]),
+            Some("safe"),
+        );
+        assert!(
+            placeholder.iter().any(|p| p.contains("args")),
+            "{placeholder:?}"
+        );
+    }
+
+    #[test]
+    fn a_mode_may_say_that_the_vendor_falls_back_from_it() {
+        let mut value = minimal();
+        value["permission_modes"] = serde_json::json!([
+            { "id": "auto", "label": "Auto", "args": ["--auto"], "may_fall_back": true },
+            { "id": "plan", "label": "Plan", "args": ["--plan"] }
+        ]);
+        value["default_permission_mode"] = serde_json::json!("auto");
+        let kind = parse(value);
+        assert!(kind.problems().is_empty(), "{:?}", kind.problems());
+        assert!(kind.permission_mode("auto").unwrap().may_fall_back);
+        assert!(!kind.permission_mode("plan").unwrap().may_fall_back);
+    }
+
+    #[test]
+    fn an_unknown_live_switch_type_or_mode_field_does_not_parse() {
+        let mut value = minimal();
+        value["permission_modes"] = serde_json::json!([{
+            "id": "a", "label": "A", "live_switch": { "type": "keys", "text": "x" }
+        }]);
+        assert!(KindDecl::from_json(&value.to_string()).is_err());
+        value["permission_modes"] = serde_json::json!([{ "id": "a", "label": "A", "flag": "-a" }]);
+        assert!(KindDecl::from_json(&value.to_string()).is_err());
     }
 }

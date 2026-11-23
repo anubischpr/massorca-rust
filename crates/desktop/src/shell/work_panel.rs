@@ -202,14 +202,26 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reveal_terminal(workspace, terminal, cx);
+        if let Some(view) = self.terminal_views.get(terminal) {
+            let focus = view.surface.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// Selects `terminal` in `workspace`'s strip and attaches its view when it has none, without
+    /// moving the focus. The tab shows once the store lists the terminal.
+    pub(super) fn reveal_terminal(
+        &mut self,
+        workspace: &str,
+        terminal: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.model.select_terminal(workspace, terminal);
         self.terminal_notice = None;
         if !self.terminal_views.contains_key(terminal) {
             self.attach_view(workspace, terminal, cx);
-        }
-        if let Some(view) = self.terminal_views.get(terminal) {
-            let focus = view.surface.read(cx).focus_handle().clone();
-            window.focus(&focus, cx);
         }
         cx.notify();
     }

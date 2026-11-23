@@ -475,6 +475,10 @@ pub(crate) mod fixtures {
             result: None,
             holds_secrets: false,
             secrets_withheld: None,
+            permission_mode: None,
+            mode_confirmed: false,
+            mode_source: None,
+            pending_permission_mode: None,
         }
     }
 
@@ -500,6 +504,8 @@ pub(crate) mod fixtures {
                 imported: false,
             },
             problems: Vec::new(),
+            permission_modes: Vec::new(),
+            default_permission_mode: None,
         }
     }
 
@@ -528,6 +534,8 @@ pub(crate) mod fixtures {
             state: WorkspaceState::Ready,
             missing: false,
             created_at_ms: created,
+            locked: None,
+            prunable: None,
         }
     }
 

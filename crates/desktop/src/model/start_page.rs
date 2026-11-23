@@ -21,6 +21,38 @@ pub const NOT_CONNECTED: &str = "The service is not connected.";
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
 
+/// Where a session started from the page opens: as a Conversation in the Canvas, or as the agent's
+/// own terminal in the Work panel (D-AG-01, pv96). Chat is the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StartMode {
+    #[default]
+    Chat,
+    Terminal,
+}
+
+impl StartMode {
+    /// The switch's segment for this mode.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Chat => 0,
+            Self::Terminal => 1,
+        }
+    }
+
+    /// The mode of the switch's segment `index`; anything past Chat is Terminal.
+    pub fn from_index(index: usize) -> Self {
+        if index == 0 {
+            Self::Chat
+        } else {
+            Self::Terminal
+        }
+    }
+}
+
+/// The note under the composer while Terminal is chosen (WS-40).
+pub const TERMINAL_NOTE: &str =
+    "The agent opens in a Work panel terminal. Some features are limited there.";
+
 /// The key hints under the composer, each key with what it does (D-AG-01).
 pub const KEY_HINTS: [(&str, &str); 4] = [
     ("Enter", "send"),
@@ -89,6 +121,7 @@ pub fn start_params(workspace: &str, kind: &str, prompt: &str) -> AgentStartPara
         cols: Some(NEW_TERMINAL_COLS),
         rows: Some(NEW_TERMINAL_ROWS),
         request_id: None,
+        permission_mode: None,
     }
 }
 
@@ -229,6 +262,14 @@ mod tests {
             send_reason(true, true, Some(&starting)).as_deref(),
             Some("Starting Claude on This PC")
         );
+    }
+
+    #[test]
+    fn chat_is_the_default_mode_and_each_segment_has_its_mode() {
+        assert_eq!(StartMode::default(), StartMode::Chat);
+        for mode in [StartMode::Chat, StartMode::Terminal] {
+            assert_eq!(StartMode::from_index(mode.index()), mode);
+        }
     }
 
     #[test]

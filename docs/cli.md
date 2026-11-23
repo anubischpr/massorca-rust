@@ -57,10 +57,11 @@ machine.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
-| `pair offer [--admin] [--ttl <SECS>]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. `--admin` adds `host-admin` and `device-admin`. |
+| `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
 | `device revoke <DEVICE>` | Revokes a device by id, or by name when that is unique. Its connections close at once and it is refused afterwards. |
+| `device grant <DEVICE>` | Gives a paired device full access, every scope, from its next connection, so a reduced device does not have to pair again. Needs host-admin. A revoked device is refused with `device.revoked`. |
 | `device forget <DEVICE>` | Removes a revoked device from `device list`. Takes the id, or a name that exactly one revoked device has. Needs host-admin. An active device is refused with `device.not_revoked`. A forgotten device stays refused: its key is no longer known. |
 | `device whoami` | Shows the principal this command runs as, its scopes and its device. |
 | `server status` | Shows the listeners, the server pin, the active devices and the pending offers. Without `--host`, also this computer's Tailscale state. |
@@ -72,17 +73,18 @@ machine.
 | `host memory` | Shows the memory of the service and of each live terminal's processes (agent runs included), read on the host that runs them: the total, the service, then one row per terminal with its workspace, agent session, process count and memory. Working set on Windows, resident set on Linux and macOS (decision 0081). Sizes use binary units: `N KB` under 1 MiB, `x.y MB` under 1 GiB, `x.yz GB` above. A size that rounds up to the next unit is shown in it (`1.0 MB`, not `1024 KB`). Processes that could not be read are counted, not added. A terminal counts its session on Linux and its parent tree on macOS, so a process that started its own session (Linux) or was reparented away (macOS) is not counted (decision 0081, D6). A terminal whose processes cannot be listed or read shows `-` and `unverifiable` instead of a size and is not in the total. A terminal with some processes read and some not shows its size with `(partial)`: that size covers only the processes read, the total counts it so, and a line says how many terminals are partial. Works with `--host`. A service that cannot be reached or is lost mid-call (`service.unavailable`, `service.disconnected`, `host.unreachable`, `client.io`) prints `unverifiable` (`memory.unverifiable`) and exits 4, never a size; other failures, such as `host.identity_mismatch` or a refused handshake, keep their own code. |
 | `host ports` | Shows the TCP ports that the processes of each live terminal listen on, read on the host that runs them (decision 0081): one row per listening socket with its port, bind address, process (name and pid), workspace and agent session. A terminal whose ports cannot be listed or read shows `unverifiable` and lists no port; a terminal with some processes unread is `partial`, and a line counts such terminals, since its list may miss ports. A host whose socket table cannot be read exits 4 with `ports.unverifiable`, never an empty list. Works with `--host`. A service that cannot be reached or is lost mid-call prints `unverifiable` (`ports.unverifiable`) and exits 4; other failures keep their own code. macOS reads no socket table yet, so `host ports` is unverifiable there. |
 | `host add-ssh <SSH-TARGET> --binary <PATH> [--name <HOST>] [--listen <ADDR>]... [--ssh-arg <ARG>]... [--device-name <NAME>]` | Installs or upgrades massorca on a Linux x86_64 or aarch64 host over SSH, as a systemd user unit, then pairs with it. Progress goes to stderr. A host that already exists is upgraded and not paired again. `--ssh-arg` takes one option per flag: `--ssh-arg -p --ssh-arg 2222`. |
-| `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Problems follow the table. |
-| `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. Prints the session. |
+| `agent kinds` | Lists the agent kinds: id, name, owner, package state (`installed`), whether a program resolves (`detected`: `yes`, `no` or `invalid`) and the resolved path. Then one `modes:` line per kind that declares permission modes: each mode's id and label, marked `default` (the vendor CLI's own default), `bypass` (lifts the vendor's prompts or sandbox), `live` (switches in a running session) and `may fall back` (the vendor may start in another mode without failing). Problems follow. |
+| `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
 | `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
 | `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
-| `agent resume <SESSION>` | Starts a new run of an exited session with the kind's resume arguments, in a new terminal. The session keeps its id and agent ref. |
+| `agent resume <SESSION> [--mode MODE]` | Starts a new run of an exited session with the kind's resume arguments, in a new terminal. The session keeps its id and agent ref. The run is in MODE; without it, in the mode `agent mode` set for this resume unless that is a bypass mode (a pending bypass is used only with `--mode`), else the last chosen mode unless it was a bypass mode, else the vendor's own default. |
+| `agent mode <SESSION> <MODE> [--force]` | Switches the session's permission mode. A kind that reports no activity cannot say whether its agent is mid-prompt, so a live switch into it needs `--force`; without it the switch fails with `agent.mode_unavailable`. Where the kind declares a live switch and the run is live, types it into the run once the agent is ready and prints `switched to MODE in the running session`; no hook confirms it, so the mode shows as requested. Otherwise prints `MODE applies at the next resume`, shows it as `next resume mode: MODE`, and leaves the running mode as it is. Fails with `agent.mode_unknown` for a mode the kind does not list, `agent.mode_unavailable` for a mode a resume could not apply, and `agent.resume_unavailable` when the session can neither switch now nor resume. |
 | `agent forget <SESSION>` | Forgets a session whose run has ended, with its terminal and generated files. |
 | `agent attach <SESSION>` | Interactive: `terminal attach` on the session's run. `Ctrl+]` detaches. |
 | `agent hook <EVENT> [PAYLOAD]` | Called by an agent's hooks inside its run: reports the event to the service. Always exits 0. |
-| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. The child's title is T, or the first line of TEXT (at most 80 characters). Prints the child. |
+| `agent delegate [--from SESSION] --prompt TEXT [--kind K] [--name N] [--title T] [--read-only] [--mode MODE]` | Starts a child session of SESSION with TEXT as its first prompt, in a new workspace of its own unless `--read-only`. The child's title is T, or the first line of TEXT (at most 80 characters). The child runs in MODE, or its vendor's own default: never in its parent's mode. Inside an agent run (where the run's token goes with the call) a bypass MODE is refused with `agent.mode_unavailable`: a person chooses one with `agent start`. Prints the child. |
 | `agent tree <SESSION>` | Shows the session's delegation tree: its root, then the root's children. |
 | `agent bring-back <CHILD> [--no-merge] [--no-prompt]` | Merges a finished child's branch into its parent's worktree with a merge commit, and tells the parent's run. |
 | `agent credentials import <KIND> --from <DIR> [--replace]` | Copies the kind's declared login files from `DIR` into the profile's home for the kind. Prints file names and sizes only, and says to stop using the source login. |
@@ -295,7 +297,7 @@ The server's owner makes an offer, and the other computer accepts it:
 
 ```sh
 # on the server
-massorca pair offer --admin
+massorca pair offer
 # on the other computer, reading the offer from stdin
 massorca pair accept - --name vps
 ```
@@ -355,13 +357,15 @@ own:
 | `--page <NAME>` | Open one page or dialog once the data it shows has arrived. An unknown name exits with status 2 before the window opens, and the error lists the valid names. |
 
 The page names are `workspace`, `settings-general`, `settings-hosts`, `settings-vault`, `pairing`,
-`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team`, `add-bot` and `session`.
+`board`, `add-host`, `add-secret`, `replace-secret`, `remove-secret`, `new-team`, `add-bot`, `session`, `delegate` and `bring-back`.
 
 A page waits while the service is still answering. When the service has answered without the data
 a page or dialog needs, it opens its parent page instead, and stderr says why. `replace-secret` and
 `remove-secret` need an owned secret (parent: Settings, Vault). `board` and `add-bot` need a team, and
 `new-team` and `add-bot` need Bot Teams (parent: the Bot Teams home). `session` opens the newest agent
-session, or the first workspace's start page when there is none.
+session, or the first workspace's start page when there is none. `delegate` opens the delegate form under
+the newest agent session, and `bring-back` opens the confirm for the first child session not yet brought
+back. Each falls back to its parent when the service has no such session; `delegate` also needs a service.
 
 `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused, so a page can be checked
 without showing it:

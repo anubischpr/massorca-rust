@@ -651,3 +651,89 @@ fn team_memory_refusals_exit_with_code_one_and_name_their_code() {
     assert_eq!(document["ok"], false);
     assert_eq!(document["error"]["code"], "team.not_found");
 }
+
+#[test]
+fn a_team_project_takes_a_workspaces_source_on_add_and_update_and_names_it_in_the_list() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_str().expect("utf-8 path");
+    sandbox
+        .run("default", &["team", "create", "alpha"])
+        .success();
+    let folder = sandbox.json_ok("default", &["project", "add", notes_text, "--folder"]);
+    let folder_id = folder["id"].as_str().expect("project id").to_owned();
+
+    let linked = sandbox.json_ok(
+        "default",
+        &[
+            "team", "project", "add", "alpha", "parser", "--source", "notes",
+        ],
+    );
+    assert_eq!(linked["source_project"], folder_id);
+    assert_eq!(linked["source_project_name"], "notes");
+    assert_eq!(linked["source_kind"], "folder");
+
+    let plain = sandbox.json_ok("default", &["team", "project", "add", "alpha", "lexer"]);
+    assert!(plain["source_project"].is_null());
+
+    let moved = sandbox.json_ok(
+        "default",
+        &[
+            "team", "project", "update", "alpha", "lexer", "--source", notes_text,
+        ],
+    );
+    assert_eq!(moved["source_project"], folder_id);
+    assert_eq!(moved["source_kind"], "folder");
+
+    let listed = stdout_text(
+        &sandbox
+            .run("default", &["team", "project", "list", "alpha"])
+            .success(),
+    );
+    let parser_line = listed
+        .lines()
+        .find(|line| line.starts_with("parser"))
+        .expect("parser is listed");
+    assert_eq!(parser_line.rsplit('\t').next(), Some("notes"), "{listed}");
+
+    let cleared = sandbox.json_ok(
+        "default",
+        &[
+            "team", "project", "update", "alpha", "parser", "--source", "",
+        ],
+    );
+    assert!(cleared["source_project"].is_null());
+    assert!(cleared["source_project_name"].is_null());
+    let relisted = stdout_text(
+        &sandbox
+            .run("default", &["team", "project", "list", "alpha"])
+            .success(),
+    );
+    let parser_line = relisted
+        .lines()
+        .find(|line| line.starts_with("parser"))
+        .expect("parser is listed");
+    assert_eq!(parser_line.rsplit('\t').next(), Some("-"), "{relisted}");
+
+    let refused_add = sandbox
+        .run(
+            "default",
+            &[
+                "team", "project", "add", "alpha", "vanished", "--source", "nothing",
+            ],
+        )
+        .failure()
+        .code(1);
+    assert!(stderr_text(&refused_add).contains("project.not_found"));
+    let refused_update = sandbox
+        .run(
+            "default",
+            &[
+                "team", "project", "update", "alpha", "lexer", "--source", "nothing",
+            ],
+        )
+        .failure()
+        .code(1);
+    assert!(stderr_text(&refused_update).contains("project.not_found"));
+}

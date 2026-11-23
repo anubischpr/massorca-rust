@@ -4,10 +4,11 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentPromptParams, AgentSession,
-    AgentSessionList, AgentSessionRef, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
-    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
+    AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams,
+    AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams, BringBackResult,
+    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
+    CredentialsShown, PromptReceipt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -251,6 +252,23 @@ impl Client {
     /// `agent.resume`: starts a new run of an exited session; the session keeps its id.
     pub async fn agent_resume(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::RESUME, &session_ref(session)).await
+    }
+
+    /// `agent.resume` with its optional permission mode (capability `agent-modes/1`, decision 0083).
+    pub async fn agent_resume_with(
+        &self,
+        params: &AgentResumeParams,
+    ) -> Result<AgentSession, ClientError> {
+        self.call(agents::RESUME, params).await
+    }
+
+    /// `agent.set_mode`: switches a session's permission mode at once where the kind has a live switch, or stores it for
+    /// the next resume; the result says which (capability `agent-modes/1`, decision 0083).
+    pub async fn agent_set_mode(
+        &self,
+        params: &AgentSetModeParams,
+    ) -> Result<AgentModeSet, ClientError> {
+        self.call(agents::SET_MODE, params).await
     }
 
     /// `agent.delegate`: starts a child session of a parent session; the child's record and an optional note.

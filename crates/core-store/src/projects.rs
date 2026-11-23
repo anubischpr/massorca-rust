@@ -138,4 +138,24 @@ impl Store {
             .execute("DELETE FROM projects WHERE id = ?1", [id])?;
         Ok(removed > 0)
     }
+
+    /// Deletes a project and every workspace row of it in one transaction, returning the workspace ids.
+    /// Their agent sessions go with them (`ON DELETE CASCADE`). `None` when no project has `id`.
+    pub fn forget_project(&self, id: &str) -> Result<Option<Vec<String>>, StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        let workspaces = {
+            let mut statement = transaction.prepare(
+                "SELECT id FROM workspaces WHERE project_id = ?1 ORDER BY created_at, id",
+            )?;
+            let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        transaction.execute("DELETE FROM workspaces WHERE project_id = ?1", [id])?;
+        if transaction.execute("DELETE FROM projects WHERE id = ?1", [id])? == 0 {
+            return Ok(None);
+        }
+        transaction.commit()?;
+        Ok(Some(workspaces))
+    }
 }

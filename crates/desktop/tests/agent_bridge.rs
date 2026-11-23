@@ -15,7 +15,8 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentPromptParams, AgentSession, AgentStartParams, PackageState,
+    AgentBringBackParams, AgentDelegateParams, AgentPromptParams, AgentSession, AgentStartParams,
+    PackageState,
 };
 use massorca_protocol::methods::projects::ProjectAddParams;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -140,6 +141,59 @@ async fn the_agent_kinds_the_service_declares_reach_the_store_on_connect() {
         Instant::now(),
     );
     assert_eq!(store.agent_kinds, declared);
+
+    drop(bridge);
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_delegate_from_a_session_the_service_does_not_have_is_refused_and_its_tree_is_read_again()
+{
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let mut bridge = ServiceBridge::start(profile(home.path()), connect_options(None))
+        .expect("the bridge starts");
+    let handle = bridge.handle();
+    let mut updates = bridge.take_updates().expect("the updates are there");
+    // The first agent list comes once the bridge is connected, so the call below reaches the service.
+    timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentsResync(_) = updates.recv().await.expect("the bridge is alive")
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the bridge connects");
+
+    let parent = "0196a6f0-0000-7000-8000-000000000000".to_owned();
+    let refusal = handle
+        .agent_delegate(AgentDelegateParams {
+            parent: parent.clone(),
+            prompt: "look".to_owned(),
+            kind: None,
+            name: None,
+            title: None,
+            read_only: true,
+            token: None,
+            request_id: Some("0196a6f0-0000-7000-8000-000000000001".to_owned()),
+            permission_mode: None,
+        })
+        .await
+        .expect_err("a parent the service does not have is refused");
+    assert_eq!(refusal.code(), Some(codes::AGENT_NOT_FOUND), "{refusal:?}");
+    // The refetch after the refused call asks for the parent's tree, which the service no longer has.
+    let gone = timeout(WAIT, async {
+        loop {
+            if let StoreUpdate::AgentGone(id) = updates.recv().await.expect("the bridge is alive") {
+                return id;
+            }
+        }
+    })
+    .await
+    .expect("the refetch follows the refused call");
+    assert_eq!(gone, parent);
 
     drop(bridge);
     stop_service(service).await;
@@ -332,6 +386,7 @@ async fn start_fake(handle: &ServiceHandle, workspace: &str) -> AgentSession {
             cols: Some(100),
             rows: Some(30),
             request_id: None,
+            permission_mode: None,
         })
         .await
         .expect("the session starts")

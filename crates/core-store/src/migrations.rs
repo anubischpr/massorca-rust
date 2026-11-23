@@ -313,6 +313,87 @@ CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
 "#,
         foreign_keys_off: false,
     },
+    // A team project's code source (decision 0072): the Workspaces project it links to. Removing that project clears the link.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A team's folder workspace, made on its first task start; folder workspaces that let several agents write at once
+    // (a team folder: no git index to corrupt, and shared files are the point); and the lookup from an agent session to
+    // its task, the protocol code of a failed start beside its message, and the pending start attempt that keys a retry
+    // to the same agent request (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE teams ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN error_code TEXT;
+ALTER TABLE tasks ADD COLUMN start_attempt TEXT;
+ALTER TABLE workspaces ADD COLUMN shared_writers INTEGER NOT NULL DEFAULT 0 CHECK(shared_writers IN (0,1));
+CREATE INDEX tasks_session_id ON tasks (session_id);
+"#,
+        foreign_keys_off: false,
+    },
+    // Where a task's last start ran: its own worktree on a linked git project, a linked folder or the team folder, and
+    // the worktree's branch, where the result is (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE tasks ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN branch TEXT;
+"#,
+        foreign_keys_off: false,
+    },
+    // Team routines (decision 0072 amendment): a schedule that starts a task for a bot on each occurrence. A team's
+    // removal removes its routines and their runs; a bot's removal keeps the routine with no bot, and its runs record
+    // why. A run keeps its task: removing the run or its routine never removes the task. A run whose `settled_at` is
+    // NULL has not recorded its start's outcome yet; the next service start marks it interrupted.
+    Migration {
+        sql: r#"
+CREATE TABLE team_routines (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('daily','weekly','monthly','once')),
+    time TEXT NOT NULL,
+    weekday TEXT,
+    month_day INTEGER CHECK(month_day IS NULL OR month_day BETWEEN 1 AND 28),
+    run_date TEXT,
+    zone TEXT,
+    paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+    starts_as_admin INTEGER NOT NULL CHECK(starts_as_admin IN (0,1)),
+    next_run_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routines_by_team ON team_routines (team_id, created_at);
+CREATE INDEX team_routines_due ON team_routines (next_run_at);
+CREATE TABLE team_routine_runs (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES team_routines(id) ON DELETE CASCADE,
+    scheduled_for INTEGER NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    error TEXT,
+    error_code TEXT,
+    settled_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routine_runs_by_routine ON team_routine_runs (routine_id, scheduled_for);
+"#,
+        foreign_keys_off: false,
+    },
+    // An agent session's permission mode (decision 0083): the mode of its current or last run, whether launch arguments
+    // confirmed it, where it came from (`vendor_default` or `chosen`), and the mode waiting for the next resume, kept
+    // apart from the running one.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT;
+ALTER TABLE agent_sessions ADD COLUMN mode_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(mode_confirmed IN (0,1));
+ALTER TABLE agent_sessions ADD COLUMN mode_source TEXT CHECK(mode_source IS NULL OR mode_source IN ('vendor_default','chosen'));
+ALTER TABLE agent_sessions ADD COLUMN pending_permission_mode TEXT;
+"#,
+        foreign_keys_off: false,
+    },
     // A project's base branch, which a new workspace starts from when it names none (WS-04).
     Migration {
         sql: r#"

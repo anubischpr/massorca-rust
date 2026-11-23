@@ -3,6 +3,7 @@
 mod harness;
 
 use harness::{Sandbox, execute, git, git_repo, single_document, stdout_text, with_json};
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 #[test]
@@ -194,4 +195,64 @@ fn adding_the_same_project_twice_and_showing_an_unknown_one_are_refused() {
         single_document(&unknown)["error"]["code"],
         "project.not_found"
     );
+}
+
+#[test]
+fn a_linked_worktree_registers_and_names_its_main_repository() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let linked = sandbox.home().join("linked-wt");
+    let linked_text = linked.to_string_lossy().into_owned();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked-wt",
+            linked_text.as_str(),
+        ],
+    );
+
+    sandbox
+        .run("default", &["project", "add", linked_text.as_str()])
+        .success()
+        .stdout(contains("added project repo (git) at "))
+        .stdout(contains("linked-wt").not());
+}
+
+#[test]
+fn forget_workspaces_drops_the_workspace_records_and_touches_no_file() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    std::fs::write(notes.join("notes.txt"), "keep me").expect("write notes");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+
+    sandbox
+        .run("default", &["project", "rm", "notes"])
+        .code(1)
+        .stderr(contains("project.has_workspaces"));
+
+    sandbox
+        .run(
+            "default",
+            &["project", "rm", "notes", "--forget-workspaces"],
+        )
+        .success()
+        .stdout(contains("removed project notes (folder)"))
+        .stdout(contains("forgot 1 workspace record"))
+        .stdout(contains("no files"));
+    assert!(notes.join("notes.txt").is_file(), "the folder's files stay");
+    sandbox
+        .run("default", &["project", "list"])
+        .success()
+        .stdout(contains("no projects"));
 }

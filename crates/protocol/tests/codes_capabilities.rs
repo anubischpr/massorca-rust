@@ -68,6 +68,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::WORKSPACE_PATH_TAKEN, "workspace.path_taken"),
     (codes::WORKSPACE_DIRTY, "workspace.dirty"),
     (codes::WORKSPACE_LOCKED, "workspace.locked"),
+    (codes::WORKSPACE_BUSY, "workspace.busy"),
     (codes::WORKSPACE_MAIN_WORKTREE, "workspace.main_worktree"),
     (codes::BRANCH_EXISTS, "branch.exists"),
     (codes::BRANCH_NOT_FOUND, "branch.not_found"),
@@ -115,10 +116,18 @@ const ERROR_CODES: &[(&str, &str)] = &[
         codes::AGENT_CREDENTIALS_INVALID,
         "agent.credentials_invalid",
     ),
+    (codes::AGENT_MODE_UNKNOWN, "agent.mode_unknown"),
+    (codes::AGENT_MODE_UNAVAILABLE, "agent.mode_unavailable"),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
     (codes::TEAM_PROJECT_NOT_FOUND, "team.project_not_found"),
     (codes::TEAM_PROJECT_NAME_IN_USE, "team.project_name_in_use"),
+    (codes::TEAM_ROUTINE_NOT_FOUND, "team.routine_not_found"),
+    (
+        codes::TEAM_ROUTINE_RUN_INTERRUPTED,
+        "team.routine_run_interrupted",
+    ),
+    (codes::TEAM_ROUTINE_CHANGED, "team.routine_changed"),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),
@@ -152,5 +161,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::TERMINALS, "terminals/1");
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
     assert_eq!(capabilities::AGENTS, "agents/1");
+    assert_eq!(capabilities::AGENT_MODES, "agent-modes/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }
