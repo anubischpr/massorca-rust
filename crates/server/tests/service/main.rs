@@ -24,6 +24,7 @@ mod git_watch;
 mod handshake;
 mod host_memory;
 mod host_ports;
+mod host_storage;
 mod lifecycle;
 mod network;
 mod network_account_masking;
