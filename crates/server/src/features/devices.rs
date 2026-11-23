@@ -186,10 +186,17 @@ async fn grant(ctx: RequestCtx, params: DeviceGrantParams) -> Result<DeviceInfo,
     }
     let id = row.id.clone();
     let scopes = Scopes::ADMIN.names();
-    store_blocking::run(&ctx.state, move |store| {
-        store.set_device_scopes(&id, &scopes)
+    let changed = store_blocking::run(&ctx.state, move |store| {
+        store.grant_device_scopes(&id, &scopes)
     })
     .await?;
+    if !changed {
+        // Revoked between the read and the write.
+        return Err(ErrorBody::new(
+            codes::DEVICE_REVOKED,
+            format!("device {:?} is revoked; pair it again instead", row.name),
+        ));
+    }
     tracing::info!(device = %row.id, "a device was granted full access");
     let id = row.id.clone();
     let stored = store_blocking::run(&ctx.state, move |store| store.get_device(&id)).await?;
