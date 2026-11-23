@@ -12,6 +12,13 @@ use crate::paths;
 use crate::views;
 use crate::workspaces::Workspaces;
 
+/// What `remove_project` took away: the project, and the ids of the workspace rows forgotten with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedProject {
+    pub project: Project,
+    pub workspaces: Vec<String>,
+}
+
 impl Workspaces {
     /// Registers a git repository (at its toplevel) or a folder. Without `kind`, a directory
     /// inside a repository is a git project and any other directory is a folder.
@@ -115,19 +122,33 @@ impl Workspaces {
         Ok(views::project(&self.resolve_project(selector)?))
     }
 
-    /// Unregisters a project. Refused while it has workspaces, and never deletes its files.
-    pub fn remove_project(&self, selector: &str) -> Result<Project, DomainError> {
+    /// Unregisters a project. Refused while it has workspaces, unless `forget_workspaces` drops their
+    /// records with it in one transaction. Never deletes files, worktrees or branches.
+    pub fn remove_project(
+        &self,
+        selector: &str,
+        forget_workspaces: bool,
+    ) -> Result<RemovedProject, DomainError> {
         let _guard = self.lock_mutations();
         let row = self.resolve_project(selector)?;
+        if forget_workspaces {
+            return match self.store.forget_project(&row.id)? {
+                Some(workspaces) => Ok(RemovedProject {
+                    project: views::project(&row),
+                    workspaces,
+                }),
+                None => Err(not_found(&row.name)),
+            };
+        }
         if self.store.count_workspaces(&row.id)? > 0 {
             return Err(has_workspaces(&row.name));
         }
         match self.store.delete_project(&row.id) {
-            Ok(true) => Ok(views::project(&row)),
-            Ok(false) => Err(DomainError::new(
-                codes::PROJECT_NOT_FOUND,
-                format!("no project named {:?}", row.name),
-            )),
+            Ok(true) => Ok(RemovedProject {
+                project: views::project(&row),
+                workspaces: Vec::new(),
+            }),
+            Ok(false) => Err(not_found(&row.name)),
             // A workspace inserted after the count is still referenced; the foreign key refuses.
             Err(StoreError::Constraint { .. }) => Err(has_workspaces(&row.name)),
             Err(error) => Err(error.into()),
@@ -144,6 +165,13 @@ fn not_git(dir: &Path) -> DomainError {
     DomainError::new(
         codes::PROJECT_NOT_GIT,
         format!("{} is not inside a git repository", dir.display()),
+    )
+}
+
+fn not_found(name: &str) -> DomainError {
+    DomainError::new(
+        codes::PROJECT_NOT_FOUND,
+        format!("no project named {name:?}"),
     )
 }
 
