@@ -93,6 +93,7 @@ mod tests {
             identity: None,
             active,
             projects: Vec::new(),
+            origin: massorca_protocol::methods::agents::AccountOrigin::Unknown,
         }
     }
 
