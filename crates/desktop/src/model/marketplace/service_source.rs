@@ -1,13 +1,18 @@
 //! The Marketplace of a connected service: its agent kinds, as `agent.kinds` lists them. The service has no
 //! method for the other item kinds, so they are not listed, and nothing it offers can be changed from here yet.
 
-use massorca_protocol::methods::agents::{AgentKind, PackageState};
+use std::collections::BTreeMap;
+
+use massorca_protocol::methods::agents::{AccountSummary, AgentKind, PackageState};
+
+use super::service_accounts::ServiceAccounts;
 
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
     Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
     MarketplaceSnapshot,
 };
+use crate::service::Refusal;
 
 /// The host every agent item is on: the service the desktop is connected to.
 const SERVICE_HOST: HostId = HostId(1);
@@ -16,6 +21,8 @@ const SERVICE_HOST: HostId = HostId(1);
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServiceMarketplace {
     snapshot: MarketplaceSnapshot,
+    /// The accounts of every kind, as the service lists them.
+    accounts: ServiceAccounts,
 }
 
 /// The Marketplace snapshot for the agent kinds a service lists, in the order it lists them.
@@ -89,7 +96,24 @@ fn state_of(kind: &AgentKind) -> ItemState {
 
 impl MarketplaceSource for ServiceMarketplace {
     fn snapshot(&self) -> MarketplaceSnapshot {
-        self.snapshot.clone()
+        let mut snapshot = self.snapshot.clone();
+        snapshot.accounts = self.accounts.rows().to_vec();
+        snapshot
+    }
+
+    fn follow_accounts(
+        &mut self,
+        accounts: &BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
+    ) {
+        self.accounts.follow(accounts);
+    }
+
+    fn service_account(&self, account: super::types::AccountId) -> Option<(String, String)> {
+        self.accounts.key(account)
+    }
+
+    fn account_number(&mut self, kind: &str, account: &str) -> Option<super::types::AccountId> {
+        Some(self.accounts.number(kind, account))
     }
 
     fn follow_agent_kinds(&mut self, kinds: &[AgentKind]) {
@@ -248,6 +272,31 @@ mod tests {
             .map(|item| item.name.clone())
             .collect();
         assert_eq!(names, ["Claude"]);
+    }
+
+    #[test]
+    fn the_listed_accounts_stay_in_the_snapshot_when_the_kinds_are_read_again() {
+        use massorca_protocol::methods::agents::AccountState as WireState;
+        let mut source = ServiceMarketplace::default();
+        source.follow_agent_kinds(&service_kinds());
+        let summary = AccountSummary {
+            id: "acct-1".to_owned(),
+            label: "Work account".to_owned(),
+            state: WireState::SignedIn,
+            identity: None,
+            active: true,
+            projects: Vec::new(),
+        };
+        source.follow_accounts(&BTreeMap::from([("claude".to_owned(), Ok(vec![summary]))]));
+        source.follow_agent_kinds(&service_kinds());
+        let snapshot = source.snapshot();
+        let rows = snapshot.accounts_for("claude");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            source.service_account(rows[0].id),
+            Some(("claude".to_owned(), "acct-1".to_owned()))
+        );
+        assert_eq!(source.account_number("claude", "acct-1"), Some(rows[0].id));
     }
 
     #[test]
