@@ -44,6 +44,16 @@ machine attributed to a workspace by working directory or command line, scanned 
   cannot be read (it exited, or access is denied) is skipped and counted in `unreadable`; it never fails the sample.
   A terminal whose processes cannot be listed, or of which none could be read, is marked `unverifiable`, shown as
   unknown, and left out of the total: never reported as zero.
+- D6 What a terminal's tree counts, and how a read is trusted. Each platform counts a different thing, and the answer
+  does not hide the difference. Windows counts the job: its members cannot leave it, because the terminal's job does not
+  allow breakaway, so the count is exact. Linux counts the session: a process that starts a session of its own (`setsid`,
+  as daemons do) is not counted, while one reparented to init keeps its session and is counted. macOS counts the parent
+  walk from the shell: a process whose parent exited and was reparented to launchd is not counted, although the terminal
+  started it, and one that starts its own session but keeps its parent is counted. The service's own process is never a
+  member. A process is read only while it is the one listed: its start time, and on Linux its session, must match the
+  listing before and after the read, so a reused pid is unreadable. A macOS listing that grows while it is read is asked
+  again with more room; one that still does not fit makes the table incomplete, and the terminals read from it are
+  `partial`. Samples are shared for about a second, so a call within that time gets the sample already taken.
 
 ## Alternatives
 

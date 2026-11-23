@@ -49,20 +49,27 @@ may add its own figure locally), and the figure is not pushed.
   than 1024 processes); then per pid `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetExitCodeProcess` (an ended
   process whose handle is still held is not counted), `IsProcessInJob` on that handle (a pid reused since the listing
   is not read) and `K32GetProcessMemoryInfo` for the working set. A Toolhelp32 snapshot gives names and parent ids.
-- Linux: `VmRSS` from `/proc/<pid>/status`; names, parents and session ids from `/proc/<pid>/stat`.
-- macOS: `proc_pidinfo` (`PROC_PIDTASKINFO` for the resident size, `PROC_PIDTBSDINFO` for parents and names) and
-  `proc_listallpids`.
+- Linux: `VmRSS` from `/proc/<pid>/status`; names, parents, session ids and start times from `/proc/<pid>/stat`.
+- macOS: `proc_pidinfo` (`PROC_PIDTASKINFO` for the resident size, `PROC_PIDTBSDINFO` for parents, names and start
+  times) and `proc_listallpids`, asked again while the count grows.
 
-A terminal's processes come from its `ProcessTree`: exact on Windows (the job) and Linux (the session). macOS has no
-session listing, so the tree is the shell and everything below it by parent id; a process that detached from the shell
-is missed there. On Unix the process table is read once per sample and shared by every terminal; a terminal's lock is
+A terminal's processes come from its `ProcessTree`, and each platform counts a different set (decision 0081, D6).
+Windows counts the job, whose members cannot leave it, since the terminal's job does not allow breakaway. Linux counts
+the session, which a process leaves when it starts a session of its own, as daemons do; a process reparented to init
+keeps its session. macOS walks parent ids from the shell, so a process whose parent exited (and was reparented to
+launchd) is missed. On Unix the process table is read once per sample and shared by every terminal; a terminal's lock is
 held only to check that its shell is not reaped, never during a scan. The parent walk is Unix only, since Windows parent
-ids can name a parent that exited.
+ids can name a parent that exited. The service's own process is never a member.
+
+Each process is read only while it is the one the table listed: its start time, and on Linux its session, must match
+the listing before and after the read. A pid reused since the listing is counted unreadable and never summed. A macOS
+table that still does not fit after its bounded retries is incomplete: the terminals read from it are `partial`.
 
 ## Polling
 
 There is no event and no watch. A client polls while it shows the figure: every 2 seconds while a memory detail is
 open, otherwise with its usual status refresh. One sample reads the process table once (Unix) or each terminal's
-job (Windows), and a few system calls per process, so a poll costs little, but nothing samples while nobody asks.
+job (Windows), and a few system calls per process, so a poll costs little, but nothing samples while nobody asks. A sample is shared for about a second: a call within that
+time is answered with the sample already taken, and its `sampled_at_ms` is when that sample was taken.
 
 A client that cannot reach the service shows `unverifiable`, never zero: the CLI exits 4 with `memory.unverifiable`.

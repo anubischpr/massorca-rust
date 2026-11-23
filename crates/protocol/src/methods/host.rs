@@ -1,6 +1,6 @@
 //! Host methods: figures read on the host that runs the service (capability `host/1`, decision 0081).
 //!
-//! Sampled when asked; nothing is pushed. A client polls while it shows them.
+//! Sampled when asked and shared for about a second; nothing is pushed. A client polls while it shows them.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +39,10 @@ pub struct ProcessMemory {
     pub bytes: u64,
 }
 
-/// One live terminal's processes and their memory.
+/// One live terminal's processes and their memory: its shell and what the shell started, as its platform counts them
+/// (decision 0081, D6). Windows counts the job, exactly. Linux counts the session, which misses a process that started a
+/// session of its own. macOS counts the parent walk from the shell, which misses a process reparented away from it. The
+/// service's own process is never counted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalMemory {
     pub terminal_id: String,
