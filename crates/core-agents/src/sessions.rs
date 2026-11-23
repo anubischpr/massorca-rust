@@ -205,6 +205,9 @@ struct Inner {
     /// to one of its sessions without `force` are refused with `agent.busy`. Taken after the status lock when both are
     /// held.
     merging: Mutex<HashSet<String>>,
+    /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
+    /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
+    sign_in_timeout: Duration,
 }
 
 /// A run whose exit the service has not seen yet.
@@ -275,6 +278,11 @@ impl Agents {
                 accounts: Mutex::new(crate::accounts::AccountBusy::default()),
                 bring_back_gate: Mutex::new(()),
                 merging: Mutex::new(HashSet::new()),
+                sign_in_timeout: crate::sign_in::sign_in_timeout_from(
+                    std::env::var(crate::sign_in::SIGN_IN_TIMEOUT_ENV)
+                        .ok()
+                        .as_deref(),
+                ),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -298,6 +306,11 @@ impl Agents {
     /// The terminal manager the runs and sign-ins are created in.
     pub(crate) fn terminals(&self) -> &TerminalManager {
         &self.inner.config.terminals
+    }
+
+    /// How long a sign-in terminal may stay open with no result (decision 0059).
+    pub(crate) fn sign_in_timeout(&self) -> Duration {
+        self.inner.sign_in_timeout
     }
 
     /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::MutexGuard;
 use std::thread;
 
-use massorca_core_store::{AgentAccountRow, new_id, now_ms};
+use massorca_core_store::{AgentAccountRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
     AccountState, AccountSummary, AccountsChanged, AccountsImported, AccountsRemoved,
@@ -26,6 +26,7 @@ use crate::credentials;
 use crate::kind::{KindDecl, valid_id};
 use crate::paths;
 use crate::sessions::{AgentError, Agents, Change};
+use crate::sign_in::{SignInEnd, SignInOutcome, sign_in_outcome};
 
 /// The label of an account when the person gives none.
 pub(crate) const DEFAULT_LABEL: &str = "account";
@@ -46,8 +47,9 @@ pub struct AccountUse {
     pub account: Option<String>,
 }
 
-/// The accounts a service call is working on, under the busy lock: sign-ins still open (account to its terminal, or empty
-/// until the terminal starts) and accounts being removed.
+/// The accounts a service call is working on, under the busy lock: sign-ins still open (account to its terminal), accounts
+/// being decided (empty: taken before a terminal exists, while a decision runs, or for an import), and accounts being
+/// removed.
 #[derive(Debug, Default)]
 pub(crate) struct AccountBusy {
     pub(crate) pending: HashMap<String, String>,
@@ -66,6 +68,19 @@ impl Drop for RemovalMark {
     }
 }
 
+/// Marks an account as being decided until dropped (decision 0059): no check, activation, removal or other decision of it
+/// runs meanwhile. The mark is dropped once the outcome is stored, or the account is signed out and deleted.
+pub(crate) struct DecisionMark {
+    agents: Agents,
+    account: String,
+}
+
+impl Drop for DecisionMark {
+    fn drop(&mut self) {
+        self.agents.account_busy().pending.remove(&self.account);
+    }
+}
+
 fn kind_not_found(kind: &str) -> AgentError {
     AgentError::new(codes::AGENT_KIND_NOT_FOUND, format!("no agent kind {kind}"))
 }
@@ -81,6 +96,26 @@ fn busy(account: &str, why: &str) -> AgentError {
     AgentError::new(
         codes::AGENT_BUSY,
         format!("account {account} is {why}; wait for it, or stop the live session that uses it"),
+    )
+}
+
+/// An account another call holds: a sign-in still open (`signing in`), or one being decided (`being decided`).
+fn pending_busy(account: &str, mark: &str) -> AgentError {
+    busy(
+        account,
+        if mark.is_empty() {
+            "being decided"
+        } else {
+            "signing in"
+        },
+    )
+}
+
+/// An account whose sign-in no check has decided yet: it cannot be activated until a check decides it.
+fn undecided(account: &str) -> AgentError {
+    AgentError::new(
+        codes::AGENT_BUSY,
+        format!("account {account} has a sign-in that is not decided yet; check it, or remove it"),
     )
 }
 
@@ -119,9 +154,10 @@ impl Agents {
             .collect()
     }
 
-    /// Imports the kind's declared files from `from` into a new account (decision 0059), then checks it. The result is
-    /// `imported`; `failed` when the check reports the login is not signed in (the new account is then deleted); or
-    /// `not_found` when none of the declared files is in `from`.
+    /// Imports the kind's declared files from `from` into a new account (decision 0059), then decides it with its check. The
+    /// account stays undecided until the check keeps it, so a refused import never counts as the kind's history. The result
+    /// is `imported`; `failed` when the check reports the login is not signed in (the new account is then deleted, without a
+    /// sign-out: the login is the person's); or `not_found` when none of the declared files is in `from`.
     pub fn accounts_import(
         &self,
         kind: &str,
@@ -130,7 +166,7 @@ impl Agents {
     ) -> Result<AccountsImported, AgentError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_owned());
         valid_label(&label)?;
-        let (account, _) =
+        let (account, _, mark) =
             match self.import_new_account(kind, Path::new(from), &label, ORIGIN_IMPORT) {
                 Ok(added) => added,
                 Err(error) if error.code == codes::AGENT_CREDENTIALS_UNSUPPORTED => {
@@ -151,17 +187,20 @@ impl Agents {
                     });
                 }
             };
-        if let Some(AccountState::Expired | AccountState::NeedsSignIn) =
-            self.check_imported(kind, &account)
-        {
-            self.discard_account(kind, &account);
-            return Ok(AccountsImported {
-                result: ImportResult::Failed,
-                account: None,
-                reason: Some("the check reports the login is not signed in".to_owned()),
-            });
+        let verdict = self.check_imported(kind, &account);
+        let files =
+            credentials::account_files_present(self.profile_dir(), kind, &account).unwrap_or(false);
+        match sign_in_outcome(verdict.as_ref(), files, SignInEnd::TerminalEnded) {
+            SignInOutcome::Discard => {
+                self.discard_marked(kind, &account);
+                return Ok(AccountsImported {
+                    result: ImportResult::Failed,
+                    account: None,
+                    reason: Some("the check reports the login is not signed in".to_owned()),
+                });
+            }
+            outcome => self.store_outcome(kind, &account, outcome, mark, None),
         }
-        self.make_active_if_none(kind, &account);
         let row = self.account_of(kind, &account)?;
         let summary = self.summary(
             &row,
@@ -175,22 +214,29 @@ impl Agents {
     }
 
     /// Makes an account the kind's active one, or the project's choice for `project` (decision 0059). An account that is
-    /// being removed, or whose sign-in is still open, is refused with `agent.busy`; one that never signed in is refused.
+    /// being removed, or whose sign-in is still open, being decided, or not decided yet, is refused with `agent.busy`; one
+    /// that never signed in is refused. The homes gate is held from the checks to the write, so a removal cannot delete the
+    /// row in between.
     pub fn accounts_activate(
         &self,
         kind: &str,
         account: &str,
         project: Option<&str>,
     ) -> Result<AccountSummary, AgentError> {
+        let _gate = credentials::lock_homes();
         let row = self.account_of(kind, account)?;
         {
             let busy_set = self.account_busy();
             if busy_set.removing.contains(account) {
                 return Err(busy(account, "being removed"));
             }
-            if busy_set.pending.contains_key(account) {
-                return Err(busy(account, "signing in"));
+            if let Some(mark) = busy_set.pending.get(account) {
+                return Err(pending_busy(account, mark));
             }
+        }
+        // A sign-in or import an earlier service left undecided is marked only in the store, so the store decides this too.
+        if self.store_pending(account)? {
+            return Err(undecided(account));
         }
         if parse_state(&row.state) == AccountState::NeedsSignIn {
             return Err(AgentError::new(
@@ -255,8 +301,8 @@ impl Agents {
             if busy_set.removing.contains(account) {
                 return Err(busy(account, "already being removed"));
             }
-            if busy_set.pending.contains_key(account) {
-                return Err(busy(account, "signing in"));
+            if let Some(mark) = busy_set.pending.get(account) {
+                return Err(pending_busy(account, mark));
             }
             if self
                 .live_runs()
@@ -273,7 +319,9 @@ impl Agents {
         })
     }
 
-    /// Runs the kind's check on an account now, or on the active one when `account` is absent (decision 0059).
+    /// Runs the kind's check on an account now, or on the active one when `account` is absent (decision 0059). An account
+    /// whose sign-in is open, or being decided, is busy. An account whose sign-in or import is still undecided in the store
+    /// is decided by the check, as a sign-in's end decides it; any other account keeps what its check finds.
     pub fn accounts_check(
         &self,
         kind: &str,
@@ -287,26 +335,22 @@ impl Agents {
                 .ok_or_else(|| account_not_found(kind, "active"))?,
         };
         let row = self.account_of(kind, &id)?;
+        if let Some(mark) = self.account_busy().pending.get(&id) {
+            return Err(pending_busy(&id, mark));
+        }
+        if self.store_pending(&id)? {
+            return self.check_undecided(kind, &id);
+        }
         let (decl, program) = self.startable_kind(kind)?;
-        let state = if decl
-            .accounts
-            .as_ref()
-            .and_then(|accounts| accounts.check.as_ref())
-            .is_none()
+        let state = self.check_verdict(&decl, &program, &id, row.identity.as_deref());
         {
-            unknown()
-        } else {
-            self.check_account_home(&decl, &program, &id, row.identity.as_deref())
-                .unwrap_or(Verdict {
-                    state: AccountState::NeedsSignIn,
-                    identity: None,
-                })
-        };
-        self.store().set_agent_account_check(
-            &id,
-            state_name(state.state),
-            state.identity.as_deref(),
-        )?;
+            let _gate = credentials::lock_homes();
+            self.store().set_agent_account_check(
+                &id,
+                state_name(state.state),
+                state.identity.as_deref(),
+            )?;
+        }
         if parse_state(&row.state) != state.state {
             self.notify_account(kind, &id, state.state);
         }
@@ -315,6 +359,186 @@ impl Agents {
             &row,
             self.store().get_active_agent_account(kind)?.as_deref(),
         )
+    }
+
+    /// The verdict of an account's check as a check command reports it: `unknown` when the kind declares no check, and
+    /// `needs_sign_in` when the check cannot run on the account's home.
+    fn check_verdict(
+        &self,
+        decl: &KindDecl,
+        program: &Path,
+        account: &str,
+        recorded: Option<&str>,
+    ) -> Verdict {
+        let declares_check = decl
+            .accounts
+            .as_ref()
+            .and_then(|accounts| accounts.check.as_ref())
+            .is_some();
+        if !declares_check {
+            return unknown();
+        }
+        self.check_account_home(decl, program, account, recorded)
+            .unwrap_or(Verdict {
+                state: AccountState::NeedsSignIn,
+                identity: None,
+            })
+    }
+
+    /// Checks an account whose sign-in or import is still undecided in the store (decision 0059). The check decides it as a
+    /// sign-in's end does: signed in keeps it; a check that cannot tell keeps it as `unknown` while its files exist; anything
+    /// else signs a sign-in out and deletes it (an import is only deleted). The mark is held meanwhile, so no other call
+    /// decides the account too.
+    fn check_undecided(&self, kind: &str, account: &str) -> Result<AccountSummary, AgentError> {
+        let mark = self.mark_for_decision(account)?;
+        // The row may have been decided between the first look and the mark: then it is an ordinary account again.
+        if !self.store_pending(account)? {
+            drop(mark);
+            return self.accounts_check(kind, Some(account));
+        }
+        let row = self.account_of(kind, account)?;
+        let (decl, program) = self.startable_kind(kind)?;
+        let verdict = self.check_verdict(&decl, &program, account, row.identity.as_deref());
+        let files =
+            credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
+        let outcome = sign_in_outcome(Some(&verdict), files, SignInEnd::TerminalEnded);
+        let sign_out = (row.origin == ORIGIN_SIGN_IN).then_some((decl, program));
+        self.store_outcome(kind, account, outcome, mark, sign_out);
+        match self.store().get_agent_account(account)? {
+            Some(row) if row.kind == kind => {
+                let active = self.store().get_active_agent_account(kind)?;
+                self.summary(&row, active.as_deref())
+            }
+            _ => Err(AgentError::new(
+                codes::AGENT_ACCOUNT_NOT_FOUND,
+                format!(
+                    "account {account} of agent kind {kind} was signed out and deleted: its sign-in was not kept"
+                ),
+            )),
+        }
+    }
+
+    /// Marks `account` as being decided, unless another call holds it: a sign-in still open, another decision, or a removal.
+    /// Refused with `agent.busy` meanwhile.
+    pub(crate) fn mark_for_decision(&self, account: &str) -> Result<DecisionMark, AgentError> {
+        {
+            let mut busy_set = self.account_busy();
+            if busy_set.removing.contains(account) {
+                return Err(busy(account, "being removed"));
+            }
+            if let Some(mark) = busy_set.pending.get(account) {
+                return Err(pending_busy(account, mark));
+            }
+            busy_set.pending.insert(account.to_owned(), String::new());
+        }
+        Ok(DecisionMark {
+            agents: self.clone(),
+            account: account.to_owned(),
+        })
+    }
+
+    /// Marks `account` without a check: for a row the caller has just created, or for a sign-in whose terminal has ended,
+    /// which replaces the open mark (the terminal's id) by the decision's.
+    pub(crate) fn mark_now(&self, account: &str) -> DecisionMark {
+        self.account_busy()
+            .pending
+            .insert(account.to_owned(), String::new());
+        DecisionMark {
+            agents: self.clone(),
+            account: account.to_owned(),
+        }
+    }
+
+    /// Whether the store still marks the account's sign-in or import as undecided (`sign_in_pending`).
+    pub(crate) fn store_pending(&self, account: &str) -> Result<bool, AgentError> {
+        Ok(self
+            .store()
+            .list_pending_sign_ins()?
+            .iter()
+            .any(|row| row.id == account))
+    }
+
+    /// Stores the outcome of a decision, then drops its mark (decision 0059). A refused sign-in is signed out first, when
+    /// `sign_out` names its kind's program; an import is never signed out. Each store write is made under the homes gate.
+    pub(crate) fn store_outcome(
+        &self,
+        kind: &str,
+        account: &str,
+        outcome: SignInOutcome,
+        mark: DecisionMark,
+        sign_out: Option<(KindDecl, PathBuf)>,
+    ) {
+        match outcome {
+            SignInOutcome::Discard => {
+                if let Some((decl, program)) = &sign_out {
+                    self.sign_out(decl, program, kind, account);
+                }
+                self.discard_marked(kind, account);
+            }
+            SignInOutcome::Undecided => self.leave_undecided(kind, account),
+            SignInOutcome::Unknown => self.keep_marked(kind, account, AccountState::Unknown, None),
+            SignInOutcome::SignedIn { identity } => {
+                self.keep_marked(kind, account, AccountState::SignedIn, identity)
+            }
+        }
+        drop(mark);
+    }
+
+    /// Keeps an account whose mark the caller holds: its check's state and identity are stored, its sign-in mark is cleared
+    /// (so the kind's history records it), and it is made active when its kind has no active account (decision 0059).
+    fn keep_marked(
+        &self,
+        kind: &str,
+        account: &str,
+        state: AccountState,
+        identity: Option<String>,
+    ) {
+        let gate = credentials::lock_homes();
+        match self.keep_decided(kind, account, state, identity.as_deref()) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
+                return;
+            }
+        }
+        self.make_active_if_none(kind, account);
+        drop(gate);
+        self.notify_account(kind, account, state);
+    }
+
+    /// Deletes an account a decision has refused, while the caller holds its mark: its home and its row, under the gate.
+    fn discard_marked(&self, kind: &str, account: &str) {
+        let _gate = credentials::lock_homes();
+        if let Err(error) = credentials::remove_account_locked(self.profile_dir(), kind, account) {
+            tracing::warn!(
+                kind,
+                code = error.code,
+                "a discarded account's home could not be deleted"
+            );
+        }
+        if self.store().delete_agent_account(account).is_err() {
+            tracing::warn!(kind, "a discarded account's row could not be deleted");
+        }
+    }
+
+    /// Leaves an account the startup sweep cannot decide: its state is `unknown` and its mark is not kept, so it stays pending
+    /// until a check decides it (decision 0059).
+    fn leave_undecided(&self, kind: &str, account: &str) {
+        let gate = credentials::lock_homes();
+        match self
+            .store()
+            .set_agent_account_check(account, state_name(AccountState::Unknown), None)
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
+                return;
+            }
+        }
+        drop(gate);
+        self.notify_account(kind, account, AccountState::Unknown);
     }
 
     /// The account a run of `kind` in `project` uses, and its home (decision 0059): the project's choice, else the active
@@ -373,7 +597,8 @@ impl Agents {
     }
 
     /// `agent.credentials.import` (deprecated, 0056): imports into a new account that becomes the active one. The active
-    /// account is refused unless `replace` is set, and is then removed once the new one is in place.
+    /// account is refused unless `replace` is set, and is then removed once the new one is in place. This import checks no
+    /// login, so the new account is kept as it was imported: decided, as `unknown`.
     pub fn credentials_import(
         &self,
         kind: &str,
@@ -385,14 +610,16 @@ impl Agents {
         if active.is_some() && !replace {
             return Err(already_has_home(kind));
         }
-        let (account, imported) =
+        let (account, imported, mark) =
             self.import_new_account(kind, Path::new(from), DEFAULT_LABEL, ORIGIN_IMPORT)?;
         if let Some(old) = active
             && let Err(error) = self.accounts_remove(kind, &old)
         {
-            self.discard_account(kind, &account);
+            self.discard_marked(kind, &account);
             return Err(error);
         }
+        self.keep_marked(kind, &account, AccountState::Unknown, None);
+        drop(mark);
         self.store().set_active_agent_account(kind, &account)?;
         Ok(imported)
     }
@@ -424,7 +651,8 @@ impl Agents {
     /// - a `migrated` row whose home is gone is deleted (a crash between recording the row and moving the home);
     /// - 0056's single home of each kind is moved into an account;
     /// - an account directory with no row is adopted as `migrated`, active only if its kind has no active account;
-    /// - each sign-in left open by an earlier service is decided by [`Agents::decide_sign_in`], on a thread of its own.
+    /// - each sign-in or import left undecided by an earlier service is decided by [`Agents::decide_sign_in`], on a thread
+    ///   of its own; a check that cannot tell leaves a sign-in pending.
     pub fn startup_sweep(&self) {
         let profile = self.profile_dir().to_path_buf();
         match self.store().list_all_agent_accounts() {
@@ -471,24 +699,30 @@ impl Agents {
                 }
             }
         }
-        // Only a sign-in still open is decided here. A `needs_sign_in` state alone can be an imported or migrated account
-        // whose check failed, and such a login is never discarded at startup (decision 0059).
-        let open: Vec<(String, String)> = match self.store().list_pending_sign_ins() {
+        // Only an undecided row is decided here. A `needs_sign_in` state alone can be an imported or migrated account whose
+        // check failed, and such a login is never discarded at startup (decision 0059).
+        let open: Vec<(String, String, String)> = match self.store().list_pending_sign_ins() {
             Ok(rows) => rows
                 .into_iter()
-                .filter(|row| row.origin == ORIGIN_SIGN_IN)
-                .map(|row| (row.kind, row.id))
+                .map(|row| (row.kind, row.id, row.origin))
                 .collect(),
             Err(error) => {
-                tracing::error!(code = %error, "the open sign-ins could not be read at startup");
+                tracing::error!(code = %error, "the undecided sign-ins could not be read at startup");
                 Vec::new()
             }
         };
         if !open.is_empty() {
             let agents = self.clone();
             thread::spawn(move || {
-                for (kind, account) in open {
-                    agents.decide_sign_in(&kind, &account);
+                for (kind, account, origin) in open {
+                    // A sign-in the sweep cannot decide stays pending; an import is decided as its import would be, so it
+                    // never stays pending (decision 0059).
+                    let end = if origin == ORIGIN_SIGN_IN {
+                        SignInEnd::StartupSweep
+                    } else {
+                        SignInEnd::TerminalEnded
+                    };
+                    agents.decide_sign_in(&kind, &account, end);
                 }
             });
         }
@@ -594,40 +828,46 @@ impl Agents {
         })
     }
 
-    /// Creates a new account, copies the declared files into it, and records its row. Returns its id and the copy's record.
-    /// The gate is taken by the copy itself, which is not reentrant, so the caller must not hold it.
+    /// Creates a new account, copies the declared files into it, and records its row undecided: the sign-in mark keeps the
+    /// account out of the kind's history until a decision keeps it (decision 0059). Returns its id, the copy's record, and the
+    /// mark the caller holds until it decides the account. The gate is taken by the copy itself, which is not reentrant, so
+    /// the caller must not hold it.
     pub(crate) fn import_new_account(
         &self,
         kind: &str,
         from: &Path,
         label: &str,
         origin: &str,
-    ) -> Result<(String, CredentialsImported), AgentError> {
+    ) -> Result<(String, CredentialsImported, DecisionMark), AgentError> {
         self.migrate_now(kind)?;
         let account = new_id();
+        // Marked before the copy and the row exist, so no check of the account can take the decision first.
+        let mark = self.mark_now(&account);
         let imported = credentials::import_account(self.profile_dir(), kind, &account, from)?;
-        self.store().insert_agent_account(&AgentAccountRow {
-            id: account.clone(),
-            kind: kind.to_owned(),
-            label: label.to_owned(),
-            created_at: now_ms(),
-            identity: None,
-            state: state_name(AccountState::Unknown).to_owned(),
-            origin: origin.to_owned(),
-        })?;
-        Ok((account, imported))
+        {
+            let _gate = credentials::lock_homes();
+            let row = AgentAccountRow {
+                id: account.clone(),
+                kind: kind.to_owned(),
+                label: label.to_owned(),
+                created_at: now_ms(),
+                identity: None,
+                state: state_name(AccountState::Unknown).to_owned(),
+                origin: origin.to_owned(),
+            };
+            if let Err(error) = self.store().insert_pending_sign_in(&row) {
+                let _ = credentials::remove_account_locked(self.profile_dir(), kind, &account);
+                return Err(error.into());
+            }
+        }
+        Ok((account, imported, mark))
     }
 
-    /// Checks an imported account and records what it finds. `None` when the kind declares no check or cannot run one.
-    fn check_imported(&self, kind: &str, account: &str) -> Option<AccountState> {
+    /// The check of an import: `None` when the kind declares no check or cannot run one. It records nothing: the import's
+    /// decision does.
+    fn check_imported(&self, kind: &str, account: &str) -> Option<Verdict> {
         let (decl, program) = self.startable_kind(kind).ok()?;
-        let found = self.check_account_home(&decl, &program, account, None)?;
-        let _ = self.store().set_agent_account_check(
-            account,
-            state_name(found.state),
-            found.identity.as_deref(),
-        );
-        Some(found.state)
+        self.check_account_home(&decl, &program, account, None)
     }
 
     /// Runs the kind's check on an account's home and settles the result against the recorded identity. `None` when the
@@ -659,7 +899,7 @@ impl Agents {
 
     /// Runs the kind's sign-out on an account's home, when declared and the home exists. It runs outside the gate. Its
     /// failure is only logged.
-    fn sign_out(&self, decl: &KindDecl, program: &Path, kind: &str, account: &str) {
+    pub(crate) fn sign_out(&self, decl: &KindDecl, program: &Path, kind: &str, account: &str) {
         let Some(logout) = decl
             .accounts
             .as_ref()
@@ -724,6 +964,25 @@ impl Agents {
         if matches!(self.store().get_active_agent_account(kind), Ok(None)) {
             let _ = self.store().set_active_agent_account(kind, account);
         }
+    }
+
+    /// Records what a check found for an account, and clears its sign-in mark: a kept account is decided, so it is no longer
+    /// an open sign-in, and the kind's history records it (decision 0059). Every decision that keeps an account uses it. The
+    /// caller holds the homes gate. Returns whether the account exists.
+    pub(crate) fn keep_decided(
+        &self,
+        kind: &str,
+        account: &str,
+        state: AccountState,
+        identity: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let found = self
+            .store()
+            .set_agent_account_check(account, state_name(state), identity)?;
+        if found && let Err(error) = self.store().set_agent_account_pending(account, false) {
+            tracing::warn!(kind, code = %error, "a decided sign-in could not be cleared");
+        }
+        Ok(found)
     }
 
     pub(crate) fn notify_account(&self, kind: &str, account: &str, state: AccountState) {
