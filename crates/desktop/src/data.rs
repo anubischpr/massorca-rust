@@ -131,9 +131,9 @@ impl DataSource for SampleDataSource {
             status: StatusBarModel {
                 waiting: 1,
                 running: 1,
-                memory: "1.22 GB".into(),
+                memory: Some("1.22 GB".into()),
                 terminals: 2,
-                ports: 0,
+                ports: Some(0),
                 hosts_total: 2,
                 hosts_unreachable: 1,
             },
