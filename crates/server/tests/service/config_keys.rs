@@ -46,8 +46,8 @@ async fn the_list_describes_each_kind() {
     let list = client.config_list().await.expect("config.list answers");
     assert_eq!(
         list.values.len(),
-        32,
-        "31 keys of 0070 and the workspace root"
+        34,
+        "31 keys of 0070, the workspace root and the two branch prefix keys"
     );
     let find = |name: &str| {
         list.values

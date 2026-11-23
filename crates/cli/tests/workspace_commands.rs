@@ -475,3 +475,22 @@ fn workspace_create_without_a_name_generates_one_for_the_branch_and_folder() {
         stdout_text(&text)
     );
 }
+
+#[test]
+fn a_custom_branch_prefix_set_through_config_prefixes_the_branch_of_a_named_workspace() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "workspaces.branch_prefix", "custom"],
+    );
+    sandbox.json_ok(
+        "default",
+        &["config", "set", "workspaces.branch_prefix_custom", "team"],
+    );
+
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+
+    assert_eq!(created["name"], "feature");
+    assert_eq!(created["branch"], "team/feature");
+}

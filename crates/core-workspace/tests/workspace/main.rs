@@ -1,5 +1,6 @@
 //! Projects and workspaces against real git repositories and a real store (ADR 0008).
 
+mod branch_prefix;
 mod concurrency;
 mod create_folder;
 mod create_worktree;

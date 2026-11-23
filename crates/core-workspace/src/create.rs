@@ -12,6 +12,7 @@ use massorca_core_store::{
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceCreateParams};
 
+use crate::branch_prefix;
 use crate::error::DomainError;
 use crate::generated_names;
 use crate::names;
@@ -98,6 +99,7 @@ impl Workspaces {
             ),
             StoreKind::Git => {
                 let repo = Path::new(&project.path);
+                let segment = self.branch_prefix.segment(repo)?;
                 let branches: HashSet<String> = self
                     .git
                     .branches(repo)?
@@ -107,8 +109,9 @@ impl Workspaces {
                 let root = paths::absolute(&project.workspaces_root)?;
                 generated_names::generated_name(
                     |name| {
+                        let branch = branch_prefix::branch_name(segment.as_deref(), name);
                         names.contains(name)
-                            || branches.contains(name)
+                            || branches.contains(&branch.to_lowercase())
                             || is_occupied(&root.join(name))
                     },
                     generated_names::random_choice(),
@@ -130,7 +133,16 @@ impl Workspaces {
         params: &WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
         let repo = Path::new(&project.path);
-        let branch = params.branch.as_deref().unwrap_or(params.name.as_str());
+        // Why: a named or existing branch is used as given; only a new one takes the prefix.
+        let branch = match params.branch.as_deref() {
+            Some(explicit) => explicit.to_owned(),
+            None if params.existing_branch => params.name.clone(),
+            None => {
+                let segment = self.branch_prefix.segment(repo)?;
+                branch_prefix::branch_name(segment.as_deref(), &params.name)
+            }
+        };
+        let branch = branch.as_str();
         if !self.git.check_branch_name(repo, branch)? {
             return Err(DomainError::new(
                 codes::WORKSPACE_NAME_INVALID,
