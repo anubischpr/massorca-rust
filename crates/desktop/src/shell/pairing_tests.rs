@@ -32,7 +32,10 @@ fn making_an_offer_asks_the_service_and_shows_what_it_answers(cx: &mut TestAppCo
     click(cx, "pairing-make-offer");
     let reply = loop {
         match rig.script.next() {
-            Some(Command::CreateOffer { reply, .. }) => break reply,
+            Some(Command::CreateOffer { params, reply }) => {
+                assert!(params.admin, "a paired device gets full access");
+                break reply;
+            }
             Some(_) => continue,
             None => panic!("the offer was not asked for"),
         }
