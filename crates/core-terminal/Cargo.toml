@@ -18,6 +18,10 @@ vt100.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["fs"] }
 
+# macOS has no session listing: a terminal's processes are found by walking parent ids (decision 0081).
+[target.'cfg(target_os = "macos")'.dependencies]
+massorca-host-stats.workspace = true
+
 # A job object per terminal ends its whole process tree (decision 0031).
 [target.'cfg(windows)'.dependencies]
 win32job.workspace = true
