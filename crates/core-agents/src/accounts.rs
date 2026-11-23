@@ -1005,3 +1005,120 @@ fn all_missing(error: &AgentError) -> bool {
             !files.is_empty() && files.iter().all(|file| file["reason"] == "missing")
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sessions::tests::service;
+
+    fn account_row(state: &str, origin: &str) -> AgentAccountRow {
+        AgentAccountRow {
+            id: new_id(),
+            kind: "fake".to_owned(),
+            label: "work".to_owned(),
+            created_at: now_ms(),
+            identity: None,
+            state: state.to_owned(),
+            origin: origin.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_account_that_is_not_pending_is_activated() {
+        let (agents, _, _profile) = service();
+        let account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
+        agents.store().insert_agent_account(&account).unwrap();
+
+        let summary = agents
+            .accounts_activate("fake", &account.id, None)
+            .expect("a signed-in account is activated");
+        assert!(summary.active);
+        assert_eq!(
+            agents.store().get_active_agent_account("fake").unwrap(),
+            Some(account.id.clone())
+        );
+    }
+
+    #[test]
+    fn a_sign_in_still_open_in_the_store_refuses_activation_with_nothing_in_memory() {
+        let (agents, _, _profile) = service();
+        // A sign-in an earlier service left undecided: its state is not `needs_sign_in`, so only its mark refuses it.
+        let open = account_row("unknown", ORIGIN_SIGN_IN);
+        agents.store().insert_pending_sign_in(&open).unwrap();
+
+        match agents.accounts_activate("fake", &open.id, None) {
+            Ok(_) => panic!("an undecided sign-in was activated"),
+            Err(error) => assert_eq!(error.code, codes::AGENT_BUSY, "{}", error.message),
+        }
+        assert_eq!(
+            agents.store().get_active_agent_account("fake").unwrap(),
+            None,
+            "nothing became active"
+        );
+    }
+
+    #[test]
+    fn keeping_an_account_as_checked_clears_its_sign_in_mark() {
+        let (agents, _, _profile) = service();
+        let open = account_row(state_name(AccountState::NeedsSignIn), ORIGIN_SIGN_IN);
+        agents.store().insert_pending_sign_in(&open).unwrap();
+
+        assert!(
+            agents
+                .keep_decided("fake", &open.id, AccountState::Unknown, None)
+                .unwrap()
+        );
+        assert!(
+            agents.store().list_pending_sign_ins().unwrap().is_empty(),
+            "a kept account is no longer an open sign-in"
+        );
+    }
+
+    #[test]
+    fn a_check_of_an_account_being_decided_is_refused_as_busy() {
+        let (agents, _, _profile) = service();
+        // A sign-in the startup sweep is deciding right now: its mark is in the busy set, and the store still has it pending.
+        let open = account_row("unknown", ORIGIN_SIGN_IN);
+        agents.store().insert_pending_sign_in(&open).unwrap();
+        agents
+            .account_busy()
+            .pending
+            .insert(open.id.clone(), String::new());
+
+        match agents.accounts_check("fake", Some(&open.id)) {
+            Ok(_) => panic!("a check ran on an account that is being decided"),
+            Err(error) => assert_eq!(error.code, codes::AGENT_BUSY, "{}", error.message),
+        }
+    }
+
+    #[test]
+    fn a_new_import_is_not_history_until_its_check_keeps_it() {
+        let (agents, _, profile) = service();
+        let kinds = paths::kinds_dir(profile.path());
+        fs::create_dir_all(&kinds).expect("create the kinds directory");
+        let kind = serde_json::json!({
+            "id": "fake",
+            "name": "Fake",
+            "program": ["fake-agent"],
+            "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] }
+        });
+        fs::write(kinds.join("fake.json"), kind.to_string()).expect("write the fake kind");
+        let source = tempfile::tempdir().expect("a source directory");
+        fs::write(source.path().join("token.json"), "{}").expect("write a token");
+
+        let (account, _, _mark) = agents
+            .import_new_account("fake", source.path(), "work", ORIGIN_IMPORT)
+            .expect("the import copies the declared file");
+        assert!(
+            !agents.store().kind_has_had_account("fake").unwrap(),
+            "an import its check has not kept is not history"
+        );
+        agents
+            .keep_decided("fake", &account, AccountState::SignedIn, None)
+            .unwrap();
+        assert!(
+            agents.store().kind_has_had_account("fake").unwrap(),
+            "a kept import is history"
+        );
+    }
+}

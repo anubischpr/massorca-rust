@@ -351,14 +351,37 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Sign-in** (`sign_in.rs`): the empty home and its row (origin `sign_in`) are created under the
   gate, and the account is pending until its terminal ends. A service-owned terminal runs the
   kind's `accounts.login` arguments with the home variable set and `strip_env` applied (set to
-  empty, as in 0056). The terminal is listed under `agent-accounts`, which is no workspace. When it
-  ends, `decide_sign_in` keeps the account only when the check reports `signed_in`, and stores that
-  check's own state and identity. A check that did not finish (`unknown`), or a kind with no check,
-  keeps the account only if its declared files exist, as `unknown`. Any other verdict deletes it.
-  A row that is already gone is left alone, with no event.
-- **Pending and removing accounts**: a pending sign-in refuses removal and activation with
-  `agent.busy`; an account that never signed in refuses activation. Removal marks the account as
-  removing under the gate, so no run starts on it while the sign-out runs.
+  empty, as in 0056). The terminal is listed under `agent-accounts`, which is no workspace. A
+  terminal still open after 15 minutes (`sign_in::SIGN_IN_TIMEOUT`) is closed with a graceful kill,
+  and then decided as an ended one is. The limit is read from `MASSORCA_SIGN_IN_TIMEOUT_MS` when
+  the service starts: a test hook, whole milliseconds clamped to 100 ms through the default. When
+  the terminal ends, `decide_sign_in` decides the account from the check and its declared files
+  (`sign_in::sign_in_outcome`), holding the account's decision mark until the outcome is stored:
+  - `signed_in` keeps the account decided, with the check's own identity, and clears its mark;
+  - a check that cannot tell keeps the account decided as `unknown`, and clears its mark, while its
+    declared files exist. A check cannot tell when the kind has no check, or when it did not finish
+    (a timeout, or a program that could not start). The account can then be activated;
+  - any other verdict (`expired`, or another exit) deletes the account, and so does a check that
+    cannot tell when no declared file is left. Before a sign-in is deleted, the kind's
+    `accounts.logout` runs against the home when it is declared (see Removal).
+  The startup sweep decides the same way, except that a check that cannot tell keeps the account
+  pending, as `unknown`, so the next start decides it again (see Migration and startup). A check of
+  an undecided account (its store mark is set) decides it the same way, as a sign-in's end does. An
+  undecided account is not the kind's history until a decision keeps it (decision 0059). A row that
+  is already gone is left alone, with no event.
+- **Pending and removing accounts**: an account whose sign-in is open in this service, or whose
+  sign-in or import is being decided, refuses removal, activation and checks with `agent.busy`. An
+  account whose store mark (`sign_in_pending`) is still set, which a startup sweep or an interrupted
+  import leaves undecided, refuses activation with `agent.busy` too, also after a restart, until a
+  check decides it. Removal of such an account is allowed, and runs the sign-out as for any sign-in.
+  An account that never signed in refuses activation. Activation holds the homes gate from its checks
+  to its write, so a removal that begins meanwhile cannot delete the row under it. Removal marks the
+  account as removing under the gate, so no run starts on it while the sign-out runs.
+- **Devices below `workspace`**: a paired device that does not hold `workspace` still gets every
+  `agent.accounts.*` answer without the account's `identity`, gets `agent.credentials.show` with an
+  empty `home` and refusals that name no path, and gets sign-in terminals from `terminal.list` and
+  `terminal.show` with an empty `cwd`, since those paths are the account's home. The owner and
+  `workspace` devices see all of them.
 - **Check** (`account_check.rs`): it runs with the home variable set and the account commands' stripped
   names removed (`credentials.strip_env` and `accounts.strip_env`, decision 0059 amendment 2026-11-22), for at most 10 s. Its whole
   process tree is stopped at the deadline (a Job Object on Windows, a process group on Unix), and
@@ -368,37 +391,48 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   pattern's first group as the identity; another exit means `needs_sign_in`; a check that does not
   finish means `unknown`. A captured identity is kept only when it is at most 256 characters with no
   control character. A different identity than the recorded one is `conflict`, and the recorded
-  identity stays.
-- **Import** copies the declared files into a new account (origin `import`) and checks it. A check
-  that reports the login is not signed in deletes the new account, and the result is `failed`.
-  `not_found` means none of the declared files is in the source.
+  identity stays. The declaration has no way to name an offline failure, so a non-zero exit that is
+  neither the signed-in exit nor an expired match stays `needs_sign_in`; a kind that cannot tell
+  declares no check. An ordinary account keeps what its check finds: the state is recorded and
+  nothing else changes. A check of an undecided account (its store mark is set) decides it instead,
+  as a sign-in's end does (see Sign-in). A check of an account whose sign-in is open, or being
+  decided, is refused with `agent.busy`; a check that decides an undecided account by signing it out
+  answers `agent.account_not_found`, since the account is gone.
+- **Import** copies the declared files into a new account (origin `import`), which stays undecided
+  until its check decides it: a check that reports the login is not signed in deletes the new
+  account without a sign-out, and the result is `failed`; any other result keeps it, and only then
+  does it count as the kind's history. `not_found` means none of the declared files is in the
+  source. An import a crash left undecided is decided at the next start, the same way.
 - **Removal**: three steps. Under the gate, a busy account (a live run, an open sign-in, or a removal
   already running) is refused, and the account is marked removing. Outside the gate, the kind's
   `accounts.logout` runs only for an account whose origin is `sign_in`: an imported or migrated login
   is the person's, so the service never signs it out; its files are only deleted. Under the gate
-  again, the home and the row are deleted.
+  again, the home and the row are deleted. A sign-in the service discards (see Sign-in) is signed out
+  the same way before its home is deleted, since the service made that login.
 - **Migration and startup**: `startup_sweep` runs once before requests are served. It deletes a
   `migrated` row whose home is gone only while 0056's home is still there (a crash between recording
   the row and moving the home); moves 0056's home of each kind into an account; adopts an account
   directory that has no row as `migrated` (active only when its kind has no active account); and
-  decides each sign-in still open. Only a row marked pending (`sign_in_pending`, set when `add`
-  creates it, cleared when the sign-in is kept) is a sign-in still open. A `needs_sign_in` state on
+  decides each sign-in or import still undecided (see Sign-in and Import): a sign-in whose check cannot
+  tell stays pending for the next start. Only a row marked pending (`sign_in_pending`, set when `add`
+  or an import creates it, cleared when a decision keeps the account) is undecided. A `needs_sign_in` state on
   an imported or migrated account is only a state: the sweep never discards it. The row is recorded
   before the move, and its active mark too when the kind has none, so a crash after the move leaves
   the kind on that account. A move that fails deletes the row again. The reads `agent.kinds`,
   `agent.accounts.list` and `agent.credentials.show` never move a home; a start or a resume still
   moves it as a fallback.
 - **No silent fallback** (decision 0059): a kind that has ever had an account (the history record
-  `agent_account_history`, written by a trigger on every insert and kept when the accounts are
-  removed) and has no active account refuses to start with `agent.credentials_invalid`, until an
-  account is activated. Only a kind that never had an account uses the vendor's usual home.
+  `agent_account_history`, written by a trigger when an account is inserted decided, or when its
+  undecided sign-in or import is kept, and kept when the accounts are removed) and has no active
+  account refuses to start with `agent.credentials_invalid`, until an account is activated. Only a
+  kind that never had an account uses the vendor's usual home. A refused sign-in or import never
+  writes the record.
 - **Terminals and restarts**: the service owns its terminals. A graceful stop kills every live
   terminal (`TerminalManager::shutdown`, called from `service.rs`), and on Windows each terminal's
   job object kills its processes when the service's handle closes. A restart therefore starts with
   no sign-in terminal running from the previous service on those paths. On Unix, after a crash, a
   login process can outlive the service; the sweep decides a sign-in by its files and check and
   does not wait for that process.
-  resume still moves it as a fallback.
 - **Labels**: at most 256 characters with no control character, refused with
   `request.invalid_params`. The CLI prints labels and identities without control characters.
 - **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
@@ -488,6 +522,10 @@ not every variable a future Claude release may read.
 ## Follow-ups
 
 - Agent sessions (runs) keep the vendor credential variables; whether they strip `accounts.strip_env` is open (decision 0059, amendment 2026-11-22).
+- The sign-in terminal sets stripped names to empty because a terminal can only add variables;
+  removing them needs environment removal in `core-terminal`.
+- A check failure caused by being offline is read as signed out: a kind declaration has no way to
+  name it yet.
 
 ## Security
 

@@ -260,3 +260,139 @@ pub(crate) fn sign_in_outcome(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn found(state: AccountState, identity: Option<&str>) -> Verdict {
+        Verdict {
+            state,
+            identity: identity.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_sign_in_time_limit_is_fifteen_minutes_unless_the_test_hook_sets_it() {
+        assert_eq!(SIGN_IN_TIMEOUT, Duration::from_secs(15 * 60));
+        assert_eq!(sign_in_timeout_from(None), SIGN_IN_TIMEOUT);
+        assert_eq!(
+            sign_in_timeout_from(Some("soon")),
+            SIGN_IN_TIMEOUT,
+            "not a whole number"
+        );
+    }
+
+    #[test]
+    fn the_test_hook_sets_the_time_limit_clamped_between_a_tenth_of_a_second_and_the_default() {
+        assert_eq!(
+            sign_in_timeout_from(Some("250")),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            sign_in_timeout_from(Some(" 400 ")),
+            Duration::from_millis(400)
+        );
+        assert_eq!(
+            sign_in_timeout_from(Some("100")),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            sign_in_timeout_from(Some("40")),
+            Duration::from_millis(100),
+            "clamped up to the floor"
+        );
+        assert_eq!(
+            sign_in_timeout_from(Some("0")),
+            Duration::from_millis(100),
+            "clamped up to the floor"
+        );
+        assert_eq!(sign_in_timeout_from(Some("900000")), SIGN_IN_TIMEOUT);
+        assert_eq!(
+            sign_in_timeout_from(Some("99999999999")),
+            SIGN_IN_TIMEOUT,
+            "clamped down to the default"
+        );
+    }
+
+    #[test]
+    fn a_check_that_reports_signed_in_keeps_the_account_with_its_identity() {
+        for end in [SignInEnd::TerminalEnded, SignInEnd::StartupSweep] {
+            assert_eq!(
+                sign_in_outcome(
+                    Some(&found(AccountState::SignedIn, Some("fake@example.com"))),
+                    true,
+                    end
+                ),
+                SignInOutcome::SignedIn {
+                    identity: Some("fake@example.com".to_owned())
+                }
+            );
+            assert_eq!(
+                sign_in_outcome(Some(&found(AccountState::SignedIn, None)), false, end),
+                SignInOutcome::SignedIn { identity: None }
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_that_reports_signed_out_discards_the_account_even_with_its_files() {
+        for end in [SignInEnd::TerminalEnded, SignInEnd::StartupSweep] {
+            for state in [
+                AccountState::NeedsSignIn,
+                AccountState::Expired,
+                AccountState::Conflict,
+            ] {
+                assert_eq!(
+                    sign_in_outcome(Some(&found(state, None)), true, end),
+                    SignInOutcome::Discard,
+                    "{state:?} at {end:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_check_that_cannot_tell_keeps_the_account_as_unknown_when_its_terminal_ended() {
+        assert_eq!(
+            sign_in_outcome(
+                Some(&found(AccountState::Unknown, None)),
+                true,
+                SignInEnd::TerminalEnded
+            ),
+            SignInOutcome::Unknown
+        );
+        assert_eq!(
+            sign_in_outcome(None, true, SignInEnd::TerminalEnded),
+            SignInOutcome::Unknown,
+            "a kind without a check, or one that could not run"
+        );
+    }
+
+    #[test]
+    fn a_check_that_cannot_tell_leaves_the_account_pending_at_startup() {
+        assert_eq!(
+            sign_in_outcome(
+                Some(&found(AccountState::Unknown, None)),
+                true,
+                SignInEnd::StartupSweep
+            ),
+            SignInOutcome::Undecided
+        );
+        assert_eq!(
+            sign_in_outcome(None, true, SignInEnd::StartupSweep),
+            SignInOutcome::Undecided
+        );
+    }
+
+    #[test]
+    fn a_sign_in_with_no_declared_file_left_is_discarded_whatever_the_check_cannot_tell() {
+        for end in [SignInEnd::TerminalEnded, SignInEnd::StartupSweep] {
+            assert_eq!(
+                sign_in_outcome(Some(&found(AccountState::Unknown, None)), false, end),
+                SignInOutcome::Discard
+            );
+            assert_eq!(sign_in_outcome(None, false, end), SignInOutcome::Discard);
+        }
+    }
+}

@@ -1242,7 +1242,7 @@ fn activity_of(stored: &StoredActivity) -> Option<Activity> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use massorca_core_git::Git;
     use massorca_core_store::{
         ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState,
@@ -1254,7 +1254,7 @@ mod tests {
     use super::*;
 
     /// A service over an in-memory store with one workspace; returns it, the workspace id and the profile directory.
-    pub(super) fn service() -> (Agents, String, tempfile::TempDir) {
+    pub(crate) fn service() -> (Agents, String, tempfile::TempDir) {
         let profile = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         let project = ProjectRow {
