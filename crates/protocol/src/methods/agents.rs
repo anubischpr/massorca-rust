@@ -67,6 +67,10 @@ pub const QUEUE_RESUME: &str = "agent.queue.resume";
 /// Most prompts one session's queue holds (decision 0084).
 pub const MAX_QUEUED_PROMPTS: usize = 100;
 
+/// Most request ids of delivered prompts one session remembers, so a retry of a delivered prompt is refused (decision
+/// 0084). The window is the most recent ids, not a span of time.
+pub const MAX_DELIVERED_REQUEST_IDS: usize = 100;
+
 /// `reason` of a waiting prompt held because its agent is busy.
 pub const QUEUE_REASON_BUSY: &str = "busy";
 /// `reason` of a waiting prompt held because its agent is asking the person something.
@@ -116,7 +120,7 @@ pub enum QueueState {
 }
 
 /// One prompt waiting in a session's queue (decision 0084).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueuedPrompt {
     pub id: String,
     pub session: String,
@@ -129,6 +133,22 @@ pub struct QueuedPrompt {
     pub reason: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+/// Prints every field but the text, which is replaced by its length: a queued prompt is never printed into a log.
+impl std::fmt::Debug for QueuedPrompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueuedPrompt")
+            .field("id", &self.id)
+            .field("session", &self.session)
+            .field("position", &self.position)
+            .field("text", &format_args!("{} bytes", self.text.len()))
+            .field("state", &self.state)
+            .field("reason", &self.reason)
+            .field("created_at_ms", &self.created_at_ms)
+            .field("updated_at_ms", &self.updated_at_ms)
+            .finish()
+    }
 }
 
 /// Result of `agent.queue.list` and `agent.queue.resume`: a session's queue, head first.

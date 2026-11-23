@@ -662,3 +662,15 @@ fn queue_params_and_the_list_have_their_wire_shapes() {
     assert_eq!(agents::QUEUE_SEND_NOW, "agent.queue.send_now");
     assert_eq!(agents::QUEUE_RESUME, "agent.queue.resume");
 }
+
+#[test]
+fn a_queued_prompt_does_not_print_its_text_in_debug() {
+    let item = queued(agents::QueueState::Waiting, Some(agents::QUEUE_REASON_BUSY));
+    let shown = format!("{item:?}");
+    assert!(!shown.contains("next"), "the text is not printed: {shown}");
+    assert!(
+        shown.contains("q-1") && shown.contains("Waiting"),
+        "{shown}"
+    );
+    assert_eq!(agents::MAX_DELIVERED_REQUEST_IDS, 100);
+}
