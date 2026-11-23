@@ -155,3 +155,25 @@ fn an_exited_child_is_unreadable() {
     assert!(sample.processes.is_empty(), "{sample:?}");
     assert_eq!(sample.unreadable, 1);
 }
+
+/// A listing that names another start time for this process is a reused pid: unreadable, never summed. The same
+/// listing, as it was taken, is read.
+#[cfg(unix)]
+#[test]
+fn a_listing_with_another_start_time_is_not_read() {
+    let own = std::process::id();
+    let listed = processes()
+        .into_iter()
+        .find(|entry| entry.pid == own)
+        .expect("this process is listed");
+    assert!(listed.start.is_some(), "{listed:?}");
+    let as_listed = massorca_host_stats::sample_listed(std::slice::from_ref(&listed), &[own]);
+    assert_eq!(as_listed.processes.len(), 1, "{as_listed:?}");
+    let reused = massorca_host_stats::ProcessInfo {
+        start: listed.start.map(|start| start.wrapping_add(1)),
+        ..listed
+    };
+    let sample = massorca_host_stats::sample_listed(std::slice::from_ref(&reused), &[own]);
+    assert!(sample.processes.is_empty(), "{sample:?}");
+    assert_eq!(sample.unreadable, 1);
+}

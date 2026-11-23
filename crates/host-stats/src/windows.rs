@@ -210,6 +210,7 @@ fn info_of(entry: &PROCESSENTRY32W) -> ProcessInfo {
         parent: (entry.th32ProcessID != 0).then_some(entry.th32ParentProcessID),
         name: String::from_utf16_lossy(&name[..len]),
         session: None,
+        start: None,
     }
 }
 

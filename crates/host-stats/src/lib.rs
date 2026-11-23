@@ -31,6 +31,8 @@ use windows as sys;
 
 #[cfg(windows)]
 pub use memory::sample_job;
+#[cfg(unix)]
+pub use memory::sample_listed;
 pub use memory::{METRIC, MemorySample, Metric, ProcessMemory, memory_of, sample_memory};
 #[cfg(unix)]
 pub use table::descendants;

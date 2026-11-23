@@ -1,4 +1,4 @@
-//! The live process table: pids, parents and names.
+//! The live process table: pids, parents, names and start times.
 
 use crate::sys;
 
@@ -12,6 +12,10 @@ pub struct ProcessInfo {
     pub name: String,
     /// Linux: the session id, which groups a terminal's processes. `None` elsewhere.
     pub session: Option<u32>,
+    /// What identifies the process while its pid is held: Linux clock ticks since boot (`starttime`), macOS
+    /// microseconds since the epoch. A pid reused since the listing has another start time. `None` on Windows, where a
+    /// job's handle identifies its members.
+    pub start: Option<u64>,
 }
 
 /// Every live process this user can see, in one pass. Ended processes (Unix zombies) are left out. Empty when the
@@ -67,6 +71,7 @@ mod tests {
             parent,
             name: format!("p{pid}"),
             session: None,
+            start: None,
         }
     }
 

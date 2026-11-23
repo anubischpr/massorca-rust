@@ -183,13 +183,13 @@ impl ProcessTree {
                 .filter(|process| process.session == Some(shell))
                 .map(|process| process.pid)
                 .collect();
-            Some(massorca_host_stats::sample_memory(&pids))
+            Some(massorca_host_stats::sample_listed(table, &pids))
         }
         #[cfg(target_os = "macos")]
         {
             let shell = self.unreaped_shell()?;
             let pids = massorca_host_stats::descendants(shell, table);
-            Some(massorca_host_stats::sample_memory(&pids))
+            Some(massorca_host_stats::sample_listed(table, &pids))
         }
         #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         {
