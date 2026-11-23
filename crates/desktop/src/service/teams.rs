@@ -11,7 +11,8 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamProject, TeamRef,
+    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamProject,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -136,6 +137,17 @@ pub(crate) enum TeamCommand {
         task: String,
         reply: oneshot::Sender<Result<Task, Refusal>>,
     },
+    SaveBrief {
+        team: String,
+        project: String,
+        brief: String,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
+    },
+    DeleteProject {
+        team: String,
+        project: String,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -162,6 +174,35 @@ pub(super) fn spawn_call(
                 client.task_reopen(&TaskRef { task }).await
             });
         }
+        TeamCommand::SaveBrief {
+            team,
+            project,
+            brief,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_project_update(&TeamProjectUpdateParams {
+                        team,
+                        project,
+                        name: None,
+                        goal: None,
+                        brief: Some(brief),
+                    })
+                    .await
+            });
+        }
+        TeamCommand::DeleteProject {
+            team,
+            project,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_project_remove(&TeamProjectRemoveParams { team, project })
+                    .await
+            });
+        }
         TeamCommand::AddBot { params, reply } => {
             spawn_write(client, updates, sequence, reply, move |client| async move {
                 client.team_bot_add(&params).await
@@ -180,6 +221,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::TaskDone { reply, .. } | TeamCommand::TaskReopen { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::SaveBrief { reply, .. } | TeamCommand::DeleteProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -228,7 +272,9 @@ fn teams_refusal(error: &ClientError) -> Refusal {
             }
         }
         ClientError::Remote(body)
-            if body.code == codes::TEAM_NOT_FOUND || body.code == codes::BOT_NOT_FOUND =>
+            if body.code == codes::TEAM_NOT_FOUND
+                || body.code == codes::BOT_NOT_FOUND
+                || body.code == codes::TEAM_PROJECT_NOT_FOUND =>
         {
             Refusal::Failed {
                 code: body.code.clone(),
