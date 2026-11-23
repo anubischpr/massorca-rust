@@ -194,3 +194,29 @@ massorca team memory rm <team> <line>
 ```
 
 Team files and the Engram link stay out of this change (AUTO-31).
+
+## Amendment 2026-11-22: a team project's source
+
+A team project can now name the Workspaces project its code comes from. This
+amends the "code source" that the core decision left out of scope.
+
+- **The link.** `source_project` holds the Workspaces project id. While that
+  project exists, the wire also returns `source_project_name` and `source_kind`
+  (`git` or `folder`). All three are left out when no project is linked.
+- **How it is set.** `team.project_add` and `team.project_update` take an
+  optional `source_project`: a Workspaces project id, exact name or path. The
+  Workspaces domain resolves it. An unknown project is refused with
+  `project.not_found`, and nothing changes.
+- **How it is cleared.** `team.project_update` with an empty `source_project`
+  clears the link. Leaving the field out keeps the link.
+- **When the Workspaces project is removed.** The link is cleared. The column
+  is a foreign key with `ON DELETE SET NULL`, so no dangling id is kept. The
+  team project keeps its id, name, goal, brief and Board.
+- **Storage.** Migration step 15 adds `team_projects.source_project_id`. Rows
+  from before it read as no link.
+- **CLI.** `massorca team project add|update <team> <name> --source <project>`
+  sets the link. On update, an empty `--source` clears it. `team project list`
+  shows the linked project's name in a fourth column, or `-`.
+- **Not in this change.** Starting a task on a linked project comes in the next
+  PR. A git project gets one worktree per task. A folder project runs the task
+  in the folder itself. Read-only tasks run in the main checkout.

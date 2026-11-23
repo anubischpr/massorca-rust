@@ -313,6 +313,13 @@ CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
 "#,
         foreign_keys_off: false,
     },
+    // A team project's code source (decision 0072): the Workspaces project it links to. Removing that project clears the link.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
