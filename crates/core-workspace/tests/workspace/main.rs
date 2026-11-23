@@ -6,6 +6,7 @@ mod create_worktree;
 mod errors;
 mod fixture;
 mod interrupted_create;
+mod layout;
 mod names;
 mod names_and_paths;
 mod projects;
