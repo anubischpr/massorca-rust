@@ -2,6 +2,7 @@
 //! the cases the client cannot produce.
 
 mod agents_redaction;
+mod agents_seen;
 mod capabilities;
 mod common;
 mod concurrency;

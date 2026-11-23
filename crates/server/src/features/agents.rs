@@ -41,6 +41,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_MODES, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::AGENT_SEEN, Owner::Core)?,
         methods.register(
             Owner::Core,
             agents::KINDS,
@@ -96,6 +99,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::AGENT_MODES,
             Permission::Workspace,
             set_mode,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::MARK_SEEN,
+            capabilities::AGENT_SEEN,
+            Permission::Workspace,
+            mark_seen,
         )?,
         methods.register(
             Owner::Core,
@@ -239,6 +249,12 @@ async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, 
         agents.stop(&params.session, params.force)
     })
     .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Marks a session's latest `waiting` or `done` as seen (inventory STAT-19); watchers get the change.
+async fn mark_seen(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| agents.mark_seen(&params.session)).await?;
     Ok(for_caller(&ctx, session))
 }
 

@@ -65,6 +65,11 @@ pub enum AgentCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Marks a session's Waiting for you or Done state as seen, which clears its marker in every client.
+    Seen {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Forgets a session whose run has ended.
     Forget {
         /// Session id, or a unique prefix of at least 8 characters.
@@ -354,6 +359,10 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&set, &agent_text::mode_set_lines(&set));
+        }
+        AgentCommand::Seen { session } => {
+            let seen = client.agent_mark_seen(&session).await?;
+            output.success(&seen, &agent_text::session_details(&seen));
         }
         AgentCommand::Forget { session } => {
             let forgotten = client.agent_forget(&session).await?;

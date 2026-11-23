@@ -236,6 +236,12 @@ impl Client {
         self.call(agents::STOP, &params).await
     }
 
+    /// `agent.mark_seen`: marks a session's latest `waiting` or `done` as seen and answers with the session (capability
+    /// `agent-seen/1`).
+    pub async fn agent_mark_seen(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::MARK_SEEN, &session_ref(session)).await
+    }
+
     /// `agent.forget`: deletes the record of a session whose run has ended.
     pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::FORGET, &session_ref(session)).await

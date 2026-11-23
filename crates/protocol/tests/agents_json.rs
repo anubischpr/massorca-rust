@@ -62,6 +62,7 @@ fn method_names_match_the_wire_table() {
         (agents::FORGET, "agent.forget"),
         (agents::PROMPT, "agent.prompt"),
         (agents::RESUME, "agent.resume"),
+        (agents::MARK_SEEN, "agent.mark_seen"),
         (agents::HOOK, "agent.hook"),
         (agents::WATCH, "agent.watch"),
         (agents::DELEGATE, "agent.delegate"),
@@ -120,6 +121,7 @@ fn an_exited_session_carries_its_exit_activity_and_result() {
             outcome: Some(Outcome::Interrupted),
             source: ActivitySource::Process,
             at_ms: 1_767_225_602_000,
+            seen_at_ms: None,
         }),
         result: Some("all green".to_owned()),
         holds_secrets: false,
@@ -562,5 +564,23 @@ fn a_session_says_where_its_mode_came_from_and_what_waits_for_the_resume() {
     assert_eq!(
         (decoded.mode_source, decoded.pending_permission_mode),
         (None, None)
+    );
+}
+
+#[test]
+fn an_activity_carries_when_it_was_seen_and_an_older_one_decodes_without() {
+    let older = json!({ "state": "waiting", "source": "hook", "at_ms": 5 });
+    let decoded: Activity =
+        serde_json::from_value(older.clone()).expect("decodes without the field");
+    assert_eq!(decoded.seen_at_ms, None, "absent means not seen");
+    assert_wire(&decoded, &older);
+
+    let seen = Activity {
+        seen_at_ms: Some(9),
+        ..decoded
+    };
+    assert_wire(
+        &seen,
+        &json!({ "state": "waiting", "source": "hook", "at_ms": 5, "seen_at_ms": 9 }),
     );
 }

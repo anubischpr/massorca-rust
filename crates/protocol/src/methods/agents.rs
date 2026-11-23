@@ -27,6 +27,8 @@ pub const PROMPT: &str = "agent.prompt";
 pub const RESUME: &str = "agent.resume";
 /// Params: [`AgentSetModeParams`]. Result: [`AgentModeSet`]. Capability `agent-modes/1` (decision 0083).
 pub const SET_MODE: &str = "agent.set_mode";
+/// Marks a session's latest `waiting` or `done` as seen (capability `agent-seen/1`); answers with the session.
+pub const MARK_SEEN: &str = "agent.mark_seen";
 /// Params: [`AgentHookParams`]. Result: `null`.
 pub const HOOK: &str = "agent.hook";
 /// Params: [`AgentWatchParams`]. Result: `{ stream }`, as `events.subscribe`; then [`AgentWatchEvent`]s.
@@ -576,6 +578,10 @@ pub struct Activity {
     pub outcome: Option<Outcome>,
     pub source: ActivitySource,
     pub at_ms: i64,
+    /// When someone marked this `waiting` or `done` as seen (capability `agent-seen/1`). Absent means not seen, and is
+    /// what an older service sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_at_ms: Option<i64>,
 }
 
 /// One agent session.

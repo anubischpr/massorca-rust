@@ -1112,6 +1112,20 @@ impl Agents {
         self.view(row)
     }
 
+    /// Marks a session's current `waiting` or `done` as seen (inventory STAT-19) and announces the change once, so every
+    /// reader clears its marker together. Any other activity, or one already seen, is returned as it is.
+    pub fn mark_seen(&self, selector: &str) -> Result<AgentSession, AgentError> {
+        let id = self.resolve(selector)?.id;
+        let mut live = lock(&self.inner.status);
+        let marked = self.store().mark_agent_session_seen(&id, now_ms())?;
+        let row = self.reload(&id)?;
+        let session = self.view_with(&mut live, row)?;
+        if marked {
+            self.notify(Change::Updated(Box::new(session.clone())));
+        }
+        Ok(session)
+    }
+
     /// Ends the current run (graceful, or at once with `force`). The record stays, exited with reason `killed`.
     /// A session whose run already ended is returned as it is.
     pub fn stop(&self, selector: &str, force: bool) -> Result<AgentSession, AgentError> {
@@ -1538,6 +1552,9 @@ fn activity_of(stored: &StoredActivity) -> Option<Activity> {
     if let Some(outcome) = &stored.outcome {
         value["outcome"] = json!(outcome);
     }
+    if let Some(seen_at) = stored.seen_at {
+        value["seen_at_ms"] = json!(seen_at);
+    }
     serde_json::from_value(value).ok()
 }
 
@@ -1614,6 +1631,7 @@ pub(crate) mod tests {
             outcome: outcome.map(str::to_owned),
             source: "hook".to_owned(),
             at: 5,
+            seen_at: None,
         }
     }
 

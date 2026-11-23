@@ -394,6 +394,14 @@ ALTER TABLE agent_sessions ADD COLUMN pending_permission_mode TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // When someone marked a session's latest `waiting` or `done` as seen (inventory STAT-19, decision 0052); NULL until
+    // then, and cleared whenever the activity changes.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN activity_seen_at INTEGER;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

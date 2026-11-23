@@ -68,6 +68,19 @@ contact is never proof a process died. Terminals already use `live` /
   may dim old values. Expiry rules (the old 30-minute rule) come with
   notifications, where they matter.
 
+- **Seen state (amendment, 2026-11-23, inventory STAT-19).** A `waiting` or
+  `done` is something for the person to look at, so the store also keeps
+  whether someone has seen it: `seen_at_ms` on the session's activity, absent
+  until then. `agent.mark_seen` (CLI `agent seen <session>`, capability
+  `agent-seen/1`) sets it on the current `waiting` or `done` only; a second
+  mark keeps the first time, and any other activity is left as it is. A mark
+  is a change like any other: watchers get a `changed` item and the bus gets
+  `agent.changed`, so every client clears its marker together. Any new
+  activity, and a resume, clears it, so the next attention state is unseen.
+  It is saved with the activity on the session row (`activity_seen_at`), so a
+  restart keeps it. Clients keep only how they draw an unseen marker; an older
+  service sends no `seen_at_ms`, which reads as not seen.
+
 ## Alternatives
 
 - **One combined state** (`running`, `waiting`, `exited`...). It mixes "is
