@@ -72,6 +72,7 @@ pub(in crate::shell) fn project_page(
                     team,
                     project,
                     name: name.clone(),
+                    error: None,
                 };
                 let _ = shell.update(cx, |shell, cx| shell.open_team_confirm(confirm, cx));
             })
@@ -255,6 +256,7 @@ mod tests {
                     team: TeamId(1),
                     project: ProjectId(1),
                     name: "Desarrollo onboarding".into(),
+                    error: None,
                 },
                 cx,
             );

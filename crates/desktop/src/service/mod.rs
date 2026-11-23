@@ -32,6 +32,8 @@ pub use launch::{LaunchOptions, autostart_next_to};
 pub use refusal::Refusal;
 #[cfg(test)]
 pub(crate) use secrets::SecretCommand;
+#[cfg(test)]
+pub(crate) use teams::TeamCommand;
 pub use teams::{ProjectRecord, TeamIds, TeamRecord, TeamsRead};
 pub use terminals::{AttachRole, StreamEnd, TerminalStream, TerminalStreamItem, feed_events};
 #[cfg(test)]

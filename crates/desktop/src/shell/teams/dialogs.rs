@@ -91,6 +91,8 @@ pub(in crate::shell) enum TeamConfirm {
         team: TeamId,
         project: ProjectId,
         name: String,
+        /// Why the service refused the last delete, shown until the confirm closes.
+        error: Option<String>,
     },
     DeleteMemory {
         team: TeamId,
@@ -290,6 +292,9 @@ impl Shell {
             (TeamDialog::AddBot(dialog), Some(service)) => {
                 return self.send_add_bot(service, dialog, cx);
             }
+            (TeamDialog::EditBrief(dialog), Some(service)) => {
+                return self.send_edit_brief(service, dialog, cx);
+            }
             (dialog, _) => dialog,
         };
         self.team_dialog = match dialog {
@@ -433,6 +438,99 @@ impl Shell {
         .detach();
     }
 
+    /// Sends the brief of the Edit brief form, as `send_add_bot` sends a bot. A refusal reopens the form with its
+    /// message; an accepted brief shows once the teams are read again.
+    fn send_edit_brief(
+        &mut self,
+        service: ServiceHandle,
+        dialog: EditBriefDialog,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let brief = dialog.field.read(cx).text().trim().to_owned();
+        let team = self.team_key(dialog.team, cx);
+        let project = self.service_key(dialog.project.0, cx);
+        let form = TeamDialog::EditBrief(dialog);
+        let (Some(team), Some(project)) = (team, project) else {
+            let missing = TeamError::Missing.message();
+            return self.finish_team_dialog(form, Some(missing.into()), cx);
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.save_brief(team, project, brief).await;
+            this.update(cx, |shell, cx| {
+                let message = answer.err().map(|refusal| refusal.message().into());
+                shell.finish_team_dialog(form, message, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Sends a project delete to the service, as `send_add_bot` sends a bot. The project's page goes back to its
+    /// team's Board once the service accepts; a refusal reopens the confirm with its message.
+    fn send_delete_project(
+        &mut self,
+        service: ServiceHandle,
+        confirm: TeamConfirm,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+        let TeamConfirm::DeleteProject { team, project, .. } = &confirm else {
+            return;
+        };
+        let (team, project) = (*team, *project);
+        let (Some(team_key), Some(project_key)) =
+            (self.team_key(team, cx), self.service_key(project.0, cx))
+        else {
+            let missing = TeamError::Missing.message();
+            return self.finish_team_confirm(confirm, Some(missing.into()), cx);
+        };
+        cx.spawn(async move |this, cx| {
+            let answer = service.delete_project(team_key, project_key).await;
+            this.update(cx, |shell, cx| {
+                match answer {
+                    Ok(_) => shell.model.open_team_page(TeamPage::Board(team)),
+                    Err(refusal) => {
+                        shell.finish_team_confirm(confirm, Some(refusal.message().into()), cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reopens a confirm the service refused, with its message, unless another confirm has opened meanwhile.
+    fn finish_team_confirm(
+        &mut self,
+        confirm: TeamConfirm,
+        message: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(message) = message else {
+            return cx.notify();
+        };
+        if self.team_confirm.is_some() {
+            return cx.notify();
+        }
+        self.team_confirm = Some(match confirm {
+            TeamConfirm::DeleteProject {
+                team,
+                project,
+                name,
+                ..
+            } => TeamConfirm::DeleteProject {
+                team,
+                project,
+                name,
+                error: Some(message.to_string()),
+            },
+            other => other,
+        });
+        cx.notify();
+    }
+
     /// Closes a form the service accepted (`message` is `None`). Otherwise the form comes back with the message,
     /// unless another form has been opened meanwhile.
     fn finish_team_dialog(
@@ -458,11 +556,16 @@ impl Shell {
 
     /// The service's id for a team of this shell, as the store numbered it.
     fn team_key(&self, team: TeamId, cx: &App) -> Option<String> {
+        self.service_key(team.0, cx)
+    }
+
+    /// The service's id for the item the store numbered `number`: a team, a project or a card.
+    fn service_key(&self, number: u32, cx: &App) -> Option<String> {
         self.store
             .read(cx)
             .state()
             .team_ids
-            .key(team.0)
+            .key(number)
             .map(str::to_owned)
     }
 
@@ -544,13 +647,16 @@ impl Shell {
         let Some(confirm) = self.team_confirm.take() else {
             return;
         };
-        match confirm {
-            TeamConfirm::DeleteProject { team, project, .. } => {
+        match (confirm, self.service.clone()) {
+            (confirm @ TeamConfirm::DeleteProject { .. }, Some(service)) => {
+                self.send_delete_project(service, confirm, cx);
+            }
+            (TeamConfirm::DeleteProject { team, project, .. }, None) => {
                 if self.model.teams_mut().delete_project(team, project).is_ok() {
                     self.model.open_team_page(TeamPage::Board(team));
                 }
             }
-            TeamConfirm::DeleteMemory { team, memory } => {
+            (TeamConfirm::DeleteMemory { team, memory }, _) => {
                 let _ = self.model.teams_mut().delete_memory(team, memory);
             }
         }
@@ -701,6 +807,10 @@ pub(in crate::shell) fn team_confirm_view(
 ) -> Dialog {
     let theme = *cx.theme();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
+    let error = match confirm {
+        TeamConfirm::DeleteProject { error, .. } => error.clone(),
+        TeamConfirm::DeleteMemory { .. } => None,
+    };
     let (dialog, body, action) = match confirm {
         TeamConfirm::DeleteProject { name, .. } => (
             Dialog::new("delete-project", format!("Delete project {name}?"))
@@ -714,7 +824,7 @@ pub(in crate::shell) fn team_confirm_view(
             "Delete memory",
         ),
     };
-    dialog
+    let dialog = dialog
         .open(true)
         .child(
             div()
@@ -728,7 +838,11 @@ pub(in crate::shell) fn team_confirm_view(
         })
         .on_dismiss(move |_, cx| {
             let _ = on_dismiss.update(cx, |shell, cx| shell.close_team_confirm(cx));
-        })
+        });
+    match error {
+        Some(message) => dialog.error(SharedString::from(message)),
+        None => dialog,
+    }
 }
 
 #[cfg(test)]
@@ -737,13 +851,15 @@ mod tests {
     use crate::data::SampleDataSource;
     use crate::model::marketplace::MarketplaceItemId;
     use crate::model::navigation::{MarketplacePage, Mode, Page};
-    use crate::model::teams::{SampleTeamsSource, TeamId};
-    use crate::service::StoreUpdate;
-    use crate::service::TeamsRead;
+    use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage};
     use crate::service::fixtures::{agent_kind, team};
+    use crate::service::{
+        Command, ProjectRecord, Refusal, StoreUpdate, TeamCommand, TeamRecord, TeamsRead,
+    };
     use crate::shell::service_tests::{click, draw, rig};
     use gpui::{Entity, TestAppContext, VisualTestContext};
     use massorca_protocol::methods::agents::PackageState;
+    use massorca_protocol::methods::teams::{Board, TeamProject};
     use massorca_ui::{Appearance, Theme};
 
     fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -963,6 +1079,160 @@ mod tests {
                 shell.model().navigation().page,
                 Page::Marketplace(MarketplacePage::Item(MarketplaceItemId(2)))
             );
+        });
+    }
+
+    /// Team t1 with one project, p1, named Checkout and briefed "Old".
+    fn team_with_checkout() -> TeamRecord {
+        let mut record = team("t1", "Desarrollo");
+        record.projects.push(ProjectRecord {
+            project: checkout(),
+            board: Board {
+                team_id: "t1".into(),
+                project_id: Some("p1".into()),
+                columns: Vec::new(),
+            },
+        });
+        record
+    }
+
+    fn checkout() -> TeamProject {
+        TeamProject {
+            id: "p1".into(),
+            team_id: "t1".into(),
+            name: "Checkout".into(),
+            goal: String::new(),
+            brief: "Old".into(),
+            created_at_ms: 1,
+        }
+    }
+
+    #[gpui::test]
+    fn a_brief_on_a_connected_service_is_sent_and_its_form_closes_once_accepted(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_checkout()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_edit_brief(TeamId(1), ProjectId(2), window, cx);
+        });
+        cx.run_until_parked();
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::SaveBrief {
+            team,
+            project,
+            brief,
+            reply,
+        })) = rig.script.next()
+        else {
+            panic!("the brief goes to the service");
+        };
+        assert_eq!(
+            (team.as_str(), project.as_str(), brief.as_str()),
+            ("t1", "p1", "Old")
+        );
+        let _ = reply.send(Ok(checkout()));
+        cx.run_until_parked();
+        rig.shell.read_with(cx, |shell, _| {
+            assert!(shell.team_dialog.is_none(), "the form closes once accepted")
+        });
+    }
+
+    #[gpui::test]
+    fn a_brief_the_service_refuses_keeps_its_form_open_with_the_reason(cx: &mut TestAppContext) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_checkout()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update_in(cx, |shell, window, cx| {
+            shell.open_edit_brief(TeamId(1), ProjectId(2), window, cx);
+        });
+        cx.run_until_parked();
+        rig.shell
+            .update(cx, |shell, cx| shell.submit_team_dialog(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::SaveBrief { reply, .. })) = rig.script.next() else {
+            panic!("the brief goes to the service");
+        };
+        let _ = reply.send(Err(Refusal::Failed {
+            code: "team.project_not_found".into(),
+            message: "That item is gone. Nothing was changed.".into(),
+        }));
+        cx.run_until_parked();
+        rig.shell
+            .read_with(cx, |shell, _| match &shell.team_dialog {
+                Some(TeamDialog::EditBrief(form)) => assert_eq!(
+                    form.error.as_deref(),
+                    Some("That item is gone. Nothing was changed.")
+                ),
+                other => {
+                    panic!("the Edit brief form should stay open with the reason, found {other:?}")
+                }
+            });
+    }
+
+    #[gpui::test]
+    fn deleting_a_project_on_a_connected_service_opens_its_team_board_once_accepted(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
+        rig.updates
+            .send(StoreUpdate::Teams(TeamsRead {
+                number: 1,
+                teams: Ok(vec![team_with_checkout()]),
+            }))
+            .expect("the store listens");
+        cx.run_until_parked();
+        rig.shell.update(cx, |shell, cx| {
+            shell.model.press_mode_switch();
+            shell
+                .model
+                .open_team_page(TeamPage::Project(TeamId(1), ProjectId(2)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        rig.shell.update(cx, |shell, cx| {
+            shell.open_team_confirm(
+                TeamConfirm::DeleteProject {
+                    team: TeamId(1),
+                    project: ProjectId(2),
+                    name: "Checkout".into(),
+                    error: None,
+                },
+                cx,
+            );
+        });
+        rig.shell
+            .update(cx, |shell, cx| shell.confirm_team_delete(cx));
+        cx.run_until_parked();
+        let Some(Command::Team(TeamCommand::DeleteProject {
+            team,
+            project,
+            reply,
+        })) = rig.script.next()
+        else {
+            panic!("the delete goes to the service");
+        };
+        assert_eq!((team.as_str(), project.as_str()), ("t1", "p1"));
+        let _ = reply.send(Ok(checkout()));
+        cx.run_until_parked();
+        rig.shell.read_with(cx, |shell, _| {
+            assert_eq!(
+                shell.model().navigation().page,
+                Page::Team(TeamPage::Board(TeamId(1)))
+            )
         });
     }
 }
