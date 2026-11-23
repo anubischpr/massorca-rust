@@ -1,6 +1,7 @@
 //! The nine parts of a Marketplace item page in the owner's order (teams-extensions-settings.md 7.2,
 //! decision 0059): which parts an item has, and the rows each part shows.
 
+use super::extension_items::risk_word;
 use super::types::{AccountState, ItemState, MarketplaceItem, MarketplaceSnapshot};
 
 /// One part of the item page, from the top down.
@@ -89,6 +90,9 @@ pub fn information(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
     ];
     if let Some(permissions) = &item.permissions {
         rows.push(("Permissions", permissions.clone()));
+    }
+    if let Some(extension) = &item.extension {
+        rows.push(("Risk", risk_word(extension.risk.level).to_owned()));
     }
     if let Some(found) = &item.found_on_this_pc {
         rows.push(("Found on this PC", found.clone()));

@@ -259,9 +259,10 @@ impl Shell {
                 shell.model.refresh_teams(teams);
             }
             if !store.read(cx).is_sample() {
-                shell
-                    .marketplace
-                    .follow_agent_kinds(&store.read(cx).state().agent_kinds);
+                let state = store.read(cx).state();
+                shell.marketplace.follow_agent_kinds(&state.agent_kinds);
+                let (installed, catalogue) = state.extension_lists();
+                shell.marketplace.follow_extensions(installed, catalogue);
                 shell.model.set_marketplace(shell.marketplace.snapshot());
             }
             cx.notify();

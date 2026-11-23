@@ -8,6 +8,7 @@ use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AgentKind, AgentSession};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
+use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
@@ -335,6 +336,16 @@ impl StoreState {
         for record in self.teams.iter().flatten() {
             self.team_ids.register(record);
         }
+    }
+
+    /// The installed packages and the catalogue as the last read listed them; empty while a list is refused or unread.
+    pub fn extension_lists(&self) -> (&[ExtensionItem], &[ExtensionItem]) {
+        let Some(read) = &self.extensions else {
+            return (&[], &[]);
+        };
+        let installed = read.installed.as_ref().map_or(&[][..], Vec::as_slice);
+        let catalogue = read.catalogue.as_ref().map_or(&[][..], Vec::as_slice);
+        (installed, catalogue)
     }
 
     /// Keeps the newest extension read, as `apply_teams` does for Bot Teams.
