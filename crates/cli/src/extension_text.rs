@@ -231,7 +231,7 @@ fn plan_line(plan: &CliPlan) -> String {
             plan.agent,
             command_text(command),
             if *runs_package_scripts {
-                " npm also runs the package's own install script, which this review cannot show."
+                " npm also runs the install scripts of the package and its dependencies, which this review cannot show."
             } else {
                 ""
             }

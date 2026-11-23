@@ -36,7 +36,8 @@ fn a_missing_cli_plans_the_built_in_install_command_for_this_os() {
     assert_eq!(
         review.cli[0].state,
         PlanState::WillRun {
-            runs_package_scripts: claude_install()[0] == "npm",
+            // Claude installs with npm only on Linux.
+            runs_package_scripts: cfg!(target_os = "linux"),
             command: claude_install(),
         }
     );
@@ -52,8 +53,10 @@ fn an_npm_install_says_the_package_scripts_run_and_others_do_not() {
     assert_eq!(value["cli"][0]["runs_package_scripts"], true);
 
     let claude = serde_json::to_value(claude_review(&FakeHost::new())).expect("serializes");
-    let npm = claude_install()[0] == "npm";
-    assert_eq!(claude["cli"][0].get("runs_package_scripts").is_some(), npm);
+    assert_eq!(
+        claude["cli"][0].get("runs_package_scripts").is_some(),
+        cfg!(target_os = "linux")
+    );
 }
 
 #[test]

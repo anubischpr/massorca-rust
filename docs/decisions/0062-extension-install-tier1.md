@@ -322,14 +322,17 @@ fixed with a test, except where a row says otherwise.
   and `bin` in its package.json). The package declares `npm install -g gentle-pi` on every OS and verifies with
   `gentle-shell --version`, which the reference documents. The Pi runtime is an optional peer dependency and the
   package runs a `postinstall` script, so a host without Pi installs the package but fails verify, and nothing is
-  registered. No uninstall is declared: the vendor's own is `gentle-shell self-uninstall`, which is not on the program
+  registered on that attempt. npm leaves the launcher on `PATH`, so a later install finds it and registers it without
+  running anything: verify runs only after a vendor installer, because running a found program would break the review's
+  "nothing runs" promise. A session started with that CLI then fails when the program runs. The same holds for every
+  built-in that declares verify. No uninstall is declared: the vendor's own is `gentle-shell self-uninstall`, which is not on the program
   allowlist, and the vendor says npm removal on Windows is not verified yet. The npm name appears only inside the quoted
   install command; every user-visible name is "Gentle Shell".
   A Gentle Shell the vendor's bundle installer put on the machine (a generated `gentle-shell.cmd` launcher in a bundle
   folder on `PATH`, with its own runtime) resolves like any program, so the install registers it and runs nothing.
 - **Package scripts.** When the planned command is `npm install`, the review's plan carries `runs_package_scripts` (an
-  optional wire field older peers omit), and the CLI says that npm also runs the package's own install script, which
-  the review cannot show. It applies to every built-in that installs with npm, not only Gentle Shell.
+  optional wire field older peers omit), and the CLI says that npm also runs the install scripts of the package and
+  its dependencies, which the review cannot show. It applies to every built-in that installs with npm, not only Gentle Shell.
 
 #### Third-party vendor commands (refused in tier 1)
 

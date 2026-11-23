@@ -446,7 +446,7 @@ pub enum CliPlanState {
     /// The vendor's command for the host OS runs, exactly this argv.
     WillRun {
         command: Vec<String>,
-        /// npm also runs the package's own install scripts, which the review cannot show. Absent from older peers.
+        /// npm also runs the install scripts of the package and its dependencies. Absent from older peers.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         runs_package_scripts: bool,
     },

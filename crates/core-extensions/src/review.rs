@@ -60,7 +60,7 @@ pub enum PlanState {
     /// The vendor's command for this OS runs, exactly this argv.
     WillRun {
         command: Vec<String>,
-        /// npm also runs the package's own install scripts, which the review cannot show.
+        /// npm also runs the install scripts of the package and its dependencies, which the review cannot show.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         runs_package_scripts: bool,
     },
@@ -109,7 +109,7 @@ fn plan_one(cli: &AgentCli, resolver: &dyn ProgramResolver, os: Option<CliOs>) -
         })
 }
 
-/// `npm install` runs the installed package's lifecycle scripts unless scripts are turned off.
+/// `npm install` runs the lifecycle scripts of the package and its dependencies unless scripts are turned off.
 fn runs_package_scripts(command: &[String]) -> bool {
     command.first().is_some_and(|program| program == "npm")
         && command
