@@ -9,6 +9,7 @@ pub mod devices;
 pub mod events;
 pub mod extensions;
 pub mod git;
+pub mod host;
 pub mod projects;
 pub mod secrets;
 pub mod service;

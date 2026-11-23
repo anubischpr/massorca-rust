@@ -266,8 +266,11 @@ massorca secret reset-key
     session exists. The message names the cause and variable names, never a
     value.
 - **The client boundary.** Setting a secret needs HostAdmin, so reading one
-  through a run does too.
-  - A caller below HostAdmin (a paired device with standard scopes) starts,
+  through a run does too. Pairing defaults to full access, HostAdmin
+  included, because a paired device is the owner themself (0078, not
+  adopted). The gating below therefore applies only to a device the owner
+  deliberately paired with reduced scopes, an optional, advanced restriction.
+  - A caller below HostAdmin (a device paired with reduced scopes) starts,
     resumes or delegates a run without vault variables, and the reply says so
     in `secrets_withheld`.
   - A run that received vault variables, and every child delegated from it, is
@@ -298,9 +301,12 @@ massorca secret reset-key
   therefore protects against Read-scope clients, against accidental display,
   and against other OS users. It is defence in depth, not a boundary against a
   Workspace-scope device.
-- **Open design item**, not in this change: a real boundary needs pairing
-  scopes that exclude `terminal.create` and arbitrary programs, or OS-level
-  isolation of the vault.
+- **No device boundary is planned.** A real boundary against a device would
+  need pairing scopes that exclude `terminal.create` and arbitrary programs,
+  or OS-level isolation of the vault. 0078 designed such a scope and was not
+  adopted: a paired device is the owner, and restrictions come from the
+  agent's permission mode. Anyone who holds a full-access device can read
+  every secret, as the owner at the keyboard can.
 - **Dangerous names**, refused when a secret is set, linked or requested
   (`secret.reserved_name`) and again at launch, compared without case: `PATH`,
   `PATHEXT`, `COMSPEC`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`,

@@ -114,11 +114,13 @@ fn two_owners_may_declare_the_same_setting_key_and_each_finds_its_own() {
             kind: SettingKind::Bool,
             default: Value::Bool(false),
             description: "core".to_owned(),
+            aliases: Vec::new(),
         })
         .expect("core declares the key");
     let _extension = settings
         .register(SettingDecl {
             owner: extension.clone(),
+            aliases: Vec::new(),
             key: "shared.key".to_owned(),
             kind: SettingKind::String,
             default: Value::String("x".to_owned()),
@@ -146,6 +148,7 @@ fn two_owners_may_declare_the_same_setting_key_and_each_finds_its_own() {
             kind: SettingKind::Integer,
             default: Value::from(1),
             description: "again".to_owned(),
+            aliases: Vec::new(),
         })
         .expect_err("one owner may not declare a key twice");
     assert!(matches!(duplicate, RegistrationError::Duplicate { .. }));

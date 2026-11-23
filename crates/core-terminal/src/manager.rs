@@ -22,6 +22,7 @@ use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySi
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
+use massorca_host_stats::MemorySample;
 
 /// Largest input accepted per call (0033).
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -174,6 +175,16 @@ pub struct TerminalInfo {
     pub exit: Option<ExitRecord>,
     /// Set at creation for a run that got vault secrets, and never cleared.
     pub holds_secrets: bool,
+}
+
+/// One terminal's process memory (`TerminalManager::memory`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSample {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    /// The shell and what it started. `None` when the terminal's processes cannot be known; see
+    /// `ProcessTree::memory`.
+    pub sample: Option<MemorySample>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -650,6 +661,32 @@ impl TerminalManager {
     /// Live terminals, counting creates in progress.
     pub fn live_count(&self) -> usize {
         lock(&self.inner.registry).live
+    }
+
+    /// The process memory of every terminal not yet exited, by creation time, for host memory (decision 0081). A
+    /// terminal whose wait failed (`Unverifiable`) is included. On Unix the process table is taken once for all
+    /// terminals; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
+    pub fn memory(&self) -> Vec<TerminalSample> {
+        let table = if cfg!(unix) {
+            massorca_host_stats::processes()
+        } else {
+            Vec::new()
+        };
+        let mut terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
+            .terminals
+            .values()
+            .cloned()
+            .collect();
+        terminals.sort_by_key(|terminal| terminal.seq);
+        terminals
+            .iter()
+            .filter(|terminal| !terminal.is_exited())
+            .map(|terminal| TerminalSample {
+                terminal_id: terminal.id.clone(),
+                workspace_id: terminal.workspace_id.clone(),
+                sample: terminal.tree.memory(&table),
+            })
+            .collect()
     }
 }
 
