@@ -163,6 +163,8 @@ fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBod
         outcome: None,
         error: None,
         error_code: None,
+        workspace_id: None,
+        branch: None,
         created_at: now,
         updated_at: now,
     };
@@ -372,6 +374,8 @@ pub(crate) fn view_of(row: &TaskRow, session: &Session) -> Task {
         outcome: row.outcome.map(outcome_of),
         error: row.error.clone(),
         error_code: row.error_code.clone(),
+        workspace_id: row.workspace_id.clone(),
+        branch: row.branch.clone(),
         column: standing.column,
         state: standing.state,
         last_known: standing.last_known,

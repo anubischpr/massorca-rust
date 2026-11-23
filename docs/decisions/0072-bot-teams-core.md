@@ -242,15 +242,31 @@ The workspace domain lets one agent write in a workspace at a time
   verified. That start is refused with `bot.busy`. The task stays Open with the
   reason in `error`, and nothing is queued. Starts are serialised, so two
   starts for one bot cannot both find it free.
-- **A task on a team project that is a plain folder:** it runs in that folder,
-  with several writers, as in pv96.
+- **A task on a team project that is a plain folder:** it runs in that
+  folder, with several writers. The project's folder workspace at its own path
+  is reused, or made when it has none, and is marked as shared.
 - **A task on a team project that is a git repository:** the bot works in its
-  own git worktree for that task. That worktree is made through the path
-  delegation uses for child agents, and the result comes back as a branch. A
-  task that only reads runs in the main checkout, as in pv96.
-- **What is not built yet:** a team project can name its code source, but
-  `task.start` does not use that link yet, so no task reaches either project
-  case today. Both come in a follow-up.
+  own git worktree, made through the same Workspaces entry delegation uses for
+  a child agent. The Workspaces domain picks the base: the project's base
+  branch once projects have one, otherwise the main checkout's `HEAD`. The
+  main checkout's uncommitted changes are not carried, and the task prompt
+  says so. The result is that worktree's branch; the owner merges it.
+- **Worktree names:** as in pv96, the worktree and its branch are named after
+  the task title: a lowercase ASCII slug of at most 40 characters, then `-`
+  and 6 characters of the start attempt (`child-<6>` when the title has no
+  letters or digits). Every start makes a new worktree; a retry of the same
+  pending attempt finds its own.
+- **Cleanup:** none. `task.done`, `task.reopen`, `task.rm` and removing the
+  team leave the worktree and its branch. The owner removes them with
+  `workspace rm`, which keeps a branch that is not merged.
+- **Where the result is:** a task and a Board card carry optional
+  `workspace_id` (where the last start ran) and `branch` (set only for a task's
+  own worktree). Migration step 17 adds both columns.
+- **No source:** a task with no project, or whose project links no source or a
+  removed one, runs in the team folder.
+- **Read-only tasks: deferred.** pv96 runs a task that only reads in the main
+  checkout. Here a git project's main checkout has no workspace row, so no
+  agent can run there yet. That needs a Workspaces change of its own.
 - **Who owns the run:** the host that runs the agent owns the run. A card
   follows its session in the `live`, `unverifiable` and `exited` terms. An
   unverifiable session counts as running, and losing contact never moves a

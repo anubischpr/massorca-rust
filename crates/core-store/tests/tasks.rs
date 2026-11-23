@@ -60,6 +60,8 @@ fn task_row(team_id: &str, title: &str, created_at: i64) -> TaskRow {
         outcome: None,
         error: None,
         error_code: None,
+        workspace_id: None,
+        branch: None,
         created_at,
         updated_at: created_at,
     }

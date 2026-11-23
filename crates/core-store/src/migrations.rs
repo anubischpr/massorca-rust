@@ -334,6 +334,15 @@ CREATE INDEX tasks_session_id ON tasks (session_id);
 "#,
         foreign_keys_off: false,
     },
+    // Where a task's last start ran: its own worktree on a linked git project, a linked folder or the team folder, and
+    // the worktree's branch, where the result is (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE tasks ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN branch TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

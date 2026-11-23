@@ -178,6 +178,12 @@ pub struct Task {
     /// The protocol code of `error`, such as `agent.not_installed` or `bot.busy`, for the sentence a client shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// The workspace the last start ran in: the task's own worktree, a linked folder, or the team folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// The branch of the task's own worktree, where its result is; set only for a linked git project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub column: Column,
     pub state: CardState,
     /// The session's terminal cannot be reached, so the state is the last one the agent reported.

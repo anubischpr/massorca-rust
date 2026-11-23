@@ -166,6 +166,8 @@ mod tests {
             last_known: false,
             error: error.map(Into::into),
             error_code: None,
+            workspace_id: None,
+            branch: None,
             at_ms: 1,
         }
     }

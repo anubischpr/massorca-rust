@@ -156,6 +156,8 @@ mod tests {
             outcome: None,
             error: None,
             error_code: None,
+            workspace_id: None,
+            branch: None,
             created_at: 1,
             updated_at: 1,
         };
