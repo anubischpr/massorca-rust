@@ -2,6 +2,7 @@
 //! runtime, the connection states, the updates the UI folds into its store, and the typed
 //! refusals that pick a dialog.
 
+mod accounts;
 mod agents;
 mod bridge;
 mod connection;
@@ -19,6 +20,8 @@ mod git_tests;
 #[cfg(test)]
 mod secrets_tests;
 
+#[cfg(test)]
+pub(crate) use accounts::AccountCommand;
 #[cfg(test)]
 pub(crate) use bridge::{Command, Script};
 pub use bridge::{ServiceBridge, ServiceHandle, connect_options};
