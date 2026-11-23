@@ -309,6 +309,44 @@ mod tests {
         assert!(kinds[0].detected);
     }
 
+    /// A package whose state cannot be read (an unreadable lockfile) is refused with that read failure, not with advice
+    /// to install or enable it.
+    #[test]
+    fn a_kind_whose_package_state_cannot_be_read_is_refused_with_the_read_failure() {
+        let mut unknown = fake_package(PackageState::Unknown, MISSING_PROGRAM);
+        unknown.decl = Err(
+            "ext.fake: the extensions lockfile cannot be read (extension.invalid_lockfile)"
+                .to_owned(),
+        );
+        let (agents, base, profile) = service(vec![unknown]);
+        let workspace = existing_workspace(&agents, &base, profile.path());
+        let error = agents
+            .start(start_params(&workspace, "fake"), SecretGrant::Provide)
+            .expect_err("a kind in an unknown state never starts");
+        assert_eq!(
+            error.code,
+            codes::AGENT_KIND_NOT_ENABLED,
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("the extensions lockfile cannot be read"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("install or enable it"),
+            "{}",
+            error.message
+        );
+        let data = error.data.expect("data");
+        assert_eq!(data["state"], "unknown");
+        assert_eq!(data["kind"], "fake");
+        assert_eq!(data["package"], "ext.fake");
+    }
+
     #[test]
     fn an_available_kind_is_listed_and_not_startable() {
         let (agents, base, profile) =

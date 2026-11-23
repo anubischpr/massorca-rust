@@ -1673,7 +1673,8 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
-/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state.
+/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state;
+/// a state that cannot be read is reported with the read failure.
 fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
     if entry.enabled() {
         return Ok(());
@@ -1683,13 +1684,20 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let package = entry.package.id.clone().unwrap_or_default();
-    let mut error = AgentError::new(
-        codes::AGENT_KIND_NOT_ENABLED,
+    // A state that cannot be read (an unreadable lockfile) is that failure, which installing or enabling cannot fix.
+    let message = if state == "unknown" && !entry.problems.is_empty() {
+        format!(
+            "agent kind {} comes from package {package}, whose state cannot be read: {}",
+            entry.id,
+            entry.problems.join("; ")
+        )
+    } else {
         format!(
             "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
             entry.id
-        ),
-    );
+        )
+    };
+    let mut error = AgentError::new(codes::AGENT_KIND_NOT_ENABLED, message);
     error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
     Err(error)
 }
