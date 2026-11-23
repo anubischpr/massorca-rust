@@ -27,7 +27,7 @@ fn the_workspaces_status_bar_draws_its_agents_and_labelled_memory(cx: &mut TestA
     shell.read_with(cx, |shell, _| {
         assert_eq!(
             shell.model().snapshot().status.memory_text(),
-            "Memory 1.22 GB"
+            Some("Memory 1.22 GB".into())
         );
     });
 }
@@ -51,7 +51,7 @@ fn the_bot_teams_status_bar_counts_terminals_and_ports_and_names_unreachable_hos
     shell.read_with(cx, |shell, _| {
         let status = &shell.model().snapshot().status;
         assert_eq!(status.bot_teams_terminals_text(), "Terminals 2");
-        assert_eq!(status.bot_teams_ports_text(), "Ports 0");
+        assert_eq!(status.bot_teams_ports_text(), Some("Ports 0".into()));
         assert_eq!(status.bot_teams_hosts_text(), "1 host unreachable");
     });
 }
