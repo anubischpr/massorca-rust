@@ -14,6 +14,7 @@ use massorca_protocol::methods::terminals::{
     TerminalInputParams, TerminalKillParams, TerminalList, TerminalListParams, TerminalRef,
     TerminalResizeParams, TerminalState,
 };
+use massorca_protocol::methods::workspaces::WorkspaceState;
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use crate::context::{Registries, RequestCtx};
@@ -85,6 +86,13 @@ async fn create(ctx: RequestCtx, params: TerminalCreateParams) -> Result<Termina
     let domain = shared(&ctx);
     let selector = params.workspace;
     let workspace = blocking(move || domain.show_workspace(&selector)).await?;
+    // Its removal stops the terminals it finds, so none may start once it has begun.
+    if workspace.state == WorkspaceState::Removing {
+        return Err(ErrorBody::new(
+            codes::WORKSPACE_NOT_FOUND,
+            format!("workspace `{}` is being removed", workspace.name),
+        ));
+    }
     if workspace.missing {
         return Err(ErrorBody::new(
             codes::PATH_NOT_FOUND,

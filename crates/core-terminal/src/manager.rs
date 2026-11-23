@@ -22,7 +22,7 @@ use crate::pty::{self, ExitInfo, PtyChild, PtyError, PtyMaster, PtyReader, PtySi
 use crate::ring::{ByteRing, RING_CAPACITY};
 use crate::screen::{FrozenScreen, Screen};
 use crate::shell::{EnvSnapshot, TerminalEnv, build_environment, default_shell, resolve_program};
-use massorca_host_stats::MemorySample;
+use massorca_host_stats::{MemorySample, ProcessTable};
 
 /// Largest input accepted per call (0033).
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -185,6 +185,15 @@ pub struct TerminalSample {
     /// The shell and what it started. `None` when the terminal's processes cannot be known; see
     /// `ProcessTree::memory`.
     pub sample: Option<MemorySample>,
+}
+
+/// One live terminal's member pids, for listening ports (decision 0081). `pids` is `None` when they cannot be listed:
+/// the terminal's ports are then unknown, not none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalMembers {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    pub pids: Option<Vec<u32>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -664,29 +673,51 @@ impl TerminalManager {
     }
 
     /// The process memory of every terminal not yet exited, by creation time, for host memory (decision 0081). A
-    /// terminal whose wait failed (`Unverifiable`) is included. On Unix the process table is taken once for all
-    /// terminals; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
-    pub fn memory(&self) -> Vec<TerminalSample> {
-        let table = if cfg!(unix) {
-            massorca_host_stats::processes()
-        } else {
-            Vec::new()
-        };
+    /// terminal whose wait failed (`Unverifiable`) is included. `table` is the process table the caller took once for
+    /// this sample; see `ProcessTree::memory` for what each platform reads. Blocking: it makes system calls.
+    pub fn memory(&self, table: &ProcessTable) -> Vec<TerminalSample> {
+        self.live_terminals()
+            .iter()
+            .map(|terminal| TerminalSample {
+                terminal_id: terminal.id.clone(),
+                workspace_id: terminal.workspace_id.clone(),
+                sample: terminal.tree.memory(&table.processes),
+            })
+            .collect()
+    }
+
+    /// The member pids of every live terminal, by creation time, from `table` (decision 0081); see
+    /// `ProcessTree::member_pids`. A terminal's `pids` is `None` where they cannot be listed. Blocking: system calls.
+    pub fn member_pids(&self, table: &ProcessTable) -> Vec<TerminalMembers> {
+        self.live_terminals()
+            .iter()
+            .map(|terminal| TerminalMembers {
+                terminal_id: terminal.id.clone(),
+                workspace_id: terminal.workspace_id.clone(),
+                pids: terminal.tree.member_pids(&table.processes),
+            })
+            .collect()
+    }
+
+    /// The pids of `pids` that still belong to the terminal `terminal_id` (see `ProcessTree::still_members`). A terminal
+    /// that has ended keeps none.
+    pub fn still_members(&self, terminal_id: &str, pids: &[u32]) -> Vec<u32> {
+        match self.inner.find(terminal_id) {
+            Ok(terminal) => terminal.tree.still_members(pids),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// The terminals not yet exited, by creation time.
+    fn live_terminals(&self) -> Vec<Arc<Terminal>> {
         let mut terminals: Vec<Arc<Terminal>> = lock(&self.inner.registry)
             .terminals
             .values()
             .cloned()
             .collect();
         terminals.sort_by_key(|terminal| terminal.seq);
+        terminals.retain(|terminal| !terminal.is_exited());
         terminals
-            .iter()
-            .filter(|terminal| !terminal.is_exited())
-            .map(|terminal| TerminalSample {
-                terminal_id: terminal.id.clone(),
-                workspace_id: terminal.workspace_id.clone(),
-                sample: terminal.tree.memory(&table),
-            })
-            .collect()
     }
 }
 

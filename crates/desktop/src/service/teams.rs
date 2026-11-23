@@ -52,7 +52,7 @@ pub(super) struct Sequence {
 }
 
 impl Sequence {
-    fn next(&self) -> u64 {
+    pub(super) fn next(&self) -> u64 {
         self.last.fetch_add(1, Ordering::SeqCst) + 1
     }
 }
