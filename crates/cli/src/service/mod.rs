@@ -2,4 +2,5 @@
 
 pub mod control;
 pub mod foreground;
+pub mod parent_watch;
 pub mod unit;

@@ -266,6 +266,37 @@ END;
 "#,
         foreign_keys_off: false,
     },
+    // Whether an agent session's current or last run received vault secrets (decision 0071); never their names.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN holds_secrets INTEGER NOT NULL DEFAULT 0 CHECK(holds_secrets IN (0,1));
+"#,
+        foreign_keys_off: false,
+    },
+    // Team memory (decision 0072): lines a team or one of its bots keeps for later tasks. A bot-less line is the team's
+    // scope. A team's or a bot's removal removes its lines.
+    Migration {
+        sql: r#"
+CREATE TABLE team_memory (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('task','person')),
+    task_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
+"#,
+        foreign_keys_off: false,
+    },
+    // A team project's code source (decision 0072): the Workspaces project it links to. Removing that project clears the link.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
     // A team's folder workspace, made on its first task start; folder workspaces that let several agents write at once
     // (a team folder: no git index to corrupt, and shared files are the point); and the lookup from an agent session to
     // its task, the protocol code of a failed start beside its message, and the pending start attempt that keys a retry

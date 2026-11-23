@@ -22,6 +22,12 @@ path = "src/bin/fake_agent.rs"
 test = false
 doc = false
 
+# The fake vendor CLI and installer for the extension tests (decision 0062). An example, not a binary: `cargo test`
+# builds it next to the test binaries, while `cargo build --release` and the installers never ship it.
+[[example]]
+name = "massorca-fake-vendor"
+path = "examples/massorca-fake-vendor.rs"
+
 [dependencies]
 massorca-process.workspace = true
 clap.workspace = true
@@ -42,10 +48,17 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 vt100.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [dev-dependencies]
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

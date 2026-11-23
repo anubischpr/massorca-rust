@@ -10,7 +10,11 @@ use massorca_core_store::Store;
 use massorca_net::TlsIdentity;
 use massorca_protocol::methods::agents;
 use massorca_protocol::methods::devices::{
-    self, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret, WhoAmI,
+    self, DeviceInfo, DeviceList, NetworkStatus, PairingCreateParams, PairingCreated, Secret,
+    WhoAmI,
+};
+use massorca_protocol::methods::extensions::{
+    ExtensionInstallParams, ExtensionRemoveParams, ExtensionSetEnabledParams,
 };
 use massorca_protocol::methods::secrets::{self, SecretSet};
 use massorca_protocol::pairing::Offer;
@@ -28,7 +32,7 @@ fn peer() -> PeerInfo {
 }
 
 /// A service listening on an ephemeral loopback port.
-async fn start_listening(home: &Path) -> RunningService {
+pub(super) async fn start_listening(home: &Path) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -54,7 +58,7 @@ async fn start_listening(home: &Path) -> RunningService {
     panic!("the network listener did not start");
 }
 
-async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
+pub(super) async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
     let owner = connect(home, "server").await;
     let created: PairingCreated = owner
         .call(
@@ -67,13 +71,13 @@ async fn offer(home: &Path, admin: bool, ttl_secs: Option<u32>) -> Offer {
 }
 
 /// A client profile with its own hosts list.
-fn client_side() -> (TempHome, Hosts) {
+pub(super) fn client_side() -> (TempHome, Hosts) {
     let home = temp_home();
     let hosts = Hosts::of(&profile(home.path(), "client"));
     (home, hosts)
 }
 
-async fn pair(
+pub(super) async fn pair(
     hosts: &Hosts,
     offer: &Offer,
     name: &str,
@@ -227,6 +231,68 @@ async fn scopes_limit_a_device_and_admin_widens_them() {
     stop(running).await;
 }
 
+/// Only a revoked device can be forgotten, only with host-admin, and a forgotten device leaves the list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_device_is_forgotten_by_a_host_admin_and_leaves_the_list() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let (standard, laptop) = pair(&hosts, &offer(home.path(), false, None).await, "plain")
+        .await
+        .unwrap();
+    let owner = connect(home.path(), "server").await;
+    let forget = |device: &str| devices::DeviceForgetParams {
+        device: device.to_owned(),
+    };
+
+    let active = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("an active device is refused");
+    assert_eq!(remote_code(&active), codes::DEVICE_NOT_REVOKED);
+    let by_name = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget("laptop"))
+        .await
+        .expect_err("a name that only an active device has is refused");
+    assert_eq!(remote_code(&by_name), codes::DEVICE_NOT_REVOKED);
+    let denied = standard
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("a standard device has no host-admin");
+    assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED);
+
+    let _: DeviceInfo = owner
+        .call(
+            devices::REVOKE,
+            &devices::DeviceRevokeParams {
+                device: laptop.device_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let forgotten: DeviceInfo = owner
+        .call(devices::FORGET, &forget("laptop"))
+        .await
+        .expect("a revoked device is forgotten by name");
+    assert_eq!(forgotten.id, laptop.device_id);
+    let list: DeviceList = owner.call(devices::LIST, &()).await.unwrap();
+    assert!(list.devices.is_empty(), "{list:?}");
+    let again = owner
+        .call::<_, DeviceInfo>(devices::FORGET, &forget(&laptop.device_id))
+        .await
+        .expect_err("gone");
+    assert_eq!(remote_code(&again), codes::DEVICE_NOT_FOUND);
+
+    let refused = Client::connect_host(&hosts, "plain", &peer())
+        .await
+        .expect_err("a forgotten device is still refused");
+    assert!(
+        matches!(refused, ClientError::Handshake { .. }),
+        "{refused:?}"
+    );
+    stop(running).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_standard_device_cannot_set_or_reset_a_secret() {
     let home = temp_home();
@@ -328,7 +394,10 @@ async fn revoking_ends_the_device_streams_with_the_reason() {
     .expect("the stream ends");
     let error = match ended {
         Some(Err(error)) => error,
-        other => panic!("expected the revocation, got {other:?}"),
+        other => panic!(
+            "expected the revocation, got {other:?}, connection lost: {}",
+            events.connection_lost()
+        ),
     };
     assert_eq!(error.code, codes::AUTH_DEVICE_REVOKED);
     assert!(!events.connection_lost());
@@ -470,5 +539,83 @@ async fn a_read_only_device_is_refused_every_agent_account_write_and_may_list() 
         .await
         .expect("a read is allowed to a read-only device");
     assert_eq!(listed["accounts"], serde_json::json!([]));
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_without_host_admin_inspects_only_the_catalogue() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (standard, _) = pair(&hosts, &standard_offer, "plain").await.unwrap();
+    let folder = temp_home();
+
+    standard
+        .extension_inspect("catalogue:massorca.claude")
+        .await
+        .expect("the catalogue needs only Read");
+    for source in [
+        format!("dir:{}", folder.path().display()),
+        format!("file:{}", folder.path().join("kit.mxt").display()),
+    ] {
+        let denied = standard
+            .extension_inspect(&source)
+            .await
+            .expect_err("a host path needs HostAdmin");
+        assert_eq!(remote_code(&denied), codes::PERMISSION_DENIED, "{source}");
+    }
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_without_host_admin_cannot_install_enable_or_remove_extensions() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let (standard, _) = pair(&hosts, &standard_offer, "plain").await.unwrap();
+
+    let install = standard
+        .extension_install(&ExtensionInstallParams {
+            source: "catalogue:massorca.codex".to_owned(),
+            consent: None,
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("installing needs HostAdmin");
+    assert_eq!(remote_code(&install), codes::PERMISSION_DENIED);
+    let toggle = standard
+        .extension_set_enabled(&ExtensionSetEnabledParams {
+            id: "massorca.claude".to_owned(),
+            enabled: false,
+        })
+        .await
+        .expect_err("enabling needs HostAdmin");
+    assert_eq!(remote_code(&toggle), codes::PERMISSION_DENIED);
+    let removal = standard
+        .extension_remove(&ExtensionRemoveParams {
+            id: "massorca.claude".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .expect_err("removing needs HostAdmin");
+    assert_eq!(remote_code(&removal), codes::PERMISSION_DENIED);
+
+    let review = standard
+        .extension_inspect("catalogue:massorca.claude")
+        .await
+        .expect("the catalogue needs only Read");
+    for plan in &review.cli {
+        if let massorca_protocol::methods::extensions::CliPlanState::Detected { path } = &plan.state
+        {
+            assert!(
+                path.is_none(),
+                "a host path reaches only a host administrator"
+            );
+        }
+    }
     stop(running).await;
 }

@@ -157,6 +157,70 @@ These later items call `task.create` and the methods above.
   projects, tasks and the Board land first, and `task.start` follows in its
   own slice once agent sessions are on main.
 
+## Amendment 2026-11-22: Team memory
+
+A memory line belongs to a team. It is in the team scope, or in one bot's scope
+of that team. A line written during a task names the task and has the source
+`task`. A line the owner wrote has the source `person`. Each line keeps its
+creation time.
+
+A line is at most 500 characters. Surrounding spaces are removed first, and a
+blank line is refused. The count is in Unicode scalar values. The owner lists
+and removes lines. Bots and the owner add them.
+
+A task start reads 40 lines per scope: the newest 40 team-scope lines, and the
+newest 40 lines of the bot that starts the task. The store provides this read
+as `memory_for_start`. Task start does not read it yet. The next PR, which adds
+`task.start`, puts these lines in the bot's prompt.
+
+Methods:
+
+- `team.memory_list` takes `{ team, bot? }`. Without `bot` it lists every line
+  of the team. With `bot` it lists only that bot's lines. Newest first.
+- `team.memory_add` takes `{ team, bot?, text, task? }`. A given `task` makes
+  the line a `task` line. The task must belong to the team.
+- `team.memory_rm` takes `{ team, line }` and returns the removed line.
+
+Adds and removes publish `team.changed` with the team id. Refusals use
+`request.invalid_params` for a blank or long text, `team.not_found`,
+`bot.not_found`, `task.not_found`, and `team.memory_not_found`.
+
+CLI:
+
+```
+massorca team memory list <team> [--bot <bot>]
+massorca team memory add <team> <text> [--bot <bot>] [--task <task>]
+massorca team memory rm <team> <line>
+```
+
+Team files and the Engram link stay out of this change (AUTO-31).
+
+## Amendment 2026-11-22: a team project's source
+
+A team project can now name the Workspaces project its code comes from. This
+amends the "code source" that the core decision left out of scope.
+
+- **The link.** `source_project` holds the Workspaces project id. While that
+  project exists, the wire also returns `source_project_name` and `source_kind`
+  (`git` or `folder`). All three are left out when no project is linked.
+- **How it is set.** `team.project_add` and `team.project_update` take an
+  optional `source_project`: a Workspaces project id, exact name or path. The
+  Workspaces domain resolves it. An unknown project is refused with
+  `project.not_found`, and nothing changes.
+- **How it is cleared.** `team.project_update` with an empty `source_project`
+  clears the link. Leaving the field out keeps the link.
+- **When the Workspaces project is removed.** The link is cleared. The column
+  is a foreign key with `ON DELETE SET NULL`, so no dangling id is kept. The
+  team project keeps its id, name, goal, brief and Board.
+- **Storage.** Migration step 15 adds `team_projects.source_project_id`. Rows
+  from before it read as no link.
+- **CLI.** `massorca team project add|update <team> <name> --source <project>`
+  sets the link. On update, an empty `--source` clears it. `team project list`
+  shows the linked project's name in a fourth column, or `-`.
+- **Not in this change.** Starting a task on a linked project comes in the next
+  PR. A git project gets one worktree per task. A folder project runs the task
+  in the folder itself. Read-only tasks run in the main checkout.
+
 ## Amendment 2026-11-22: where a task runs
 
 The workspace domain lets one agent write in a workspace at a time

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub const LIST: &str = "device.list";
 pub const REVOKE: &str = "device.revoke";
+/// Removes a revoked device from the list (host-admin). An active device is refused.
+pub const FORGET: &str = "device.forget";
 pub const WHOAMI: &str = "device.whoami";
 pub const PAIRING_CREATE: &str = "pairing.create";
 pub const NETWORK_STATUS: &str = "network.status";
@@ -66,6 +68,12 @@ pub struct DeviceList {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRevokeParams {
     /// The device id, or its name when that is unique.
+    pub device: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceForgetParams {
+    /// The device id, or its name when exactly one revoked device has it.
     pub device: String,
 }
 

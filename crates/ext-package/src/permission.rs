@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 use serde::Deserialize;
 
+use crate::display_chars;
 use crate::error::{Problem, Problems, at};
 use crate::ids;
 use crate::package_path;
@@ -206,6 +207,8 @@ pub fn validate(permissions: &[Permission], base: &str) -> Vec<Problem> {
         }
         if permission.reason.trim().is_empty() {
             problems.add(at(&here, "reason"), "a reason is required");
+        } else if display_chars::hidden_char(&permission.reason).is_some() {
+            problems.add(at(&here, "reason"), crate::manifest::HIDDEN_TEXT);
         }
         if let Some(scope) = &permission.scope {
             validate_scope(scope, &at(&here, "scope"), &mut problems);

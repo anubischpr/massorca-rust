@@ -127,7 +127,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),
@@ -143,7 +144,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "project": { "type": "string" },
                     "name": { "type": "string" },
                     "goal": { "type": "string" },
-                    "brief": { "type": "string" }
+                    "brief": { "type": "string" },
+                    "source_project": { "type": "string" }
                 }
             }),
         ),
@@ -157,6 +159,47 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 "properties": {
                     "team": { "type": "string" },
                     "project": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.memory.list",
+            "List a team's memory lines, or one bot's",
+            "team.memory_list",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.memory.add",
+            "Add a line to a team's memory",
+            "team.memory_add",
+            json!({
+                "type": "object",
+                "required": ["team", "text"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "text": { "type": "string" },
+                    "task": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.memory.rm",
+            "Remove a line from a team's memory",
+            "team.memory_rm",
+            json!({
+                "type": "object",
+                "required": ["team", "line"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "line": { "type": "string" }
                 }
             }),
         ),

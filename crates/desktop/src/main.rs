@@ -1,9 +1,10 @@
 //! The MassOrca desktop window. It talks to the service of its profile (decision 0028) and
 //! starts it when it can; `--sample` opens the shell on sample data instead (decision 0023).
 //!
-//! Flags: `--sample`, `--profile <name>`, `--home <dir>`, `--no-autostart`. Like the CLI, it reads
-//! `MASSORCA_HOME`, `MASSORCA_PROFILE` and `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1`
-//! opens the window hidden and unfocused for automated checks (see `launch_options`).
+//! Flags: `--sample`, `--profile <name>`, `--home <dir>`, `--no-autostart`, `--page <name>` (a debug
+//! page, see `launch_options::DebugPage`). Like the CLI, it reads `MASSORCA_HOME`, `MASSORCA_PROFILE` and
+//! `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused for
+//! automated checks (see `launch_options`).
 
 use gpui::{
     AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
@@ -30,6 +31,7 @@ fn main() {
             }
         };
     let launch = WindowLaunch::from_env(|key| std::env::var(key).ok());
+    let debug_page = options.page;
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx| {
@@ -50,7 +52,8 @@ fn main() {
                     }
                 }
             };
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let window_size = size(px(1440.), px(900.));
+            let bounds = Bounds::centered(None, window_size, cx);
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -83,12 +86,18 @@ fn main() {
                         if let Some(field) = launch.debug_focus {
                             shell.start_debug_input(field, window, cx);
                         }
+                        if let Some(page) = debug_page {
+                            shell.start_debug_page(page);
+                        }
                         shell
                     })
                 },
             );
             match opened {
-                Ok(_) if launch.background => {}
+                // GPUI applies the requested size only when it activates a window; a hidden one never is.
+                Ok(window) if launch.background => {
+                    let _ = window.update(cx, |_, window, _| window.resize(window_size));
+                }
                 Ok(_) => cx.activate(true),
                 Err(error) => {
                     report(&format!("{error:#}"));

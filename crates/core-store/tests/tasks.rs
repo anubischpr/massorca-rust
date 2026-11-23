@@ -37,6 +37,7 @@ fn bot_row(team_id: &str, name: &str) -> BotRow {
 
 fn project_row(team_id: &str, name: &str) -> TeamProjectRow {
     TeamProjectRow {
+        source_project_id: None,
         id: new_id(),
         team_id: team_id.to_owned(),
         name: name.to_owned(),
