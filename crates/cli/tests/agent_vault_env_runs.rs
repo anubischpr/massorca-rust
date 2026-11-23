@@ -13,6 +13,8 @@ const UNTIL_SECS: &str = "60";
 
 /// Kind `fake`: argv prompt, an assigned ref, a resume form, and status reports.
 fn declare_fake(sandbox: &Sandbox) {
+    // The kind file goes into the profile, so the profile is created private first (ADR 0073).
+    sandbox.prepare_profile("default");
     let kind = json!({
         "id": "fake",
         "name": "Fake agent",
