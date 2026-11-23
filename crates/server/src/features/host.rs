@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use massorca_core_agents::sessions::Agents;
 use massorca_core_store::now_ms;
 use massorca_core_terminal::{TerminalManager, TerminalSample};
-use massorca_host_stats::{self as stats, Listening, ListeningSocket, Metric};
+use massorca_host_stats::{self as stats, Listening, ListeningSocket, Metric, ProcessTable};
 use massorca_protocol::methods::host::{
     self, HostMemory, HostPort, HostPorts, MemoryMetric, PortTerminal, ProcessMemory,
     TerminalMemory,
@@ -140,7 +140,7 @@ fn sample_ports(terminals: &TerminalManager, agents: &Agents) -> Result<HostPort
         listening.as_ref(),
         &names,
         &sessions,
-        table.complete,
+        listing_complete(&table),
     );
     Ok(HostPorts {
         ports,
@@ -315,6 +315,20 @@ fn with_listing(mut entry: TerminalMemory, complete: bool) -> TerminalMemory {
     entry
 }
 
+/// Whether every process of the terminals was listed. On Unix a terminal's processes come from the process table, so a
+/// table that ended early can miss some, and its terminals are partial. On Windows they come from each terminal's job,
+/// so the snapshot does not decide (decision 0081).
+#[cfg(unix)]
+fn listing_complete(table: &ProcessTable) -> bool {
+    table.complete
+}
+
+#[cfg(not(unix))]
+fn listing_complete(table: &ProcessTable) -> bool {
+    let _ = table;
+    true
+}
+
 fn sample(terminals: &TerminalManager, agents: &Agents) -> Result<HostMemory, ErrorBody> {
     let own_pid = std::process::id();
     // The service always reads its own process; failing to is a platform without a reader, not an empty figure.
@@ -328,7 +342,7 @@ fn sample(terminals: &TerminalManager, agents: &Agents) -> Result<HostMemory, Er
     let mut entries = Vec::new();
     for terminal in terminals.memory(&table) {
         let (entry, skipped) = entry_of(terminal, &sessions);
-        let entry = with_listing(entry, table.complete);
+        let entry = with_listing(entry, listing_complete(&table));
         unreadable = unreadable.saturating_add(skipped);
         total_bytes = total_bytes.saturating_add(entry.bytes);
         entries.push(entry);
@@ -377,11 +391,11 @@ mod tests {
     use std::collections::HashMap;
 
     use massorca_core_terminal::TerminalSample;
-    use massorca_host_stats::{METRIC, MemorySample, ProcessMemory};
+    use massorca_host_stats::{METRIC, MemorySample, ProcessMemory, ProcessTable};
 
     use massorca_protocol::methods::host::TerminalMemory;
 
-    use super::{entry_of, with_listing};
+    use super::{entry_of, listing_complete, with_listing};
 
     fn terminal(sample: Option<MemorySample>) -> TerminalSample {
         TerminalSample {
@@ -462,6 +476,34 @@ mod tests {
             !with_listing(gone, false).partial,
             "an unverifiable terminal is never partial"
         );
+    }
+
+    #[test]
+    fn only_a_unix_table_that_ended_early_makes_terminals_partial() {
+        let ended_early = ProcessTable {
+            processes: Vec::new(),
+            complete: false,
+        };
+        // On Windows a terminal's processes come from its job, so the snapshot's completeness does not decide.
+        #[cfg(windows)]
+        {
+            assert!(
+                listing_complete(&ended_early),
+                "a Windows snapshot does not decide a terminal's members"
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert!(
+                !listing_complete(&ended_early),
+                "a Unix table that ended early is incomplete"
+            );
+        }
+        let whole = ProcessTable {
+            processes: Vec::new(),
+            complete: true,
+        };
+        assert!(listing_complete(&whole));
     }
 
     #[test]
