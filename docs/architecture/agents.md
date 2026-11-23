@@ -60,12 +60,14 @@ program are checked, on `agent.start`, `agent.delegate` (and every other start t
 `agent.accounts.check`, `agent.accounts.remove`, and the vendor sign-out on removal or on a
 discarded sign-in keep working on a disabled kind.
 
-**Used kinds.** `used_kinds(&Store, profile_dir) -> BTreeSet<String>` (public from core-agents)
+**Used kinds.** `used_kinds(&Store, profile_dir) -> Result<BTreeSet<String>, AgentError>` (public from core-agents)
 is every kind the profile has used, for the extension runtime's removal rules: the kinds of
 `agent_sessions`, `agent_accounts` (pending sign-ins included), `agent_account_history` and
 `bots` (the store query `used_agent_kinds`), and the directories under
 `<profile>/agents/accounts/` and `<profile>/agents/homes/` that are real directories, never links,
-named by a valid kind id. A store that cannot be read is logged and leaves out what it names.
+named by a valid kind id. A store that cannot be read, or a kind directory that exists but cannot be
+listed, is an error (`internal`), so the caller retries instead of treating a used kind as unused; a
+directory that does not exist has no kinds.
 
 ## Kind declaration
 

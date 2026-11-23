@@ -334,4 +334,5 @@ Account commands (check, sign-in, sign-out) judge the account's home only: for t
   its meaning for an enabled kind with problems or no program.
 - **Used kinds.** `core-agents` exposes `used_kinds(&Store, profile_dir)`: the kinds its sessions,
   accounts, account history and bots name, and the kind directories under
-  `<profile>/agents/accounts/` and `<profile>/agents/homes/`.
+  `<profile>/agents/accounts/` and `<profile>/agents/homes/`. A store or a kind directory that cannot be read is an
+  error, never an empty answer.

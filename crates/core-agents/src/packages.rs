@@ -6,13 +6,16 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use massorca_core_store::Store;
+use massorca_protocol::codes;
 pub use massorca_protocol::methods::agents::PackageState;
 
 use crate::kind::valid_id;
 use crate::paths;
+use crate::sessions::AgentError;
 
 /// The package id prefix of first-party packages. Their kinds keep the owner `core`.
 pub const FIRST_PARTY_PREFIX: &str = "massorca.";
@@ -75,29 +78,44 @@ impl KindPackages for BuiltInPackages {
 /// `<profile>/agents/homes/`. A directory counts only when it is a real directory, never a link, named by a valid kind
 /// id. The extension runtime keeps a package whose kind is in it from being removed as unused.
 ///
-/// A store that cannot be read is logged and leaves out what it names.
-pub fn used_kinds(store: &Store, profile_dir: &Path) -> BTreeSet<String> {
-    let mut kinds = store.used_agent_kinds().unwrap_or_else(|error| {
-        tracing::warn!(%error, "the kinds the store names could not be read");
-        BTreeSet::new()
-    });
+/// A store that cannot be read is an error, and so is a kind directory that exists but cannot be read, so the caller can
+/// retry instead of treating a used kind as unused. A directory that does not exist has no kinds.
+pub fn used_kinds(store: &Store, profile_dir: &Path) -> Result<BTreeSet<String>, AgentError> {
+    let mut kinds = store.used_agent_kinds()?;
     let agents = paths::agents_dir(profile_dir);
     for parent in ["accounts", "homes"] {
-        kinds.extend(kind_dirs(&agents.join(parent)));
+        kinds.extend(kind_dirs(&agents.join(parent), parent)?);
     }
-    kinds
+    Ok(kinds)
 }
 
-/// The names of the real directories (never links) in `dir` that are valid kind ids. A missing directory has none.
-fn kind_dirs(dir: &Path) -> Vec<String> {
-    let Ok(read) = fs::read_dir(dir) else {
-        return Vec::new();
+/// The names of the real directories (never links) in `dir` that are valid kind ids. A directory that does not exist has
+/// none; one that exists but cannot be listed is an error, named by `name`.
+fn kind_dirs(dir: &Path, name: &str) -> Result<Vec<String>, AgentError> {
+    let unreadable = |error: io::Error| {
+        AgentError::new(
+            codes::INTERNAL,
+            format!("cannot read the agents/{name} directory of the profile: {error}"),
+        )
     };
-    read.filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| valid_id(name))
-        .collect()
+    let read = match fs::read_dir(dir) {
+        Ok(read) => read,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(unreadable(error)),
+    };
+    let mut kinds = Vec::new();
+    for entry in read {
+        let entry = entry.map_err(unreadable)?;
+        if !entry.file_type().map_err(unreadable)?.is_dir() {
+            continue;
+        }
+        if let Ok(kind) = entry.file_name().into_string()
+            && valid_id(&kind)
+        {
+            kinds.push(kind);
+        }
+    }
+    Ok(kinds)
 }
 
 #[cfg(test)]
@@ -500,7 +518,11 @@ mod tests {
     #[test]
     fn used_kinds_cover_the_store_and_the_credential_directories() {
         let (agents, workspace, profile) = service(Vec::new());
-        assert!(used_kinds(agents.store(), profile.path()).is_empty());
+        assert!(
+            used_kinds(agents.store(), profile.path())
+                .unwrap()
+                .is_empty()
+        );
 
         exited_session(&agents, &workspace, "from-session");
         agents
@@ -521,6 +543,7 @@ mod tests {
         std::fs::write(paths::home_dir(profile.path(), "a-file"), "").unwrap();
 
         let used: Vec<String> = used_kinds(agents.store(), profile.path())
+            .unwrap()
             .into_iter()
             .collect();
         assert_eq!(
@@ -567,6 +590,7 @@ mod tests {
             })
             .unwrap();
         let used: Vec<String> = used_kinds(agents.store(), profile.path())
+            .unwrap()
             .into_iter()
             .collect();
         assert_eq!(used, ["from-account", "from-bot"]);
@@ -580,6 +604,50 @@ mod tests {
         std::fs::create_dir_all(paths::agents_dir(profile.path()).join("homes")).unwrap();
         std::os::unix::fs::symlink(target.path(), paths::home_dir(profile.path(), "linked"))
             .unwrap();
-        assert!(used_kinds(agents.store(), profile.path()).is_empty());
+        assert!(
+            used_kinds(agents.store(), profile.path())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn used_kinds_of_a_profile_without_agent_directories_are_the_stores() {
+        let (agents, workspace, profile) = service(Vec::new());
+        exited_session(&agents, &workspace, "from-session");
+        assert!(!paths::agents_dir(profile.path()).exists());
+        let used: Vec<String> = used_kinds(agents.store(), profile.path())
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(used, ["from-session"]);
+    }
+
+    #[test]
+    fn a_kind_directory_that_cannot_be_read_is_an_error() {
+        let (agents, _, profile) = service(Vec::new());
+        // `homes` exists but is a file, so it cannot be listed: its kinds are unknown, not absent.
+        std::fs::create_dir_all(paths::agents_dir(profile.path())).unwrap();
+        std::fs::write(paths::agents_dir(profile.path()).join("homes"), "").unwrap();
+        let error = used_kinds(agents.store(), profile.path())
+            .expect_err("an unreadable kind directory is an error");
+        assert_eq!(error.code, codes::INTERNAL, "{}", error.message);
+        assert!(
+            error.message.contains("homes"),
+            "the message names the directory: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("store.db");
+        let store = Store::open(&file).unwrap();
+        assert!(used_kinds(&store, dir.path()).unwrap().is_empty());
+        // The file under the open store stops being a database: the next read fails instead of naming no kinds.
+        std::fs::write(&file, vec![0xA5_u8; 8192]).unwrap();
+        let error = used_kinds(&store, dir.path()).expect_err("an unreadable store is an error");
+        assert_eq!(error.code, codes::INTERNAL, "{}", error.message);
     }
 }
