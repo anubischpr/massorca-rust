@@ -2,15 +2,22 @@
 //! no session open. The facts come from the records the service reported; nothing here starts a
 //! session. Free of GPUI, so the rules test without a window.
 
+use std::collections::BTreeMap;
+
+use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::workspaces::WorkspaceState;
 
 use super::service_view::LOCAL_HOST;
+use super::work_panel::{NEW_TERMINAL_COLS, NEW_TERMINAL_ROWS};
 use crate::service::StoreState;
 
 /// Why the page's actions that need sessions or git are off.
 pub const SESSIONS_LATER: &str = "Agent sessions come later.";
 pub const GIT_LATER: &str = "Git operations come later.";
 pub const VOICE_LATER: &str = "Voice input comes later.";
+/// The Send button's reason while no agent is chosen, or the service is not connected.
+pub const CHOOSE_AN_AGENT: &str = "Choose an agent to start a session.";
+pub const NOT_CONNECTED: &str = "The service is not connected.";
 
 /// The composer's placeholder: the session composer's words (A33).
 pub const COMPOSER_PLACEHOLDER: &str = "Ask anything, @ to mention files, / for commands";
@@ -37,6 +44,53 @@ pub struct WorkspaceStart {
     pub state: &'static str,
     /// The folder is not on disk any more. The page says so and changes nothing.
     pub missing: bool,
+}
+
+/// A session the service has not answered for yet: the workspace it starts in and the agent's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartingSession {
+    pub workspace: String,
+    pub kind_name: String,
+}
+
+impl StartingSession {
+    /// The status under the composer, which Send's reason repeats while the start is in flight.
+    pub fn status(&self) -> String {
+        format!("Starting {} on {LOCAL_HOST}", self.kind_name)
+    }
+}
+
+/// Why Send is off, or `None` when it is on: a start in flight, the service away, or no agent chosen.
+pub fn send_reason(
+    connected: bool,
+    kind_chosen: bool,
+    starting: Option<&StartingSession>,
+) -> Option<String> {
+    if let Some(starting) = starting {
+        Some(starting.status())
+    } else if !connected {
+        Some(NOT_CONNECTED.to_owned())
+    } else if !kind_chosen {
+        Some(CHOOSE_AN_AGENT.to_owned())
+    } else {
+        None
+    }
+}
+
+/// The `agent.start` call that opens a session in `workspace` with `prompt`, at the Work panel's terminal size.
+pub fn start_params(workspace: &str, kind: &str, prompt: &str) -> AgentStartParams {
+    AgentStartParams {
+        workspace: workspace.to_owned(),
+        kind: kind.to_owned(),
+        prompt: Some(prompt.to_owned()),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        read_only: false,
+        title: None,
+        cols: Some(NEW_TERMINAL_COLS),
+        rows: Some(NEW_TERMINAL_ROWS),
+        request_id: None,
+    }
 }
 
 /// The page for `workspace_id`, or `None` when the store does not hold that workspace.
@@ -151,5 +205,39 @@ mod tests {
         );
         let keys: Vec<&str> = KEY_HINTS.iter().map(|(key, _)| *key).collect();
         assert_eq!(keys, ["Enter", "Shift+Enter", "@", "/"]);
+    }
+
+    #[test]
+    fn send_is_off_until_an_agent_is_chosen_and_the_service_is_connected() {
+        assert_eq!(send_reason(true, true, None), None);
+        assert_eq!(
+            send_reason(true, false, None).as_deref(),
+            Some(CHOOSE_AN_AGENT)
+        );
+        assert_eq!(
+            send_reason(false, true, None).as_deref(),
+            Some(NOT_CONNECTED)
+        );
+    }
+
+    #[test]
+    fn a_start_in_flight_says_which_agent_starts_where() {
+        let starting = StartingSession {
+            workspace: "w1".into(),
+            kind_name: "Claude".into(),
+        };
+        assert_eq!(
+            send_reason(true, true, Some(&starting)).as_deref(),
+            Some("Starting Claude on This PC")
+        );
+    }
+
+    #[test]
+    fn a_start_carries_the_workspace_the_kind_and_the_prompt() {
+        let params = start_params("w1", "claude", "fix the login");
+        assert_eq!(params.workspace, "w1");
+        assert_eq!(params.kind, "claude");
+        assert_eq!(params.prompt.as_deref(), Some("fix the login"));
+        assert_eq!(params.cols, Some(NEW_TERMINAL_COLS));
     }
 }
