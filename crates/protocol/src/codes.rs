@@ -291,3 +291,5 @@ pub const EXTENSION_BUSY: &str = "extension.busy";
 pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
 /// A vendor installer or uninstaller needs a person: an agent run may not start one.
 pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
+/// `extensions.update` found the installed package already in place: nothing changed.
+pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
