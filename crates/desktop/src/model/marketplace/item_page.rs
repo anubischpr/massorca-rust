@@ -1,9 +1,9 @@
 //! The nine parts of a Marketplace item page in the owner's order (teams-extensions-settings.md 7.2,
 //! decision 0059): which parts an item has, and the rows each part shows.
 
-use massorca_protocol::methods::extensions::{ExtensionItem, SourceKind};
+use massorca_protocol::methods::extensions::ExtensionItem;
 
-use super::extension_items::risk_word;
+use super::extension_items::{risk_word, source_word};
 use super::types::{AccountState, ItemState, MarketplaceItem, MarketplaceSnapshot};
 
 /// One part of the item page, from the top down.
@@ -143,15 +143,6 @@ pub fn advanced_rows(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
     }
     rows.push(("Who can use it", "Only you".to_owned()));
     rows
-}
-
-fn source_word(kind: SourceKind) -> &'static str {
-    match kind {
-        SourceKind::Catalogue => "Catalogue",
-        SourceKind::Dir => "Folder",
-        SourceKind::File => "Archive",
-        SourceKind::Unknown => "Unknown source",
-    }
 }
 
 /// The body of the uninstall confirm. An agent's accounts stay on this computer until the person

@@ -3,7 +3,7 @@
 //! from a folder or archive, which the catalogue does not list, is an item of its own.
 
 use massorca_protocol::methods::extensions::{
-    ExtensionItem, ExtensionState, Permission, RiskLevel,
+    ExtensionItem, ExtensionState, Permission, RiskLevel, SourceKind,
 };
 
 use super::service_source::SERVICE_HOST;
@@ -138,7 +138,7 @@ fn permissions_text(permissions: &[Permission]) -> Option<String> {
     Some(words.join(", "))
 }
 
-fn permission_word(kind: &str) -> &str {
+pub(super) fn permission_word(kind: &str) -> &str {
     match kind {
         "storage" => "Storage",
         "notifications" => "Notifications",
@@ -155,6 +155,16 @@ fn permission_word(kind: &str) -> &str {
         "process" => "Programs",
         "credentials" => "Agent credentials",
         other => other,
+    }
+}
+
+/// Where a package was installed from, as a word.
+pub fn source_word(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Catalogue => "Catalogue",
+        SourceKind::Dir => "Folder",
+        SourceKind::File => "Archive",
+        SourceKind::Unknown => "Unknown source",
     }
 }
 
