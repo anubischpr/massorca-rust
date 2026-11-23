@@ -345,7 +345,8 @@ ALTER TABLE tasks ADD COLUMN branch TEXT;
     },
     // Team routines (decision 0072 amendment): a schedule that starts a task for a bot on each occurrence. A team's
     // removal removes its routines and their runs; a bot's removal keeps the routine with no bot, and its runs record
-    // why. A run keeps its task: removing the run or its routine never removes the task.
+    // why. A run keeps its task: removing the run or its routine never removes the task. A run whose `settled_at` is
+    // NULL has not recorded its start's outcome yet; the next service start marks it interrupted.
     Migration {
         sql: r#"
 CREATE TABLE team_routines (
@@ -373,6 +374,8 @@ CREATE TABLE team_routine_runs (
     scheduled_for INTEGER NOT NULL,
     task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
     error TEXT,
+    error_code TEXT,
+    settled_at INTEGER,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX team_routine_runs_by_routine ON team_routine_runs (routine_id, scheduled_for);

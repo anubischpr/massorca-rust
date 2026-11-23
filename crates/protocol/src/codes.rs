@@ -206,6 +206,8 @@ pub const TEAM_PROJECT_NAME_IN_USE: &str = "team.project_name_in_use";
 /// The team has no memory line with this id.
 pub const TEAM_MEMORY_NOT_FOUND: &str = "team.memory_not_found";
 pub const TEAM_ROUTINE_NOT_FOUND: &str = "team.routine_not_found";
+/// The service stopped after a routine run was claimed and before its start recorded an outcome. It is not retried.
+pub const TEAM_ROUTINE_RUN_INTERRUPTED: &str = "team.routine_run_interrupted";
 pub const BOT_NOT_FOUND: &str = "bot.not_found";
 /// Another bot of the team has this name.
 pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";

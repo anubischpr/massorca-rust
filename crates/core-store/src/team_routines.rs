@@ -2,6 +2,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
+use crate::tasks::{TaskRow, insert_task_row};
 
 /// One row of `team_routines`: a schedule that starts a task for a bot on each occurrence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,12 +44,16 @@ pub struct TeamRoutineRunRow {
     pub task_id: Option<String>,
     /// Why the run or its task did not start.
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `bot.not_found`.
+    pub error_code: Option<String>,
+    /// When the run's outcome was recorded; `None` while its start is pending. The next service start marks a run still
+    /// pending from before it as interrupted.
+    pub settled_at: Option<i64>,
     pub created_at: i64,
 }
 
 const SELECT_ROUTINES: &str = "SELECT id, team_id, bot_id, name, prompt, cadence, time, weekday, month_day, run_date, zone, paused, starts_as_admin, next_run_at, created_at FROM team_routines";
-const SELECT_RUNS: &str =
-    "SELECT id, routine_id, scheduled_for, task_id, error, created_at FROM team_routine_runs";
+const SELECT_RUNS: &str = "SELECT id, routine_id, scheduled_for, task_id, error, error_code, settled_at, created_at FROM team_routine_runs";
 
 fn routine_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoutineRow> {
     Ok(TeamRoutineRow {
@@ -77,19 +82,31 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<TeamRoutineRunRow> {
         scheduled_for: row.get("scheduled_for")?,
         task_id: row.get("task_id")?,
         error: row.get("error")?,
+        error_code: row.get("error_code")?,
+        settled_at: row.get("settled_at")?,
         created_at: row.get("created_at")?,
     })
 }
 
-fn insert_run(connection: &Connection, row: &TeamRoutineRunRow) -> Result<(), StoreError> {
+/// Inserts `task`, when the run made one, then the run that links it.
+fn insert_run(
+    connection: &Connection,
+    row: &TeamRoutineRunRow,
+    task: Option<&TaskRow>,
+) -> Result<(), StoreError> {
+    if let Some(task) = task {
+        insert_task_row(connection, task)?;
+    }
     connection.execute(
-        "INSERT INTO team_routine_runs (id, routine_id, scheduled_for, task_id, error, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO team_routine_runs (id, routine_id, scheduled_for, task_id, error, error_code, settled_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             row.id,
             row.routine_id,
             row.scheduled_for,
             row.task_id,
             row.error,
+            row.error_code,
+            row.settled_at,
             row.created_at
         ],
     )?;
@@ -181,13 +198,15 @@ impl Store {
         Ok(removed > 0)
     }
 
-    /// Claims one occurrence: moves `next_run_at` from `expected_next` to `new_next` and records `run`, in one
-    /// transaction. Returns `false`, and writes nothing, when `next_run_at` is no longer `expected_next`.
+    /// Claims one occurrence: moves `next_run_at` from `expected_next` to `new_next`, and records `task` and the `run`
+    /// that links it, in one transaction. Returns `false`, and writes nothing, when `next_run_at` is no longer
+    /// `expected_next`.
     pub fn claim_routine_run(
         &self,
         expected_next: i64,
         new_next: Option<i64>,
         run: &TeamRoutineRunRow,
+        task: Option<&TaskRow>,
     ) -> Result<bool, StoreError> {
         let mut connection = self.lock();
         let transaction = connection.transaction()?;
@@ -198,32 +217,57 @@ impl Store {
         if changed == 0 {
             return Ok(false);
         }
-        insert_run(&transaction, run)?;
+        insert_run(&transaction, run, task)?;
         transaction.commit()?;
         Ok(true)
     }
 
-    /// Records a run outside the schedule, such as a run made now. The schedule does not move.
-    pub fn insert_routine_run(&self, row: &TeamRoutineRunRow) -> Result<(), StoreError> {
-        insert_run(&self.lock(), row)
+    /// Records a run outside the schedule, such as a run made now, with the task it made. The schedule does not move.
+    pub fn insert_routine_run(
+        &self,
+        row: &TeamRoutineRunRow,
+        task: Option<&TaskRow>,
+    ) -> Result<(), StoreError> {
+        let mut connection = self.lock();
+        let transaction = connection.transaction()?;
+        insert_run(&transaction, row, task)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn get_routine_run(&self, id: &str) -> Result<Option<TeamRoutineRunRow>, StoreError> {
         self.query_optional(&format!("{SELECT_RUNS} WHERE id = ?1"), [id], run_from_row)
     }
 
-    /// Records the task a run made and why it did not start, if it did not. Returns whether a row changed.
+    /// Records a pending run's outcome: no error once its task started, or the code and message of why it did not. A
+    /// run already settled, such as one marked interrupted, keeps its outcome. Returns whether a row changed.
     pub fn set_routine_run_result(
         &self,
         run_id: &str,
-        task_id: Option<&str>,
-        error: Option<&str>,
+        error: Option<(&str, &str)>,
+        settled_at: i64,
     ) -> Result<bool, StoreError> {
+        let (code, message) = error.unzip();
         let changed = self.lock().execute(
-            "UPDATE team_routine_runs SET task_id = ?2, error = ?3 WHERE id = ?1",
-            params![run_id, task_id, error],
+            "UPDATE team_routine_runs SET error = ?2, error_code = ?3, settled_at = ?4 WHERE id = ?1 AND settled_at IS NULL",
+            params![run_id, message, code, settled_at],
         )?;
         Ok(changed > 0)
+    }
+
+    /// Marks every run created before `created_before` that never recorded an outcome as interrupted with `code` and
+    /// `message`. Nothing retries them. Returns how many runs it marked.
+    pub fn interrupt_pending_routine_runs(
+        &self,
+        created_before: i64,
+        code: &str,
+        message: &str,
+        settled_at: i64,
+    ) -> Result<usize, StoreError> {
+        Ok(self.lock().execute(
+            "UPDATE team_routine_runs SET error = ?2, error_code = ?3, settled_at = ?4 WHERE settled_at IS NULL AND created_at < ?1",
+            params![created_before, message, code, settled_at],
+        )?)
     }
 
     /// The runs of one routine, newest first; `limit` keeps the newest that many.

@@ -120,6 +120,10 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::TEAM_PROJECT_NOT_FOUND, "team.project_not_found"),
     (codes::TEAM_PROJECT_NAME_IN_USE, "team.project_name_in_use"),
     (codes::TEAM_ROUTINE_NOT_FOUND, "team.routine_not_found"),
+    (
+        codes::TEAM_ROUTINE_RUN_INTERRUPTED,
+        "team.routine_run_interrupted",
+    ),
     (codes::BOT_NOT_FOUND, "bot.not_found"),
     (codes::BOT_NAME_IN_USE, "bot.name_in_use"),
     (codes::BOT_LEAD_TAKEN, "bot.lead_taken"),

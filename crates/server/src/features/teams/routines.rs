@@ -21,7 +21,7 @@ use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
-use super::routine_run::{routine_grant, run_routine};
+use super::routine_run::{prepare_run, routine_grant, start_run};
 use super::task_start::{Changes, publish_changes};
 use super::{blocking, invalid, non_blank, optional_text, selectors, store_error};
 
@@ -326,28 +326,22 @@ fn run_now(
 ) -> Result<(Changes, RoutineRun), ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let routine = selectors::routine(store, &team, &params.routine)?;
-    let run = TeamRoutineRunRow {
-        id: new_id(),
-        routine_id: routine.id.clone(),
-        scheduled_for: now,
-        task_id: None,
-        error: None,
-        created_at: now,
-    };
-    store.insert_routine_run(&run).map_err(store_error)?;
+    let prepared = prepare_run(store, &routine, now, now);
+    store
+        .insert_routine_run(&prepared.run, prepared.task.as_ref())
+        .map_err(store_error)?;
     let mut changes = Changes::default();
     let grant = routine_grant(routine.starts_as_admin && caller_admin);
-    run_routine(
+    start_run(
         store,
         agents,
         workspaces,
-        &routine,
-        &run,
+        &prepared.run,
         grant,
         &mut changes,
     );
     let saved = store
-        .get_routine_run(&run.id)
+        .get_routine_run(&prepared.run.id)
         .map_err(store_error)?
         .ok_or_else(vanished)?;
     Ok((changes, run_view(&saved)))
@@ -439,6 +433,7 @@ pub(super) fn run_view(row: &TeamRoutineRunRow) -> RoutineRun {
         scheduled_for_ms: row.scheduled_for,
         task_id: row.task_id.clone(),
         error: row.error.clone(),
+        error_code: row.error_code.clone(),
         created_at_ms: row.created_at,
     }
 }

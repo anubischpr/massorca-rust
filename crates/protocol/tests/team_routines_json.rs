@@ -154,6 +154,7 @@ fn a_run_has_the_documented_shape() {
         scheduled_for_ms: 100,
         task_id: Some("task1".to_owned()),
         error: None,
+        error_code: None,
         created_at_ms: 100,
     };
     let value: Value = serde_json::to_value(&run).unwrap();

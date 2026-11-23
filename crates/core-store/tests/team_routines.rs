@@ -66,6 +66,8 @@ fn run(routine_id: &str, scheduled_for: i64) -> TeamRoutineRunRow {
         scheduled_for,
         task_id: None,
         error: None,
+        error_code: None,
+        settled_at: None,
         created_at: scheduled_for,
     }
 }
@@ -103,7 +105,7 @@ fn a_claim_wins_once_and_writes_its_run_with_the_next_occurrence() {
 
     assert!(
         store
-            .claim_routine_run(100, Some(200), &run(&routine.id, 100))
+            .claim_routine_run(100, Some(200), &run(&routine.id, 100), None)
             .unwrap()
     );
     assert_eq!(next_run_at(&store, &routine.id), Some(200));
@@ -112,7 +114,7 @@ fn a_claim_wins_once_and_writes_its_run_with_the_next_occurrence() {
     // Another caller holding the same stored time loses, and writes no run.
     assert!(
         !store
-            .claim_routine_run(100, Some(300), &run(&routine.id, 100))
+            .claim_routine_run(100, Some(300), &run(&routine.id, 100), None)
             .unwrap()
     );
     assert_eq!(next_run_at(&store, &routine.id), Some(200));
@@ -129,7 +131,7 @@ fn a_claim_after_several_missed_occurrences_records_one_run_for_the_latest() {
     // Occurrences at 100, 200 and 300 were missed; the claim at 350 stands for 300 only.
     assert!(
         store
-            .claim_routine_run(100, Some(400), &run(&routine.id, 300))
+            .claim_routine_run(100, Some(400), &run(&routine.id, 300), None)
             .unwrap()
     );
     let runs = store.list_routine_runs(&routine.id, 10).unwrap();
@@ -186,7 +188,7 @@ fn deleting_a_routine_removes_its_runs_and_keeps_its_tasks() {
     store.insert_task(&task).unwrap();
     let mut linked = run(&routine.id, 100);
     linked.task_id = Some(task.id.clone());
-    store.insert_routine_run(&linked).unwrap();
+    store.insert_routine_run(&linked, None).unwrap();
 
     assert!(store.delete_routine(&routine.id).unwrap());
 
@@ -201,7 +203,9 @@ fn removing_a_team_removes_its_routines_and_their_runs() {
     let team = team(&store);
     let routine = routine(&team.id, None, None);
     store.insert_routine(&routine).unwrap();
-    store.insert_routine_run(&run(&routine.id, 100)).unwrap();
+    store
+        .insert_routine_run(&run(&routine.id, 100), None)
+        .unwrap();
 
     assert!(store.delete_team(&team.id).unwrap());
 
@@ -232,7 +236,7 @@ fn runs_list_newest_first_and_a_limit_keeps_the_newest() {
     store.insert_routine(&routine).unwrap();
     for scheduled_for in [100, 300, 200] {
         store
-            .insert_routine_run(&run(&routine.id, scheduled_for))
+            .insert_routine_run(&run(&routine.id, scheduled_for), None)
             .unwrap();
     }
 
@@ -246,26 +250,31 @@ fn runs_list_newest_first_and_a_limit_keeps_the_newest() {
 }
 
 #[test]
-fn a_run_records_its_task_and_its_error() {
+fn a_run_records_the_code_and_message_of_its_error_once() {
     let store = store();
     let team = team(&store);
     let bot = bot(&store, &team.id);
     let routine = routine(&team.id, Some(&bot.id), None);
     store.insert_routine(&routine).unwrap();
-    let task = task(&team.id, &bot.id);
-    store.insert_task(&task).unwrap();
     let pending = run(&routine.id, 100);
-    store.insert_routine_run(&pending).unwrap();
+    store.insert_routine_run(&pending, None).unwrap();
 
     assert!(
         store
-            .set_routine_run_result(&pending.id, Some(&task.id), Some("bot.busy"))
+            .set_routine_run_result(&pending.id, Some(("bot.busy", "the bot is busy")), 150)
+            .unwrap()
+    );
+    // A settled run keeps its outcome.
+    assert!(
+        !store
+            .set_routine_run_result(&pending.id, None, 160)
             .unwrap()
     );
 
     let saved = store.get_routine_run(&pending.id).unwrap().unwrap();
-    assert_eq!(saved.task_id.as_deref(), Some(task.id.as_str()));
-    assert_eq!(saved.error.as_deref(), Some("bot.busy"));
+    assert_eq!(saved.error.as_deref(), Some("the bot is busy"));
+    assert_eq!(saved.error_code.as_deref(), Some("bot.busy"));
+    assert_eq!(saved.settled_at, Some(150));
 }
 
 #[test]

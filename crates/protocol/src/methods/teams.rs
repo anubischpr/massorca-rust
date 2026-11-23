@@ -541,6 +541,9 @@ pub struct RoutineRun {
     /// Why the run or its task did not start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The protocol code of `error`, such as `bot.not_found` or `team.routine_run_interrupted`. Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     pub created_at_ms: i64,
 }
 

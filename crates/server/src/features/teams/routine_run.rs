@@ -1,21 +1,26 @@
-//! A routine's run: the task it makes, started through the same start a person's Start uses, and the outcome recorded on
-//! the run. A failure is kept on the run; a task already made stays Open with its own error, and nothing is retried.
+//! A routine's run: the task it makes, stored with the run in one transaction, then started through the same start a
+//! person's Start uses, and the outcome recorded on the run. A failure is kept on the run with its code; a task already
+//! made stays Open with its own error, and nothing is retried. A run whose outcome was never recorded is marked
+//! interrupted at the next service start.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_core_agents::{Agents, SecretGrant};
-use massorca_core_store::{Store, TeamRoutineRow, TeamRoutineRunRow};
+use massorca_core_store::{Store, TaskRow, TeamRoutineRow, TeamRoutineRunRow, new_id, now_ms};
 use massorca_core_workspace::Workspaces;
 use massorca_protocol::methods::tasks::{TaskCreateParams, TaskOrigin};
 use massorca_protocol::{ErrorBody, codes};
 
 use super::store_error;
-use super::task::create_task;
+use super::task::new_task_row;
 use super::task_start::{Changes, start_task};
 
 /// Why a run receives no vault secrets: its routine was not set up by a host-admin caller.
 const WITHHELD: &str =
     "vault secrets go only to routine runs whose routine a host-admin caller set up";
+
+/// The message of a run the service stopped before its start recorded an outcome.
+pub(super) const INTERRUPTED: &str = "the service stopped before this run started";
 
 /// The grant a routine's run receives: vault secrets only when its creator held host-admin scope (decision 0071).
 pub(super) fn routine_grant(starts_as_admin: bool) -> SecretGrant {
@@ -26,52 +31,104 @@ pub(super) fn routine_grant(starts_as_admin: bool) -> SecretGrant {
     }
 }
 
-/// Makes the run's task and starts it, then records the task and any failure on `run`. It never fails its caller.
-pub(super) fn run_routine(
+/// A run about to be stored, and the task it makes. A run that cannot make its task, such as one whose bot was
+/// removed, is already settled with the reason and has no task.
+pub(super) struct Prepared {
+    pub(super) run: TeamRoutineRunRow,
+    pub(super) task: Option<TaskRow>,
+}
+
+/// Builds the run for the occurrence `scheduled_for` and the task it makes, neither stored yet.
+pub(super) fn prepare_run(
+    store: &Store,
+    routine: &TeamRoutineRow,
+    scheduled_for: i64,
+    now: i64,
+) -> Prepared {
+    match routine_task(store, routine, scheduled_for) {
+        Ok(task) => {
+            let mut run = pending_run(routine, scheduled_for, now);
+            run.task_id = Some(task.id.clone());
+            Prepared {
+                run,
+                task: Some(task),
+            }
+        }
+        Err(error) => failed_run(routine, scheduled_for, now, &error),
+    }
+}
+
+/// A run that ends before it makes a task, with the code and message of `error`.
+pub(super) fn failed_run(
+    routine: &TeamRoutineRow,
+    scheduled_for: i64,
+    now: i64,
+    error: &ErrorBody,
+) -> Prepared {
+    let mut run = pending_run(routine, scheduled_for, now);
+    run.error = Some(error.message.clone());
+    run.error_code = Some(error.code.clone());
+    run.settled_at = Some(now);
+    Prepared { run, task: None }
+}
+
+fn pending_run(routine: &TeamRoutineRow, scheduled_for: i64, now: i64) -> TeamRoutineRunRow {
+    TeamRoutineRunRow {
+        id: new_id(),
+        routine_id: routine.id.clone(),
+        scheduled_for,
+        task_id: None,
+        error: None,
+        error_code: None,
+        settled_at: None,
+        created_at: now,
+    }
+}
+
+/// Starts the task a stored run made, then records the outcome on the run. A settled run, or one without a task, starts
+/// nothing. It never fails its caller.
+pub(super) fn start_run(
     store: &Store,
     agents: &Agents,
     workspaces: &Workspaces,
-    routine: &TeamRoutineRow,
     run: &TeamRoutineRunRow,
     grant: SecretGrant,
     changes: &mut Changes,
 ) {
-    let (task_id, error) = match start_routine_task(
-        store,
-        agents,
-        workspaces,
-        routine,
-        run.scheduled_for,
-        grant,
-        changes,
-    ) {
-        Ok(task_id) => (Some(task_id), None),
-        Err(failure) => (failure.task, Some(failure.error.message)),
+    let Some(task_id) = run.task_id.as_deref() else {
+        return;
     };
-    if let Err(error) = store.set_routine_run_result(&run.id, task_id.as_deref(), error.as_deref())
-    {
-        tracing::warn!("a routine run's outcome could not be saved: {error}");
+    if run.settled_at.is_some() {
+        return;
+    }
+    changes.task = Some(task_id.to_owned());
+    let failure = start_task(store, agents, workspaces, task_id, grant, changes).err();
+    record_outcome(store, &run.id, failure.as_ref());
+}
+
+/// Records a run's outcome, trying once more when the write fails. A run whose outcome still could not be written stays
+/// pending, and the next service start marks it interrupted, so its state never lives only in the log.
+fn record_outcome(store: &Store, run_id: &str, failure: Option<&ErrorBody>) {
+    let error = failure.map(|error| (error.code.as_str(), error.message.as_str()));
+    for attempt in 1..=2 {
+        match store.set_routine_run_result(run_id, error, now_ms()) {
+            Ok(_) => return,
+            Err(write) => tracing::warn!(
+                attempt,
+                "a routine run's outcome could not be saved; the next start marks it interrupted: {write}"
+            ),
+        }
     }
 }
 
-/// Why a run did not start, and the task it had already made when the start failed. Boxed: it is only the failure path.
-struct Failure {
-    task: Option<String>,
-    error: ErrorBody,
-}
-
-fn start_routine_task(
+/// The task a run makes for the routine's bot, checked as `task.create` checks it.
+fn routine_task(
     store: &Store,
-    agents: &Agents,
-    workspaces: &Workspaces,
     routine: &TeamRoutineRow,
     scheduled_for: i64,
-    grant: SecretGrant,
-    changes: &mut Changes,
-) -> Result<String, Box<Failure>> {
-    let unstarted = |error: ErrorBody| Box::new(Failure { task: None, error });
-    let bot_id = bot_of(store, routine).map_err(unstarted)?;
-    let task = create_task(
+) -> Result<TaskRow, ErrorBody> {
+    let bot_id = bot_of(store, routine)?;
+    new_task_row(
         store,
         TaskCreateParams {
             team: routine.team_id.clone(),
@@ -82,16 +139,6 @@ fn start_routine_task(
             origin: Some(TaskOrigin::Cli),
         },
     )
-    .map_err(unstarted)?;
-    let task_id = task.id;
-    changes.task = Some(task_id.clone());
-    start_task(store, agents, workspaces, &task_id, grant, changes).map_err(|error| {
-        Box::new(Failure {
-            task: Some(task_id.clone()),
-            error,
-        })
-    })?;
-    Ok(task_id)
 }
 
 /// The routine's bot, by id. A removed bot leaves the routine with none, and its run says so.
