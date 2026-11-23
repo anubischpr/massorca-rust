@@ -139,6 +139,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("device"),
         ),
         command(
+            "device.forget",
+            "Remove a revoked device from the list",
+            "device.forget",
+            selector("device"),
+        ),
+        command(
             "device.whoami",
             "Show who this connection acts as",
             "device.whoami",

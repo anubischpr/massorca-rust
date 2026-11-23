@@ -191,7 +191,7 @@ async fn install(
             .cli
             .iter()
             .filter_map(|plan| match &plan.state {
-                CliPlanState::WillRun { command } => Some(command_text(command)),
+                CliPlanState::WillRun { command, .. } => Some(command_text(command)),
                 _ => None,
             })
             .collect();
