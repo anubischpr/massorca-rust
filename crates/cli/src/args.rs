@@ -285,7 +285,8 @@ pub struct WorkspaceCreateArgs {
     /// Branch to create or check out. Defaults to the workspace name.
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
-    /// Commit or ref the new branch starts from. Defaults to HEAD.
+    /// Commit or ref the new branch starts from. `origin/x` means the remote-tracking branch. Defaults to the
+    /// default branch (what `origin/HEAD` points at, else `origin/main`, `origin/master`, `main`, `master`), else HEAD.
     #[arg(long, value_name = "REF")]
     pub base: Option<String>,
     /// Check out an existing local branch instead of creating one.

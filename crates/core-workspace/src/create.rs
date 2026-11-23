@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use massorca_core_git::WorktreeAdd;
+use massorca_core_git::{Base, WorktreeAdd};
 use massorca_core_store::{
     ProjectKind as StoreKind, ProjectRow, StoreError, WorkspaceKind as StoreWorkspaceKind,
     WorkspaceRow, WorkspaceState as StoreWorkspaceState, new_id, now_ms,
@@ -76,7 +76,10 @@ impl Workspaces {
             return Ok(adopted);
         }
         self.ensure_path_free(&target)?;
-        let base = params.base.as_deref().unwrap_or("HEAD");
+        let mut base = Base {
+            name: "HEAD".to_owned(),
+            revision: "HEAD".to_owned(),
+        };
         if params.existing_branch {
             if params.base.is_some() {
                 return Err(invalid(
@@ -98,10 +101,17 @@ impl Workspaces {
                     format!("branch {branch:?} already exists"),
                 ));
             }
-            if !self.git.ref_exists(repo, base)? {
+            // Unnamed, the repository's default branch (decision 0008); HEAD only when it has none.
+            if let Some(found) = match params.base.as_deref() {
+                Some(name) => Some(self.git.qualify_base(repo, name)?),
+                None => self.git.default_base(repo)?,
+            } {
+                base = found;
+            }
+            if !self.git.ref_exists(repo, &base.revision)? {
                 return Err(DomainError::new(
                     codes::BASE_NOT_FOUND,
-                    format!("base {base:?} does not resolve to a commit"),
+                    format!("base {:?} does not resolve to a commit", base.name),
                 ));
             }
         }
@@ -116,7 +126,7 @@ impl Workspaces {
         } else {
             WorktreeAdd::NewBranch {
                 branch,
-                base: Some(base),
+                base: Some(base.revision.as_str()),
             }
         };
         self.git.worktree_add(repo, &target, add)?;
@@ -129,7 +139,7 @@ impl Workspaces {
             path: stored_path,
             path_key,
             branch: Some(branch.to_owned()),
-            base_ref: created_branch.then(|| base.to_owned()),
+            base_ref: created_branch.then(|| base.name.clone()),
             created_branch,
             state: StoreWorkspaceState::Ready,
             request_id: params.request_id.clone(),

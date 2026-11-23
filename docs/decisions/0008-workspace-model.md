@@ -23,8 +23,14 @@ lineage) comes later; the model must not block it.
 - **Git is the truth for which worktrees exist.** The store keeps identity and
   metadata. `show` and `list` report a workspace whose directory is gone as
   `missing` instead of hiding it.
-- **Create a worktree.** Branch defaults to the sanitized name; base defaults
-  to the repository's `HEAD`. An existing local branch is used only with
+- **Create a worktree.** Branch defaults to the sanitized name. Base defaults
+  to the repository's default branch: what `origin/HEAD` points at, else
+  `origin/main`, `origin/master`, `main`, `master`, and `HEAD` only when none
+  exists (GIT-13). A named base is resolved in the namespace it implies, so a
+  tag of the same name never wins: a name with a `/` is a remote-tracking
+  branch first, then a local branch; a plain name is a local branch; a full
+  `refs/` name or a commit id passes through. The workspace records the name as
+  given (`origin/main`). An existing local branch is used only with
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is
   given. Create carries an optional client request id; repeating the same id
   returns the first result instead of creating twice.
@@ -85,8 +91,7 @@ lineage) comes later; the model must not block it.
 
 ## Deferred (recorded so it is not forgotten)
 
-Branch prefixes, generated names and their retirement, base-ref fallback
-order, nested layout options, setup scripts, terminal and agent guards on
+Branch prefixes, generated names and their retirement, nested layout options, setup scripts, terminal and agent guards on
 removal, squash-merge detection, id aliases after a folder rename, remote
 hosts. Each lands with its phase and its own tests.
 
