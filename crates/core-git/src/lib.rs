@@ -18,6 +18,7 @@ mod refs;
 mod remote;
 mod repository;
 mod status;
+mod untrusted;
 mod version;
 mod worktree;
 mod worktree_locks;
