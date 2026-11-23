@@ -13,12 +13,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::terminal as tty;
-use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
-use massorca_protocol::methods::terminals::{Terminal, TerminalAttachParams, TerminalResizeParams};
+use massorca_client::{
+    AttachStep, AttachUpdate, Backoff, Client, ClientError, Link, ResilientAttach, is_transient,
+};
+use massorca_protocol::methods::terminals::{
+    AttachMode, Terminal, TerminalAttachParams, TerminalResizeParams,
+};
 use tokio::sync::mpsc;
 
 use crate::error::{CliError, exit};
+use crate::stream_reconnect::{Reconnector, link_text};
+use crate::target::Target;
 use crate::terminal::exit_text;
+
+type Attach = ResilientAttach<Reconnector>;
 
 /// The byte Ctrl+] sends; typing it detaches instead of reaching the terminal.
 const DETACH_BYTE: u8 = 0x1d;
@@ -53,7 +61,8 @@ pub fn require_terminal() -> Result<(), CliError> {
 }
 
 /// Attaches to `terminal` until the user detaches or the terminal exits. Either way the local terminal is restored first.
-pub async fn attach(client: &Client, terminal: &str) -> Result<(), CliError> {
+/// A dropped connection is retried with backoff and the attach resumes after the output already shown (decision 0040).
+pub async fn attach(target: &Target, client: &Client, terminal: &str) -> Result<(), CliError> {
     #[cfg(windows)]
     {
         // Enables VT processing on the console output so the remote program's escape sequences draw.
@@ -63,20 +72,28 @@ pub async fn attach(client: &Client, terminal: &str) -> Result<(), CliError> {
         Ok((cols, rows)) => (Some(cols), Some(rows)),
         Err(_) => (None, None),
     };
-    let mut attachment = client
-        .terminal_attach(&TerminalAttachParams {
+    let mut attachment = ResilientAttach::new(
+        Reconnector::new(target, client),
+        TerminalAttachParams {
             terminal: terminal.to_owned(),
             since: None,
             cols,
             rows,
             // The user's terminal answers the program's queries; its replies arrive on stdin.
             answers_queries: Some(true),
-        })
-        .await?;
+        },
+        Backoff::default(),
+    );
+    // The first step is read before raw mode, so a refused attach fails like any other command.
+    let first = match attachment.next().await {
+        Some(Ok(step)) => step,
+        Some(Err(error)) => return Err(error.into()),
+        None => return Err(ClientError::Disconnected.into()),
+    };
     write_stderr(&format!(
         "attached to terminal {terminal}; press Ctrl+] to detach\n"
     ));
-    let ended = run_attached(client, &mut attachment, terminal).await?;
+    let ended = run_attached(&mut attachment, first, terminal).await?;
     match ended {
         Ended::Detached => write_stderr(&format!("detached from terminal {terminal}\n")),
         Ended::Exited(exited) => match &exited.exit {
@@ -93,33 +110,40 @@ pub async fn attach(client: &Client, terminal: &str) -> Result<(), CliError> {
 
 /// Runs the session with the local terminal in raw mode. The guard and the input source drop on every path, which restores the terminal.
 async fn run_attached(
-    client: &Client,
-    attachment: &mut TerminalAttachment,
+    attachment: &mut Attach,
+    first: AttachStep,
     terminal: &str,
 ) -> Result<Ended, CliError> {
     let _raw = RawMode::enable()?;
     let mut inputs = start_inputs()?;
-    session(client, attachment, &mut inputs.receiver, terminal).await
+    session(attachment, first, &mut inputs.receiver, terminal).await
+}
+
+/// What the session tracks across a reconnect.
+#[derive(Default)]
+struct Gap {
+    /// A loss was reported and the next `attached` tells how the attach came back.
+    reconnecting: bool,
 }
 
 async fn session(
-    client: &Client,
-    attachment: &mut TerminalAttachment,
+    attachment: &mut Attach,
+    first: AttachStep,
     inputs: &mut mpsc::UnboundedReceiver<InputMessage>,
     terminal: &str,
 ) -> Result<Ended, CliError> {
+    let mut gap = Gap::default();
+    if let Some(ended) = step(first, &mut gap)? {
+        return Ok(ended);
+    }
     loop {
         tokio::select! {
-            update = attachment.next() => {
-                let Some(update) = update else {
+            next = attachment.next() => {
+                let Some(next) = next else {
                     return Err(ClientError::Disconnected.into());
                 };
-                match update? {
-                    AttachUpdate::Snapshot { bytes, .. } | AttachUpdate::Output { bytes, .. } => {
-                        write_output(&bytes)?;
-                    }
-                    AttachUpdate::Exited { terminal: exited } => return Ok(Ended::Exited(exited)),
-                    AttachUpdate::Attached { .. } | AttachUpdate::Resized { .. } => {}
+                if let Some(ended) = step(next?, &mut gap)? {
+                    return Ok(ended);
                 }
             }
             input = inputs.recv() => match input {
@@ -128,13 +152,17 @@ async fn session(
                 Some(Ok(Input::End)) => return Ok(Ended::Detached),
                 Some(Err(error)) => return Err(error.into()),
                 Some(Ok(Input::Resize(cols, rows))) => {
-                    client
-                        .terminal_resize(&TerminalResizeParams {
-                            terminal: terminal.to_owned(),
-                            cols,
-                            rows,
-                        })
-                        .await?;
+                    attachment.set_size(cols, rows);
+                    if let Some(client) = attachment.client() {
+                        let resized = client
+                            .terminal_resize(&TerminalResizeParams {
+                                terminal: terminal.to_owned(),
+                                cols,
+                                rows,
+                            })
+                            .await;
+                        tolerate_loss(resized.map(drop))?;
+                    }
                 }
                 Some(Ok(Input::Bytes(bytes))) => {
                     let (typed, detach) = match bytes.iter().position(|&byte| byte == DETACH_BYTE) {
@@ -142,7 +170,10 @@ async fn session(
                         None => (&bytes[..], false),
                     };
                     if !typed.is_empty() {
-                        client.terminal_input(terminal, typed).await?;
+                        match attachment.client() {
+                            Some(client) => tolerate_loss(client.terminal_input(terminal, typed).await)?,
+                            None => write_notice("not connected: that input was not sent"),
+                        }
                     }
                     if detach {
                         return Ok(Ended::Detached);
@@ -151,6 +182,42 @@ async fn session(
             }
         }
     }
+}
+
+/// Acts on one step of the attach; `Some` when the attach is over.
+fn step(step: AttachStep, gap: &mut Gap) -> Result<Option<Ended>, CliError> {
+    match step {
+        AttachStep::Link(link) => {
+            gap.reconnecting = matches!(link, Link::Unverifiable { .. });
+            write_notice(&link_text(&link));
+        }
+        AttachStep::Update(update) => match update {
+            AttachUpdate::Snapshot { bytes, .. } | AttachUpdate::Output { bytes, .. } => {
+                write_output(&bytes)?;
+            }
+            AttachUpdate::Exited { terminal: exited } => return Ok(Some(Ended::Exited(exited))),
+            AttachUpdate::Attached { mode, .. } => {
+                if std::mem::take(&mut gap.reconnecting) && mode == AttachMode::Snapshot {
+                    write_notice("output from the gap is no longer held; the screen was redrawn");
+                }
+            }
+            AttachUpdate::Resized { .. } => {}
+        },
+    }
+    Ok(None)
+}
+
+/// A call that failed because the connection dropped is left to the reconnect; any other failure ends the attach.
+fn tolerate_loss(result: Result<(), ClientError>) -> Result<(), CliError> {
+    match result {
+        Err(error) if !is_transient(&error) => Err(error.into()),
+        _ => Ok(()),
+    }
+}
+
+/// A line of its own between the remote program's output; raw mode needs the carriage returns.
+fn write_notice(text: &str) {
+    write_stderr(&format!("\r\n[{text}]\r\n"));
 }
 
 fn write_output(bytes: &[u8]) -> io::Result<()> {
