@@ -46,8 +46,8 @@ async fn the_list_describes_each_kind() {
     let list = client.config_list().await.expect("config.list answers");
     assert_eq!(
         list.values.len(),
-        34,
-        "31 keys of 0070, the workspace root and the two branch prefix keys"
+        35,
+        "31 keys of 0070, the workspace root, the workspace layout and the two branch prefix keys"
     );
     let find = |name: &str| {
         list.values
@@ -85,6 +85,13 @@ async fn the_list_describes_each_kind() {
         "{folder:?}"
     );
     assert_eq!(find("privacy.telemetry").value, json!(false));
+    let layout = find("workspaces.layout");
+    assert_eq!(layout.kind.as_deref(), Some("choice"));
+    assert_eq!(
+        layout.choices.as_deref(),
+        Some(&["nested".to_owned(), "flat".to_owned()][..])
+    );
+    assert_eq!(layout.value, json!("nested"));
     stop(running).await;
 }
 

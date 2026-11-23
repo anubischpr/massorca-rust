@@ -258,7 +258,7 @@ pub struct ProjectAddArgs {
     /// Register a git repository; fail when the directory is not inside one.
     #[arg(long)]
     pub git: bool,
-    /// Directory that holds this project's workspaces. Defaults to a folder under the workspaces default root.
+    /// Directory that holds this project's workspaces. Defaults to a folder named after the project under the workspaces default root, or to the default root itself when workspaces.layout is flat.
     #[arg(long, value_name = "DIR")]
     pub workspaces_root: Option<PathBuf>,
 }
@@ -328,7 +328,7 @@ pub struct WorkspaceListArgs {
 
 #[derive(Debug, Args)]
 pub struct ConfigGetArgs {
-    /// Setting key, for example workspaces.default_root.
+    /// Setting key, for example workspaces.default_root or workspaces.layout.
     pub key: String,
     /// Owner of the setting: core (default) or ext:<id>.
     #[arg(long, value_name = "OWNER")]
@@ -337,7 +337,7 @@ pub struct ConfigGetArgs {
 
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
-    /// Setting key, for example workspaces.default_root.
+    /// Setting key, for example workspaces.default_root or workspaces.layout.
     pub key: String,
     /// New value: JSON when it parses, otherwise plain text.
     #[arg(allow_hyphen_values = true)]

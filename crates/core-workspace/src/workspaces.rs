@@ -7,6 +7,7 @@ use massorca_protocol::methods::workspaces::Workspace;
 
 use crate::branch_prefix::BranchPrefix;
 use crate::error::DomainError;
+use crate::layout::WorkspaceLayout;
 use crate::views;
 
 /// The projects and workspaces domain API. Share one value across threads behind an `Arc`.
@@ -17,6 +18,8 @@ pub struct Workspaces {
     pub(crate) default_root: PathBuf,
     /// How new branches are prefixed; `none` unless a caller asks otherwise.
     pub(crate) branch_prefix: BranchPrefix,
+    /// The layout a project added through this handle gets under the default root.
+    pub(crate) layout: WorkspaceLayout,
     /// Serialises every mutation, so a name, path or branch checked before git runs
     /// cannot be taken by another call before the row is inserted.
     mutations: Arc<Mutex<()>>,
@@ -30,6 +33,7 @@ impl Workspaces {
             git,
             default_root,
             branch_prefix: BranchPrefix::None,
+            layout: WorkspaceLayout::default(),
             mutations: Arc::new(Mutex::new(())),
         }
     }
@@ -43,6 +47,7 @@ impl Workspaces {
             git: self.git.clone(),
             default_root,
             branch_prefix: self.branch_prefix.clone(),
+            layout: self.layout,
             mutations: Arc::clone(&self.mutations),
         }
     }
@@ -55,6 +60,20 @@ impl Workspaces {
             git: self.git.clone(),
             default_root: self.default_root.clone(),
             branch_prefix,
+            layout: self.layout,
+            mutations: Arc::clone(&self.mutations),
+        }
+    }
+
+    /// A handle over the same store and git that gives projects added through it `layout`.
+    /// It shares the mutation lock, like `with_default_root`.
+    pub fn with_layout(&self, layout: WorkspaceLayout) -> Self {
+        Self {
+            store: self.store.clone(),
+            git: self.git.clone(),
+            default_root: self.default_root.clone(),
+            layout,
+            branch_prefix: self.branch_prefix.clone(),
             mutations: Arc::clone(&self.mutations),
         }
     }
