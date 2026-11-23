@@ -1,5 +1,6 @@
-//! The Title bar's content: navigation, the title, the Sidebar toggle and the region
-//! toggles (D-SH-03). Full pages swap Back and the title in, and hide the region toggles.
+//! The Title bar's content: navigation, the title, the Sidebar toggle and the region toggles (D-SH-03).
+//! Each page draws its Back control as its artboard does: sessions show Back and Forward, full pages
+//! one Back, and Bot Teams pages none.
 
 use super::navigation::{Mode, Page};
 use super::regions::Region;
@@ -11,6 +12,9 @@ pub const NO_SESSION_TITLE: &str = "No session open";
 
 /// The title of the Bot Teams home, the team list (screens 4.5).
 pub const BOT_TEAMS_TITLE: &str = "Bot teams";
+
+/// Joins a team or a marketplace name to its page, as the artboards read: "Desarrollo · Board".
+const TITLE_SEPARATOR: &str = " · ";
 
 /// The regions with a Title bar toggle, in D-SH-03 order.
 const TOGGLED_REGIONS: [Region; 3] = [
@@ -26,13 +30,25 @@ pub struct RegionToggle {
     pub on: bool,
 }
 
+/// The Back control at the start of the Title bar, as the artboards draw each kind of page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackControl {
+    /// No Back. Bot Teams pages keep the Sidebar toggle and name their team (bt-board).
+    None,
+    /// Back and Forward icons beside the Sidebar toggle, for a session (sh-empty-app).
+    History,
+    /// One icon Back beside the title, on a full page (bt-settings-appearance, bt-calendar-week).
+    Icon,
+    /// One labelled Back beside the title, on a full page (ws-tasks, ws-automations).
+    Labelled,
+}
+
 /// What the Title bar shows right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitleBarModel {
-    /// The full page on screen, if any; its Back button and title replace the session.
+    /// The full page on screen, if any; its Back control and title replace the session.
     pub full_page: Option<Page>,
-    /// Back is a labelled button with the page title: full pages and Bot Teams screens (D-SH-03).
-    pub labelled_back: bool,
+    pub back: BackControl,
     pub title: String,
     /// No session is open, so the title reads in tertiary text.
     pub title_is_placeholder: bool,
@@ -42,8 +58,8 @@ pub struct TitleBarModel {
     pub sidebar_on: bool,
     /// Names the action the Sidebar toggle takes.
     pub sidebar_label: &'static str,
-    /// Off on full pages, where the Sidebar is hidden.
-    pub sidebar_enabled: bool,
+    /// Full pages hide the Sidebar and its toggle, as their artboards do.
+    pub show_sidebar_toggle: bool,
     /// Empty on full pages.
     pub region_toggles: Vec<RegionToggle>,
 }
@@ -55,11 +71,16 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     let bot_teams = navigation.mode == Mode::BotTeams;
     let session = model.snapshot().session_title.as_ref();
     let (title, title_is_placeholder) = match (full_page, navigation.page, session) {
-        (Some(page), _, _) => (page.title().to_owned(), false),
+        (Some(page), _, _) => (full_page_title(model, page), false),
         (None, Page::Team(page), _) => (team_page_title(model, page), false),
         (None, _, _) if bot_teams => (BOT_TEAMS_TITLE.to_owned(), false),
         (None, _, Some(session)) => (session.clone(), false),
         (None, _, None) => (NO_SESSION_TITLE.to_owned(), true),
+    };
+    let back = match full_page {
+        Some(page) => full_page_back(page),
+        None if bot_teams => BackControl::None,
+        None => BackControl::History,
     };
     // Bot Teams pages have no Workspaces regions to toggle.
     let region_toggles = if full_page.is_some() || bot_teams {
@@ -76,7 +97,7 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
     let sidebar_on = model.region_visible(Region::Sidebar);
     TitleBarModel {
         full_page,
-        labelled_back: full_page.is_some() || bot_teams,
+        back,
         title,
         title_is_placeholder,
         can_go_back: navigation.can_go_back(),
@@ -87,20 +108,47 @@ pub fn title_bar(model: &ShellModel) -> TitleBarModel {
         } else {
             "Show sidebar"
         },
-        sidebar_enabled: full_page.is_none(),
+        show_sidebar_toggle: full_page.is_none(),
         region_toggles,
     }
 }
 
-/// A team page is named by its page, and a project's page by the project's name.
-fn team_page_title(model: &ShellModel, page: TeamPage) -> String {
+/// The Back control of a full page. Tasks and Automations draw a labelled Back; the other full
+/// pages draw one icon Back, as their artboards do.
+fn full_page_back(page: Page) -> BackControl {
     match page {
+        Page::Tasks | Page::Automations => BackControl::Labelled,
+        _ => BackControl::Icon,
+    }
+}
+
+/// A full page is named by its page; a Marketplace item page by the item's name.
+fn full_page_title(model: &ShellModel, page: Page) -> String {
+    match page {
+        Page::Marketplace(super::navigation::MarketplacePage::Item(id)) => {
+            model.marketplace().item(id).map_or_else(
+                || page.title().to_owned(),
+                |item| format!("{}{TITLE_SEPARATOR}{}", page.title(), item.name),
+            )
+        }
+        _ => page.title().to_owned(),
+    }
+}
+
+/// A team page is named by its team and page, and a project's page by the team and the project's
+/// name: "Desarrollo · Board" (bt-board).
+fn team_page_title(model: &ShellModel, page: TeamPage) -> String {
+    let page_name = match page {
         TeamPage::Project(team, project) => model
             .teams()
             .team(team)
             .and_then(|team| team.project(project))
             .map_or_else(|| page.title().to_owned(), |project| project.name.clone()),
         _ => page.title().to_owned(),
+    };
+    match model.teams().team(page.team()) {
+        Some(team) => format!("{}{TITLE_SEPARATOR}{page_name}", team.name),
+        None => page_name,
     }
 }
 
@@ -108,19 +156,30 @@ fn team_page_title(model: &ShellModel, page: TeamPage) -> String {
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
-    use crate::model::teams::{SampleTeamsSource, TeamId, TeamPage, TeamsSource};
+    use crate::model::marketplace::{MarketplaceSource, SampleMarketplaceSource};
+    use crate::model::navigation::MarketplacePage;
+    use crate::model::teams::{ProjectId, SampleTeamsSource, TeamId, TeamPage, TeamsSource};
 
     fn shell() -> ShellModel {
         ShellModel::new(SampleDataSource.snapshot(), 1440.0)
     }
 
+    fn bot_teams_shell() -> ShellModel {
+        let mut model = shell();
+        model.set_teams(SampleTeamsSource.teams());
+        model.press_mode_switch();
+        model
+    }
+
     #[test]
-    fn a_session_titles_the_bar_and_back_is_off_without_history() {
+    fn a_session_titles_the_bar_and_draws_back_and_forward() {
         let bar = title_bar(&shell());
         assert_eq!(bar.title, "Implementation of master catalogs");
         assert!(!bar.title_is_placeholder);
         assert!(!bar.can_go_back && !bar.can_go_forward);
         assert_eq!(bar.full_page, None);
+        assert_eq!(bar.back, BackControl::History);
+        assert!(bar.show_sidebar_toggle);
         assert_eq!(bar.region_toggles.len(), 3);
     }
 
@@ -134,15 +193,51 @@ mod tests {
     }
 
     #[test]
-    fn a_full_page_shows_its_title_and_hides_the_region_toggles() {
+    fn a_full_page_shows_its_title_and_hides_the_sidebar_and_region_toggles() {
         let mut model = shell();
         model.open_page(Page::Tasks);
         let bar = title_bar(&model);
         assert_eq!(bar.full_page, Some(Page::Tasks));
         assert_eq!(bar.title, "Tasks");
         assert!(bar.region_toggles.is_empty());
-        assert!(!bar.sidebar_enabled);
+        assert!(!bar.show_sidebar_toggle);
         assert!(bar.can_go_back);
+    }
+
+    #[test]
+    fn each_full_page_draws_back_as_its_artboard_does() {
+        let cases = [
+            // ws-tasks and ws-automations draw a labelled Back.
+            (Page::Tasks, BackControl::Labelled),
+            (Page::Automations, BackControl::Labelled),
+            // bt-settings-appearance, bt-calendar-week, bt-marketplace-catalogue and
+            // sh-setup-checklist draw one icon Back. Pairing has no artboard and follows them.
+            (Page::Settings, BackControl::Icon),
+            (Page::Calendar, BackControl::Icon),
+            (
+                Page::Marketplace(MarketplacePage::Discover),
+                BackControl::Icon,
+            ),
+            (Page::Setup, BackControl::Icon),
+            (Page::Pairing, BackControl::Icon),
+        ];
+        for (page, back) in cases {
+            let mut model = shell();
+            model.open_page(page);
+            assert_eq!(title_bar(&model).back, back, "{page:?}");
+        }
+    }
+
+    #[test]
+    fn a_marketplace_item_page_names_the_marketplace_and_the_item() {
+        let mut model = shell();
+        model.set_marketplace(SampleMarketplaceSource::default().snapshot());
+        let item = model.marketplace().items[0].clone();
+        model.open_page(Page::Marketplace(MarketplacePage::Item(item.id)));
+        assert_eq!(
+            title_bar(&model).title,
+            format!("Marketplace · {}", item.name)
+        );
     }
 
     #[test]
@@ -172,31 +267,41 @@ mod tests {
     }
 
     #[test]
-    fn a_bot_teams_page_is_named_by_its_page_and_has_no_region_toggles() {
-        let mut model = shell();
-        model.set_teams(SampleTeamsSource.teams());
-        model.press_mode_switch();
-        let bar = title_bar(&model);
-        assert_eq!(bar.title, BOT_TEAMS_TITLE);
-        assert!(bar.region_toggles.is_empty());
-        assert!(bar.sidebar_enabled);
+    fn a_bot_teams_page_is_named_by_its_team_and_page() {
+        let mut model = bot_teams_shell();
+        assert_eq!(title_bar(&model).title, BOT_TEAMS_TITLE);
         model.open_team_page(TeamPage::Board(TeamId(1)));
-        assert_eq!(title_bar(&model).title, "Board");
+        assert_eq!(title_bar(&model).title, "Desarrollo · Board");
+        model.open_team_page(TeamPage::Conference(TeamId(1)));
+        assert_eq!(title_bar(&model).title, "Desarrollo · Conference room");
+        model.open_team_page(TeamPage::Routines(TeamId(1)));
+        assert_eq!(title_bar(&model).title, "Desarrollo · Routines");
+        model.open_team_page(TeamPage::NewRoutine(TeamId(1)));
+        assert_eq!(title_bar(&model).title, "Desarrollo · New routine");
     }
 
     #[test]
-    fn bot_teams_screens_name_back_and_keep_the_sidebar() {
-        let mut model = shell();
-        model.set_teams(SampleTeamsSource.teams());
-        model.press_mode_switch();
+    fn a_team_project_page_is_named_by_its_team_and_project() {
+        let mut model = bot_teams_shell();
+        model.open_team_page(TeamPage::Project(TeamId(1), ProjectId(1)));
+        assert_eq!(
+            title_bar(&model).title,
+            "Desarrollo · Desarrollo onboarding"
+        );
+    }
+
+    #[test]
+    fn bot_teams_pages_draw_no_back_and_keep_the_sidebar_toggle() {
+        let mut model = bot_teams_shell();
         let home = title_bar(&model);
-        assert!(home.labelled_back);
-        assert!(home.sidebar_enabled);
+        assert_eq!(home.back, BackControl::None);
+        assert!(home.show_sidebar_toggle);
+        assert!(home.region_toggles.is_empty());
         model.open_team_page(TeamPage::Board(TeamId(1)));
         let board = title_bar(&model);
-        assert!(board.labelled_back);
+        assert_eq!(board.back, BackControl::None);
         assert_eq!(board.full_page, None);
-        assert!(board.sidebar_enabled);
-        assert!(!title_bar(&shell()).labelled_back);
+        assert!(board.show_sidebar_toggle);
+        assert!(board.region_toggles.is_empty());
     }
 }

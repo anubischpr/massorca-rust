@@ -6,17 +6,22 @@ mod agent_links;
 mod catalogue;
 mod item_page;
 mod sample;
+mod service_accounts;
 mod service_source;
 mod source;
 mod types;
 
-pub use accounts::{AccountView, account_views};
+pub use accounts::{
+    AccountActivity, AccountView, TerminalSignIn, account_views, busy_refusal, connection_rows,
+    import_outcome, terminal_sign_in,
+};
 pub use agent_links::{AgentLink, installed_agent_links};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use item_page::{
     Part, advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
 };
 pub use sample::SampleMarketplaceSource;
+pub use service_accounts::ServiceAccounts;
 pub use service_source::{ServiceMarketplace, agent_snapshot};
 pub use source::{MarketplaceSource, SourceError, UnavailableMarketplace};
 pub use types::{

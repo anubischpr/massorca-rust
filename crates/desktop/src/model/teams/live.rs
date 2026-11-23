@@ -47,6 +47,7 @@ fn live_team(ids: &TeamIds, host: &str, record: &TeamRecord, kinds: &[AgentKind]
     Some(Team {
         id: TeamId(ids.get(&record.team.id)?),
         name: record.team.name.clone(),
+        character: record.team.character,
         purpose: record.team.purpose.clone(),
         host: host.to_owned(),
         reach: HostReach::Connected,

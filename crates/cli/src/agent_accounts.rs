@@ -15,6 +15,7 @@ use massorca_protocol::methods::agents::{
 use crate::cwd_path;
 use crate::error::CliError;
 use crate::output::Output;
+use crate::target::Target;
 use crate::terminal_attach;
 use crate::workspace_text;
 
@@ -76,6 +77,7 @@ pub enum AccountsCommand {
 /// Runs one `agent accounts` subcommand. `json` is the output mode: sign-in attaches to a terminal, which has no JSON
 /// form, so it needs `--no-attach` there.
 pub async fn execute(
+    target: &Target,
     client: &Client,
     command: AccountsCommand,
     output: Output,
@@ -107,7 +109,7 @@ pub async fn execute(
                 .await?;
             output.success(&added, &added_lines(&added));
             if !no_attach {
-                terminal_attach::attach(client, &added.terminal_id).await?;
+                terminal_attach::attach(target, client, &added.terminal_id).await?;
             }
         }
         AccountsCommand::Import { kind, from, label } => {

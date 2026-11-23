@@ -205,6 +205,48 @@ fn a_watch_of_a_revoked_device_exits_non_zero_and_says_why() {
 }
 
 #[test]
+fn a_revoked_device_is_forgotten_and_an_active_one_is_refused() {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let _service = start_server(&server);
+    accept_ok(&client, &pair_offer(&server, &[]), "srv", "laptop");
+    accept_ok(&client, &pair_offer(&server, &["--admin"]), "adm", "desk");
+
+    let refused = client
+        .run(
+            "client",
+            &with_json(&["--host", "srv", "device", "forget", "laptop"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&refused)["error"]["code"],
+        "permission.denied"
+    );
+    let active = server
+        .run(
+            "server",
+            &with_json(&["--no-autostart", "device", "forget", "laptop"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&active)["error"]["code"],
+        "device.not_revoked"
+    );
+
+    client.json_ok("client", &["--host", "adm", "device", "revoke", "laptop"]);
+    let forgotten = server.json_ok("server", &["--no-autostart", "device", "forget", "laptop"]);
+    assert_eq!(forgotten["name"], "laptop");
+    let devices = client.json_ok("client", &["--host", "adm", "device", "list"]);
+    let names: Vec<&str> = devices["devices"]
+        .as_array()
+        .expect("devices")
+        .iter()
+        .filter_map(|device| device["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["desk"]);
+}
+
+#[test]
 fn damaged_and_spent_offers_are_refused_and_the_input_is_never_echoed() {
     let server = Sandbox::new();
     let client = Sandbox::new();

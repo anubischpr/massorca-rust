@@ -82,7 +82,7 @@ pub(in crate::shell) fn project_page(
                 .text_color(theme.palette.text.primary)
                 .child(project_data.name.clone()),
         )
-        .child(team_pill(&team_data.name, team, &theme));
+        .child(team_pill(&team_data.name, team_data.character, &theme));
     let brief_section = section("Brief", &theme)
         .child(body(brief, &theme))
         .child(edit_brief);

@@ -38,6 +38,9 @@ use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
 use crate::launch::{self, LaunchError, LaunchInput, LaunchPlan, Run};
 use crate::paths;
 use crate::prompt;
+use crate::provided_env::{
+    EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, SecretGrant, provide_bounded,
+};
 use crate::resolve::{SearchEnv, resolve_first};
 use crate::status::{self, HookRules};
 
@@ -158,6 +161,8 @@ impl From<LaunchError> for AgentError {
             | LaunchError::PromptHasNul
             | LaunchError::PromptHasControl => codes::AGENT_PROMPT_INVALID,
             LaunchError::NotResumable => codes::AGENT_RESUME_UNAVAILABLE,
+            LaunchError::ReservedName(_) => codes::AGENT_SECRETS_UNAVAILABLE,
+            LaunchError::DangerousCallerEnv(_) => codes::REQUEST_INVALID_PARAMS,
         };
         Self::new(code, error.to_string())
     }
@@ -173,6 +178,8 @@ pub struct AgentsConfig {
     pub profile_dir: PathBuf,
     /// The `massorca` executable that runs the service; agents and their hooks call it.
     pub massorca_bin: PathBuf,
+    /// Variables each run receives from the profile's vault (decision 0071); `None` gives none.
+    pub env_provider: Option<EnvProvider>,
 }
 
 /// The agents service. Cheap to clone; every clone is the same service.
@@ -329,17 +336,45 @@ impl Agents {
         AgentKinds { kinds }
     }
 
-    /// Starts a session: its first run in a new terminal in the workspace root (0051).
-    pub fn start(&self, params: AgentStartParams) -> Result<AgentSession, AgentError> {
-        self.start_session(params, None)
+    /// The vault's variables for a run in `project_id`: none without a provider or a grant, and a failure once the
+    /// provider takes longer than [`PROVIDER_TIMEOUT`].
+    pub(crate) fn provided_env(
+        &self,
+        project_id: &str,
+        grant: SecretGrant,
+    ) -> Result<ProvidedEnv, AgentError> {
+        let (Some(provider), SecretGrant::Provide) = (&self.inner.config.env_provider, grant)
+        else {
+            return Ok(ProvidedEnv::default());
+        };
+        provide_bounded(provider, project_id, PROVIDER_TIMEOUT).map_err(|error| {
+            AgentError::new(
+                codes::AGENT_SECRETS_UNAVAILABLE,
+                format!("the run's secrets are unavailable: {error}"),
+            )
+        })
     }
 
-    /// Starts a session, delegated from `parent_id` when one is given (0055).
-    fn start_session(
+    /// Starts a session: its first run in a new terminal in the workspace root (0051). The run receives the vault's
+    /// variables only with [`SecretGrant::Provide`]; otherwise the session says why it has none.
+    pub fn start(
         &self,
         params: AgentStartParams,
-        parent_id: Option<String>,
+        grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        self.start_session(params, None, grant)
+    }
+
+    /// Starts a session, delegated from `parent` when one is given (0055); a child of a run holding secrets is marked
+    /// as holding them too.
+    pub(crate) fn start_session(
+        &self,
+        params: AgentStartParams,
+        parent: Option<&AgentSessionRow>,
+        grant: SecretGrant,
+    ) -> Result<AgentSession, AgentError> {
+        let parent_holds = parent.is_some_and(|parent| parent.holds_secrets);
+        let parent_id = parent.map(|parent| parent.id.clone());
         let _gate = lock(&self.inner.start_gate);
         if let Some(request_id) = &params.request_id
             && let Some(row) = self.store().find_agent_session_by_request_id(request_id)?
@@ -383,6 +418,9 @@ impl Agents {
             return Err(error);
         }
 
+        // Before the homes gate and the status lock: the provider reads the vault, bounded by its timeout.
+        let provided = self.provided_env(&workspace.project_id, grant)?;
+        let holds_secrets = !provided.is_empty() || parent_holds;
         let session_id = new_id();
         let token = new_token();
         let new_ref = uuid::Uuid::new_v4().to_string();
@@ -402,6 +440,8 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             caller_args: &params.args,
+            provided_env: &provided,
+            holds_secrets,
             caller_env: &params.env,
         })?;
 
@@ -448,6 +488,7 @@ impl Agents {
             activity: None,
             result: None,
             brought_back_at: None,
+            holds_secrets,
         };
         if let Err(error) = self.store().insert_agent_session(&row) {
             live.remove(&session_id);
@@ -457,8 +498,9 @@ impl Agents {
             remove_dir(&run_dir);
             return Err(error.into());
         }
-        let session = self.view_with(&mut live, row)?;
+        let mut session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
+        session.secrets_withheld = withheld(grant);
         Ok(session)
     }
 
@@ -468,7 +510,7 @@ impl Agents {
     /// its run is live; `agent.resume_unavailable` when the kind is no longer declared, has no resume form, or the
     /// agent's ref is not known; `agent.not_installed` when no program of the kind resolves; `agent.workspace_busy` when
     /// another session writes in the workspace.
-    pub fn resume(&self, selector: &str) -> Result<AgentSession, AgentError> {
+    pub fn resume(&self, selector: &str, grant: SecretGrant) -> Result<AgentSession, AgentError> {
         let _gate = lock(&self.inner.start_gate);
         let row = self.resolve(selector)?;
         if self.view(row.clone())?.execution.state != TerminalState::Exited {
@@ -513,6 +555,17 @@ impl Agents {
             return Err(error);
         }
 
+        // Before the homes gate and the status lock, as in `start`.
+        let provided = self.provided_env(&workspace.project_id, grant)?;
+        let parent_holds = match &row.parent_id {
+            Some(parent) => self
+                .store()
+                .get_agent_session(parent)?
+                .is_some_and(|parent| parent.holds_secrets),
+            None => false,
+        };
+        // Sticky: once a run of the session got secrets, its scrollback may hold them, so the mark never clears.
+        let holds_secrets = !provided.is_empty() || parent_holds || row.holds_secrets;
         let token = new_token();
         // The gate holds from the account's resolution until the run is registered (see `start`).
         let gate = credentials::lock_homes();
@@ -532,6 +585,8 @@ impl Agents {
             massorca_bin: &self.inner.config.massorca_bin,
             credential_home: access.home.as_deref(),
             caller_args: &[],
+            provided_env: &provided,
+            holds_secrets,
             caller_env: &no_env,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
@@ -560,7 +615,9 @@ impl Agents {
                 live.remove(&row.id);
                 remove_dir(&run_dir);
             })?;
-        let restarted = self.store().restart_agent_session(&row.id, &terminal_id);
+        let restarted = self
+            .store()
+            .restart_agent_session(&row.id, &terminal_id, holds_secrets);
         if !matches!(restarted, Ok(true)) {
             live.remove(&row.id);
             // Closed once the status lock is released: a close can wait for the terminal's kill grace.
@@ -574,8 +631,9 @@ impl Agents {
             ));
         }
         let fresh = self.reload(&row.id)?;
-        let session = self.view_with(&mut live, fresh)?;
+        let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
+        session.secrets_withheld = withheld(grant);
         Ok(session)
     }
 
@@ -609,6 +667,7 @@ impl Agents {
             size,
             title: Some(title),
             request_id: None,
+            holds_secrets: plan.holds_secrets,
         };
         Ok(self.inner.config.terminals.create(spec)?.id)
     }
@@ -1089,6 +1148,16 @@ fn record(row: AgentSessionRow, execution: Execution) -> AgentSession {
         execution,
         activity: row.activity.as_ref().and_then(activity_of),
         result: row.result,
+        holds_secrets: row.holds_secrets,
+        secrets_withheld: None,
+    }
+}
+
+/// Why a run started without the vault's variables, for its caller.
+fn withheld(grant: SecretGrant) -> Option<String> {
+    match grant {
+        SecretGrant::Provide => None,
+        SecretGrant::Withhold(reason) => Some(reason.to_owned()),
     }
 }
 
@@ -1279,6 +1348,7 @@ mod tests {
             )),
             profile_dir: profile.path().to_path_buf(),
             massorca_bin: PathBuf::from("massorca"),
+            env_provider: None,
         });
         (agents, workspace.id, profile)
     }
@@ -1313,6 +1383,7 @@ mod tests {
             activity: Some(activity("working", None)),
             result: None,
             brought_back_at: None,
+            holds_secrets: false,
         };
         agents.store().insert_agent_session(&stale).unwrap();
         agents
@@ -1395,7 +1466,9 @@ mod tests {
     #[test]
     fn a_resume_of_an_unknown_session_is_not_found() {
         let (agents, _workspace_id, _profile) = service();
-        let error = agents.resume("no-such-session").unwrap_err();
+        let error = agents
+            .resume("no-such-session", SecretGrant::Provide)
+            .unwrap_err();
         assert_eq!(error.code, codes::AGENT_NOT_FOUND);
     }
 
@@ -1419,6 +1492,7 @@ mod tests {
             activity: None,
             result: None,
             brought_back_at: None,
+            holds_secrets: false,
         };
         agents.store().insert_agent_session(&row).unwrap();
         let end = RunExit {
@@ -1437,7 +1511,7 @@ mod tests {
         assert!(
             agents
                 .store()
-                .restart_agent_session(&row.id, "t-2")
+                .restart_agent_session(&row.id, "t-2", false)
                 .unwrap()
         );
         let mut live: LiveRuns = HashMap::new();
@@ -1489,10 +1563,11 @@ mod tests {
             activity: None,
             result: None,
             brought_back_at: None,
+            holds_secrets: false,
         };
         agents.store().insert_agent_session(&row).unwrap();
 
-        let error = agents.resume(&row.id).unwrap_err();
+        let error = agents.resume(&row.id, SecretGrant::Provide).unwrap_err();
         assert_eq!(error.code, codes::AGENT_RESUME_UNAVAILABLE, "{error}");
     }
 }
