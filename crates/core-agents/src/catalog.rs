@@ -503,4 +503,198 @@ mod tests {
             Some(vec!["auth".to_owned(), "logout".to_owned()])
         );
     }
+    /// One declared mode: `(id, label, args, live switch text, bypass)`.
+    type ModeRow<'a> = (&'a str, &'a str, Vec<&'a str>, Option<&'a str>, bool);
+
+    /// Every mode of `kind`, in declared order.
+    fn modes_of(kind: &KindDecl) -> Vec<ModeRow<'_>> {
+        kind.permission_modes
+            .iter()
+            .map(|mode| {
+                (
+                    mode.id.as_str(),
+                    mode.label.as_str(),
+                    mode.args.iter().map(String::as_str).collect(),
+                    mode.live_switch.as_ref().map(|switch| switch.text.as_str()),
+                    mode.bypass,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn built_in_permission_modes_match_decision_0083() {
+        let kinds = built_ins();
+        let claude = &kinds[0];
+        assert_eq!(claude.default_permission_mode.as_deref(), Some("default"));
+        assert_eq!(
+            modes_of(claude),
+            [
+                (
+                    "default",
+                    "Manual",
+                    vec!["--permission-mode", "default"],
+                    None,
+                    false
+                ),
+                (
+                    "acceptEdits",
+                    "Edit automatically",
+                    vec!["--permission-mode", "acceptEdits"],
+                    None,
+                    false
+                ),
+                (
+                    "plan",
+                    "Plan",
+                    vec!["--permission-mode", "plan"],
+                    None,
+                    false
+                ),
+                (
+                    "auto",
+                    "Auto",
+                    vec!["--permission-mode", "auto"],
+                    None,
+                    false
+                ),
+                (
+                    "dontAsk",
+                    "Don't ask",
+                    vec!["--permission-mode", "dontAsk"],
+                    None,
+                    false
+                ),
+                (
+                    "bypassPermissions",
+                    "Bypass permissions",
+                    vec!["--permission-mode", "bypassPermissions"],
+                    None,
+                    true
+                ),
+            ]
+        );
+
+        let codex = &kinds[1];
+        assert_eq!(codex.default_permission_mode.as_deref(), Some("auto"));
+        assert_eq!(
+            modes_of(codex),
+            [
+                (
+                    "auto",
+                    "Auto",
+                    vec![
+                        "--sandbox",
+                        "workspace-write",
+                        "--ask-for-approval",
+                        "on-request"
+                    ],
+                    None,
+                    false
+                ),
+                (
+                    "read-only",
+                    "Safe read-only browsing",
+                    vec!["--sandbox", "read-only", "--ask-for-approval", "on-request"],
+                    None,
+                    false
+                ),
+                (
+                    "read-only-never",
+                    "Read-only non-interactive (CI)",
+                    vec!["--sandbox", "read-only", "--ask-for-approval", "never"],
+                    None,
+                    false
+                ),
+                (
+                    "auto-review",
+                    "Auto-review mode",
+                    vec!["--approve-for-me"],
+                    None,
+                    false
+                ),
+                (
+                    "full-access",
+                    "Dangerous full access",
+                    vec!["--dangerously-bypass-approvals-and-sandbox"],
+                    None,
+                    true
+                ),
+            ]
+        );
+
+        let antigravity = &kinds[2];
+        assert_eq!(antigravity.default_permission_mode.as_deref(), Some("auto"));
+        assert_eq!(
+            modes_of(antigravity),
+            [
+                ("auto", "auto", vec!["--mode=auto"], None, false),
+                (
+                    "accept-edits",
+                    "accept-edits",
+                    vec!["--mode=accept-edits"],
+                    None,
+                    false
+                ),
+                ("plan", "plan", vec!["--mode=plan"], None, false),
+                (
+                    "always-proceed",
+                    "always-proceed",
+                    vec!["--dangerously-skip-permissions"],
+                    None,
+                    true
+                ),
+            ]
+        );
+
+        let gentle = &kinds[3];
+        assert_eq!(gentle.default_permission_mode.as_deref(), Some("normal"));
+        assert_eq!(
+            modes_of(gentle),
+            [
+                (
+                    "normal",
+                    "Normal",
+                    vec![],
+                    Some("/gentle:mode normal"),
+                    false
+                ),
+                ("auto", "Auto", vec![], Some("/gentle:mode auto"), false),
+                ("yolo", "YOLO", vec![], Some("/gentle:mode yolo"), false),
+                (
+                    "super-yolo",
+                    "Super Yolo",
+                    vec![],
+                    Some("/gentle:mode super-yolo"),
+                    true
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn views_list_the_modes_without_their_arguments() {
+        let profile = tempfile::tempdir().unwrap();
+        let views = Catalog::load(profile.path()).views(profile.path(), &SearchEnv::default());
+        let gentle = views.iter().find(|kind| kind.id == "gentle-shell").unwrap();
+        assert_eq!(gentle.default_permission_mode.as_deref(), Some("normal"));
+        let super_yolo = gentle
+            .permission_modes
+            .iter()
+            .find(|mode| mode.id == "super-yolo")
+            .unwrap();
+        assert_eq!(
+            super_yolo,
+            &wire::PermissionMode {
+                id: "super-yolo".to_owned(),
+                label: "Super Yolo".to_owned(),
+                description: super_yolo.description.clone(),
+                bypass: true,
+                live_switch: true,
+            }
+        );
+        let claude = views.iter().find(|kind| kind.id == "claude").unwrap();
+        assert_eq!(claude.permission_modes.len(), 6);
+        assert!(claude.permission_modes.iter().all(|mode| !mode.live_switch));
+    }
 }

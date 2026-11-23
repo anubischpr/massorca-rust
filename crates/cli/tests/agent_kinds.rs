@@ -186,3 +186,61 @@ fn detection_and_package_state_are_separate_columns() {
         "a kind that does not resolve shows no path: {absent_row}"
     );
 }
+
+#[test]
+fn kinds_list_their_permission_modes_with_the_default_and_bypass_marked() {
+    let sandbox = Sandbox::new();
+    let mut fake = fake_kind();
+    fake["permission_modes"] = json!([
+        { "id": "careful", "label": "Careful", "args": ["--mode", "careful"] },
+        {
+            "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true,
+            "live_switch": { "type": "input", "text": "/mode wild" }
+        }
+    ]);
+    fake["default_permission_mode"] = json!("careful");
+    declare(&sandbox, "fake.json", &fake.to_string());
+
+    let kinds = sandbox.json_ok("default", &["agent", "kinds"]);
+    let listed = kind(&kinds, "fake", "user");
+    assert_eq!(listed["default_permission_mode"], "careful");
+    assert_eq!(
+        listed["permission_modes"],
+        json!([
+            { "id": "careful", "label": "Careful", "bypass": false, "live_switch": false },
+            { "id": "wild", "label": "Wild", "bypass": true, "live_switch": true }
+        ]),
+        "the modes are listed without their arguments"
+    );
+    let claude = kind(&kinds, "claude", "core");
+    assert_eq!(claude["default_permission_mode"], "default");
+
+    let text = stdout_text(&sandbox.run("default", &["agent", "kinds"]).success());
+    assert!(
+        text.contains("modes: fake: careful (Careful, default), wild (Wild, bypass, live)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("bypassPermissions (Bypass permissions, bypass)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_kind_whose_default_mode_is_a_bypass_is_listed_with_the_problem() {
+    let sandbox = Sandbox::new();
+    let mut fake = fake_kind();
+    fake["permission_modes"] =
+        json!([{ "id": "wild", "label": "Wild", "args": ["--mode", "wild"], "bypass": true }]);
+    fake["default_permission_mode"] = json!("wild");
+    declare(&sandbox, "fake.json", &fake.to_string());
+    let kinds = sandbox.json_ok("default", &["agent", "kinds"]);
+    let listed = kind(&kinds, "fake", "user");
+    assert_eq!(listed["detected"], false, "{listed}");
+    assert!(
+        listed["problems"][0]
+            .as_str()
+            .is_some_and(|problem| problem.contains("bypass mode")),
+        "{listed}"
+    );
+}
