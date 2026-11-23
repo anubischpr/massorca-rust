@@ -89,6 +89,8 @@ mod start_page_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod title_bar_tests;
+#[cfg(test)]
 mod work_panel_tests;
 
 /// The root view of the window. Views read only its view model (decision 0023).

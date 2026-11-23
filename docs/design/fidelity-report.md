@@ -54,6 +54,16 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - A2 start-workspace-demo: Chat/Terminal switch in the composer's bottom row, key-hint row, "Send" tooltip replaces the placeholder (#101).
 - N8 composer, partial: switch and key-hint row (#101). The +, access chip, model picker and microphone are not listed as fixed.
 
+**Superseded by owner ruling (branch `desktop/title-bars`)**
+- N12 is superseded. Title bars read like the artboards, and back navigation stays in the Sidebar and the history controls. Measured per artboard at 1440×900:
+  - `bt-board`, `bt-conference-room`, `bt-routines-empty`, `bt-routine-form`: Sidebar toggle, then "Desarrollo · {page}" (`{team} · {page}`), no Back control.
+  - `bt-settings-appearance`, `bt-vault`, `bt-calendar-week`, `bt-marketplace-catalogue`, `sh-setup-checklist`: one icon Back, then the page title, no Sidebar toggle.
+  - `ws-tasks`, `ws-automations`: one labelled Back, then the page title, no Sidebar toggle.
+  - `ws-session`, `ws-start`, `sh-empty-app`: Sidebar toggle, Back and Forward icons, then the session title.
+- No artboard exists for Pairing, Memory, Files or the team project page. Pairing draws the icon Back. Memory, Files and the project page take the team pattern, `{team} · {page}`.
+- No keyboard shortcut for Back exists in `shell/actions.rs`, so none was added.
+- Owner decision: a page whose artboard draws Back keeps it. Full pages keep the Back that their artboards show, labelled or icon.
+
 **Cannot match yet**
 - A1 start frame: sample data and "not listed by the service" heading. Open (L4).
 - A3 Conversation: page not built.
