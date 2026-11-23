@@ -340,6 +340,42 @@ ALTER TABLE tasks ADD COLUMN branch TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // Team routines (decision 0072 amendment): a schedule that starts a task for a bot on each occurrence. A team's
+    // removal removes its routines and their runs; a bot's removal keeps the routine with no bot, and its runs record
+    // why. A run keeps its task: removing the run or its routine never removes the task.
+    Migration {
+        sql: r#"
+CREATE TABLE team_routines (
+    id TEXT PRIMARY KEY,
+    team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    bot_id TEXT REFERENCES bots(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK(cadence IN ('daily','weekly','monthly','once')),
+    time TEXT NOT NULL,
+    weekday TEXT,
+    month_day INTEGER CHECK(month_day IS NULL OR month_day BETWEEN 1 AND 28),
+    run_date TEXT,
+    zone TEXT,
+    paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),
+    starts_as_admin INTEGER NOT NULL CHECK(starts_as_admin IN (0,1)),
+    next_run_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routines_by_team ON team_routines (team_id, created_at);
+CREATE INDEX team_routines_due ON team_routines (next_run_at);
+CREATE TABLE team_routine_runs (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL REFERENCES team_routines(id) ON DELETE CASCADE,
+    scheduled_for INTEGER NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    error TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX team_routine_runs_by_routine ON team_routine_runs (routine_id, scheduled_for);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
