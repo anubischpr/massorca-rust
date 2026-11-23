@@ -232,7 +232,10 @@ fn a_pending_sign_in_is_listed_until_cleared_and_a_kind_keeps_the_record_of_its_
         .map(|row| row.id)
         .collect();
     assert_eq!(pending, vec![signing.id.clone()]);
-    assert!(store.kind_has_had_account("fake").unwrap());
+    assert!(
+        !store.kind_has_had_account("fake").unwrap(),
+        "an open sign-in is not yet an account the kind had"
+    );
 
     let imported = account("fake", "imported", 2);
     store.insert_agent_account(&imported).unwrap();
@@ -249,4 +252,44 @@ fn a_pending_sign_in_is_listed_until_cleared_and_a_kind_keeps_the_record_of_its_
         store.kind_has_had_account("fake").unwrap(),
         "removing every account keeps the record that the kind had one"
     );
+}
+
+#[test]
+fn a_sign_in_discarded_while_pending_leaves_no_record_that_the_kind_had_an_account() {
+    let store = Store::open_in_memory().unwrap();
+    let discarded = account("fake", "discarded", 1);
+    store.insert_pending_sign_in(&discarded).unwrap();
+    assert!(store.delete_agent_account(&discarded.id).unwrap());
+    assert!(
+        !store.kind_has_had_account("fake").unwrap(),
+        "a sign-in deleted while still pending was never kept"
+    );
+}
+
+#[test]
+fn a_sign_in_kept_records_that_the_kind_had_an_account_after_it_is_removed() {
+    let store = Store::open_in_memory().unwrap();
+    let kept = account("fake", "kept", 1);
+    store.insert_pending_sign_in(&kept).unwrap();
+    assert!(store.set_agent_account_pending(&kept.id, false).unwrap());
+    assert!(store.kind_has_had_account("fake").unwrap());
+    assert!(store.delete_agent_account(&kept.id).unwrap());
+    assert!(
+        store.kind_has_had_account("fake").unwrap(),
+        "a kept sign-in counts even after it is removed"
+    );
+    assert!(
+        !store.kind_has_had_account("other").unwrap(),
+        "the record is per kind"
+    );
+}
+
+#[test]
+fn an_imported_account_records_that_the_kind_had_an_account_when_inserted() {
+    let store = Store::open_in_memory().unwrap();
+    let imported = account("fake", "imported", 1);
+    store.insert_agent_account(&imported).unwrap();
+    assert!(store.kind_has_had_account("fake").unwrap());
+    assert!(store.delete_agent_account(&imported.id).unwrap());
+    assert!(store.kind_has_had_account("fake").unwrap());
 }

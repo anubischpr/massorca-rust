@@ -13,5 +13,6 @@ mod refs;
 mod remote;
 mod repository;
 mod status;
+mod untrusted;
 mod worktree_failures;
 mod worktrees;
