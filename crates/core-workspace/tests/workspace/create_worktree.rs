@@ -7,8 +7,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{WorkspaceKind, WorkspaceState};
 
 use crate::fixture::{
-    Fixture, branch_exists, canonical, create_params, entries, expect_code, project_add, run_git,
-    text, worktree_count,
+    Fixture, branch_exists, canonical, commit_file, create_params, entries, expect_code,
+    project_add, run_git, text, worktree_count,
 };
 
 #[test]
@@ -22,7 +22,11 @@ fn by_default_the_branch_takes_the_name_and_the_directory_sits_under_the_workspa
     assert_eq!(ws.state, WorkspaceState::Ready);
     assert_eq!(ws.project_id, project.id);
     assert_eq!(ws.branch.as_deref(), Some("feature"));
-    assert_eq!(ws.base_ref.as_deref(), Some("HEAD"));
+    assert_eq!(
+        ws.base_ref.as_deref(),
+        Some("main"),
+        "unnamed, the base is the default branch"
+    );
     assert!(ws.created_branch);
     assert!(!ws.missing);
     assert_eq!(
@@ -30,6 +34,22 @@ fn by_default_the_branch_takes_the_name_and_the_directory_sits_under_the_workspa
         canonical(&fx.path("defaults/repo/feature"))
     );
     assert!(branch_exists(&fx.repo(), "feature"));
+}
+
+#[test]
+fn unnamed_the_base_is_the_default_branch_even_when_another_is_checked_out() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    run_git(&fx.repo(), &["checkout", "-q", "-b", "topic"]);
+    commit_file(&fx.repo(), "topic.txt", "topic\n", "topic work");
+
+    let ws = fx.create(&project.name, "fresh");
+
+    assert_eq!(ws.base_ref.as_deref(), Some("main"));
+    assert!(
+        !Path::new(&ws.path).join("topic.txt").exists(),
+        "the new branch starts from main, not from the checked-out topic branch"
+    );
 }
 
 #[test]

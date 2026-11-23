@@ -3722,6 +3722,7 @@ dependencies = [
  "uuid",
  "vt100",
  "win32job",
+ "zeroize",
 ]
 
 [[package]]
@@ -3874,11 +3875,13 @@ dependencies = [
  "directories",
  "dunce",
  "interprocess",
+ "jiff",
  "massorca-client",
  "massorca-core-agents",
  "massorca-core-extensions",
  "massorca-core-git",
  "massorca-core-remote",
+ "massorca-core-schedule",
  "massorca-core-store",
  "massorca-core-terminal",
  "massorca-core-vault",

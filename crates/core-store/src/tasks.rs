@@ -1,5 +1,5 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::StoreError;
 use crate::store::Store;
@@ -93,11 +93,15 @@ pub struct TaskRow {
     pub error: Option<String>,
     /// The protocol code of `error`, such as `agent.not_installed`.
     pub error_code: Option<String>,
+    /// The workspace the last start ran in.
+    pub workspace_id: Option<String>,
+    /// The branch of the task's own worktree.
+    pub branch: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-const SELECT_TASKS: &str = "SELECT id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, created_at, updated_at FROM tasks";
+const SELECT_TASKS: &str = "SELECT id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, workspace_id, branch, created_at, updated_at FROM tasks";
 
 fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
@@ -112,6 +116,8 @@ fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
         outcome: row.get("outcome")?,
         error: row.get("error")?,
         error_code: row.get("error_code")?,
+        workspace_id: row.get("workspace_id")?,
+        branch: row.get("branch")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -126,28 +132,35 @@ pub struct TaskDetails<'a> {
     pub body: Option<&'a str>,
 }
 
+/// Inserts a task on `connection`, so a caller's transaction can hold it with its own rows.
+pub(crate) fn insert_task_row(connection: &Connection, row: &TaskRow) -> Result<(), StoreError> {
+    connection.execute(
+        "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, workspace_id, branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            row.id,
+            row.team_id,
+            row.project_id,
+            row.bot_id,
+            row.title,
+            row.body,
+            row.origin,
+            row.session_id,
+            row.outcome,
+            row.error,
+            row.error_code,
+            row.workspace_id,
+            row.branch,
+            row.created_at,
+            row.updated_at
+        ],
+    )?;
+    Ok(())
+}
+
 impl Store {
     /// Inserts a task. Its team, bot and project must exist; a missing one is `StoreError::Constraint`.
     pub fn insert_task(&self, row: &TaskRow) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO tasks (id, team_id, project_id, bot_id, title, body, origin, session_id, outcome, error, error_code, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                row.id,
-                row.team_id,
-                row.project_id,
-                row.bot_id,
-                row.title,
-                row.body,
-                row.origin,
-                row.session_id,
-                row.outcome,
-                row.error,
-                row.error_code,
-                row.created_at,
-                row.updated_at
-            ],
-        )?;
-        Ok(())
+        insert_task_row(&self.lock(), row)
     }
 
     pub fn get_task(&self, id: &str) -> Result<Option<TaskRow>, StoreError> {
@@ -270,6 +283,22 @@ impl Store {
             .flatten())
     }
 
+    /// Records where a start runs the task: its workspace, and the branch of its own worktree. Returns false when the
+    /// task is gone.
+    pub fn set_task_place(
+        &self,
+        id: &str,
+        workspace_id: &str,
+        branch: Option<&str>,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET workspace_id = ?2, branch = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id, workspace_id, branch, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// The task's pending start attempt, if any.
     pub fn task_start_attempt(&self, id: &str) -> Result<Option<String>, StoreError> {
         Ok(self
@@ -319,6 +348,31 @@ impl Store {
         let changed = self.lock().execute(
             "UPDATE tasks SET error = ?2, error_code = ?3, updated_at = ?4 WHERE id = ?1 AND session_id IS NULL",
             params![id, error, code, updated_at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// The task linked to `session_id`, if one is.
+    pub fn find_task_by_session(&self, session_id: &str) -> Result<Option<TaskRow>, StoreError> {
+        self.query_optional(
+            &format!("{SELECT_TASKS} WHERE session_id = ?1"),
+            [session_id],
+            task_from_row,
+        )
+    }
+
+    /// Latches a task's outcome, but only while the task is still linked to `session_id` and has none, so a reopened
+    /// task or an earlier latch is never touched. Returns whether it latched.
+    pub fn latch_task_outcome(
+        &self,
+        id: &str,
+        session_id: &str,
+        outcome: TaskOutcome,
+        updated_at: i64,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE tasks SET outcome = ?3, updated_at = ?4 WHERE id = ?1 AND session_id = ?2 AND outcome IS NULL",
+            params![id, session_id, outcome, updated_at],
         )?;
         Ok(changed > 0)
     }

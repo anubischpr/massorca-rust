@@ -16,6 +16,7 @@ mod store;
 mod tasks;
 mod team_memory;
 mod team_projects;
+mod team_routines;
 mod teams;
 mod workspaces;
 
@@ -34,6 +35,7 @@ pub use store::Store;
 pub use tasks::{TaskDetails, TaskOrigin, TaskOutcome, TaskRow};
 pub use team_memory::TeamMemoryRow;
 pub use team_projects::TeamProjectRow;
+pub use team_routines::{TeamRoutineRow, TeamRoutineRunRow};
 pub use teams::TeamRow;
 pub use workspaces::{WorkspaceKind, WorkspaceRow, WorkspaceState};
 

@@ -140,7 +140,14 @@ pub(crate) fn any_running(agents: &Agents, rows: &[TaskRow]) -> Result<bool, Err
     Ok(false)
 }
 
-fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
+pub(super) fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
+    let row = new_task_row(store, params)?;
+    store.insert_task(&row).map_err(store_error)?;
+    Ok(view_of(&row, &Session::Unstarted))
+}
+
+/// The row `task.create` inserts for `params`, checked but not yet stored, so a caller can store it with its own rows.
+pub(super) fn new_task_row(store: &Store, params: TaskCreateParams) -> Result<TaskRow, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let bot_id = optional_text(params.bot)
         .map(|selector| selectors::bot(store, &team, &selector))
@@ -163,11 +170,12 @@ fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBod
         outcome: None,
         error: None,
         error_code: None,
+        workspace_id: None,
+        branch: None,
         created_at: now,
         updated_at: now,
     };
-    store.insert_task(&row).map_err(store_error)?;
-    Ok(view_of(&row, &Session::Unstarted))
+    Ok(row)
 }
 
 fn list_tasks(
@@ -372,6 +380,8 @@ pub(crate) fn view_of(row: &TaskRow, session: &Session) -> Task {
         outcome: row.outcome.map(outcome_of),
         error: row.error.clone(),
         error_code: row.error_code.clone(),
+        workspace_id: row.workspace_id.clone(),
+        branch: row.branch.clone(),
         column: standing.column,
         state: standing.state,
         last_known: standing.last_known,

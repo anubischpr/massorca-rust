@@ -19,3 +19,21 @@ pub(crate) fn host_zone() -> (TimeZone, ZoneSource) {
         Err(_) => (TimeZone::UTC, ZoneSource::HostUnknownUsedUtc),
     }
 }
+
+/// The zone a schedule without a zone name uses on this host now: its IANA name (`UTC` when the host's zone cannot be
+/// read, `None` when the host's zone has no IANA name), and where it came from.
+pub fn host_zone_used() -> (Option<String>, ZoneSource) {
+    let (zone, source) = host_zone();
+    (zone.iana_name().map(str::to_owned), source)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_host_zone_used_is_the_zone_a_schedule_without_a_zone_resolves_to() {
+        let (name, source) = super::host_zone_used();
+        let (zone, expected) = super::host_zone();
+        assert_eq!(source, expected);
+        assert_eq!(name.as_deref(), zone.iana_name());
+    }
+}

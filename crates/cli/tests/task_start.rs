@@ -366,3 +366,242 @@ fn a_run_a_failed_start_could_not_stop_keeps_its_bot_busy_until_it_ends() {
     let freed_session = freed["session_id"].as_str().expect("linked session");
     sandbox.json_ok("default", &["agent", "stop", freed_session, "--force"]);
 }
+
+/// Answers the question the fake agent asks, then waits until its turn is done. Every task prompt asks: its "Task:" line
+/// contains the fake agent's "ask:" trigger.
+fn answer_and_wait_for_done(sandbox: &Sandbox, session: &str) {
+    let asking = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session,
+            "--until",
+            "waiting",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+    let terminal = asking["terminal_id"].as_str().expect("terminal id");
+    sandbox
+        .run("default", &["terminal", "send", terminal, "yes"])
+        .success();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session,
+            "--until",
+            "done",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+}
+
+#[test]
+fn a_finished_agent_latches_success_into_its_task_and_the_task_keeps_it_once_forgotten() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    // No "hold" and no lower-case "fail" in the prompt: the fake agent reports done with success.
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Write the parser, then stop."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+
+    answer_and_wait_for_done(&sandbox, &session);
+    let latched = eventually("the task to latch success", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["outcome"] == "success").then_some(shown)
+    });
+    assert_eq!(latched["column"], "done");
+
+    // The session is forgotten, and the Board still shows the task's own outcome.
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+    sandbox.json_ok("default", &["agent", "forget", session.as_str()]);
+    let kept = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(kept["outcome"], "success");
+    assert_eq!(kept["column"], "done");
+}
+
+#[test]
+fn a_finished_agent_that_reports_failure_latches_failure_into_its_task() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    // The lower-case "fail" in the body makes the fake agent report done with failure.
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Write the parser, then fail."],
+    );
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+
+    answer_and_wait_for_done(&sandbox, &session);
+    let latched = eventually("the task to latch failure", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["outcome"] == "failure").then_some(shown)
+    });
+    assert_eq!(latched["column"], "waiting");
+
+    sandbox.json_ok("default", &["agent", "stop", session.as_str(), "--force"]);
+}
+
+/// Adds `path` as a Workspaces project (`--folder` for a plain folder) and team project `name` linked to it.
+fn link_source(sandbox: &Sandbox, path: &Path, folder: bool, name: &str) {
+    let text = path.to_string_lossy().into_owned();
+    let mut args = vec!["project", "add", text.as_str()];
+    if folder {
+        args.push("--folder");
+    }
+    sandbox.json_ok("default", &args);
+    sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "project",
+            "add",
+            "alpha",
+            name,
+            "--source",
+            text.as_str(),
+        ],
+    );
+}
+
+#[test]
+fn a_task_on_a_linked_git_project_runs_in_its_own_worktree_and_names_its_branch() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let repo = sandbox.home().join("parser-repo");
+    git_repo(&repo);
+    link_source(&sandbox, &repo, false, "parser");
+    let task = create_task(
+        &sandbox,
+        "Parse the Headers",
+        &[
+            "--bot",
+            "mara",
+            "--project",
+            "parser",
+            "--body",
+            "Start with hold, then stop.",
+        ],
+    );
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let branch = started["branch"]
+        .as_str()
+        .expect("the task's branch")
+        .to_owned();
+    assert!(branch.starts_with("parse-the-headers-"), "{branch}");
+    assert_eq!(branch.len(), "parse-the-headers-".len() + 6, "{branch}");
+    let workspace_id = started["workspace_id"].as_str().expect("its workspace");
+    let workspace = sandbox.json_ok("default", &["workspace", "show", workspace_id]);
+    assert_eq!(workspace["kind"], "worktree");
+    assert_eq!(workspace["branch"], branch.as_str());
+
+    // The agent runs in that worktree, and its prompt says what the worktree does not carry.
+    let session = started["session_id"].as_str().expect("linked session");
+    let record = sandbox.json_ok("default", &["agent", "status", session]);
+    assert_eq!(record["workspace_id"], workspace_id);
+    let terminal = record["terminal_id"]
+        .as_str()
+        .expect("terminal id")
+        .to_owned();
+    eventually("the branch note in the prompt", || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal.as_str()]);
+        let text = screen["lines"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.contains("uncommitted changes").then_some(())
+    });
+
+    // The Board card names the branch, so the result is findable.
+    let board = sandbox.json_ok("default", &["team", "board", "alpha"]);
+    let card = board["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .flat_map(|column| column["cards"].as_array().cloned().unwrap_or_default())
+        .find(|card| card["id"] == task.as_str())
+        .expect("the task is on the Board");
+    assert_eq!(card["branch"], branch.as_str());
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
+fn a_task_on_a_linked_folder_runs_in_that_folder_and_has_no_branch() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create the folder");
+    link_source(&sandbox, &notes, true, "notes");
+    let task = create_task(
+        &sandbox,
+        "Tidy the notes",
+        &[
+            "--bot",
+            "mara",
+            "--project",
+            "notes",
+            "--body",
+            "Start with hold, then stop.",
+        ],
+    );
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    assert_eq!(started["branch"], Value::Null);
+    let workspace_id = started["workspace_id"].as_str().expect("its workspace");
+    let workspace = sandbox.json_ok("default", &["workspace", "show", workspace_id]);
+    assert_eq!(workspace["kind"], "folder");
+    let shown = PathBuf::from(workspace["path"].as_str().expect("workspace path"));
+    assert!(same_dir(&shown, &notes), "{workspace}");
+    let session = started["session_id"].as_str().expect("linked session");
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
+fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
+    let (sandbox, root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    sandbox.json_ok("default", &["team", "project", "add", "alpha", "loose"]);
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &[
+            "--bot",
+            "mara",
+            "--project",
+            "loose",
+            "--body",
+            "Start with hold, then stop.",
+        ],
+    );
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    assert_eq!(started["branch"], Value::Null);
+    let workspace_id = started["workspace_id"].as_str().expect("its workspace");
+    let workspace = sandbox.json_ok("default", &["workspace", "show", workspace_id]);
+    let shown = PathBuf::from(workspace["path"].as_str().expect("workspace path"));
+    let team = sandbox.json_ok("default", &["team", "show", "alpha"]);
+    let folder = root
+        .join("bot-teams")
+        .join(team["id"].as_str().expect("team id"));
+    assert!(same_dir(&shown, &folder), "{workspace}");
+    let session = started["session_id"].as_str().expect("linked session");
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}

@@ -6,6 +6,7 @@ mod bring_back;
 mod canvas;
 mod debug_focus;
 mod debug_page;
+mod delegate;
 mod diff_page;
 mod marketplace;
 mod pairing;
@@ -77,6 +78,8 @@ mod bring_back_tests;
 mod debug_focus_tests;
 #[cfg(test)]
 mod debug_page_tests;
+#[cfg(test)]
+mod delegate_tests;
 #[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
@@ -206,6 +209,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
+    /// The delegate form under the open session, if any (X-CH-06).
+    delegate: Option<delegate::DelegateForm>,
 }
 
 impl Shell {
@@ -434,6 +439,7 @@ impl Shell {
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,
+            delegate: None,
         }
     }
 
@@ -600,12 +606,14 @@ impl Render for Shell {
                 .as_ref()
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
+            let mode = self.start_mode(&page.id);
             start_page::StartFrame {
                 page,
                 composer,
                 shell: shell.clone(),
                 connected,
                 starting,
+                mode,
             }
         });
         let session = self.session_frame(cx);
@@ -813,6 +821,7 @@ impl Render for Shell {
         });
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let bring_back_dialog = bring_back::dialog(self, &shell, cx);
+        let delegate_dialog = delegate::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -885,6 +894,7 @@ impl Render for Shell {
             .when_some(vault_remove, |el, dialog| el.child(dialog))
             .when_some(marketplace_dialog, |el, dialog| el.child(dialog))
             .when_some(bring_back_dialog, |el, dialog| el.child(dialog))
+            .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
     }
 }
