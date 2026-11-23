@@ -16,12 +16,28 @@
 //!
 //! Searches walk at most [`MAX_SEARCH_DAYS`] local days and stop at the end of representable time, so no question
 //! loops forever; instants outside that range have no occurrence.
+//!
+//! # Exactly-once claims
+//!
+//! [`decide_claim`] is pure: it says what a claim should write. The exactly-once guarantee is a compare-and-swap on
+//! `next_run_at` in the caller's store, done before the run starts:
+//!
+//! ```sql
+//! UPDATE schedules SET next_run_at = :new_next_run_at
+//!  WHERE id = :id AND next_run_at = :old_next_run_at;
+//! -- one changed row: this caller owns the run for `scheduled_for`; zero rows: another caller claimed it.
+//! ```
+//!
+//! Because `next_run_at` moves past `now` before the run starts, a run that fails to start is recorded with its
+//! reason and is not retried by the next check. A `NULL` `next_run_at` means paused or finished. Resuming writes
+//! [`next_run_from`] for the current time, so runs missed while paused are never made up.
 
-
+mod claim;
 mod occurrence;
 mod schedule;
 mod zone;
 
+pub use claim::{ClaimDecision, MAX_COUNTED_SKIPS, decide_claim, next_run_from};
 pub use occurrence::{CompiledSchedule, MAX_SEARCH_DAYS};
 pub use schedule::{Cadence, MAX_ZONE_NAME_LEN, Schedule, ScheduleError, Weekday};
 pub use zone::ZoneSource;
