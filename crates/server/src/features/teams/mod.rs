@@ -7,6 +7,7 @@ mod memory;
 mod selectors;
 mod task;
 mod task_outcome;
+mod routine_run;
 mod task_start;
 
 pub(crate) use task_start::start_gate;

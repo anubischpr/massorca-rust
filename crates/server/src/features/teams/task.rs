@@ -140,7 +140,7 @@ pub(crate) fn any_running(agents: &Agents, rows: &[TaskRow]) -> Result<bool, Err
     Ok(false)
 }
 
-fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
+pub(super) fn create_task(store: &Store, params: TaskCreateParams) -> Result<Task, ErrorBody> {
     let team = selectors::team(store, &params.team)?;
     let bot_id = optional_text(params.bot)
         .map(|selector| selectors::bot(store, &team, &selector))
