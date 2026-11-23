@@ -1,7 +1,7 @@
 //! A routine's run: the task it makes, stored with the run in one transaction, then started through the same start a
 //! person's Start uses, and the outcome recorded on the run. A failure is kept on the run with its code; a task already
-//! made stays Open with its own error, and nothing is retried. A run whose outcome was never recorded is marked
-//! interrupted at the next service start.
+//! made stays Open with its own error, and nothing is retried. A run whose outcome was never recorded is settled at the
+//! next service start from what its task shows.
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -107,7 +107,8 @@ pub(super) fn start_run(
 }
 
 /// Records a run's outcome, trying once more when the write fails. A run whose outcome still could not be written stays
-/// pending, and the next service start marks it interrupted, so its state never lives only in the log.
+/// pending, and the next service start settles it from its task: started when its session is linked, the task's start
+/// error when it kept one, interrupted otherwise. Its state never lives only in the log.
 fn record_outcome(store: &Store, run_id: &str, failure: Option<&ErrorBody>) {
     let error = failure.map(|error| (error.code.as_str(), error.message.as_str()));
     for attempt in 1..=2 {
@@ -115,7 +116,7 @@ fn record_outcome(store: &Store, run_id: &str, failure: Option<&ErrorBody>) {
             Ok(_) => return,
             Err(write) => tracing::warn!(
                 attempt,
-                "a routine run's outcome could not be saved; the next start marks it interrupted: {write}"
+                "a routine run's outcome could not be saved; the next start settles it from its task: {write}"
             ),
         }
     }

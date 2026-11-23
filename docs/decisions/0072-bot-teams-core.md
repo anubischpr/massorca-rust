@@ -360,13 +360,16 @@ Runs:
   start keeps the task Open with its own error, and the run keeps the error too.
   No run is retried: a failed run waits for the next occurrence.
 - A run is pending from its claim until its start records an outcome
-  (`settled_at`). When the service stops in between, such as a crash, the next
-  service start marks every run left pending from before it as interrupted
-  (`team.routine_run_interrupted`, "the service stopped before this run
-  started"). Its task stays Open and is not started; nothing retries the run,
-  and the next occurrence runs as usual. A run whose outcome cannot be written
-  is tried once more, then left pending for that mark, so its state is always
-  in the store.
+  (`settled_at`). The next service start settles every run left pending from
+  before it from what its task shows: a task whose session is linked started,
+  so the run has no error; a task that kept a start error gives the run that
+  error. Any other run is interrupted (`team.routine_run_interrupted`, "the
+  service stopped before this run started"), such as one whose service crashed
+  between the claim and the start: its task stays Open and is not started.
+  Nothing retries the run, and the next occurrence runs as usual. A run whose
+  outcome cannot be written is tried once more, then left pending for that
+  settling, so its state is always in the store. A settling that fails is tried
+  again before each 30-second check until one succeeds.
 - A schedule that no longer compiles, such as a zone the database no longer
   knows, finishes the routine. The claim's run records the reason, and nothing
   retries it.

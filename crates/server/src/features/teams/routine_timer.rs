@@ -1,8 +1,8 @@
 //! The routine timer (decision 0072 amendment, decision 0082): a check every 30 seconds, and one at start, claims each
 //! due routine and runs that occurrence before it claims the next routine. A claim is a compare-and-swap on the stored
 //! next run that also stores the run and its task, so an occurrence runs once even when two checks overlap, a check
-//! that finds several missed occurrences runs the latest, and a crash after a claim leaves a run the next start marks
-//! interrupted rather than a run that silently never started.
+//! that finds several missed occurrences runs the latest, and a crash after a claim leaves a run the next start settles
+//! from its task rather than a run that silently never started.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,10 +32,10 @@ use super::{blocking_state, store_error};
 /// How often the host checks for due routines.
 const CHECK_EVERY: Duration = Duration::from_secs(30);
 
-/// Marks the runs a previous service left pending as interrupted, then checks for due routines every 30 seconds, and
-/// once at start, until shutdown.
+/// Settles the runs a previous service left pending, then checks for due routines every 30 seconds, and once at start,
+/// until shutdown. A sweep that fails is tried again before each check until one succeeds.
 pub(crate) async fn follow_routines(state: Arc<AppState>, mut signal: ShutdownSignal) {
-    sweep(&state).await;
+    let mut swept = sweep(&state).await;
     let mut checks = tokio::time::interval(CHECK_EVERY);
     // After the host slept, the late check runs once and the next one stays on the normal beat.
     checks.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -46,40 +46,46 @@ pub(crate) async fn follow_routines(state: Arc<AppState>, mut signal: ShutdownSi
             () = signal.wait() => return,
             _ = checks.tick() => {}
         }
+        if !swept {
+            swept = sweep(&state).await;
+        }
         check(&state).await;
     }
 }
 
-/// Marks every run created before this service started that never recorded an outcome as interrupted.
-async fn sweep(state: &Arc<AppState>) {
+/// Settles every run created before this service started that never recorded an outcome. Returns whether it did.
+async fn sweep(state: &Arc<AppState>) -> bool {
     let started_at = state.started_at_ms;
     match blocking_state(state, move |store, _agents| {
-        interrupt_pending(store, started_at, now_ms())
+        settle_pending(store, started_at, now_ms())
     })
     .await
     {
-        Ok(0) => {}
-        Ok(marked) => tracing::info!(
-            marked,
-            "routine runs left pending by the last stop are marked interrupted"
-        ),
-        Err(error) => tracing::warn!(
-            code = %error.code,
-            "the routine runs left pending could not be marked interrupted: {}",
-            error.message
-        ),
+        Ok(settled) => {
+            if settled > 0 {
+                tracing::info!(
+                    settled,
+                    "routine runs left pending by the last stop are settled"
+                );
+            }
+            true
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = %error.code,
+                "the routine runs left pending could not be settled; the next check tries again: {}",
+                error.message
+            );
+            false
+        }
     }
 }
 
-/// Marks the runs created before `started_at` whose start never recorded an outcome as interrupted. Nothing retries
-/// them.
-pub(super) fn interrupt_pending(
-    store: &Store,
-    started_at: i64,
-    now: i64,
-) -> Result<usize, ErrorBody> {
+/// Settles the runs created before `started_at` whose start never recorded an outcome, from what their task shows; a
+/// run whose task shows neither a session nor an error is interrupted. Nothing retries them.
+pub(super) fn settle_pending(store: &Store, started_at: i64, now: i64) -> Result<usize, ErrorBody> {
     store
-        .interrupt_pending_routine_runs(
+        .settle_pending_routine_runs(
             started_at,
             codes::TEAM_ROUTINE_RUN_INTERRUPTED,
             INTERRUPTED,
@@ -236,7 +242,7 @@ mod tests {
     use massorca_core_store::{BotRow, Store, TeamRoutineRow, TeamRoutineRunRow, TeamRow, new_id};
     use massorca_protocol::codes;
 
-    use super::{interrupt_pending, tick};
+    use super::{settle_pending, tick};
     use crate::features::teams::routine_run::INTERRUPTED;
 
     /// A team with one bot and one daily 09:00 routine in `zone`, next due at `next_run_at`.
@@ -387,7 +393,7 @@ mod tests {
 
         // The next service start marks it interrupted and does not retry it.
         assert_eq!(
-            interrupt_pending(&store, CHECK_AT + 1, CHECK_AT + 2).unwrap(),
+            settle_pending(&store, CHECK_AT + 1, CHECK_AT + 2).unwrap(),
             1
         );
         assert!(check(&store, CHECK_AT + 3).is_empty());
@@ -423,6 +429,6 @@ mod tests {
         assert_eq!(run.error_code.as_deref(), Some(codes::BOT_NOT_FOUND));
         assert!(run.settled_at.is_some());
         // A settled run is never marked interrupted.
-        assert_eq!(interrupt_pending(&store, NEXT, NEXT).unwrap(), 0);
+        assert_eq!(settle_pending(&store, NEXT, NEXT).unwrap(), 0);
     }
 }

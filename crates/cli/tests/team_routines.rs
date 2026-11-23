@@ -352,3 +352,48 @@ fn a_routine_without_a_zone_shows_the_zone_it_runs_in() {
         "{listed}"
     );
 }
+
+#[test]
+fn a_run_left_pending_by_a_stopped_service_is_settled_when_the_service_starts_again() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let routine = add_morning_routine(&sandbox, &[]);
+    let routine_id = routine["id"].as_str().expect("a routine id").to_owned();
+    sandbox.run("default", &["service", "stop"]).success();
+
+    // A run the stopped service claimed and never settled, made before the next service starts.
+    let store =
+        massorca_core_store::Store::open(sandbox.profile_dir("default").join("store.sqlite3"))
+            .expect("the store opens");
+    let pending = massorca_core_store::TeamRoutineRunRow {
+        id: massorca_core_store::new_id(),
+        routine_id,
+        scheduled_for: 1,
+        task_id: None,
+        error: None,
+        error_code: None,
+        settled_at: None,
+        created_at: 1,
+    };
+    store
+        .insert_routine_run(&pending, None)
+        .expect("store the pending run");
+    drop(store);
+
+    // Any command starts the service again, and its startup settles the run.
+    let deadline = now_ms() + 60_000;
+    let run = loop {
+        let runs = sandbox.json_ok("default", &["team", "routine", "runs", "alpha", "morning"]);
+        let run = runs["runs"][0].clone();
+        if !run["error_code"].is_null() || now_ms() > deadline {
+            break run;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    assert_eq!(run["id"], pending.id.as_str(), "{run}");
+    assert_eq!(run["error_code"], "team.routine_run_interrupted", "{run}");
+    assert_eq!(
+        run["error"], "the service stopped before this run started",
+        "{run}"
+    );
+}
