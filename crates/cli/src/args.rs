@@ -409,6 +409,8 @@ pub enum HostCommand {
     Discover,
     /// Installs or upgrades massorca on a Linux host over SSH, then pairs with it.
     AddSsh(HostAddSshArgs),
+    /// Shows the memory of the service and of its terminals, read on the host that runs them. Works with --host.
+    Memory,
 }
 
 #[derive(Debug, Args)]

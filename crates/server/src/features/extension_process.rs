@@ -818,4 +818,32 @@ mod tests {
         );
         assert_eq!(empty.resolve("vendorcli"), None);
     }
+
+    /// A vendor bundle installer (Gentle Shell's) puts a generated `.cmd` launcher on PATH, not an npm package.
+    #[cfg(windows)]
+    #[test]
+    fn a_bundle_launcher_on_the_search_path_is_detected() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let bundle = dir.path().join("bundle").join("bin");
+        fs::create_dir_all(&bundle).expect("a bundle folder");
+        fs::write(
+            bundle.join("gentle-shell.cmd"),
+            "@echo off
+",
+        )
+        .expect("a launcher");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(bundle.as_os_str().to_owned()),
+            pathext: None,
+        });
+
+        let resolved = host.resolve("gentle-shell").expect("the launcher resolves");
+
+        assert!(
+            resolved
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&bundle.join("gentle-shell.cmd").to_string_lossy()),
+            "{resolved:?}"
+        );
+    }
 }

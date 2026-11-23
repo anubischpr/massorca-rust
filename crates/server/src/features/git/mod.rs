@@ -21,7 +21,11 @@ use massorca_protocol::{ErrorBody, capabilities, codes};
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::owner::Owner;
+use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
+
+/// The folder inside the owner-only profile that untrusted git runs point `core.hooksPath` at; it stays empty.
+const EMPTY_HOOKS_DIR: &str = "git-empty-hooks";
 
 pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle>, ServiceError> {
     let mut handles = vec![
@@ -76,12 +80,19 @@ impl Repository {
 }
 
 /// Resolves `selector` to a git work tree. A folder workspace, a missing directory and a workspace being removed are refused.
+/// A caller without `workspace` permission gets a runner that starts no program the repository names (decision 0078).
 pub(crate) async fn repository(
     ctx: &RequestCtx,
     selector: String,
 ) -> Result<Repository, ErrorBody> {
     let workspaces = Arc::clone(&ctx.state.workspaces);
-    let git = workspaces.git().clone();
+    let mut git = workspaces.git().clone();
+    if !ctx.principal.holds(Permission::Workspace) {
+        let hooks = ctx.state.profile.dir().join(EMPTY_HOOKS_DIR);
+        // A failure here surfaces as the runner's refusal: it checks the folder before every run.
+        let _ = std::fs::create_dir_all(&hooks);
+        git = git.for_untrusted_caller(hooks);
+    }
     let workspace = blocking(move || {
         workspaces
             .show_workspace(&selector)
