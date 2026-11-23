@@ -175,21 +175,46 @@ impl ProcessTree {
     /// shell's pid still named it (Linux: its session; macOS: the root of the parent walk).
     /// Windows: `table` is unused; the job is listed and each process is read through it, under the job's lock.
     pub fn memory(&self, table: &[ProcessInfo]) -> Option<MemorySample> {
+        #[cfg(unix)]
+        {
+            let pids = self.member_pids(table)?;
+            Some(massorca_host_stats::sample_listed(table, &pids))
+        }
+        #[cfg(windows)]
+        {
+            let _ = table;
+            massorca_host_stats::sample_job(lock(&self.job).as_ref()?)
+        }
+    }
+
+    /// The pids of the terminal's live processes, from `table` (Unix) or the job (Windows), without the service's own
+    /// process: the service is never a member of a terminal's tree (decision 0081). `None` when they cannot be listed:
+    /// the shell was reaped (or, on Windows, its job is gone) though the exit is not recorded yet, the job cannot be
+    /// listed, or the platform has no listing. Unix: `table` is the process table taken once for every terminal.
+    pub fn member_pids(&self, table: &[ProcessInfo]) -> Option<Vec<u32>> {
+        Some(without_service(
+            self.listed_pids(table)?,
+            std::process::id(),
+        ))
+    }
+
+    /// The pids the terminal's tree lists, the service's own process included when a listing names it.
+    fn listed_pids(&self, table: &[ProcessInfo]) -> Option<Vec<u32>> {
         #[cfg(target_os = "linux")]
         {
             let shell = self.unreaped_shell()?;
-            let pids: Vec<u32> = table
-                .iter()
-                .filter(|process| process.session == Some(shell))
-                .map(|process| process.pid)
-                .collect();
-            Some(massorca_host_stats::sample_listed(table, &pids))
+            Some(
+                table
+                    .iter()
+                    .filter(|process| process.session == Some(shell))
+                    .map(|process| process.pid)
+                    .collect(),
+            )
         }
         #[cfg(target_os = "macos")]
         {
             let shell = self.unreaped_shell()?;
-            let pids = massorca_host_stats::descendants(shell, table);
-            Some(massorca_host_stats::sample_listed(table, &pids))
+            Some(massorca_host_stats::descendants(shell, table))
         }
         #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         {
@@ -199,7 +224,10 @@ impl ProcessTree {
         #[cfg(windows)]
         {
             let _ = table;
-            massorca_host_stats::sample_job(lock(&self.job).as_ref()?)
+            match lock(&self.job).as_ref() {
+                Some(job) => massorca_host_stats::job_members(job),
+                None => Some(Vec::new()),
+            }
         }
     }
 
@@ -335,6 +363,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `pids` without `service`: the service's own process is never a member of a terminal's tree (decision 0081).
+fn without_service(pids: Vec<u32>, service: u32) -> Vec<u32> {
+    pids.into_iter().filter(|pid| *pid != service).collect()
+}
+
 /// Blocks until the shell exits, leaving it unreaped: a zombie keeps its pid held.
 #[cfg(unix)]
 fn await_exit_unreaped(shell: i32) -> io::Result<()> {
@@ -440,7 +473,8 @@ fn report_unsignalled(error: rustix::io::Errno) {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::{ProcStat, parse_stat};
+    use super::{ProcStat, ProcessTree, parse_stat};
+    use massorca_host_stats::ProcessInfo;
 
     #[test]
     fn stat_fields_are_read_after_the_command_name() {
@@ -463,5 +497,40 @@ mod tests {
             })
         );
         assert_eq!(parse_stat("45 (truncated"), None);
+    }
+
+    #[test]
+    fn a_listing_that_names_the_service_leaves_it_out_of_the_tree() {
+        let service = std::process::id();
+        let tree = ProcessTree::for_session(service).expect("a session");
+        let table = [
+            ProcessInfo {
+                pid: service,
+                parent: None,
+                name: "service".to_owned(),
+                session: Some(service),
+                start: None,
+            },
+            ProcessInfo {
+                pid: 5,
+                parent: Some(service),
+                name: "child".to_owned(),
+                session: Some(service),
+                start: None,
+            },
+        ];
+        assert_eq!(tree.member_pids(&table), Some(vec![5]));
+    }
+}
+
+#[cfg(test)]
+mod member_tests {
+    use super::without_service;
+
+    #[test]
+    fn the_service_is_never_a_member_of_a_terminal_tree() {
+        assert_eq!(without_service(vec![10, 7, 11], 7), [10, 11]);
+        assert_eq!(without_service(vec![10], 7), [10]);
+        assert!(without_service(Vec::new(), 7).is_empty());
     }
 }

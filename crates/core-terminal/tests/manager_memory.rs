@@ -47,6 +47,13 @@ fn a_terminal_running_a_child_reads_the_shell_and_the_child() {
         .find(|process| process.pid == shell_pid)
         .unwrap_or_else(|| panic!("{shell_pid} not in {sample:?}"));
     assert!(shell.bytes > 0, "{sample:?}");
+    assert!(
+        sample
+            .processes
+            .iter()
+            .all(|process| process.pid != std::process::id()),
+        "the service is never a member of a terminal: {sample:?}"
+    );
 
     let killed = manager.kill(&info.id, true).expect("kill");
     assert_eq!(killed.state, TerminalState::Exited);
