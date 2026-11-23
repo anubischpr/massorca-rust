@@ -2,8 +2,8 @@
 //! the network listeners of the service.
 
 use massorca_protocol::methods::devices::{
-    self, DeviceForgetParams, DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus,
-    PairingCreateParams, PairingCreated,
+    self, DeviceForgetParams, DeviceGrantParams, DeviceInfo, DeviceList, DeviceRevokeParams,
+    NetworkStatus, PairingCreateParams, PairingCreated,
 };
 
 use crate::client::Client;
@@ -29,6 +29,14 @@ impl Client {
         params: &DeviceForgetParams,
     ) -> Result<DeviceInfo, ClientError> {
         self.call(devices::FORGET, params).await
+    }
+
+    /// `device.grant`: gives a device every scope, from its next connection. Needs host-admin.
+    pub async fn device_grant(
+        &self,
+        params: &DeviceGrantParams,
+    ) -> Result<DeviceInfo, ClientError> {
+        self.call(devices::GRANT, params).await
     }
 
     /// `pairing.create`: an offer another device can redeem once, before it expires.

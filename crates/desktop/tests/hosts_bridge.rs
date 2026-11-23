@@ -141,6 +141,7 @@ async fn an_offer_pairs_this_computer_and_the_host_shows_connected() {
         .create_offer(PairingCreateParams {
             ttl_secs: None,
             admin: false,
+            standard: false,
         })
         .await
         .expect("an offer is made");
@@ -183,6 +184,7 @@ async fn a_host_that_stops_answering_is_unreachable_and_says_why() {
         .create_offer(PairingCreateParams {
             ttl_secs: None,
             admin: false,
+            standard: false,
         })
         .await
         .expect("an offer is made");
@@ -240,6 +242,7 @@ async fn devices_are_listed_and_a_revoke_is_read_back_from_the_service() {
         .create_offer(PairingCreateParams {
             ttl_secs: None,
             admin: false,
+            standard: false,
         })
         .await
         .expect("an offer is made");
@@ -309,6 +312,7 @@ async fn a_refused_offer_reaches_the_caller_as_the_service_sentence() {
         .create_offer(PairingCreateParams {
             ttl_secs: None,
             admin: false,
+            standard: false,
         })
         .await
         .expect("an offer is made");

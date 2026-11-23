@@ -34,10 +34,11 @@ const PHASE1_METHODS: [&str; 15] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
-const DEVICE_METHODS: [&str; 6] = [
+const DEVICE_METHODS: [&str; 7] = [
     "device.list",
     "device.revoke",
     "device.forget",
+    "device.grant",
     "device.whoami",
     "pairing.create",
     "network.status",

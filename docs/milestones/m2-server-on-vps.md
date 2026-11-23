@@ -106,6 +106,9 @@ rewrites POSIX-looking arguments for Windows programs; the run used
 
 ## 3. A second device, a replay and a revocation
 
+At the time of this run, an offer without `--admin` gave `read` and `workspace`. Since 2026-11-22 offers give full
+access by default, and the reduced device needs `--standard` (decision 0041).
+
 ```
 $ massorca --host vps --json pair offer --ttl 120        (offer kept in a variable, never shown)
 $ massorca pair accept - --name vps --device-name second-device     (second profile, offer on stdin)
@@ -383,7 +386,8 @@ $M --host vps git log -w v2
 
 # Second device, replay, revocation while connected and connecting.
 B=$PWD/validate-second; C=$PWD/validate-replay; mkdir -p "$B" "$C"
-O=$($M --host vps --json pair offer --ttl 120)
+# A reduced device (`--standard`), so the permission check below has something to refuse; offers are full access by default.
+O=$($M --host vps --json pair offer --standard --ttl 120)
 jq -r .result.offer <<<"$O" | MASSORCA_HOME=$B $M pair accept - --name vps --device-name validator-second
 jq -r .result.offer <<<"$O" | MASSORCA_HOME=$C $M pair accept - --name vps --device-name replay   # expect pairing.invalid, exit 4
 unset O
