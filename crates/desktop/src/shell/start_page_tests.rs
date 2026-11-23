@@ -5,6 +5,8 @@ use super::start_page::split_last_segment;
 use super::*;
 use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
+use crate::model::regions::Region;
+use crate::model::start_page::StartMode;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
 use crate::service::{
@@ -553,4 +555,84 @@ fn new_session_from_the_workspace_menu_opens_the_start_page_of_that_workspace(
     draw(cx);
     let start = rig.shell.read_with(cx, |shell, _| shell.model.canvas());
     assert_eq!(start, Canvas::Workspace("w1".to_owned()));
+}
+
+/// Clicks the element `selector` on the drawn page.
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no element with selector {selector}"))
+        .center();
+    cx.simulate_click(center, gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui::test]
+fn chat_is_chosen_until_terminal_is_clicked_and_terminal_says_it_is_limited(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    let mode = |rig: &Rig, cx: &mut VisualTestContext| {
+        rig.shell.read_with(cx, |shell, _| shell.start_mode("w1"))
+    };
+    assert_eq!(mode(&rig, cx), StartMode::Chat);
+    assert!(cx.debug_bounds("start-terminal-note").is_none());
+
+    click(cx, "segment-1");
+    assert_eq!(mode(&rig, cx), StartMode::Terminal);
+    assert!(
+        cx.debug_bounds("start-terminal-note").is_some(),
+        "Terminal shows its note under the composer"
+    );
+
+    click(cx, "segment-0");
+    assert_eq!(mode(&rig, cx), StartMode::Chat);
+    assert!(cx.debug_bounds("start-terminal-note").is_none());
+}
+
+#[gpui::test]
+fn a_terminal_start_opens_the_agents_terminal_in_the_work_panel_and_keeps_the_page(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    click(cx, "segment-1");
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (params, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    assert_eq!(params.prompt.as_deref(), Some("fix the login"));
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    let (canvas, work_panel, selected) = rig.shell.read_with(cx, |shell, _| {
+        (
+            shell.model.canvas(),
+            shell.model.region_visible(Region::WorkPanel),
+            shell
+                .model
+                .terminal_selection()
+                .selected("w1")
+                .map(str::to_owned),
+        )
+    });
+    assert_eq!(canvas, Canvas::Workspace("w1".to_owned()), "the page stays");
+    assert!(work_panel, "the Work panel shows the agent's terminal");
+    assert_eq!(selected.as_deref(), Some(terminal));
+    let (attach, _attach_reply) =
+        attach_call(&mut rig._script).expect("the agent's terminal is attached");
+    assert_eq!(attach.terminal, terminal);
 }
