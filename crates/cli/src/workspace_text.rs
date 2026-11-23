@@ -66,6 +66,14 @@ pub fn project_line(project: &Project, verb: &str) -> String {
     )
 }
 
+/// What `project rm --forget-workspaces` dropped. No file, folder, worktree or branch is touched.
+pub fn forgotten_line(count: usize) -> String {
+    let noun = if count == 1 { "record" } else { "records" };
+    format!(
+        "forgot {count} workspace {noun}; no files, folders, worktrees or branches were touched"
+    )
+}
+
 /// The fields of one project, one per line.
 pub fn project_details(project: &Project) -> Vec<String> {
     vec![

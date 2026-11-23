@@ -169,6 +169,9 @@ pub struct TeamProjectAddArgs {
     /// What the project is for.
     #[arg(long, value_name = "TEXT")]
     pub goal: Option<String>,
+    /// The Workspaces project (id, name or path) the code comes from.
+    #[arg(long, value_name = "PROJECT")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -265,6 +268,9 @@ pub struct TeamProjectUpdateArgs {
     /// New Brief of the project. An empty value clears it.
     #[arg(long, value_name = "TEXT")]
     pub brief: Option<String>,
+    /// The Workspaces project (id, name or path) the code comes from. An empty value clears it.
+    #[arg(long, value_name = "PROJECT")]
+    pub source: Option<String>,
 }
 
 /// Runs one `team` subcommand against the service of `profile`.
@@ -404,6 +410,7 @@ async fn run_project(
                     name: args.name,
                     goal: args.goal,
                     brief: args.brief,
+                    source_project: args.source,
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "updated")]);
@@ -421,6 +428,7 @@ async fn run_project(
                     name: args.name,
                     goal: args.goal,
                     brief: None,
+                    source_project: args.source,
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "added")]);

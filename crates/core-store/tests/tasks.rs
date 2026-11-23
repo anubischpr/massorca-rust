@@ -1,8 +1,8 @@
 //! Tasks: the rows, their links to a team, bot and project, and what a removal of those does to them.
 
 use massorca_core_store::{
-    BotRow, Store, StoreError, TaskOrigin, TaskOutcome, TaskRow, TeamProjectRow, TeamRow, new_id,
-    now_ms,
+    BotRow, Store, StoreError, TaskDetails, TaskOrigin, TaskOutcome, TaskRow, TeamProjectRow,
+    TeamRow, new_id, now_ms,
 };
 
 fn store() -> Store {
@@ -37,6 +37,7 @@ fn bot_row(team_id: &str, name: &str) -> BotRow {
 
 fn project_row(team_id: &str, name: &str) -> TeamProjectRow {
     TeamProjectRow {
+        source_project_id: None,
         id: new_id(),
         team_id: team_id.to_owned(),
         name: name.to_owned(),
@@ -58,6 +59,9 @@ fn task_row(team_id: &str, title: &str, created_at: i64) -> TaskRow {
         session_id: None,
         outcome: None,
         error: None,
+        error_code: None,
+        workspace_id: None,
+        branch: None,
         created_at,
         updated_at: created_at,
     }
@@ -129,35 +133,6 @@ fn list_tasks_of_a_bot_or_a_project_names_only_its_links() {
         store.list_tasks_of_project(&parser.id).unwrap(),
         vec![linked]
     );
-}
-
-#[test]
-fn update_task_changes_its_mutable_fields_and_keeps_its_team_and_origin() {
-    let store = store();
-    let team = team_row("alpha");
-    store.insert_team(&team).unwrap();
-    let mara = bot_row(&team.id, "mara");
-    store.insert_bot(&mara).unwrap();
-    let mut row = TaskRow {
-        bot_id: Some(mara.id.clone()),
-        origin: TaskOrigin::Room,
-        error: Some("start failed".to_owned()),
-        ..task_row(&team.id, "parse", 10)
-    };
-    store.insert_task(&row).unwrap();
-
-    row.title = "parse the body".to_owned();
-    row.bot_id = None;
-    row.session_id = Some("session-2".to_owned());
-    row.outcome = Some(TaskOutcome::Success);
-    row.error = None;
-    row.updated_at = 30;
-    assert!(store.update_task(&row).unwrap());
-
-    let found = store.get_task(&row.id).unwrap().unwrap();
-    assert_eq!(found, row);
-    assert_eq!(found.origin, TaskOrigin::Room);
-    assert!(!store.update_task(&task_row(&team.id, "gone", 1)).unwrap());
 }
 
 #[test]
@@ -257,4 +232,293 @@ fn a_task_must_name_an_existing_team_bot_and_project() {
         Err(StoreError::Constraint { .. })
     ));
     assert_eq!(store.list_tasks(None).unwrap(), Vec::<TaskRow>::new());
+}
+
+#[test]
+fn a_start_error_is_recorded_and_a_session_link_clears_it_once() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+
+    assert!(
+        store
+            .set_task_start_error(&row.id, "agent.kind_not_found", "no such agent kind", 20)
+            .unwrap()
+    );
+    let failed = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(failed.error.as_deref(), Some("no such agent kind"));
+    assert_eq!(failed.error_code.as_deref(), Some("agent.kind_not_found"));
+    assert_eq!(failed.updated_at, 20);
+
+    assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
+    let linked = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(linked.session_id.as_deref(), Some("session-1"));
+    assert_eq!(linked.error, None);
+    assert_eq!(linked.error_code, None);
+    assert_eq!(linked.updated_at, 30);
+
+    // A second start finds the task linked: neither the link nor an error replaces it.
+    assert!(!store.link_task_session(&row.id, "session-2", 40).unwrap());
+    assert!(
+        !store
+            .set_task_start_error(&row.id, "bot.busy", "late failure", 40)
+            .unwrap()
+    );
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.session_id.as_deref(), Some("session-1"));
+    assert_eq!(kept.error, None);
+
+    assert!(!store.link_task_session("missing", "session-3", 50).unwrap());
+}
+
+#[test]
+fn a_session_finds_its_task_and_latches_its_outcome_once() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = TaskRow {
+        session_id: Some("session-1".to_owned()),
+        ..task_row(&team.id, "parse", 10)
+    };
+    store.insert_task(&row).unwrap();
+
+    assert_eq!(
+        store.find_task_by_session("session-1").unwrap(),
+        Some(row.clone())
+    );
+    assert_eq!(store.find_task_by_session("session-9").unwrap(), None);
+
+    // Only the session the task is linked to can latch it.
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-9", TaskOutcome::Failure, 20)
+            .unwrap()
+    );
+    assert!(
+        store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Success, 30)
+            .unwrap()
+    );
+    let latched = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(latched.outcome, Some(TaskOutcome::Success));
+    assert_eq!(latched.updated_at, 30);
+
+    // The first latch stands: a later one, of any outcome, changes nothing.
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Failure, 40)
+            .unwrap()
+    );
+    assert_eq!(store.get_task(&row.id).unwrap(), Some(latched));
+}
+
+#[test]
+fn a_reopened_task_is_not_latched_by_the_session_it_let_go() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = TaskRow {
+        session_id: Some("session-1".to_owned()),
+        ..task_row(&team.id, "parse", 10)
+    };
+    store.insert_task(&row).unwrap();
+    // What task.reopen writes: the session link and the outcome are cleared.
+    assert!(store.reopen_task(&row.id, Some("session-1"), 20).unwrap());
+    let reopened = TaskRow {
+        session_id: None,
+        updated_at: 20,
+        ..row.clone()
+    };
+
+    assert_eq!(store.find_task_by_session("session-1").unwrap(), None);
+    assert!(
+        !store
+            .latch_task_outcome(&row.id, "session-1", TaskOutcome::Success, 30)
+            .unwrap()
+    );
+    assert_eq!(store.get_task(&row.id).unwrap(), Some(reopened));
+}
+
+#[test]
+fn a_details_update_never_touches_the_session_outcome_or_error() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let mara = bot_row(&team.id, "mara");
+    store.insert_bot(&mara).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    // A start links the session after the update read the row.
+    assert!(store.link_task_session(&row.id, "session-1", 20).unwrap());
+
+    assert!(
+        store
+            .update_task_details(
+                &row.id,
+                &TaskDetails {
+                    bot: Some(Some(&mara.id)),
+                    title: Some("parse the body"),
+                    body: Some("all of it"),
+                    ..TaskDetails::default()
+                },
+                30
+            )
+            .unwrap()
+    );
+
+    let found = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(found.session_id.as_deref(), Some("session-1"));
+    assert_eq!(found.title, "parse the body");
+    assert_eq!(found.body, "all of it");
+    assert_eq!(found.bot_id.as_deref(), Some(mara.id.as_str()));
+    assert_eq!(found.updated_at, 30);
+    // A title-only update leaves the bot another call set after it read the row.
+    assert!(
+        store
+            .update_task_details(
+                &row.id,
+                &TaskDetails {
+                    title: Some("parse again"),
+                    ..TaskDetails::default()
+                },
+                35
+            )
+            .unwrap()
+    );
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.title, "parse again");
+    assert_eq!(kept.body, "all of it");
+    assert_eq!(kept.bot_id.as_deref(), Some(mara.id.as_str()));
+    assert!(
+        !store
+            .update_task_details(
+                "missing",
+                &TaskDetails {
+                    title: Some("gone"),
+                    ..TaskDetails::default()
+                },
+                40
+            )
+            .unwrap()
+    );
+}
+
+#[test]
+fn done_and_reopen_are_refused_when_the_session_changed_since_it_was_read() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert!(store.link_task_session(&row.id, "session-1", 20).unwrap());
+
+    // Both calls read the task before the link: no session.
+    assert!(
+        !store
+            .set_task_outcome(&row.id, TaskOutcome::Success, None, 30)
+            .unwrap()
+    );
+    assert!(!store.reopen_task(&row.id, None, 30).unwrap());
+    let kept = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!(kept.session_id.as_deref(), Some("session-1"));
+    assert_eq!(kept.outcome, None);
+
+    assert!(
+        store
+            .set_task_outcome(&row.id, TaskOutcome::Success, Some("session-1"), 40)
+            .unwrap()
+    );
+    assert_eq!(
+        store.get_task(&row.id).unwrap().expect("task").outcome,
+        Some(TaskOutcome::Success)
+    );
+    assert!(store.reopen_task(&row.id, Some("session-1"), 50).unwrap());
+    let reopened = store.get_task(&row.id).unwrap().expect("task");
+    assert_eq!((reopened.session_id, reopened.outcome), (None, None));
+    assert_eq!(reopened.updated_at, 50);
+}
+
+#[test]
+fn a_start_attempt_is_set_once_reused_and_cleared_when_settled() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+
+    let first = store
+        .begin_task_start_attempt(&row.id, "attempt-1")
+        .unwrap();
+    assert_eq!(first.as_deref(), Some("attempt-1"));
+    // A failed start that left a live run keeps the attempt, and a recorded error does not change it.
+    assert!(
+        store
+            .set_task_start_error(&row.id, "internal", "link failed", 20)
+            .unwrap()
+    );
+    let retry = store
+        .begin_task_start_attempt(&row.id, "attempt-2")
+        .unwrap();
+    assert_eq!(retry.as_deref(), Some("attempt-1"));
+
+    // Settled without a live run: only the attempt it names is cleared.
+    assert!(!store.end_task_start_attempt(&row.id, "attempt-2").unwrap());
+    assert!(store.end_task_start_attempt(&row.id, "attempt-1").unwrap());
+    let next = store
+        .begin_task_start_attempt(&row.id, "attempt-3")
+        .unwrap();
+    assert_eq!(next.as_deref(), Some("attempt-3"));
+
+    // A link settles the attempt too.
+    assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
+    assert!(!store.end_task_start_attempt(&row.id, "attempt-3").unwrap());
+
+    assert_eq!(
+        store
+            .begin_task_start_attempt("missing", "attempt-4")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_task_marked_finished_before_its_link_is_never_linked() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert!(
+        store
+            .set_task_outcome(&row.id, TaskOutcome::Success, None, 20)
+            .unwrap()
+    );
+
+    assert!(!store.link_task_session(&row.id, "session-1", 30).unwrap());
+
+    let found = store.get_task(&row.id).unwrap().unwrap();
+    assert_eq!(found.session_id, None);
+    assert_eq!(found.outcome, Some(TaskOutcome::Success));
+}
+
+#[test]
+fn the_pending_start_attempt_is_read_without_changing_it() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert_eq!(store.task_start_attempt(&row.id).unwrap(), None);
+
+    store
+        .begin_task_start_attempt(&row.id, "attempt-1")
+        .unwrap();
+
+    assert_eq!(
+        store.task_start_attempt(&row.id).unwrap().as_deref(),
+        Some("attempt-1")
+    );
+    assert_eq!(store.task_start_attempt("missing").unwrap(), None);
 }

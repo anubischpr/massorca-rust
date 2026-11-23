@@ -1,6 +1,8 @@
 //! The agents API agreed with the agents session: the agent kinds of installed packages and of the catalogue. It reads
 //! the lockfile without a running service, so `core-agents` can call it directly.
 
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::PathBuf;
 
 use massorca_ext_package::manifest;
@@ -8,7 +10,8 @@ use massorca_profile::Profile;
 use serde::Serialize;
 
 use crate::catalogue;
-use crate::error::{Error, HookError};
+use crate::error::{Error, HookError, codes};
+use crate::item::ItemState;
 use crate::layout::Layout;
 use crate::lockfile::Lockfile;
 use crate::service::installed_manifest;
@@ -133,4 +136,96 @@ pub fn catalogue_agent_kinds() -> Vec<CatalogueAgentKind> {
         }
     }
     out
+}
+
+/// One agent kind of the built-in catalogue or of an installed package, with its package's state on this profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageAgentKind {
+    pub kind_id: String,
+    pub package_id: String,
+    pub version: String,
+    pub state: ItemState,
+    /// The agent declaration as text, or why it cannot be used. The message names the package and never a path.
+    pub decl: Result<String, String>,
+}
+
+/// Every agent kind of the built-in catalogue and of installed packages. A built-in package with an installed copy is
+/// listed as that copy, at its catalogue position; third-party packages follow in lockfile order.
+pub fn package_agent_kinds(profile: &Profile) -> Result<Vec<PackageAgentKind>, Error> {
+    let installed = installed_agent_kinds(profile)?;
+    let catalogue = catalogue_agent_kinds();
+    let mut out = Vec::new();
+    let mut built_in_packages: BTreeSet<&str> = BTreeSet::new();
+    for kind in &catalogue {
+        if !built_in_packages.insert(kind.package_id.as_str()) {
+            continue;
+        }
+        let copies: Vec<&InstalledAgentKind> = installed
+            .iter()
+            .filter(|copy| copy.package_id == kind.package_id)
+            .collect();
+        if copies.is_empty() {
+            out.extend(
+                catalogue
+                    .iter()
+                    .filter(|built_in| built_in.package_id == kind.package_id)
+                    .map(available),
+            );
+        } else {
+            out.extend(copies.into_iter().map(installed_kind));
+        }
+    }
+    out.extend(
+        installed
+            .iter()
+            .filter(|copy| !built_in_packages.contains(copy.package_id.as_str()))
+            .map(installed_kind),
+    );
+    Ok(out)
+}
+
+fn available(kind: &CatalogueAgentKind) -> PackageAgentKind {
+    PackageAgentKind {
+        kind_id: kind.kind_id.clone(),
+        package_id: kind.package_id.clone(),
+        version: kind.package_version.clone(),
+        state: ItemState::Available,
+        decl: std::str::from_utf8(&kind.declaration)
+            .map(str::to_owned)
+            .map_err(|_| format!("{}: its declaration is not text", kind.package_id)),
+    }
+}
+
+fn installed_kind(kind: &InstalledAgentKind) -> PackageAgentKind {
+    PackageAgentKind {
+        kind_id: kind.kind_id.clone(),
+        package_id: kind.package_id.clone(),
+        version: kind.package_version.clone(),
+        state: if kind.enabled {
+            ItemState::Enabled
+        } else {
+            ItemState::Disabled
+        },
+        decl: installed_declaration(kind),
+    }
+}
+
+/// The declaration of an installed kind, read from its verified folder, or why its package cannot be used.
+fn installed_declaration(kind: &InstalledAgentKind) -> Result<String, String> {
+    if let Some(error) = &kind.error {
+        return Err(problem(&kind.package_id, error));
+    }
+    let unreadable = || format!("{}: its declaration cannot be read", kind.package_id);
+    let path = kind.path.as_deref().ok_or_else(unreadable)?;
+    fs::read_to_string(path).map_err(|_| unreadable())
+}
+
+/// Why an installed package's files cannot be used, in words that name no path.
+fn problem(package_id: &str, error: &HookError) -> String {
+    let cause = match error.code.as_str() {
+        codes::TAMPERED => "its installed files differ from what was reviewed",
+        codes::IO => "its installed files cannot be read",
+        _ => "its installed manifest is invalid",
+    };
+    format!("{package_id}: {cause} ({})", error.code)
 }

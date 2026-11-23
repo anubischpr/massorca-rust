@@ -196,6 +196,27 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Lets several agents write in a folder workspace at once. Returns false for a worktree or an unknown id: a git
+    /// index is never shared.
+    pub fn share_workspace_writers(&self, id: &str) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE workspaces SET shared_writers = 1 WHERE id = ?1 AND kind = 'folder'",
+            [id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Whether several agents may write in the workspace at once.
+    pub fn workspace_shares_writers(&self, id: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .query_optional(
+                "SELECT shared_writers FROM workspaces WHERE id = ?1",
+                [id],
+                |row| row.get::<_, bool>("shared_writers"),
+            )?
+            .unwrap_or(false))
+    }
+
     /// Returns whether a row was removed.
     pub fn delete_workspace(&self, id: &str) -> Result<bool, StoreError> {
         let removed = self

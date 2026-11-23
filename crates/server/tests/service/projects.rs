@@ -3,16 +3,24 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{self, ConfigSet};
-use massorca_protocol::methods::events::{ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED};
-use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectList, ProjectRef,
+use massorca_protocol::methods::events::{
+    ChangeEvent, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_WORKSPACE_REMOVED,
 };
+use massorca_protocol::methods::projects::{
+    self, Project, ProjectAddParams, ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams,
+};
+use massorca_protocol::methods::terminals::{
+    self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
+};
+use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
 use serde_json::{Value, json};
-use tokio::time::timeout;
+use std::collections::BTreeMap;
+use tokio::time::{Instant, sleep, timeout};
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use super::common::{connect, remote_code, shell_with_a_child, start, stop, temp_home};
 
 /// A git repository with one commit at `dir`.
 fn git_repo(dir: &Path) {
@@ -116,8 +124,9 @@ async fn list_and_show_answer_what_was_added_and_remove_publishes_project_remove
     let removed: Project = client
         .call(
             projects::REMOVE,
-            &ProjectRef {
+            &ProjectRemoveParams {
                 project: added.id.clone(),
+                forget_workspaces: false,
             },
         )
         .await
@@ -191,4 +200,129 @@ async fn a_new_default_root_applies_to_the_next_project_without_restarting() {
         elsewhere.join("repo").as_path()
     );
     stop(running).await;
+}
+
+async fn next_change(events: &mut Subscription) -> ChangeEvent {
+    timeout(Duration::from_secs(10), events.next_as::<ChangeEvent>())
+        .await
+        .expect("the event arrives")
+        .expect("stream open")
+        .expect("event decodes")
+}
+
+async fn next_change_on(events: &mut Subscription, topic: &str, id: &str) {
+    loop {
+        let event = next_change(events).await;
+        if event.topic == topic && event.id == id {
+            return;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publishes_its_removals() {
+    let home = temp_home();
+    let folder = home.path().join("notes");
+    std::fs::create_dir_all(&folder).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let mut events = client.subscribe_events().await.expect("subscribe");
+    let mut params = add_params(&folder);
+    params.kind = Some(ProjectKind::Folder);
+    let project: Project = client.call(projects::ADD, &params).await.expect("add");
+    let workspace: Workspace = client
+        .call(
+            workspaces::CREATE,
+            &WorkspaceCreateParams {
+                project: project.id.clone(),
+                name: "main".to_owned(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                path: None,
+                request_id: None,
+            },
+        )
+        .await
+        .expect("create workspace");
+    let terminal: Terminal = client
+        .call(
+            terminals::CREATE,
+            &TerminalCreateParams {
+                workspace: workspace.id.clone(),
+                shell: Some(shell_with_a_child()),
+                cwd: None,
+                env: BTreeMap::new(),
+                cols: None,
+                rows: None,
+                title: None,
+                request_id: None,
+            },
+        )
+        .await
+        .expect("create terminal");
+    let forget = ProjectRemoveParams {
+        project: project.id.clone(),
+        forget_workspaces: true,
+    };
+
+    let busy = client
+        .call::<_, Project>(projects::REMOVE, &forget)
+        .await
+        .expect_err("a live terminal in a workspace");
+    assert_eq!(remote_code(&busy), codes::WORKSPACE_BUSY);
+    let still: Project = client
+        .call(
+            projects::SHOW,
+            &ProjectRef {
+                project: project.id.clone(),
+            },
+        )
+        .await
+        .expect("the project is still registered");
+    assert_eq!(still.id, project.id);
+
+    client
+        .call::<_, Value>(
+            terminals::KILL,
+            &TerminalKillParams {
+                terminal: terminal.id.clone(),
+                force: true,
+            },
+        )
+        .await
+        .expect("kill the terminal");
+    wait_until_exited(&client, &terminal.id).await;
+
+    let removed: Project = client
+        .call(projects::REMOVE, &forget)
+        .await
+        .expect("forget once the terminal has ended");
+    assert_eq!(removed.id, project.id);
+    next_change_on(&mut events, TOPIC_PROJECT_REMOVED, &project.id).await;
+    next_change_on(&mut events, TOPIC_WORKSPACE_REMOVED, &workspace.id).await;
+    assert!(
+        folder.is_dir(),
+        "forgetting a project never deletes its files"
+    );
+    stop(running).await;
+}
+
+async fn wait_until_exited(client: &massorca_client::Client, terminal: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let list: TerminalList = client
+            .call(terminals::LIST, &json!({}))
+            .await
+            .expect("list terminals");
+        if list
+            .terminals
+            .iter()
+            .any(|item| item.id == terminal && item.exit.is_some())
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the terminal did not exit");
+        sleep(Duration::from_millis(50)).await;
+    }
 }
