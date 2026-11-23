@@ -1,0 +1,66 @@
+# Host stats
+
+Figures the desktop status bar shows, read on the host that runs the work: the memory MassOrca uses, and later the
+ports its processes listen on. The record is decision 0081; this page shows how the pieces fit.
+
+## Shape
+
+```
+ desktop / CLI (`massorca host memory`)          polls; never pushed
+        |  host/1: host.memory (Read)
+ +----------------------------- massorca service --------------------------------+
+ |  server: host.memory handler, on the blocking pool                            |
+ |     TerminalManager::memory()    -> each live terminal's process memory      |
+ |        one process table per sample (Unix), then per terminal:                 |
+ |        job read through the job (Windows) | session (Linux) | walk (macOS)     |
+ |     Agents::list()               -> the session whose current run is there    |
+ |     massorca-host-stats          -> the reads, native calls only              |
+ +-------------------------------------------------------------------------------+
+```
+
+## `host.memory`
+
+Read permission, no params. The answer:
+
+| Field | Meaning |
+|---|---|
+| `metric` | `working_set` (Windows) or `resident` (Linux, macOS). |
+| `total_bytes` | The service plus every terminal not `unverifiable`, as a plain sum: a shared page counts once per process. |
+| `service` | `{ pid, bytes }` of the service process. |
+| `terminals` | One entry per live terminal, by creation time: `terminal_id`, `workspace_id`, `session_id` when an agent session's current run uses the terminal, `processes` (how many were read), `bytes`, and `unverifiable`. |
+| `unreadable` | Processes listed but not read: they exited between the listing and the read, or access was denied. They are in no sum. |
+| `sampled_at_ms` | When the sample was taken. |
+
+A terminal is `unverifiable` when its processes cannot be listed (a job query failed, the shell was just reaped but
+its exit is not recorded yet, or the platform has no listing) or when none of them could be read. Its `processes` and
+`bytes` are then 0 and mean nothing: a client shows it as unknown, never as `0 KB`. The flag is additive; an answer
+without it reads as `false`.
+
+This is the reference desktop's "Memory" with two differences: the desktop's own process is not counted (the desktop
+may add its own figure locally), and the figure is not pushed.
+
+## Reading
+
+`crates/host-stats` reads with system calls and never starts a program:
+
+- Windows: the job's pid list (`QueryInformationJobObject`, repeated with the size the job reports when it holds more
+  than 1024 processes); then per pid `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, `GetExitCodeProcess` (an ended
+  process whose handle is still held is not counted), `IsProcessInJob` on that handle (a pid reused since the listing
+  is not read) and `K32GetProcessMemoryInfo` for the working set. A Toolhelp32 snapshot gives names and parent ids.
+- Linux: `VmRSS` from `/proc/<pid>/status`; names, parents and session ids from `/proc/<pid>/stat`.
+- macOS: `proc_pidinfo` (`PROC_PIDTASKINFO` for the resident size, `PROC_PIDTBSDINFO` for parents and names) and
+  `proc_listallpids`.
+
+A terminal's processes come from its `ProcessTree`: exact on Windows (the job) and Linux (the session). macOS has no
+session listing, so the tree is the shell and everything below it by parent id; a process that detached from the shell
+is missed there. On Unix the process table is read once per sample and shared by every terminal; a terminal's lock is
+held only to check that its shell is not reaped, never during a scan. The parent walk is Unix only, since Windows parent
+ids can name a parent that exited.
+
+## Polling
+
+There is no event and no watch. A client polls while it shows the figure: every 2 seconds while a memory detail is
+open, otherwise with its usual status refresh. One sample reads the process table once (Unix) or each terminal's
+job (Windows), and a few system calls per process, so a poll costs little, but nothing samples while nobody asks.
+
+A client that cannot reach the service shows `unverifiable`, never zero: the CLI exits 4 with `memory.unverifiable`.
