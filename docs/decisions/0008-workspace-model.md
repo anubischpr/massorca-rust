@@ -48,6 +48,13 @@ lineage) comes later; the model must not block it.
   is never deleted. A failure before git acts returns the row to `ready`; a
   failure after git has removed the worktree leaves it `removing`, and `rm` again
   finishes the job.
+- **Runs in a workspace being removed.** Once the row is `removing`, the
+  service stops every agent run in the workspace and then every live terminal
+  (a terminal that ignores the polite kill is killed by force), before git
+  acts. No terminal or agent run can start in a `removing` workspace
+  (`workspace.not_found`, "being removed"). A run that still does not stop
+  refuses the removal with `workspace.busy`; the row stays `removing`, and `rm`
+  again retries.
 - **Changes a removal would lose.** Uncommitted and untracked changes in a
   worktree refuse with `workspace.dirty` unless `--force` is given. Ignored
   files are counted apart, because `git status` does not list them and

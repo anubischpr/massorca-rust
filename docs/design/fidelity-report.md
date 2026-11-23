@@ -180,6 +180,19 @@ This report compares the desktop shell and the UI gallery with the design artboa
 - Still open: the Bot Teams home and the gallery draw the generic users avatar (`Avatar::team`). The sidebar team row is not changed on this branch.
 - N39 dashed "Nightly summary" border: `board_column.rs`. Open (L4).
 
+## Session composer (D-AG-03)
+
+**Matches**
+- The composer sits under the session's terminal with the shared body: placeholder, bottom row, and a round Stop while the agent runs.
+
+**Cannot match yet**
+- The access chip, model picker, attach button and voice input are not offered in a session. The access chip has no modes to show and the rest have no service behind them yet. Voice is disabled with its reason, as on the start page.
+- Composer.md says a message typed while the agent runs queues behind it. The service refuses a prompt while the agent works, so the session composer stops the run instead and offers no Queue.
+
+**No artboard**
+- "Sending…" and "Resuming…" under the text while a call is in flight, and the ended-session lines "This session has ended." and "This session has ended and cannot be resumed.", with the Resume button beside the first.
+- The notice above the composer when a stop or resume is refused: "Could not stop the agent: …" and "Could not resume the session: …".
+
 ## Palette and quick open
 
 **Matches**

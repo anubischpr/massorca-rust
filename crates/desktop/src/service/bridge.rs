@@ -12,15 +12,19 @@ use std::time::{Duration, Instant};
 use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord, Subscription};
 use massorca_profile::Profile;
 use massorca_protocol::codes;
-use massorca_protocol::methods::agents::{AgentBringBackParams, BringBackResult};
+use massorca_protocol::methods::agents::{
+    AgentBringBackParams, AgentPromptParams, AgentSession, AgentStartParams, BringBackResult,
+    PromptReceipt,
+};
 use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_PROJECT_ADDED,
-    TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED,
-    TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_EXTENSION_DISABLED,
+    TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED,
+    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -38,6 +42,7 @@ use tokio::time::sleep;
 use super::accounts::{self, AccountCommand, AccountsFreshness};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
+use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
@@ -77,6 +82,8 @@ pub(crate) enum Command {
     Terminal(TerminalCommand),
     /// A Bot Teams write, answered on its oneshot.
     Team(TeamCommand),
+    /// A Marketplace extension call, answered on its oneshot.
+    Extension(ExtensionCommand),
     Secret(SecretCommand),
     /// An agent account write, answered on its oneshot.
     Account(AccountCommand),
@@ -87,6 +94,26 @@ pub(crate) enum Command {
     BringBack {
         params: AgentBringBackParams,
         reply: oneshot::Sender<Result<BringBackResult, Refusal>>,
+    },
+    /// `agent.start`, answered on its oneshot once the service has started the session.
+    AgentStart {
+        params: AgentStartParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.prompt`, answered on its oneshot once the service has typed the text into the session.
+    AgentPrompt {
+        params: AgentPromptParams,
+        reply: oneshot::Sender<Result<PromptReceipt, Refusal>>,
+    },
+    /// `agent.stop` without force, answered on its oneshot with the session as the service has it now.
+    AgentStop {
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
+    AgentResume {
+        session: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     GitDiffFile {
         params: GitDiffFileParams,
@@ -379,6 +406,7 @@ impl ServiceBridge {
             watching: BTreeSet::new(),
             freshness: Arc::new(Freshness::default()),
             team_reads: Arc::new(Sequence::default()),
+            extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
         };
@@ -434,6 +462,8 @@ struct Link {
     freshness: Arc<Freshness>,
     /// Numbers the Bot Teams reads across the connections of this bridge.
     team_reads: Arc<Sequence>,
+    /// Numbers the extension reads across the connections of this bridge.
+    extension_reads: Arc<Sequence>,
     /// Orders the vault reads across the connections of this bridge.
     secrets_order: Arc<SecretsFreshness>,
     /// Orders the account reads, per kind, across the connections of this bridge.
@@ -578,6 +608,8 @@ impl Link {
             accounts::refresh_in_background(client, &kind.id, &self.updates, &self.accounts_order);
         }
         self.emit(StoreUpdate::AgentKindsResync(kinds));
+        let read_extensions = extensions::read(client, &self.extension_reads).await?;
+        self.emit(StoreUpdate::Extensions(read_extensions));
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -614,6 +646,14 @@ impl Link {
                             }
                             Some(Command::Team(command)) => {
                                 teams::spawn_call(client, command, &self.updates, &self.team_reads);
+                            }
+                            Some(Command::Extension(command)) => {
+                                extensions::spawn_call(
+                                    client,
+                                    command,
+                                    &self.updates,
+                                    &self.extension_reads,
+                                );
                             }
                             Some(Command::Secret(command)) => {
                                 secrets::spawn_call(
@@ -698,6 +738,13 @@ impl Link {
             TOPIC_TEAM_CHANGED | TOPIC_TASK_CHANGED => teams::read(client, &self.team_reads)
                 .await
                 .map(StoreUpdate::Teams),
+            // The events carry only the package id, so both lists are read again (decision 0062).
+            TOPIC_EXTENSION_INSTALLED
+            | TOPIC_EXTENSION_ENABLED
+            | TOPIC_EXTENSION_DISABLED
+            | TOPIC_EXTENSION_REMOVED => extensions::read(client, &self.extension_reads)
+                .await
+                .map(StoreUpdate::Extensions),
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             TOPIC_AGENT_CHANGED => client
@@ -838,6 +885,18 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::AgentStart { params, reply } => {
+            agents::spawn_start(&client, params, reply, updates);
+        }
+        Command::AgentPrompt { params, reply } => {
+            agents::spawn_prompt(&client, params, reply);
+        }
+        Command::AgentStop { session, reply } => {
+            agents::spawn_stop(&client, session, reply, updates);
+        }
+        Command::AgentResume { session, reply } => {
+            agents::spawn_resume(&client, session, reply, updates);
+        }
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -885,6 +944,7 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),
+        Command::Extension(command) => extensions::refuse_while_down(command, refusal),
         Command::ListDevices { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -895,6 +955,15 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::NetworkStatus { reply } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentStart { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentPrompt { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::AgentStop { reply, .. } | Command::AgentResume { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
