@@ -10,10 +10,13 @@ publish.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
 
+# A terminal's job is borrowed as a `win32job::Job`, so a read can never use a closed job handle.
 [target.'cfg(windows)'.dependencies]
+win32job.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }
