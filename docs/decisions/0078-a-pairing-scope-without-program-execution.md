@@ -100,22 +100,41 @@ prompt cannot close a bracketed paste and type outside it. A task's text that
 later becomes a prompt passes the same check when the task is created by an
 `operate` device.
 
-**Git rule.** For a caller without `workspace`:
+**Git rule.** The rule depends on the caller. A caller that holds
+`workspace`, and the owner, keep today's behaviour unchanged: their commits,
+merges, checkouts and pushes run the repository's hooks and configured
+programs, as plain git does, because pre-commit tooling depends on it. A
+caller without `workspace` (`read` today, `operate` later) must never cause a
+program the repository names to run:
 
-- Before a mutation, the service reads the repository and worktree config
+- Reads ship first, as their own PR ahead of the slices below, because a
+  `read` device can trigger row 10 today. Every git process for such a
+  caller runs with `--no-pager`, an empty `core.fsmonitor` (Git 2.25 reads the
+  value as a hook path, so `false` would run a program named `false`; an empty
+  value turns the monitor off in 2.25 and in 2.36+), `core.hooksPath` pointing
+  at an empty folder in the owner-only profile, an empty `diff.external` and
+  `credential.helper`, and `log.showSignature=false`. Every
+  `filter.*.clean/smudge/process` and `diff.*.textconv/command` set in the
+  repository's own config files (`git config --local`, and `--worktree` when
+  `extensions.worktreeConfig` is on, both with `--includes`) is overridden
+  with an empty value, and such a filter is made optional. `status`,
+  `diff-files` and `diff-index` get `--ignore-submodules=dirty`, so git never
+  runs a status inside a submodule under the submodule's own config. Filters
+  in user or system config keep running, so a Git LFS set up there still
+  works. A run that cannot be made safe (the hooks folder is missing or not
+  empty, the config cannot be read, a driver name contains `=`) is refused
+  with `git.unsafe_for_caller`, and so is any mutation or remote command
+  under this runner. Every option exists in Git 2.25; the baseline CI job
+  runs the tests on Git 2.25.5.
+- Before a mutation by an `operate` caller (slice 4), the service reads the repository and worktree config
   (`git config --local --list --show-origin`, and `--worktree`). If any key on
   row 10's list is set there, or `include.path`/`includeIf.*` is set at all,
   the call is refused with `permission.denied` naming the key.
 - If the effective hooks directory holds a hook the operation would run, the
   call is refused naming the hook. Skipping it silently would commit or push
   work the owner's checks never saw.
-- Every git process for such a caller also runs with
-  `-c core.hooksPath=<profile>/git/no-hooks` (an empty folder the service
-  owns) and `-c core.fsmonitor=false`, so a hook or config added between the
-  check and the run does nothing.
-- Reads (`status`, `diff`, `log`, `watch`) for such a caller run with
-  `-c core.fsmonitor=false`, `--no-ext-diff` and `--no-textconv`. This also
-  closes row 10 for today's `read` devices.
+- An `operate` caller's mutations then run with the same overrides as reads,
+  so a hook or config added between the check and the run does nothing.
 
 User and system git config stay trusted: they are the owner's files, and no
 device method writes them.
@@ -141,7 +160,11 @@ device method writes them.
   value to a refusal). `admin: true` keeps working. `operate` gives
   `["read", "operate"]`. CLI: `massorca pair offer --operate`, which conflicts
   with `--admin`. The desktop's offer dialog in Settings shows the three roles.
-  The default stays `standard` in this decision.
+- **Default role.** New offers stay `standard` (`read`+`workspace`) until
+  `operate` is built and validated. After that, the desktop pairing screen
+  defaults to `operate` and offers full `workspace` as an explicit choice,
+  explained in one line: "can run programs as you on this computer". The CLI
+  gets the same default in the same PR (slice 5).
 - **Older servers.** Params carry no `deny_unknown_fields`, so an older
   server ignores `role` and makes a standard offer. The client therefore
   checks `PairingCreated.scopes` and, if `operate` was asked for and the reply
@@ -158,7 +181,8 @@ device method writes them.
 - **Errors.** Every refusal is `permission.denied`, which every client
   already handles. The message names what was refused and the scope that
   allows it, for example "device X may not pass agent args; needs workspace".
-  No new code.
+  The one new code is `git.unsafe_for_caller`, for a git read that cannot be
+  made safe (see the git rule); older clients show it as a plain error.
 
 ## Residual risks
 
@@ -183,12 +207,17 @@ device method writes them.
 
 ## Implementation plan
 
+Order: the git rule for reads by callers without `workspace` lands first, as
+its own PR, because it closes a hole `read` devices have today. The five
+slices follow as small PRs, each reviewed. Zeroing the plain copies of
+secrets in the launch path comes after them.
+
 | Slice | Content | Size |
 |---|---|---|
 | 1 | `Permission::Operate`, implication from `workspace`, wire name, `Scopes::OPERATE`; re-register the allowed methods with `Operate`. | ~150 lines |
 | 2 | Parameter checks: agent `args`/`env`, operate kinds, `workspace.create` `path`, attach viewer rules, agent-run-only attach. Kind `operate` block and the built-in reviews. | ~250 lines |
 | 3 | Prompt rule for start, prompt, delegate, bring-back and task text. | ~120 lines |
-| 4 | Git rule: config and hooks checks, `-c` overrides for non-`workspace` callers, read flags. | ~250 lines |
+| 4 | Git rule for `operate` mutations: config and hooks checks, then the overrides reads already use. | ~200 lines |
 | 5 | `role` on `pairing.create`, CLI `--operate`, client reply check, desktop dialog and labels, docs. | ~250 lines |
 
 Tests, each through the service with a paired `operate` device:
@@ -206,7 +235,8 @@ Tests, each through the service with a paired `operate` device:
   refused.
 - `git.commit` in a repository with an executable `pre-commit` is refused and
   the hook did not run; with `core.fsmonitor` in `.git/config` it is refused;
-  `git.status` from a `read` device does not run a configured fsmonitor.
+  `git.status` and `git.diff_file` from a `read` device run no configured
+  fsmonitor or clean filter (shipped with the read PR).
 - A `workspace` device still commits with its hooks running (no regression).
 - A `read`+`workspace` device paired before the change keeps both scopes.
 - `pairing.create` with `role: "operate"` gives `["read", "operate"]`; against
