@@ -174,3 +174,37 @@ fn a_linked_worktree_registers_and_names_its_main_repository() {
         .stdout(contains("added project repo (git) at "))
         .stdout(contains("linked-wt").not());
 }
+
+#[test]
+fn forget_workspaces_drops_the_workspace_records_and_touches_no_file() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    std::fs::write(notes.join("notes.txt"), "keep me").expect("write notes");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+
+    sandbox
+        .run("default", &["project", "rm", "notes"])
+        .code(1)
+        .stderr(contains("project.has_workspaces"));
+
+    sandbox
+        .run(
+            "default",
+            &["project", "rm", "notes", "--forget-workspaces"],
+        )
+        .success()
+        .stdout(contains("removed project notes (folder)"))
+        .stdout(contains("forgot 1 workspace record"))
+        .stdout(contains("no files"));
+    assert!(notes.join("notes.txt").is_file(), "the folder's files stay");
+    sandbox
+        .run("default", &["project", "list"])
+        .success()
+        .stdout(contains("no projects"));
+}

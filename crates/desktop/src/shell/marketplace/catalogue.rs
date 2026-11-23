@@ -2,8 +2,10 @@
 //! category (teams-extensions-settings.md 7.1 and 7.4).
 
 use super::MarketplaceFrame;
+use super::item::problem_banner;
 use crate::model::marketplace::{
-    ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed, no_match_text,
+    ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
+    no_match_text, problem_alert,
 };
 use crate::model::navigation::MarketplacePage;
 use gpui::{
@@ -226,12 +228,16 @@ pub(super) fn catalogue_view(
         let mut grid = div().flex().flex_wrap().gap(px(SPACE_4));
         for item in items {
             let key = item.id.0;
-            grid = grid.child(
-                div()
-                    .w(px(CARD_WIDTH))
-                    .debug_selector(move || format!("marketplace-item-{key}"))
-                    .child(card(frame, item)),
-            );
+            let mut cell = div()
+                .w(px(CARD_WIDTH))
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .debug_selector(move || format!("marketplace-item-{key}"));
+            if let Some(alert) = problem_alert(item) {
+                cell = cell.child(problem_banner(item.id, &alert));
+            }
+            grid = grid.child(cell.child(card(frame, item)));
         }
         grid.into_any_element()
     };

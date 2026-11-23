@@ -1,10 +1,12 @@
-//! `massorca task ...`: the tasks on a team's Board (decision 0072). `task start` is not built yet.
+//! `massorca task ...`: the tasks on a team's Board (decision 0072).
 
 mod text;
 
 use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams, TaskListParams, TaskRef};
+
+use massorca_protocol::codes;
 
 use crate::connect::connect;
 use crate::error::CliError;
@@ -24,6 +26,11 @@ pub enum TaskCommand {
     },
     /// Changes a task: its title, body, bot or project. An empty bot or project clears it.
     Update(TaskUpdateArgs),
+    /// Starts the task's bot on it, in the team's folder workspace. A failed start keeps the task Open with the reason.
+    Start {
+        /// Task id.
+        task: String,
+    },
     /// Marks a task done by hand, for work that finished outside an agent.
     Done {
         /// Task id.
@@ -160,6 +167,13 @@ pub async fn execute(
                 .await?;
             output.success(&task, &[text::task_line(&task, "updated")]);
         }
+        TaskCommand::Start { task } => {
+            let started = client
+                .task_start(&TaskRef { task })
+                .await
+                .map_err(|error| too_old_to_start(error.into()))?;
+            output.success(&started, &[text::task_line(&started, "started")]);
+        }
         TaskCommand::Done { task } => {
             let done = client.task_done(&TaskRef { task }).await?;
             output.success(&done, &[text::task_line(&done, "done")]);
@@ -174,4 +188,35 @@ pub async fn execute(
         }
     }
     Ok(())
+}
+
+/// `task.start` came after the rest of `teams/1`, so an older host answers it as an unknown method.
+fn too_old_to_start(error: CliError) -> CliError {
+    if error.code == codes::METHOD_NOT_FOUND {
+        return CliError {
+            message: "this host is too old to run tasks; update it".to_owned(),
+            ..error
+        };
+    }
+    error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::exit;
+
+    #[test]
+    fn an_unknown_task_start_method_says_the_host_is_too_old() {
+        let old = too_old_to_start(CliError::new(
+            codes::METHOD_NOT_FOUND,
+            "unknown method task.start",
+            exit::ERROR,
+        ));
+        assert_eq!(old.code, codes::METHOD_NOT_FOUND);
+        assert_eq!(old.message, "this host is too old to run tasks; update it");
+
+        let other = too_old_to_start(CliError::new(codes::BOT_BUSY, "mara is busy", exit::ERROR));
+        assert_eq!(other.message, "mara is busy");
+    }
 }

@@ -142,6 +142,11 @@ impl Client {
         self.call(tasks::UPDATE, params).await
     }
 
+    /// `task.start`: starts the task's bot on it in the team's folder workspace; a failed start keeps it Open with `error`.
+    pub async fn task_start(&self, params: &TaskRef) -> Result<Task, ClientError> {
+        self.call(tasks::START, params).await
+    }
+
     /// `task.done`: marks a task done by hand; refused while its agent session runs.
     pub async fn task_done(&self, params: &TaskRef) -> Result<Task, ClientError> {
         self.call(tasks::DONE, params).await

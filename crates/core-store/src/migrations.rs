@@ -313,6 +313,36 @@ CREATE INDEX team_memory_by_scope ON team_memory(team_id, bot_id, created_at);
 "#,
         foreign_keys_off: false,
     },
+    // A team project's code source (decision 0072): the Workspaces project it links to. Removing that project clears the link.
+    Migration {
+        sql: r#"
+ALTER TABLE team_projects ADD COLUMN source_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+"#,
+        foreign_keys_off: false,
+    },
+    // A team's folder workspace, made on its first task start; folder workspaces that let several agents write at once
+    // (a team folder: no git index to corrupt, and shared files are the point); and the lookup from an agent session to
+    // its task, the protocol code of a failed start beside its message, and the pending start attempt that keys a retry
+    // to the same agent request (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE teams ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN error_code TEXT;
+ALTER TABLE tasks ADD COLUMN start_attempt TEXT;
+ALTER TABLE workspaces ADD COLUMN shared_writers INTEGER NOT NULL DEFAULT 0 CHECK(shared_writers IN (0,1));
+CREATE INDEX tasks_session_id ON tasks (session_id);
+"#,
+        foreign_keys_off: false,
+    },
+    // Where a task's last start ran: its own worktree on a linked git project, a linked folder or the team folder, and
+    // the worktree's branch, where the result is (decision 0072 amendment).
+    Migration {
+        sql: r#"
+ALTER TABLE tasks ADD COLUMN workspace_id TEXT;
+ALTER TABLE tasks ADD COLUMN branch TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
@@ -347,6 +377,10 @@ pub(crate) fn migrate_observed(
     // would back up the half-migrated file again.
     let _upgrade = file.map(upgrade_lock).transpose()?;
     observe("store migration lock");
+    if found == 0 && create_fresh(connection, file, steps)? {
+        observe("store schema");
+        return Ok(());
+    }
     let mut backed_up = false;
     loop {
         // Read without the lock first, so an up-to-date database is never written to.
@@ -361,6 +395,41 @@ pub(crate) fn migrate_observed(
         apply_step(connection, file, found, index, step, &mut backed_up)?;
         observe("store schema step");
     }
+}
+
+/// Builds the whole schema of a new, empty database file in one transaction: one commit and one sync instead of one per
+/// step, which on a busy disk made a first start take longer than the client waits. Nothing is lost if it fails: the
+/// database was empty. Returns `false`, changing nothing, for an in-memory database, one that already holds objects or
+/// a version, or steps that need foreign keys switched off; those run one transaction per step, as an upgrade does.
+fn create_fresh(
+    connection: &mut Connection,
+    file: Option<&Path>,
+    steps: &[Migration],
+) -> Result<bool, StoreError> {
+    if file.is_none() || steps.iter().any(|step| step.foreign_keys_off) {
+        return Ok(false);
+    }
+    create_in_one_transaction(connection, steps)
+}
+
+fn create_in_one_transaction(
+    connection: &mut Connection,
+    steps: &[Migration],
+) -> Result<bool, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if user_version(&transaction)? != 0 || backup::holds_objects(&transaction)? {
+        return Ok(false);
+    }
+    for step in steps {
+        transaction.execute_batch(step.sql)?;
+    }
+    let version = i64::try_from(steps.len()).unwrap_or(i64::MAX);
+    if let Some(table) = first_foreign_key_violation(&transaction)? {
+        return Err(StoreError::ForeignKeyViolation { version, table });
+    }
+    transaction.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+    transaction.commit()?;
+    Ok(true)
 }
 
 /// Runs one step, with foreign keys switched off around its transaction when the step asks for that.
@@ -679,5 +748,50 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
         drop(held);
         migrate(&mut connection, Some(&path), &STEPS[..1]).unwrap();
+    }
+
+    fn schema(connection: &Connection) -> Vec<(String, String, Option<String>)> {
+        let mut statement = connection
+            .prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_new_database_gets_the_same_schema_in_one_transaction_as_step_by_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh_path = dir.path().join("fresh.db");
+        let mut fresh = Connection::open(&fresh_path).unwrap();
+        migrate(&mut fresh, Some(&fresh_path), super::MIGRATIONS).unwrap();
+
+        let stepped_path = dir.path().join("stepped.db");
+        let mut stepped = Connection::open(&stepped_path).unwrap();
+        // One step first: the database then holds objects, so the rest runs step by step as an upgrade does.
+        migrate(&mut stepped, Some(&stepped_path), &super::MIGRATIONS[..1]).unwrap();
+        migrate(&mut stepped, Some(&stepped_path), super::MIGRATIONS).unwrap();
+
+        assert_eq!(schema(&fresh), schema(&stepped));
+        let version = |connection: &Connection| -> i64 {
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            version(&fresh),
+            i64::try_from(super::MIGRATIONS.len()).unwrap()
+        );
+        assert_eq!(version(&fresh), version(&stepped));
+        assert!(
+            !fs::read_dir(dir.path()).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("fresh.db.bak")),
+            "a new database has nothing to back up"
+        );
     }
 }

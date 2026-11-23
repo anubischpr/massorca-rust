@@ -65,6 +65,9 @@ fn board_of(store: &Store, agents: &Agents, params: BoardParams) -> Result<Board
             state: standing.state,
             last_known: standing.last_known,
             error: row.error.clone(),
+            error_code: row.error_code.clone(),
+            workspace_id: row.workspace_id.clone(),
+            branch: row.branch.clone(),
             at_ms: row.updated_at,
         };
         if let Some(column) = columns

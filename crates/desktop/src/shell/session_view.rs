@@ -1,14 +1,21 @@
-//! The session view on the Canvas (ws-session, D-AG-03): the open session's header and its live terminal,
-//! attached through the same view the Work panel uses. The composer for the next message comes later.
+//! The session view on the Canvas (ws-session, D-AG-03): the open session's header, its live terminal, attached
+//! through the same view the Work panel uses, and the composer under it. The composer types the next message
+//! into the session, stops a running agent and resumes an ended session, all through the service.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Entity, WeakEntity, div, px};
-use massorca_protocol::methods::agents::{AgentKind, AgentSession};
+use gpui::{AnyElement, App, Context, Entity, SharedString, Subscription, WeakEntity, div, px};
+use massorca_protocol::methods::agents::{
+    AgentKind, AgentPromptParams, AgentSession, PromptReceipt,
+};
+use massorca_protocol::methods::terminals::TerminalState;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
 };
+use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
+use massorca_ui::components::composer::{Composer, ComposerEvent};
+use massorca_ui::components::model_picker::{Choice, PickerState};
 use massorca_ui::components::terminal_surface::TerminalSurface;
-use massorca_ui::tokens::{SIZE_TOOLBAR, SPACE_2, SPACE_4, TYPE_BODY_SM, TYPE_TITLE_SM};
+use massorca_ui::tokens::{SIZE_TOOLBAR, SPACE_2, SPACE_3, SPACE_4, TYPE_BODY_SM, TYPE_TITLE_SM};
 use massorca_ui::{ActiveTheme, TextStyled};
 
 use super::Shell;
@@ -16,8 +23,79 @@ use super::sidebar_rows::glyph_state;
 use super::work_panel::{SESSION_ATTACH_FAILED, attach_failed_banner};
 use crate::model::agent_sessions::{agent_of_kind, session_state};
 use crate::model::canvas::Canvas;
+use crate::model::shell::AgentState;
+use crate::model::start_page::VOICE_LATER;
+use crate::service::{Refusal, ServiceHandle};
 
-/// What the session view draws: the header's facts, and the terminal's pane or the refusal of its attach.
+/// What the composer of a session waits for. A session has at most one call in flight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SessionCall {
+    /// A prompt is being typed into the session.
+    Sending,
+    /// The session's run is being stopped.
+    Stopping,
+    /// The ended session is starting a new run.
+    Resuming,
+}
+
+/// A session's composer as the Shell keeps it, with the subscription that turns its events into calls.
+#[derive(Debug)]
+pub(super) struct SessionComposer {
+    pub entity: Entity<Composer>,
+    _events: Subscription,
+}
+
+const SENDING: &str = "Sending…";
+const RESUMING: &str = "Resuming…";
+const ENDED: &str = "This session has ended.";
+const ENDED_NOT_RESUMABLE: &str = "This session has ended and cannot be resumed.";
+
+/// What the composer of a session shows: whether the agent runs, why sending is off, and whether Resume is offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ComposerTerms {
+    /// The agent runs or waits for the person, so the primary button stops it.
+    pub busy: bool,
+    /// Why sending is off. The text is read-only while a reason is shown.
+    pub reason: Option<&'static str>,
+    /// An ended session of a kind that can resume offers Resume beside its reason.
+    pub resume: bool,
+    /// The run is live but nothing says the agent works, as with a kind without status hooks: Send stays the
+    /// primary button and the header keeps a Stop, so a live run can always be stopped.
+    pub stop_aside: bool,
+}
+
+/// The composer's terms for `session`, given whether its kind can resume and the call it has in flight.
+pub(super) fn composer_terms(
+    session: &AgentSession,
+    resumable: bool,
+    call: Option<SessionCall>,
+) -> ComposerTerms {
+    let busy = matches!(
+        session_state(session),
+        AgentState::Running | AgentState::Waiting
+    );
+    let ended = session.execution.state == TerminalState::Exited;
+    let live = matches!(
+        session.execution.state,
+        TerminalState::Live | TerminalState::Unverifiable
+    );
+    let (reason, resume) = match call {
+        Some(SessionCall::Sending) => (Some(SENDING), false),
+        Some(SessionCall::Resuming) => (Some(RESUMING), false),
+        _ if !ended => (None, false),
+        _ if resumable => (Some(ENDED), true),
+        _ => (Some(ENDED_NOT_RESUMABLE), false),
+    };
+    ComposerTerms {
+        busy,
+        reason,
+        resume,
+        stop_aside: live && !busy,
+    }
+}
+
+/// What the session view draws: the header's facts, the terminal's pane or the refusal of its attach, the refusal of
+/// the last stop or resume, and the composer.
 pub(super) struct SessionFrame {
     pub title: String,
     pub kind: String,
@@ -27,13 +105,32 @@ pub(super) struct SessionFrame {
     pub terminal: Option<String>,
     pub surface: Option<Entity<TerminalSurface>>,
     pub failure: Option<String>,
+    /// Why the last stop or resume of the session was refused.
+    pub notice: Option<String>,
+    /// The header's Stop for a live run the composer does not stop, and whether a call in flight holds it.
+    pub stop_aside: Option<bool>,
+    pub composer: Entity<Composer>,
     pub shell: WeakEntity<Shell>,
+    /// The open session's id, for the header's Delegate and Stop.
+    pub session: String,
+    /// Whether the header offers Delegate: a service is connected and the session's run has not ended.
+    pub can_delegate: bool,
 }
 
-/// The session view: its header, then the terminal's pane, or the refusal of its attach with Retry.
+/// The session view: its header, then the terminal's pane, or the refusal of its attach with Retry, then the notice of
+/// a refused stop or resume, and the composer.
 pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
     let theme = *cx.theme();
     let p = theme.palette;
+    let delegate = frame.can_delegate.then(|| {
+        let (shell, session) = (frame.shell.clone(), frame.session.clone());
+        Button::new("session-delegate", "Delegate")
+            .variant(ButtonVariant::Secondary)
+            .size(ButtonSize::Compact)
+            .on_click(move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.open_delegate(&session, window, cx));
+            })
+    });
     let header = div()
         .debug_selector(|| "session-header".to_owned())
         .flex()
@@ -58,7 +155,22 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
                 .text_style(TYPE_BODY_SM)
                 .text_color(p.text.tertiary)
                 .child(frame.kind),
-        );
+        )
+        .child(div().flex_1())
+        .when_some(delegate, |header, button| header.child(button))
+        .when_some(frame.stop_aside, |header, held| {
+            let shell = frame.shell.clone();
+            let session = frame.session.clone();
+            header.child(
+                Button::new("session-stop", "Stop")
+                    .size(ButtonSize::Compact)
+                    .variant(ButtonVariant::Secondary)
+                    .disabled(held)
+                    .on_click(move |_, cx| {
+                        let _ = shell.update(cx, |shell, cx| shell.stop_session(&session, cx));
+                    }),
+            )
+        });
     let body = match (frame.failure, frame.terminal, frame.surface) {
         (Some(detail), Some(terminal), _) => {
             let (shell, workspace) = (frame.shell, frame.workspace);
@@ -86,12 +198,24 @@ pub(super) fn session_page(frame: SessionFrame, cx: &mut App) -> AnyElement {
         .flex_col()
         .child(header)
         .child(body)
+        .when_some(frame.notice, |page, notice| {
+            page.child(
+                div()
+                    .debug_selector(|| "session-notice".to_owned())
+                    .flex_none()
+                    .px(px(SPACE_4))
+                    .text_style(TYPE_BODY_SM)
+                    .text_color(p.status.danger_fg)
+                    .child(notice),
+            )
+        })
+        .child(div().flex_none().pb(px(SPACE_3)).child(frame.composer))
         .into_any_element()
 }
 
 impl Shell {
-    /// The open session's view. Its terminal is attached the first time the view is drawn, the way the
-    /// Work panel attaches a terminal it selects.
+    /// The open session's view. Its terminal is attached the first time the view is drawn, the way the Work panel
+    /// attaches a terminal it selects. Its composer follows the session's state and the call it has in flight.
     pub(super) fn session_frame(&mut self, cx: &mut Context<Self>) -> Option<SessionFrame> {
         if !matches!(self.model.canvas(), Canvas::Session(_)) {
             return None;
@@ -111,20 +235,204 @@ impl Shell {
         {
             self.attach_view(&session.workspace_id, terminal, cx);
         }
-        let view = session
+        let (surface, failure) = match session
             .terminal_id
             .as_deref()
-            .and_then(|terminal| self.terminal_views.get(terminal));
+            .and_then(|terminal| self.terminal_views.get(terminal))
+        {
+            Some(view) => (Some(view.surface.clone()), view.failure.clone()),
+            None => (None, None),
+        };
+        let resumable = kinds
+            .iter()
+            .any(|kind| kind.id == session.kind && kind.resumable);
+        let call = self.session_calls.get(&id).copied();
+        let terms = composer_terms(&session, resumable, call);
+        let composer = self.session_composer(&id, cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_busy(terms.busy, cx);
+            composer.set_disabled_reason(terms.reason.map(SharedString::from), cx);
+            composer.set_resume_offered(terms.resume, cx);
+        });
         Some(SessionFrame {
+            stop_aside: terms.stop_aside.then_some(call.is_some()),
             title: session_title(&session, &kinds),
             kind: kind_name(&session.kind, &kinds),
             status: glyph_state(session_state(&session)),
             workspace: session.workspace_id.clone(),
             terminal: session.terminal_id.clone(),
-            surface: view.map(|view| view.surface.clone()),
-            failure: view.and_then(|view| view.failure.clone()),
+            surface,
+            failure,
+            notice: self.session_notices.get(&id).cloned(),
+            composer,
             shell: cx.entity().downgrade(),
+            session: id.clone(),
+            can_delegate: self.service.is_some()
+                && session.execution.state != TerminalState::Exited,
         })
+    }
+
+    /// The composer of a session, created on first use and then kept, so its draft survives redraws and switches.
+    pub(super) fn session_composer(
+        &mut self,
+        session: &str,
+        cx: &mut Context<Self>,
+    ) -> Entity<Composer> {
+        self.session_composers
+            .entry(session.to_owned())
+            .or_insert_with(|| {
+                let id = session.to_owned();
+                let picker = PickerState::new(
+                    Vec::new(),
+                    Choice {
+                        model: SharedString::default(),
+                        effort: None,
+                        fast: false,
+                    },
+                );
+                let entity = cx.new(|cx| {
+                    Composer::new(picker, Vec::new(), cx)
+                        .voice_unavailable(VOICE_LATER)
+                        .attach(false)
+                        .model_picker(false)
+                        .queueing(false)
+                });
+                let events = cx.subscribe(
+                    &entity,
+                    move |shell, composer, event: &ComposerEvent, cx| match event {
+                        ComposerEvent::Send(text) => {
+                            shell.send_prompt(&id, text.clone(), composer.clone(), cx);
+                        }
+                        ComposerEvent::RetrySend => {
+                            let text = composer.read(cx).draft(cx);
+                            shell.send_prompt(&id, text, composer.clone(), cx);
+                        }
+                        ComposerEvent::Stop => shell.stop_session(&id, cx),
+                        ComposerEvent::Resume => shell.resume_session(&id, cx),
+                        _ => {}
+                    },
+                );
+                SessionComposer {
+                    entity,
+                    _events: events,
+                }
+            })
+            .entity
+            .clone()
+    }
+
+    /// Types the draft into the session. The draft stays, read-only, until the service accepts the prompt.
+    fn send_prompt(
+        &mut self,
+        session: &str,
+        text: String,
+        composer: Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(service) = self.begin_session_call(session, SessionCall::Sending, cx) else {
+            return;
+        };
+        let params = AgentPromptParams {
+            session: session.to_owned(),
+            text,
+            force: false,
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_prompt(params).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_prompt(&id, composer, answer, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The service's answer to a prompt: an accepted one clears the draft; a refused one keeps it with the sentence.
+    fn finish_prompt(
+        &mut self,
+        session: &str,
+        composer: Entity<Composer>,
+        answer: Result<PromptReceipt, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_calls.remove(session);
+        composer.update(cx, |composer, cx| match answer {
+            Ok(_) => {
+                composer.set_disabled_reason(None, cx);
+                composer.set_error(None, cx);
+                composer.set_draft("", cx);
+            }
+            Err(refusal) => composer.set_error(Some(refusal.sentence().into()), cx),
+        });
+        cx.notify();
+    }
+
+    /// Stops the session's run at once, without a confirm. The store follows the service's answer.
+    fn stop_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.begin_session_call(session, SessionCall::Stopping, cx) else {
+            return;
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_stop(&id).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_session_call(&id, "Could not stop the agent", answer, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Starts a new run of the ended session. The store follows the session, and the view attaches its new terminal.
+    fn resume_session(&mut self, session: &str, cx: &mut Context<Self>) {
+        let Some(service) = self.begin_session_call(session, SessionCall::Resuming, cx) else {
+            return;
+        };
+        let id = session.to_owned();
+        let shell = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let answer = service.agent_resume(&id).await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.finish_session_call(&id, "Could not resume the session", answer, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Marks a call in flight for `session`. None when one is already in flight or there is no service to ask.
+    fn begin_session_call(
+        &mut self,
+        session: &str,
+        call: SessionCall,
+        cx: &mut Context<Self>,
+    ) -> Option<ServiceHandle> {
+        if self.session_calls.contains_key(session) {
+            return None;
+        }
+        let service = self.service.clone()?;
+        self.session_calls.insert(session.to_owned(), call);
+        self.session_notices.remove(session);
+        cx.notify();
+        Some(service)
+    }
+
+    /// The service's answer to a stop or resume: a refusal is kept above the composer with its reason.
+    fn finish_session_call(
+        &mut self,
+        session: &str,
+        what: &'static str,
+        answer: Result<AgentSession, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_calls.remove(session);
+        if let Err(refusal) = answer {
+            self.session_notices.insert(
+                session.to_owned(),
+                format!("{what}: {}", refusal.sentence()),
+            );
+        }
+        cx.notify();
     }
 }
 
@@ -157,7 +465,24 @@ fn kind_name(kind: &str, kinds: &[AgentKind]) -> String {
 mod tests {
     use super::*;
     use crate::service::fixtures::{agent, agent_kind};
-    use massorca_protocol::methods::agents::PackageState;
+    use massorca_protocol::methods::agents::{
+        Activity, ActivitySource, ActivityState, PackageState,
+    };
+
+    fn activity(state: ActivityState) -> Activity {
+        Activity {
+            state,
+            outcome: None,
+            source: ActivitySource::Hook,
+            at_ms: 1,
+        }
+    }
+
+    fn ended(id: &str) -> AgentSession {
+        let mut session = agent(id, "w1", 1);
+        session.execution.state = TerminalState::Exited;
+        session
+    }
 
     #[test]
     fn a_session_is_named_by_its_title_and_an_untitled_one_by_its_agent() {
@@ -173,5 +498,84 @@ mod tests {
         let mut session = agent("s3", "w1", 3);
         session.kind = "gentle-shell".to_owned();
         assert_eq!(session_title(&session, &[]), "Gentle Shell");
+    }
+
+    #[test]
+    fn a_working_or_waiting_agent_is_busy_and_an_idle_one_is_not() {
+        let mut session = agent("s", "w1", 1);
+        assert!(!composer_terms(&session, false, None).busy, "no report yet");
+        session.activity = Some(activity(ActivityState::Working));
+        assert!(composer_terms(&session, false, None).busy);
+        session.activity = Some(activity(ActivityState::Waiting));
+        assert!(
+            composer_terms(&session, false, None).busy,
+            "a question to the person still holds the run"
+        );
+        session.activity = Some(activity(ActivityState::Done));
+        assert!(!composer_terms(&session, false, None).busy);
+    }
+
+    #[test]
+    fn a_live_session_holds_no_text_and_offers_no_resume() {
+        let terms = composer_terms(&agent("s", "w1", 1), true, None);
+        assert_eq!(
+            terms,
+            ComposerTerms {
+                busy: false,
+                reason: None,
+                resume: false,
+                stop_aside: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_live_run_without_status_reports_keeps_a_stop_beside_send() {
+        let hookless = agent("s", "w1", 1);
+        assert!(
+            hookless.activity.is_none(),
+            "a kind without status hooks never reports"
+        );
+        let terms = composer_terms(&hookless, false, None);
+        assert!(!terms.busy, "Send stays the primary button");
+        assert!(terms.stop_aside, "the run can still be stopped");
+        let mut unverifiable = agent("s", "w1", 1);
+        unverifiable.execution.state = TerminalState::Unverifiable;
+        assert!(composer_terms(&unverifiable, false, None).stop_aside);
+        assert!(!composer_terms(&ended("s"), true, None).stop_aside);
+        let mut working = agent("s", "w1", 1);
+        working.activity = Some(activity(ActivityState::Working));
+        assert!(
+            !composer_terms(&working, false, None).stop_aside,
+            "the composer's primary button stops it"
+        );
+    }
+
+    #[test]
+    fn an_ended_session_offers_resume_only_when_its_kind_can_resume() {
+        let resumable = composer_terms(&ended("s"), true, None);
+        assert_eq!(resumable.reason, Some(ENDED));
+        assert!(resumable.resume);
+        let stuck = composer_terms(&ended("s"), false, None);
+        assert_eq!(stuck.reason, Some(ENDED_NOT_RESUMABLE));
+        assert!(!stuck.resume, "one line says so and no control is offered");
+    }
+
+    #[test]
+    fn a_prompt_or_a_resume_in_flight_holds_the_text_and_says_so() {
+        let sending = composer_terms(&agent("s", "w1", 1), false, Some(SessionCall::Sending));
+        assert_eq!(sending.reason, Some(SENDING));
+        let resuming = composer_terms(&ended("s"), true, Some(SessionCall::Resuming));
+        assert_eq!(resuming.reason, Some(RESUMING));
+        assert!(!resuming.resume, "no second Resume while one runs");
+    }
+
+    #[test]
+    fn a_stop_in_flight_leaves_the_state_to_the_service() {
+        let mut session = agent("s", "w1", 1);
+        session.activity = Some(activity(ActivityState::Working));
+        let terms = composer_terms(&session, false, Some(SessionCall::Stopping));
+        assert!(terms.busy, "the run ends when the service says so");
+        assert_eq!(terms.reason, None);
     }
 }

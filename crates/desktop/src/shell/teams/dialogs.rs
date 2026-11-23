@@ -1104,6 +1104,9 @@ mod tests {
             goal: String::new(),
             brief: "Old".into(),
             created_at_ms: 1,
+            source_project: None,
+            source_project_name: None,
+            source_kind: None,
         }
     }
 

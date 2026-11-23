@@ -8,6 +8,7 @@ use massorca_client::{ClientError, HostRecord};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AccountSummary, AgentKind, AgentSession};
 use massorca_protocol::methods::devices::{DeviceInfo, NetworkStatus};
+use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
@@ -16,6 +17,7 @@ use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
+use super::extensions::ExtensionsRead;
 use super::refusal::Refusal;
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
@@ -49,6 +51,8 @@ pub enum StoreUpdate {
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
+    /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
+    Extensions(ExtensionsRead),
     /// The hosts this computer paired with, after a refresh or a change. Replaces what was held.
     HostsResync(Vec<HostRecord>),
     /// What a probe or a call learned about one paired host's connection.
@@ -200,6 +204,10 @@ pub struct StoreState {
     pub network: Option<Result<NetworkStatus, Refusal>>,
     /// The secret vault: its status and every name it lists.
     pub secrets: SecretsState,
+    /// The number of the newest extension read applied; an older late answer changes nothing.
+    pub extension_read: u64,
+    /// The installed packages and the catalogue, once read; `None` while the service cannot be asked.
+    pub extensions: Option<ExtensionsRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
 }
@@ -224,6 +232,8 @@ impl Default for StoreState {
             devices: None,
             network: None,
             secrets: SecretsState::default(),
+            extension_read: 0,
+            extensions: None,
             accounts: BTreeMap::new(),
         }
     }
@@ -241,6 +251,7 @@ impl StoreState {
                 }
                 if !state.is_connected() {
                     self.teams = None;
+                    self.extensions = None;
                 }
                 self.connection = state;
             }
@@ -291,6 +302,7 @@ impl StoreState {
             StoreUpdate::AgentKindsResync(kinds) => self.agent_kinds = kinds,
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostsResync(records) => self.resync_hosts(records),
             StoreUpdate::HostLinkChanged { name, link } => {
                 if let Some(entry) = self
@@ -328,6 +340,25 @@ impl StoreState {
         for record in self.teams.iter().flatten() {
             self.team_ids.register(record);
         }
+    }
+
+    /// The installed packages and the catalogue as the last read listed them; empty while a list is refused or unread.
+    pub fn extension_lists(&self) -> (&[ExtensionItem], &[ExtensionItem]) {
+        let Some(read) = &self.extensions else {
+            return (&[], &[]);
+        };
+        let installed = read.installed.as_ref().map_or(&[][..], Vec::as_slice);
+        let catalogue = read.catalogue.as_ref().map_or(&[][..], Vec::as_slice);
+        (installed, catalogue)
+    }
+
+    /// Keeps the newest extension read, as `apply_teams` does for Bot Teams.
+    fn apply_extensions(&mut self, read: ExtensionsRead) {
+        if read.number <= self.extension_read {
+            return;
+        }
+        self.extension_read = read.number;
+        self.extensions = Some(read);
     }
 
     /// Replaces the host records, keeping what each host's last check found. A host no longer listed is dropped.
@@ -496,6 +527,8 @@ pub(crate) mod fixtures {
             state: WorkspaceState::Ready,
             missing: false,
             created_at_ms: created,
+            locked: None,
+            prunable: None,
         }
     }
 
