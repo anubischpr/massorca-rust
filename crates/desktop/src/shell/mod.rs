@@ -14,6 +14,7 @@ mod project_sidebar;
 mod rail;
 mod resize_edges;
 mod service_banner;
+mod session_view;
 mod settings;
 mod settings_remove_dialog;
 mod settings_secret_dialog;
@@ -589,6 +590,7 @@ impl Render for Shell {
                 starting,
             }
         });
+        let session = self.session_frame(cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
             .store
@@ -663,6 +665,7 @@ impl Render for Shell {
                 diff,
                 marketplace,
                 pairing,
+                session,
             },
             window,
             cx,

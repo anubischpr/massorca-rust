@@ -7,15 +7,18 @@ use crate::model::canvas::Canvas;
 use crate::model::marketplace::UnavailableMarketplace;
 use crate::model::teams::{TeamsSource, UnavailableTeams};
 use crate::service::fixtures::{agent, agent_kind, project, workspace};
-use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
+use crate::service::{
+    Command, ConnectionState, Refusal, Script, StoreUpdate, TerminalCommand, TerminalStreamItem,
+};
 use gpui::{AppContext, TestAppContext, VisualTestContext, px, size};
 use massorca_protocol::methods::agents::{AgentKind, AgentSession, AgentStartParams, PackageState};
 use massorca_protocol::methods::projects::Project;
+use massorca_protocol::methods::terminals::TerminalAttachParams;
 use massorca_protocol::methods::workspaces::Workspace;
 use massorca_ui::components::composer::Composer;
 use massorca_ui::tokens::{LAYOUT_CONVERSATION_READING, LAYOUT_SETTINGS_CONTROL_MAX, SPACE_4};
 use massorca_ui::{Appearance, Theme};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 struct Rig {
@@ -318,6 +321,10 @@ fn start_page_rig(cx: &mut TestAppContext, kinds: Vec<AgentKind>) -> (Rig, &mut 
         vec![project("p1", "alpha")],
         vec![workspace("w1", "p1", "fix-login", 1)],
     );
+    rig._script.set_connection(ConnectionState::Connected {
+        server: "massorca".into(),
+        version: "0.1.0".into(),
+    });
     rig._updates
         .send(StoreUpdate::AgentKindsResync(kinds))
         .expect("the store listens");
@@ -478,4 +485,45 @@ fn a_started_session_opens_on_the_session_canvas_once_the_store_lists_it(cx: &mu
     });
     assert!(matches!(canvas, Canvas::Session(_)), "{canvas:?}");
     assert_eq!(active.as_deref(), Some(session.id.as_str()));
+}
+
+/// The next `terminal.attach` the shell sends, with the reply that answers it.
+fn attach_call(
+    script: &mut Script,
+) -> Option<(
+    TerminalAttachParams,
+    oneshot::Sender<Result<UnboundedReceiver<TerminalStreamItem>, Refusal>>,
+)> {
+    while let Some(command) = script.next() {
+        if let Command::Terminal(TerminalCommand::Attach { params, reply }) = command {
+            return Some((params, reply));
+        }
+    }
+    None
+}
+
+#[gpui::test]
+fn the_session_terminal_is_attached_when_its_session_is_shown(cx: &mut TestAppContext) {
+    let (mut rig, cx) = start_page_rig(
+        cx,
+        vec![agent_kind("claude", "Claude", PackageState::Enabled)],
+    );
+    type_and_send(&rig, cx, "fix the login");
+    cx.run_until_parked();
+    let (_, reply) = start_call(&mut rig._script).expect("the start is sent to the service");
+    let terminal = "0196a6f0-0000-7000-8000-0000000000aa";
+    let mut session = agent("0196a6f0-0000-7000-8000-00000000abcd", "w1", 5);
+    session.terminal_id = Some(terminal.to_owned());
+    reply
+        .send(Ok(session.clone()))
+        .expect("the shell is waiting for the answer");
+    rig._updates
+        .send(StoreUpdate::AgentChanged(session.clone()))
+        .expect("the store listens");
+    cx.run_until_parked();
+    draw(cx);
+    cx.run_until_parked();
+    let (attach, _attach_reply) =
+        attach_call(&mut rig._script).expect("the session's terminal is attached");
+    assert_eq!(attach.terminal, terminal);
 }
