@@ -422,6 +422,8 @@ impl Shell {
                             );
                         }
                         ComposerEvent::Send(prompt) => {
+                            // The start page clears the prompt as it sends and gives it back on a refusal.
+                            composer.update(cx, |composer, cx| composer.set_draft("", cx));
                             shell.start_session(&workspace, prompt, composer.clone(), cx);
                         }
                         _ => {}
