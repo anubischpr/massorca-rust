@@ -23,6 +23,7 @@ use massorca_client::HostRecord;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigList, ConfigValue};
 use massorca_protocol::methods::secrets::{SecretEntry, SecretRemoved, SecretSet, SecretStatus};
+use massorca_ui::components::select::SelectEvent;
 use massorca_ui::components::text_field::TextField;
 use massorca_ui::{Appearance, Theme};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -516,6 +517,77 @@ fn the_vault_scope_filter_keeps_one_kind_of_scope_on_the_page(cx: &mut TestAppCo
                 .is_none(),
         "projects and Global are left out under the Team filter"
     );
+}
+
+#[gpui::test]
+fn the_add_dialog_closes_from_its_close_button_and_stores_nothing(cx: &mut TestAppContext) {
+    let (rig, cx) = settings_rig(cx);
+    open_vault_with_three_scopes(&rig, cx);
+    click(cx, "button:settings-vault-add");
+    click(cx, "dialog-close");
+    assert!(
+        rig.shell
+            .read_with(cx, |shell, _| shell.vault_dialog.is_none()),
+        "the close button closes Add secret"
+    );
+}
+
+#[gpui::test]
+fn a_second_project_can_be_chosen_in_the_add_dialog_and_is_sent_as_the_scope(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = settings_rig(cx);
+    rig._updates
+        .send(StoreUpdate::Resync {
+            projects: vec![project("p1", "alpha"), project("p2", "beta")],
+            workspaces: vec![workspace("w1", "p1", "fix-login", 1)],
+        })
+        .expect("the store listens");
+    cx.run_until_parked();
+    click(cx, "settings-nav-Vault");
+    click(cx, "button:settings-vault-add");
+    let select = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .vault_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.project_select.clone())
+        })
+        .expect("the project select is open");
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_index()),
+        Some(0),
+        "the first project is chosen when the add opens"
+    );
+    // A row picked in the select: the value moves to it and the owner hears the change, as the menu does.
+    select.update(cx, |select, cx| {
+        select.set_selected(Some(1), cx);
+        cx.emit(SelectEvent::Changed(1));
+    });
+    cx.run_until_parked();
+    let name_field = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .vault_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.name_field.clone())
+        })
+        .expect("the name field is open");
+    name_field.update_in(cx, |field, window, cx| {
+        field.set_text("BETA_KEY", window, cx)
+    });
+    type_value(&rig, cx, "FAKE-VALUE-0002");
+    rig.shell
+        .update_in(cx, |shell, window, cx| shell.save_secret(window, cx));
+    cx.run_until_parked();
+    let (params, _reply) = next_set(&mut rig);
+    assert_eq!(
+        params.scope, "project:p2",
+        "the second project is the scope that is sent"
+    );
+    assert_eq!(params.name, "BETA_KEY");
 }
 
 /// Opens Add and types `name` into the name field.
