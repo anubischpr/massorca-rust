@@ -89,7 +89,7 @@ fn create_params(
         .transpose()?;
     Ok(WorkspaceCreateParams {
         project: paths.selector(&args.project)?,
-        name: args.name,
+        name: args.name.unwrap_or_default(),
         branch: args.branch,
         base: args.base,
         existing_branch: args.existing_branch,

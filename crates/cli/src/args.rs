@@ -283,8 +283,9 @@ pub enum WorkspaceCommand {
 pub struct WorkspaceCreateArgs {
     /// Project id, name or path.
     pub project: String,
-    /// Name of the workspace; also its branch and directory name unless set otherwise.
-    pub name: String,
+    /// Name of the workspace, cleaned for its folder and branch (accents folded, other characters
+    /// become `-`). Omit it to generate one.
+    pub name: Option<String>,
     /// Branch to create or check out. Defaults to the workspace name.
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,

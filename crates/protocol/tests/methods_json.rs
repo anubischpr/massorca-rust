@@ -247,6 +247,13 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
 }
 
 #[test]
+fn workspace_create_params_without_a_name_decode_as_a_blank_name() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app" })).expect("decodes");
+    assert_eq!(params.name, "");
+}
+
+#[test]
 fn workspace_create_params_default_existing_branch_to_false() {
     let params: workspaces::WorkspaceCreateParams =
         serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");

@@ -118,7 +118,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "workspace.create",
             json!({
                 "type": "object",
-                "required": ["project", "name"],
+                "required": ["project"],
                 "properties": {
                     "project": { "type": "string" },
                     "name": { "type": "string" },

@@ -7,6 +7,7 @@
 
 mod create;
 mod error;
+mod generated_names;
 mod names;
 mod paths;
 mod projects;
