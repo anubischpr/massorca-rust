@@ -54,6 +54,9 @@ pub const SELECTOR_AMBIGUOUS: &str = "selector.ambiguous";
 pub const GIT_NOT_A_REPOSITORY: &str = "git.not_a_repository";
 /// A request path is absolute, has a `..` segment or a NUL, so it could leave the workspace.
 pub const GIT_PATH_OUTSIDE_WORKTREE: &str = "git.path_outside_worktree";
+/// A caller without `workspace` permission asked for a git read that could not be made to start no program the
+/// repository names, such as a hooks folder that is not empty (decision 0078).
+pub const GIT_UNSAFE_FOR_CALLER: &str = "git.unsafe_for_caller";
 /// A revision does not resolve to a commit.
 pub const GIT_REVISION_NOT_FOUND: &str = "git.revision_not_found";
 /// A discard named untracked files without `delete_untracked`; `data.paths` lists them.

@@ -59,7 +59,8 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let params = PairingCreateParams {
                 ttl_secs: None,
-                admin: false,
+                // A paired device is the owner with full access; older servers default to read and workspace.
+                admin: true,
             };
             let result = service.create_offer(params).await;
             let _ = this.update(cx, |shell, cx| {
@@ -346,13 +347,22 @@ fn devices_group(frame: &PairingFrame, theme: &Theme) -> AnyElement {
     group.into_any_element()
 }
 
-/// One paired device: its name, when it was paired, its state and, when it can be revoked, Revoke.
+/// One paired device: its name, when it was paired and last seen, a label when its access is limited, its state and, when it can be revoked, Revoke.
 fn device_row(row: &DeviceRow, frame: &PairingFrame, theme: &Theme) -> AnyElement {
     let state = div()
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.secondary)
         .child(row.state.word());
-    let mut control = div().flex().items_center().gap(px(SPACE_2)).child(state);
+    let mut control = div().flex().items_center().gap(px(SPACE_2));
+    if let Some(limited) = &row.limited {
+        control = control.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(limited.clone()),
+        );
+    }
+    control = control.child(state);
     if row.revocable {
         let flow = RevokeFlow::new(row);
         let shell = frame.shell.clone();

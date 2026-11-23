@@ -642,6 +642,14 @@ fn a_sign_in_whose_check_hangs_is_kept_as_unknown_when_its_files_exist() {
     eventually("the sign-in to finish after its check times out", || {
         (account_labelled_or_none(&sandbox, "slow")?["state"] == "unknown").then_some(())
     });
+    let id = account_labelled(&sandbox, "slow")["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    // The check could not finish, but the terminal ended with the login's files in place: the account is kept as `unknown`,
+    // decided, and activates.
+    let activation = sandbox.json_ok("default", &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activation["active"], true, "{activation}");
 }
 
 #[test]
@@ -965,4 +973,484 @@ fn a_check_judges_only_the_account_home_not_a_credential_in_the_environment() {
 
     let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
     assert_eq!(checked["state"], "needs_sign_in", "{checked}");
+}
+
+#[test]
+fn an_abandoned_sign_in_is_closed_at_its_time_limit_and_signed_out_before_it_is_discarded() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_HANG", "1"),
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+            ("MASSORCA_SIGN_IN_TIMEOUT_MS", "500"),
+        ],
+    );
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "abandoned",
+            "--no-attach",
+        ],
+    );
+    let terminal = added["terminal_id"]
+        .as_str()
+        .expect("a terminal id")
+        .to_owned();
+
+    no_accounts(&sandbox);
+    assert!(marker.exists(), "a discarded sign-in is signed out first");
+    let shown = sandbox.json_ok("default", &["terminal", "show", &terminal]);
+    assert_eq!(
+        shown["state"], "exited",
+        "the abandoned terminal is closed: {shown}"
+    );
+}
+
+#[test]
+fn a_timed_out_sign_in_whose_login_finished_is_kept_as_signed_in() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_HANG_AFTER_TOKEN", "1"),
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+            ("MASSORCA_SIGN_IN_TIMEOUT_MS", "500"),
+        ],
+    );
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "finished",
+            "--no-attach",
+        ],
+    );
+
+    eventually("the abandoned sign-in to be kept as signed in", || {
+        (account_labelled_or_none(&sandbox, "finished")?["state"] == "signed_in").then_some(())
+    });
+    assert_eq!(
+        account_labelled(&sandbox, "finished")["active"],
+        true,
+        "the first kept account becomes active"
+    );
+    assert!(!marker.exists(), "a kept account is not signed out");
+}
+
+#[test]
+fn a_failed_sign_in_is_signed_out_before_it_is_discarded() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_FAIL", "1"),
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+        ],
+    );
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "doomed",
+            "--no-attach",
+        ],
+    );
+
+    no_accounts(&sandbox);
+    assert!(marker.exists(), "a discarded sign-in is signed out first");
+}
+
+#[test]
+fn an_expired_sign_in_is_signed_out_before_it_is_discarded() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_EXPIRED", "1"),
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+        ],
+    );
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "expired",
+            "--no-attach",
+        ],
+    );
+
+    no_accounts(&sandbox);
+    assert!(marker.exists(), "a discarded sign-in is signed out first");
+}
+
+#[test]
+fn an_imported_account_that_is_refused_is_discarded_without_a_sign_out() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    let expired = source_with(&sandbox, "expired", &[("token.json", EXPIRED_TOKEN)]);
+
+    let failed = import(&sandbox, &expired, "expired");
+    assert_eq!(failed["result"], "failed", "{failed}");
+    assert!(
+        accounts(&sandbox).is_empty(),
+        "the refused import is discarded"
+    );
+    assert!(!marker.exists(), "an imported login is never signed out");
+}
+
+#[test]
+fn a_sign_in_the_check_cannot_judge_is_kept_as_unknown_and_can_be_activated() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, None);
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "undecided",
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to end without a verdict", || {
+        (account_labelled_or_none(&sandbox, "undecided")?["state"] == "unknown").then_some(())
+    });
+    let id = account_labelled(&sandbox, "undecided")["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    // The terminal ended with the login's files in place: the account is decided, so it activates without a check.
+    let activated = sandbox.json_ok("default", &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activated["active"], true, "{activated}");
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "unknown", "{checked}");
+}
+
+#[test]
+fn a_sign_in_left_undecided_by_a_restart_refuses_activation_until_it_is_checked() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, None);
+    let first = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_HANG_AFTER_TOKEN", "1")]);
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "restarted",
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let token = account_home(&sandbox, &id).join("token.json");
+    eventually("the login to write its token", || {
+        token.is_file().then_some(())
+    });
+    drop(first);
+    sandbox.wait_for_running("default", false);
+
+    let _service = spawn_service_with(&sandbox, &[]);
+    eventually("the startup sweep to leave the sign-in undecided", || {
+        (account_labelled_or_none(&sandbox, "restarted")?["state"] == "unknown").then_some(())
+    });
+    let activation = error_of(&sandbox, &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activation["code"], "agent.busy", "{activation}");
+    assert!(token.is_file(), "an undecided login is kept");
+
+    sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    let activated = sandbox.json_ok("default", &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activated["active"], true, "{activated}");
+}
+
+#[test]
+fn a_timed_out_sign_in_with_no_check_is_kept_as_unknown_and_can_be_activated() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, None);
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_HANG_AFTER_TOKEN", "1"),
+            ("MASSORCA_SIGN_IN_TIMEOUT_MS", "500"),
+        ],
+    );
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "timed",
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    eventually("the abandoned sign-in to be kept as unknown", || {
+        (account_labelled_or_none(&sandbox, "timed")?["state"] == "unknown").then_some(())
+    });
+    let activated = sandbox.json_ok("default", &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activated["active"], true, "{activated}");
+}
+
+#[test]
+fn a_sign_in_the_check_cannot_judge_with_no_declared_file_is_signed_out_and_discarded() {
+    let sandbox = Sandbox::new();
+    declare_kind(&sandbox, None);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGIN_FAIL", "1"),
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+        ],
+    );
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "fileless",
+            "--no-attach",
+        ],
+    );
+
+    no_accounts(&sandbox);
+    assert!(
+        marker.exists(),
+        "a sign-in with no declared file left is signed out first"
+    );
+}
+
+/// Leaves a sign-in the startup sweep cannot decide: with no check declared, its login writes its token and stays open, and
+/// a restart leaves the sign-in pending as `unknown`. Returns the account id, the path of its token, and the restarted
+/// service, which the caller keeps running.
+fn sign_in_left_undecided(
+    sandbox: &Sandbox,
+    label: &str,
+    env: &[(&str, &str)],
+) -> (String, PathBuf, ChildGuard) {
+    declare_kind(sandbox, None);
+    let first = spawn_service_with(sandbox, &[("FAKE_AGENT_LOGIN_HANG_AFTER_TOKEN", "1")]);
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            label,
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let token = account_home(sandbox, &id).join("token.json");
+    eventually("the login to write its token", || {
+        token.is_file().then_some(())
+    });
+    drop(first);
+    sandbox.wait_for_running("default", false);
+
+    let service = spawn_service_with(sandbox, env);
+    eventually("the startup sweep to leave the sign-in undecided", || {
+        (account_labelled_or_none(sandbox, label)?["state"] == "unknown").then_some(())
+    });
+    (id, token, service)
+}
+
+#[test]
+fn a_pending_sign_in_checked_without_a_check_and_without_a_login_is_discarded() {
+    let sandbox = Sandbox::new();
+    let marker = sandbox.home().join("logout-marker");
+    let (id, token, _service) = sign_in_left_undecided(
+        &sandbox,
+        "left",
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    // The login is gone before anyone checks it, so the check has nothing to keep.
+    fs::remove_file(&token).expect("remove the login's token");
+
+    let error = error_of(&sandbox, &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(error["code"], "agent.account_not_found", "{error}");
+    assert!(accounts(&sandbox).is_empty(), "the sign-in is deleted");
+    assert!(
+        marker.exists(),
+        "a sign-in that is not kept is signed out first"
+    );
+    // Nothing was kept, so the kind never had an account and a run starts on its usual home.
+    let (_, workspace) = project_with_main(&sandbox, "notes");
+    start_in(&sandbox, &workspace);
+}
+
+#[test]
+fn a_pending_sign_in_checked_as_expired_is_discarded() {
+    let sandbox = Sandbox::new();
+    let marker = sandbox.home().join("logout-marker");
+    let (id, token, _service) = sign_in_left_undecided(
+        &sandbox,
+        "expiring",
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    // The check is declared now, and it finds the login expired.
+    declare_fake(&sandbox);
+    fs::write(&token, EXPIRED_TOKEN).expect("write an expired token");
+
+    let error = error_of(&sandbox, &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(error["code"], "agent.account_not_found", "{error}");
+    assert!(
+        accounts(&sandbox).is_empty(),
+        "the expired sign-in is deleted"
+    );
+    assert!(
+        marker.exists(),
+        "a sign-in that is not kept is signed out first"
+    );
+    let (_, workspace) = project_with_main(&sandbox, "notes");
+    start_in(&sandbox, &workspace);
+}
+
+#[test]
+fn a_pending_sign_in_checked_without_a_check_is_kept_as_unknown_and_can_be_activated() {
+    let sandbox = Sandbox::new();
+    let (id, _token, _service) = sign_in_left_undecided(&sandbox, "kept", &[]);
+
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "unknown", "{checked}");
+    let activated = sandbox.json_ok("default", &["agent", "accounts", "activate", "fake", &id]);
+    assert_eq!(activated["active"], true, "{activated}");
+}
+
+#[test]
+fn a_check_during_a_startup_sign_out_is_refused_as_busy() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let first = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_HANG", "1")]);
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "signing-out",
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    drop(first);
+    sandbox.wait_for_running("default", false);
+
+    // The sweep finds no login and signs the sign-in out; the sign-out hangs until its time limit stops it.
+    let _service = spawn_service_with(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+            ("FAKE_AGENT_LOGOUT_HANG", "1"),
+        ],
+    );
+    eventually("the sweep to start the sign-out", || {
+        marker.is_file().then_some(())
+    });
+
+    let error = error_of(&sandbox, &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(error["code"], "agent.busy", "{error}");
+    no_accounts(&sandbox);
+}
+
+#[test]
+fn a_failed_import_does_not_mark_the_kind_as_having_had_an_account() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let (_, workspace) = project_with_main(&sandbox, "notes");
+    let expired = source_with(&sandbox, "expired", &[("token.json", EXPIRED_TOKEN)]);
+
+    let failed = import(&sandbox, &expired, "expired");
+    assert_eq!(failed["result"], "failed", "{failed}");
+    assert!(
+        accounts(&sandbox).is_empty(),
+        "the refused import is deleted"
+    );
+    // Nothing was kept, so the kind never had an account and a run starts on the vendor's usual home.
+    start_in(&sandbox, &workspace);
+}
+
+#[test]
+fn the_account_list_gives_each_accounts_origin() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "signed",
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to keep the account", || {
+        (account_labelled_or_none(&sandbox, "signed")?["state"] == "signed_in").then_some(())
+    });
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    import(&sandbox, &source, "imported");
+
+    assert_eq!(account_labelled(&sandbox, "signed")["origin"], "sign_in");
+    assert_eq!(account_labelled(&sandbox, "imported")["origin"], "import");
 }
