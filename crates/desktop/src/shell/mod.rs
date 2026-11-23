@@ -600,12 +600,14 @@ impl Render for Shell {
                 .as_ref()
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
+            let mode = self.start_mode(&page.id);
             start_page::StartFrame {
                 page,
                 composer,
                 shell: shell.clone(),
                 connected,
                 starting,
+                mode,
             }
         });
         let session = self.session_frame(cx);
