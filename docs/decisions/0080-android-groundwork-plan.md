@@ -195,8 +195,10 @@ A1 to A6 need no React Native and no phone. A12 waits for the device.
 - The repository gets a JavaScript toolchain in `mobile/` and an Android SDK in CI. CI time grows; the emulator job is
   path-gated to limit it.
 - Every new phone feature later is: a typed call in `client`, one export in `client-ffi` with its Rust test, one screen.
-- The phone permission question in `docs/inventory/open-questions.md` (item 10, the phone allowlist) stays with the
-  server: the phone pairs with the scopes the offer grants, as any device.
+- The phone pairs with full access, every scope, like any device since the owner's direction of 2026-11-22
+  (decision 0041): a paired device is the owner, and a lost phone is protected by revoking it. The phone allowlist
+  question in `docs/inventory/open-questions.md` (item 10) is answered by that direction; no reduced phone role is
+  planned. Screens that M5 does not expose are left out of the first set, not refused by permission.
 
 ## Decisions taken
 
