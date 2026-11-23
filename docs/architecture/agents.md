@@ -106,7 +106,7 @@ Capability `agents/1`. Types in `crates/protocol/src/methods/agents.rs`.
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
 | `agent.credentials.show` | read | `kind` | `{ kind, home, exists, files: [{ name, present, bytes?, modified_at_ms? }] }` |
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
-| `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects }] }` |
+| `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
@@ -436,8 +436,15 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
 - **Labels**: at most 256 characters with no control character, refused with
   `request.invalid_params`. The CLI prints labels and identities without control characters.
 - **Event**: `agent.accounts_changed` is published on the event bus with the kind as its id. The
-  bus carries no payload, so a client reads the state with `agent.accounts.list`. Removal
-  publishes nothing.
+  bus carries no payload, so a client reads the accounts with `agent.accounts.list`. Every account
+  mutation announces itself once: an added account (`needs_sign_in`); a sign-in decision (kept,
+  left undecided, or refused and deleted); a check that changes the state; an import (kept, or
+  refused and deleted); an activation (the account made active, or chosen by a project); a removal
+  (the removed account, with the state it had); and a migration or adoption. A refused sign-in or
+  import is announced with the state its check found. An import that creates no account announces
+  nothing.
+- **Origin**: `origin` is `sign_in`, `import` or `migrated`, from the row's origin column. A value
+  this build does not know, or a summary from a peer that omits the field, reads as `unknown`.
 - **Declaration**: `accounts` takes `login` (argument list; empty means no sign-in), `check`
   (`args`, `signed_in_exit`, `expired_pattern`, `identity_pattern`), `logout` (arguments) and `strip_env`
   (variable names removed from the check, sign-in and sign-out, in addition to `credentials.strip_env`;

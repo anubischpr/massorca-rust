@@ -1422,3 +1422,29 @@ fn a_failed_import_does_not_mark_the_kind_as_having_had_an_account() {
     // Nothing was kept, so the kind never had an account and a run starts on the vendor's usual home.
     start_in(&sandbox, &workspace);
 }
+
+#[test]
+fn the_account_list_gives_each_accounts_origin() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "signed",
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to keep the account", || {
+        (account_labelled_or_none(&sandbox, "signed")?["state"] == "signed_in").then_some(())
+    });
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    import(&sandbox, &source, "imported");
+
+    assert_eq!(account_labelled(&sandbox, "signed")["origin"], "sign_in");
+    assert_eq!(account_labelled(&sandbox, "imported")["origin"], "import");
+}

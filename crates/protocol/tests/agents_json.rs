@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use massorca_protocol::methods::agents::{
-    self, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
+    self, AccountOrigin, AccountState, AccountSummary, Activity, ActivitySource, ActivityState,
     AgentBringBackParams, AgentHookParams, AgentKind, AgentKinds, AgentSession, AgentStartParams,
     AgentWatchEvent, Execution, KindCredentials, KindPackage, Outcome, PackageState, PromptReceipt,
     ReceiptKind, StatusMechanism,
@@ -365,6 +365,7 @@ fn an_account_summary_omits_an_absent_identity() {
         identity: None,
         active: true,
         projects: vec!["p1".to_owned()],
+        origin: AccountOrigin::Migrated,
     };
     assert_wire(
         &summary,
@@ -373,7 +374,8 @@ fn an_account_summary_omits_an_absent_identity() {
             "label": "work",
             "state": "migrated",
             "active": true,
-            "projects": ["p1"]
+            "projects": ["p1"],
+            "origin": "migrated"
         }),
     );
 }

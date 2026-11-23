@@ -16,7 +16,9 @@ use massorca_protocol::methods::agents::{AccountState, AccountsAdded};
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 
 use crate::account_check::{Verdict, account_strip_names, sign_in_env, state_name};
-use crate::accounts::{DEFAULT_LABEL, DecisionMark, ORIGIN_IMPORT, ORIGIN_SIGN_IN, valid_label};
+use crate::accounts::{
+    DEFAULT_LABEL, DecisionMark, ORIGIN_IMPORT, ORIGIN_SIGN_IN, refused_state, valid_label,
+};
 use crate::credentials;
 use crate::sessions::{AgentError, Agents};
 
@@ -171,13 +173,14 @@ impl Agents {
             .as_ref()
             .and_then(|(decl, program)| self.check_account_home(decl, program, account, None));
         let outcome = sign_in_outcome(verdict.as_ref(), files, end);
+        let refused = refused_state(verdict.as_ref());
         // A refused sign-in is signed out first, as a removal signs out (decision 0059); an import never is.
         let sign_out = if origin == ORIGIN_SIGN_IN {
             kind_program
         } else {
             None
         };
-        self.store_outcome(kind, account, outcome, mark, sign_out);
+        self.store_outcome(kind, account, outcome, mark, sign_out, refused);
     }
 }
 

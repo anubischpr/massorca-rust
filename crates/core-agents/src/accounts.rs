@@ -14,8 +14,8 @@ use std::thread;
 use massorca_core_store::{AgentAccountRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AccountState, AccountSummary, AccountsChanged, AccountsImported, AccountsRemoved,
-    CredentialsImported, CredentialsRemoved, CredentialsShown, ImportResult,
+    AccountOrigin, AccountState, AccountSummary, AccountsChanged, AccountsImported,
+    AccountsRemoved, CredentialsImported, CredentialsRemoved, CredentialsShown, ImportResult,
 };
 
 use crate::account_check::{
@@ -139,6 +139,25 @@ pub(crate) fn valid_label(label: &str) -> Result<(), AgentError> {
     ))
 }
 
+/// The protocol's origin for a stored origin name; a name this build does not know reads as `unknown`.
+pub(crate) fn origin_of(stored: &str) -> AccountOrigin {
+    match stored {
+        ORIGIN_SIGN_IN => AccountOrigin::SignIn,
+        ORIGIN_IMPORT => AccountOrigin::Import,
+        ORIGIN_MIGRATED => AccountOrigin::Migrated,
+        _ => AccountOrigin::Unknown,
+    }
+}
+
+/// The state a refused sign-in or import is announced with: the state its check found, or `needs_sign_in` when no check
+/// judged it, since no login is left to keep.
+pub(crate) fn refused_state(verdict: Option<&Verdict>) -> AccountState {
+    match verdict {
+        Some(found) if found.state != AccountState::Unknown => found.state,
+        _ => AccountState::NeedsSignIn,
+    }
+}
+
 impl Agents {
     /// The accounts of a kind, oldest first, with the active one and the projects that chose each. A read: it never moves
     /// a credential home (that happens at startup, and at a start or resume).
@@ -190,16 +209,17 @@ impl Agents {
         let verdict = self.check_imported(kind, &account);
         let files =
             credentials::account_files_present(self.profile_dir(), kind, &account).unwrap_or(false);
+        let refused = refused_state(verdict.as_ref());
         match sign_in_outcome(verdict.as_ref(), files, SignInEnd::TerminalEnded) {
             SignInOutcome::Discard => {
-                self.discard_marked(kind, &account);
+                self.discard_marked(kind, &account, refused);
                 return Ok(AccountsImported {
                     result: ImportResult::Failed,
                     account: None,
                     reason: Some("the check reports the login is not signed in".to_owned()),
                 });
             }
-            outcome => self.store_outcome(kind, &account, outcome, mark, None),
+            outcome => self.store_outcome(kind, &account, outcome, mark, None, refused),
         }
         let row = self.account_of(kind, &account)?;
         let summary = self.summary(
@@ -218,6 +238,19 @@ impl Agents {
     /// that never signed in is refused. The homes gate is held from the checks to the write, so a removal cannot delete the
     /// row in between.
     pub fn accounts_activate(
+        &self,
+        kind: &str,
+        account: &str,
+        project: Option<&str>,
+    ) -> Result<AccountSummary, AgentError> {
+        let summary = self.activate_under_gate(kind, account, project)?;
+        // Announced once, after the gate is released: the account made active, or chosen by the project (decision 0059).
+        self.notify_account(kind, account, summary.state);
+        Ok(summary)
+    }
+
+    /// The body of [`Agents::accounts_activate`], run under the homes gate so its checks and its write cannot be split.
+    fn activate_under_gate(
         &self,
         kind: &str,
         account: &str,
@@ -286,6 +319,8 @@ impl Agents {
             self.store().delete_agent_account(account)?;
         }
         drop(mark);
+        // Announced once, with the state the account had when it was removed (decision 0059).
+        self.notify_account(kind, account, parse_state(&row.state));
         Ok(AccountsRemoved {
             kind: kind.to_owned(),
             account: account.to_owned(),
@@ -402,8 +437,9 @@ impl Agents {
         let files =
             credentials::account_files_present(self.profile_dir(), kind, account).unwrap_or(false);
         let outcome = sign_in_outcome(Some(&verdict), files, SignInEnd::TerminalEnded);
+        let refused = refused_state(Some(&verdict));
         let sign_out = (row.origin == ORIGIN_SIGN_IN).then_some((decl, program));
-        self.store_outcome(kind, account, outcome, mark, sign_out);
+        self.store_outcome(kind, account, outcome, mark, sign_out, refused);
         match self.store().get_agent_account(account)? {
             Some(row) if row.kind == kind => {
                 let active = self.store().get_active_agent_account(kind)?;
@@ -460,6 +496,7 @@ impl Agents {
 
     /// Stores the outcome of a decision, then drops its mark (decision 0059). A refused sign-in is signed out first, when
     /// `sign_out` names its kind's program; an import is never signed out. Each store write is made under the homes gate.
+    /// `refused` is the state a refusal is announced with.
     pub(crate) fn store_outcome(
         &self,
         kind: &str,
@@ -467,13 +504,14 @@ impl Agents {
         outcome: SignInOutcome,
         mark: DecisionMark,
         sign_out: Option<(KindDecl, PathBuf)>,
+        refused: AccountState,
     ) {
         match outcome {
             SignInOutcome::Discard => {
                 if let Some((decl, program)) = &sign_out {
                     self.sign_out(decl, program, kind, account);
                 }
-                self.discard_marked(kind, account);
+                self.discard_marked(kind, account, refused);
             }
             SignInOutcome::Undecided => self.leave_undecided(kind, account),
             SignInOutcome::Unknown => self.keep_marked(kind, account, AccountState::Unknown, None),
@@ -507,18 +545,28 @@ impl Agents {
         self.notify_account(kind, account, state);
     }
 
-    /// Deletes an account a decision has refused, while the caller holds its mark: its home and its row, under the gate.
-    fn discard_marked(&self, kind: &str, account: &str) {
-        let _gate = credentials::lock_homes();
-        if let Err(error) = credentials::remove_account_locked(self.profile_dir(), kind, account) {
-            tracing::warn!(
-                kind,
-                code = error.code,
-                "a discarded account's home could not be deleted"
-            );
-        }
-        if self.store().delete_agent_account(account).is_err() {
-            tracing::warn!(kind, "a discarded account's row could not be deleted");
+    /// Deletes an account a decision has refused, while the caller holds its mark: its home and its row, under the gate. The
+    /// refusal is announced once, with `last_state`: the state its check found.
+    fn discard_marked(&self, kind: &str, account: &str, last_state: AccountState) {
+        let deleted = {
+            let _gate = credentials::lock_homes();
+            if let Err(error) =
+                credentials::remove_account_locked(self.profile_dir(), kind, account)
+            {
+                tracing::warn!(
+                    kind,
+                    code = error.code,
+                    "a discarded account's home could not be deleted"
+                );
+            }
+            let row = self.store().delete_agent_account(account);
+            if row.is_err() {
+                tracing::warn!(kind, "a discarded account's row could not be deleted");
+            }
+            row.is_ok()
+        };
+        if deleted {
+            self.notify_account(kind, account, last_state);
         }
     }
 
@@ -615,7 +663,7 @@ impl Agents {
         if let Some(old) = active
             && let Err(error) = self.accounts_remove(kind, &old)
         {
-            self.discard_marked(kind, &account);
+            self.discard_marked(kind, &account, AccountState::Unknown);
             return Err(error);
         }
         self.keep_marked(kind, &account, AccountState::Unknown, None);
@@ -668,7 +716,9 @@ impl Agents {
                         matches!(credentials::usable_home(&profile, &row.kind), Ok(Some(_)));
                     if gone && legacy_present {
                         tracing::warn!(kind = %row.kind, "a migrated account has no home; its row is deleted");
-                        let _ = self.store().delete_agent_account(&row.id);
+                        if self.store().delete_agent_account(&row.id).is_ok() {
+                            self.notify_account(&row.kind, &row.id, parse_state(&row.state));
+                        }
                     }
                 }
             }
@@ -756,6 +806,7 @@ impl Agents {
         if self.store().insert_agent_account(&row).is_ok() {
             tracing::info!(kind, "adopted an account directory that had no row");
             self.make_active_if_none(kind, account);
+            self.notify_account(kind, account, AccountState::Migrated);
         }
     }
 
@@ -792,6 +843,7 @@ impl Agents {
             return Err(error);
         }
         tracing::info!(kind, "made the credential home an account");
+        self.notify_account(kind, &account, AccountState::Migrated);
         Ok(())
     }
 
@@ -825,6 +877,7 @@ impl Agents {
             identity: row.identity.clone(),
             active: active == Some(row.id.as_str()),
             projects: self.store().projects_using_agent_account(&row.id)?,
+            origin: origin_of(&row.origin),
         })
     }
 
@@ -1010,6 +1063,7 @@ fn all_missing(error: &AgentError) -> bool {
 mod tests {
     use super::*;
     use crate::sessions::tests::service;
+    use std::sync::{Arc, Mutex};
 
     fn account_row(state: &str, origin: &str) -> AgentAccountRow {
         AgentAccountRow {
@@ -1120,5 +1174,216 @@ mod tests {
             agents.store().kind_has_had_account("fake").unwrap(),
             "a kept import is history"
         );
+    }
+
+    /// Collects the changes a service announces. It is set before the call under test, since a service takes one listener.
+    fn collect_changes(agents: &Agents) -> Arc<Mutex<Vec<Change>>> {
+        let changes = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&changes);
+        agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
+        changes
+    }
+
+    /// The account changes collected so far, in order.
+    fn account_events(changes: &Mutex<Vec<Change>>) -> Vec<AccountsChanged> {
+        changes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|change| match change {
+                Change::Account(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Declares kind `fake` in the profile, running `program`, with `accounts` as its declaration when there is one.
+    fn declare_kind(profile: &Path, program: &str, accounts: Option<serde_json::Value>) {
+        let kinds = paths::kinds_dir(profile);
+        fs::create_dir_all(&kinds).expect("create the kinds directory");
+        let mut kind = serde_json::json!({
+            "id": "fake",
+            "name": "Fake",
+            "program": [program],
+            "credentials": { "home_env": "FAKE_AGENT_HOME", "files": ["token.json"] }
+        });
+        if let Some(accounts) = accounts {
+            kind["accounts"] = accounts;
+        }
+        fs::write(kinds.join("fake.json"), kind.to_string()).expect("write the fake kind");
+    }
+
+    /// A check that cannot pass: this test binary, given an option it does not know, exits non-zero.
+    fn refusing_check() -> serde_json::Value {
+        serde_json::json!({ "check": { "args": ["--no-such-option-for-this-check"] } })
+    }
+
+    /// A source directory holding the declared credential file.
+    fn source_with_token() -> tempfile::TempDir {
+        let source = tempfile::tempdir().expect("a source directory");
+        fs::write(source.path().join("token.json"), "{}").expect("write a token");
+        source
+    }
+
+    #[test]
+    fn a_kept_import_announces_its_account_once() {
+        let (agents, _, profile) = service();
+        declare_kind(profile.path(), "fake-agent", None);
+        let changes = collect_changes(&agents);
+        let source = source_with_token();
+
+        let imported = agents
+            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .expect("the import runs");
+        let account = imported.account.expect("the import keeps its account");
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, "fake");
+        assert_eq!(events[0].account, account.id);
+        assert_eq!(
+            events[0].state,
+            AccountState::Unknown,
+            "a kind with no check keeps it as unknown"
+        );
+    }
+
+    #[test]
+    fn a_refused_import_announces_its_last_known_state_once_and_keeps_nothing() {
+        let (agents, _, profile) = service();
+        let program = std::env::current_exe().expect("the test binary");
+        declare_kind(
+            profile.path(),
+            program.to_str().expect("a UTF-8 path"),
+            Some(refusing_check()),
+        );
+        let changes = collect_changes(&agents);
+        let source = source_with_token();
+
+        let imported = agents
+            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .expect("the import runs");
+        assert_eq!(imported.result, ImportResult::Failed, "{imported:?}");
+        assert!(
+            agents.accounts_list("fake").expect("a list").is_empty(),
+            "a refused import is deleted"
+        );
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, "fake");
+        assert_eq!(
+            events[0].state,
+            AccountState::NeedsSignIn,
+            "the state its check found"
+        );
+    }
+
+    #[test]
+    fn an_activation_announces_the_account_once() {
+        let (agents, _, _profile) = service();
+        let account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
+        agents.store().insert_agent_account(&account).unwrap();
+        let changes = collect_changes(&agents);
+
+        agents
+            .accounts_activate("fake", &account.id, None)
+            .expect("the activation runs");
+
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, "fake");
+        assert_eq!(events[0].account, account.id);
+        assert_eq!(events[0].state, AccountState::SignedIn);
+    }
+
+    #[test]
+    fn a_removal_announces_the_removed_account_once_with_its_last_known_state() {
+        let (agents, _, profile) = service();
+        declare_kind(profile.path(), "fake-agent", None);
+        let source = source_with_token();
+        let imported = agents
+            .accounts_import("fake", source.path().to_str().expect("a UTF-8 path"), None)
+            .expect("the import runs");
+        let account = imported.account.expect("the import keeps its account");
+        let changes = collect_changes(&agents);
+
+        agents
+            .accounts_remove("fake", &account.id)
+            .expect("the removal runs");
+
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, "fake");
+        assert_eq!(events[0].account, account.id);
+        assert_eq!(
+            events[0].state,
+            AccountState::Unknown,
+            "the state it had when it was removed"
+        );
+    }
+
+    #[test]
+    fn a_sign_in_decided_as_kept_announces_it_once() {
+        let (agents, _, profile) = service();
+        declare_kind(profile.path(), "fake-agent", None);
+        let account = account_row(state_name(AccountState::NeedsSignIn), ORIGIN_SIGN_IN);
+        agents.store().insert_pending_sign_in(&account).unwrap();
+        // The login's file is in the home and no check is declared, so the sign-in is kept as unknown.
+        let home = paths::account_home(profile.path(), "fake", &account.id);
+        fs::create_dir_all(&home).expect("create the home");
+        fs::write(home.join("token.json"), "{}").expect("write a token");
+        let changes = collect_changes(&agents);
+
+        agents.decide_sign_in("fake", &account.id, SignInEnd::TerminalEnded);
+
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].account, account.id);
+        assert_eq!(events[0].state, AccountState::Unknown);
+    }
+
+    #[test]
+    fn a_sign_in_decided_as_refused_announces_it_once_and_is_deleted() {
+        let (agents, _, _profile) = service();
+        // No home and no login file: the sign-in is refused, and it is announced with the state it was added with.
+        let account = account_row(state_name(AccountState::NeedsSignIn), ORIGIN_SIGN_IN);
+        agents.store().insert_pending_sign_in(&account).unwrap();
+        let changes = collect_changes(&agents);
+
+        agents.decide_sign_in("fake", &account.id, SignInEnd::TerminalEnded);
+
+        assert!(
+            agents
+                .store()
+                .get_agent_account(&account.id)
+                .unwrap()
+                .is_none(),
+            "a refused sign-in is deleted"
+        );
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].account, account.id);
+        assert_eq!(events[0].state, AccountState::NeedsSignIn);
+    }
+
+    #[test]
+    fn a_check_that_changes_an_accounts_state_announces_it_once() {
+        let (agents, _, profile) = service();
+        let program = std::env::current_exe().expect("the test binary");
+        declare_kind(
+            profile.path(),
+            program.to_str().expect("a UTF-8 path"),
+            Some(refusing_check()),
+        );
+        let account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
+        agents.store().insert_agent_account(&account).unwrap();
+        let changes = collect_changes(&agents);
+
+        let checked = agents
+            .accounts_check("fake", Some(&account.id))
+            .expect("the check runs");
+        assert_eq!(checked.state, AccountState::NeedsSignIn);
+        let events = account_events(&changes);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].state, AccountState::NeedsSignIn);
     }
 }
