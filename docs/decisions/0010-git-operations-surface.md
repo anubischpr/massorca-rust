@@ -43,6 +43,10 @@ same time. The same API must later run against a remote execution host
   - In-progress operations: `git.abort`.
   - Notifications: `git.watch`, a stream (0012).
 - Reads need the `Read` permission. Everything else needs `Workspace`.
+- A read by a caller without `Workspace` starts no program the repository's
+  own config names: no fsmonitor, filter, diff driver or hook. When the run
+  cannot be made safe it is refused with `git.unsafe_for_caller`. Callers
+  with `Workspace` keep git's own behaviour, hooks included (decision 0078).
 - Each method has a command descriptor in the core table. `massorca git <verb>`
   maps one to one onto the methods.
 

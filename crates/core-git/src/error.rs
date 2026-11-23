@@ -34,4 +34,7 @@ pub enum GitError {
     /// back unambiguously before Git 2.36.
     #[error("unsupported worktree path {path:?}: it contains a line break")]
     UnsupportedPath { path: PathBuf },
+    /// The run would act for a caller without `workspace` permission and cannot be made safe (decision 0078).
+    #[error("git refused for a caller without workspace permission: {reason}")]
+    UnsafeForCaller { reason: String },
 }
