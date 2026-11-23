@@ -23,7 +23,30 @@ env:
 # desktop's real-service integration tests (`desktop-integration`), without
 # the ui unit suite. `release` is core, ui or scripts/ together: it gates the
 # Linux programs and the desktop bundles, which need both halves.
+# `check workspace` is not filtered: every pull request compiles every crate and
+# target on both systems, so a change to a shared crate cannot break one the
+# filter skipped.
 jobs:
+  check:
+    name: check workspace (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - name: Install GPUI system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libglib2.0-dev libasound2-dev libva-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check
+      - run: cargo check --workspace --all-targets --locked
+
   changes:
     runs-on: ubuntu-latest
     outputs:
