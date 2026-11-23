@@ -2,15 +2,15 @@
 //! only from the person's press, with the consent of the review they read. A scripted service answers each call.
 
 use super::InstallReview;
-use crate::model::marketplace::{ItemState, MarketplaceItemId};
+use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, problem_alert};
 use crate::model::navigation::MarketplacePage;
 use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate};
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
-    ExtensionReview, ExtensionState, InstalledInfo, Listing, Permission, Risk, RiskLevel,
-    SourceKind, SourceRef, UninstallEffects,
+    ExtensionReview, ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk,
+    RiskLevel, SourceKind, SourceRef, UninstallEffects,
 };
 use tokio::sync::oneshot;
 
@@ -454,4 +454,81 @@ fn a_refused_removal_keeps_the_confirm_open_with_the_reason(cx: &mut TestAppCont
         .expect("the confirm stays open");
     assert!(!confirm.sending);
     assert_eq!(confirm.error.as_deref(), Some("A session uses this agent"));
+}
+
+/// An installed package whose files the service found changed (`extension.tampered`).
+fn tampered_package() -> ExtensionItem {
+    let mut item = installed_package(true);
+    item.problem = Some(ItemProblem {
+        code: "extension.tampered".to_owned(),
+        message: "the files changed".to_owned(),
+    });
+    item
+}
+
+fn shown(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    draw(cx);
+    cx.debug_bounds(selector).is_some()
+}
+
+#[gpui::test]
+fn a_tampered_package_shows_its_problem_on_its_page_and_on_its_catalogue_card(
+    cx: &mut TestAppContext,
+) {
+    let (rig, cx, id) = open_listed(cx, vec![tampered_package()], vec![tampered_package()]);
+    assert!(
+        shown(cx, "marketplace-problem"),
+        "the item page shows the alert"
+    );
+    let tone = rig.shell.read_with(cx, |shell, _| {
+        shell
+            .model()
+            .marketplace()
+            .item(id)
+            .and_then(|item| problem_alert(item))
+            .map(|alert| alert.tone)
+    });
+    assert_eq!(tone, Some(ProblemTone::Danger));
+
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Discover, cx)
+    });
+    assert!(
+        shown(cx, "marketplace-problem"),
+        "the catalogue card shows the alert too"
+    );
+}
+
+#[gpui::test]
+fn a_tampered_package_refuses_enable_and_can_still_be_uninstalled(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![tampered_package()], vec![tampered_package()]);
+    click(cx, "marketplace-enabled-switch");
+    assert!(
+        rig.script.next().is_none(),
+        "the refused switch sends nothing to the service"
+    );
+    let refused = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone());
+    assert_eq!(
+        refused
+            .as_ref()
+            .map(|(item, text)| (*item, text.contains("cannot be turned on"))),
+        Some((id, true))
+    );
+
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("uninstall is still sent for a tampered package"),
+    }
 }

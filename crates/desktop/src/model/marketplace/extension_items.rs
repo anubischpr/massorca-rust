@@ -425,6 +425,68 @@ mod tests {
         );
     }
 
+    fn with_problem(code: &str, message: &str) -> ExtensionItem {
+        let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
+        entry.problem = Some(massorca_protocol::methods::extensions::ItemProblem {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        });
+        entry
+    }
+
+    #[test]
+    fn a_tampered_package_is_a_danger_alert_with_a_plain_sentence() {
+        let found = items(&[], &[with_problem("extension.tampered", "raw")], &[]);
+        let alert = crate::model::marketplace::problem_alert(&found[0]).expect("an alert");
+        assert_eq!(alert.tone, crate::model::marketplace::ProblemTone::Danger);
+        assert!(
+            alert.message.contains("changed on this computer"),
+            "{}",
+            alert.message
+        );
+        assert!(!alert.message.contains("raw"));
+    }
+
+    #[test]
+    fn another_problem_is_a_warning_with_the_service_sentence() {
+        let found = items(&[], &[with_problem("extension.io", "disk full")], &[]);
+        let alert = crate::model::marketplace::problem_alert(&found[0]).expect("an alert");
+        assert_eq!(alert.tone, crate::model::marketplace::ProblemTone::Warning);
+        assert_eq!(alert.message, "disk full");
+    }
+
+    #[test]
+    fn a_package_without_a_problem_has_no_alert_and_no_refusal() {
+        let found = items(
+            &[],
+            &[package("acme.notes", "extensions", ExtensionState::Enabled)],
+            &[],
+        );
+        assert_eq!(crate::model::marketplace::problem_alert(&found[0]), None);
+        assert_eq!(
+            crate::model::marketplace::package_refusal(
+                &found[0],
+                crate::model::marketplace::PackageAction::Enable
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_tampered_package_refuses_install_and_enable_but_not_uninstall_and_others_pass() {
+        use crate::model::marketplace::{PackageAction, package_refusal};
+
+        let tampered = items(&[], &[with_problem("extension.tampered", "raw")], &[]);
+        let enable = package_refusal(&tampered[0], PackageAction::Enable).expect("refused");
+        assert!(enable.contains("cannot be turned on"), "{enable}");
+        let install = package_refusal(&tampered[0], PackageAction::Install).expect("refused");
+        assert!(install.contains("cannot be installed again"), "{install}");
+
+        let other = items(&[], &[with_problem("extension.io", "disk full")], &[]);
+        assert_eq!(package_refusal(&other[0], PackageAction::Enable), None);
+        assert_eq!(package_refusal(&other[0], PackageAction::Install), None);
+    }
+
     #[test]
     fn the_information_part_names_the_risk_of_a_package() {
         let mut entry = package("acme.notes", "extensions", ExtensionState::Available);

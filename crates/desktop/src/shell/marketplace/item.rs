@@ -4,8 +4,9 @@
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
 use crate::model::marketplace::{
-    AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId, Part, account_views,
-    advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
+    AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId, Part, ProblemAlert,
+    ProblemTone, account_views, advanced_rows, information, parts, problem_alert, settings_rows,
+    state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -17,6 +18,7 @@ use massorca_ui::components::account_connection_list::{
     AccountConnectionList, AccountRow, AccountStatus,
 };
 use massorca_ui::components::badge::{Badge, BadgeTone};
+use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::danger_zone::DangerZone;
 use massorca_ui::components::empty_state::EmptyState;
@@ -47,6 +49,9 @@ pub(super) fn item_page(
         .max_w(px(880.0))
         .min_w_0()
         .child(header(frame, item, cx));
+    if let Some(alert) = problem_alert(item) {
+        page = page.child(problem_banner(item.id, &alert));
+    }
     for part in parts(item) {
         let section = match part {
             Part::Logo | Part::Name | Part::Host => continue,
@@ -76,6 +81,25 @@ fn shell_button(
         .on_click(move |_, cx| {
             let _ = shell.update(cx, |shell, cx| action(shell, cx));
         })
+}
+
+/// The alert of an installed package's problem: danger for a tampered package, a warning for any other.
+pub(super) fn problem_banner(id: MarketplaceItemId, alert: &ProblemAlert) -> AnyElement {
+    let variant = match alert.tone {
+        ProblemTone::Danger => BannerVariant::Danger,
+        ProblemTone::Warning => BannerVariant::Warning,
+    };
+    div()
+        .debug_selector(|| "marketplace-problem".to_owned())
+        .child(
+            Banner::new(
+                SharedString::from(format!("marketplace-problem-{}", id.0)),
+                variant,
+                alert.message.clone(),
+            )
+            .title("This package has a problem"),
+        )
+        .into_any_element()
 }
 
 /// Parts 1 to 3: the plate and name with the state chip and Copy link, the meta line, the host

@@ -3,7 +3,9 @@
 //! the review they read; nothing is installed on an answer alone.
 
 use super::InstallReview;
-use crate::model::marketplace::{MarketplaceItemId, extension_refusal_text};
+use crate::model::marketplace::{
+    MarketplaceItemId, PackageAction, extension_refusal_text, package_refusal,
+};
 use crate::service::Refusal;
 use crate::shell::Shell;
 use gpui::Context;
@@ -18,6 +20,16 @@ impl Shell {
         item: MarketplaceItemId,
         cx: &mut Context<Self>,
     ) {
+        if let Some(sentence) = self
+            .model
+            .marketplace()
+            .item(item)
+            .and_then(|found| package_refusal(found, PackageAction::Install))
+        {
+            self.marketplace_item_error = Some((item, sentence));
+            cx.notify();
+            return;
+        }
         let Some(service) = self.service.clone() else {
             return;
         };
