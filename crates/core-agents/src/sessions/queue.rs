@@ -8,9 +8,9 @@ use massorca_core_store::{
 use massorca_core_terminal::TerminalError;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    ActivityState, AgentQueueList, MAX_QUEUED_PROMPTS, QUEUE_REASON_ASKING,
-    QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY, QUEUE_REASON_PAUSED_STOPPED, QueueState,
-    QueuedPrompt,
+    ActivityState, AgentQueueList, MAX_DELIVERED_REQUEST_IDS, MAX_QUEUED_PROMPTS,
+    QUEUE_REASON_ASKING, QUEUE_REASON_BEHIND_FAILED, QUEUE_REASON_BUSY,
+    QUEUE_REASON_PAUSED_STOPPED, QueueState, QueuedPrompt,
 };
 
 use super::{AgentError, Agents, Change, LiveRun, LiveRuns, input_refusal, lock, not_live};
@@ -42,6 +42,20 @@ impl Agents {
                 .find_queued_prompt_by_request_id(&row.id, request_id)?
         {
             return self.queued_item(&mut live, &existing.session_id, &existing.id);
+        }
+        if let Some(request_id) = request_id
+            && self
+                .store()
+                .find_delivered_request(&row.id, request_id)?
+                .is_some()
+        {
+            return Err(AgentError::new(
+                codes::AGENT_QUEUE_ALREADY_DELIVERED,
+                format!(
+                    "the prompt with request id {request_id} was already delivered to session {}",
+                    row.id
+                ),
+            ));
         }
         if self.store().list_queued_prompts(&row.id)?.len() >= MAX_QUEUED_PROMPTS {
             return Err(AgentError::new(
@@ -293,7 +307,24 @@ impl Agents {
             run.delivering = false;
         }
         let stored = match written {
-            Ok(()) => self.store().delete_queued_prompt(item).map(drop),
+            Ok(()) => {
+                if let Some(request_id) = self
+                    .store()
+                    .get_queued_prompt(item)
+                    .ok()
+                    .flatten()
+                    .and_then(|row| row.request_id)
+                    && let Err(error) = self.store().record_delivered_request(
+                        session,
+                        &request_id,
+                        now_ms(),
+                        keep_delivered_request_ids(),
+                    )
+                {
+                    tracing::warn!(session = %session, %error, "a delivered request id could not be remembered");
+                }
+                self.store().delete_queued_prompt(item).map(drop)
+            }
             Err(error) => self
                 .store()
                 .set_queued_prompt_state(item, QueuedState::Failed, Some(&error.message), now_ms())
@@ -386,6 +417,11 @@ impl Agents {
             }
         }
     }
+}
+
+/// How many delivered request ids a session remembers (decision 0084).
+fn keep_delivered_request_ids() -> u32 {
+    u32::try_from(MAX_DELIVERED_REQUEST_IDS).unwrap_or(u32::MAX)
 }
 
 /// Why a queued prompt is failed instead of typed: its caller held no host-admin scope, and the run now holds vault secrets.
@@ -835,6 +871,31 @@ mod tests {
         };
         agents.store().insert_agent_session(&row).unwrap();
         row.id
+    }
+
+    #[test]
+    fn a_retry_of_a_delivered_prompt_is_refused_and_not_queued_again() {
+        let (agents, workspace, _profile) = service();
+        let session = claude_session(&agents, &workspace);
+        let first = agents
+            .queue_add(&session, "one", Some("req-1"), false)
+            .unwrap();
+        agents
+            .store()
+            .set_queued_prompt_state(&first.id, QueuedState::Sending, None, now_ms())
+            .unwrap();
+        agents.finish_delivery(&session, &first.id, Ok(()));
+        assert!(agents.queue_list(&session).unwrap().items.is_empty());
+
+        let retry = agents
+            .queue_add(&session, "one", Some("req-1"), false)
+            .unwrap_err();
+
+        assert_eq!(retry.code, codes::AGENT_QUEUE_ALREADY_DELIVERED, "{retry}");
+        assert!(
+            agents.queue_list(&session).unwrap().items.is_empty(),
+            "the retry is not typed again"
+        );
     }
 
     #[test]
