@@ -258,20 +258,44 @@ pub(crate) fn listening_sockets(_table: &[ProcessInfo], pids: &BTreeSet<u32>) ->
     })
 }
 
+/// Rows of room added to an owner table's buffer beyond the size the system reports, so a table that gains a few
+/// listeners between the size query and the read still fits.
+const TABLE_SLACK_ROWS: usize = 16;
+
+/// The words of the buffer for an owner table the system reports as `size` bytes: none for the size query, otherwise
+/// the size plus room for `TABLE_SLACK_ROWS` rows of the larger family.
+fn table_words(size: u32) -> usize {
+    if size == 0 {
+        return 0;
+    }
+    let slack = TABLE_SLACK_ROWS * size_of::<MIB_TCP6ROW_OWNER_PID>();
+    usize::try_from(size)
+        .unwrap_or(usize::MAX)
+        .saturating_add(slack)
+        .div_ceil(size_of::<u64>())
+}
+
 /// The system's TCP owner table of one family, listing only LISTEN sockets with their owners' pids. It is read into
 /// words, so its rows are aligned for their u32 fields, and asked again with the size the system reports while it grows.
 /// Returns the buffer and the bytes the table fills. `None` when it cannot be read.
 fn owner_table(family: ADDRESS_FAMILY) -> Option<(Vec<u64>, usize)> {
     let mut size = 0u32;
     for _ in 0..TABLE_ATTEMPTS {
-        let words = usize::try_from(size).ok()?.div_ceil(size_of::<u64>());
+        let words = table_words(size);
         let mut buffer = vec![0u64; words];
         let mut needed = u32::try_from(words * size_of::<u64>()).ok()?;
-        // SAFETY: `buffer` holds `needed` writable bytes, aligned for the table's u32 fields; the call writes at most
-        // `needed` bytes and sets `needed` to the size the table needs.
+        // The size query has no buffer to write into, so it passes a null pointer with a zero size.
+        let table: *mut core::ffi::c_void = if words == 0 {
+            ptr::null_mut()
+        } else {
+            buffer.as_mut_ptr().cast()
+        };
+        // SAFETY: `table` is null only with `needed` zero, so the call writes nothing; otherwise `buffer` holds `needed`
+        // writable bytes, aligned for the table's u32 fields, and the call writes at most `needed` bytes and sets
+        // `needed` to the size the table needs.
         let status = unsafe {
             GetExtendedTcpTable(
-                buffer.as_mut_ptr().cast(),
+                table,
                 &raw mut needed,
                 0,
                 u32::from(family),
@@ -340,7 +364,22 @@ mod tests {
 
     use win32job::{ExtendedLimitInfo, Job};
 
-    use super::{job_ids, memory_in_job, resident_bytes};
+    use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCP6ROW_OWNER_PID;
+
+    use super::{TABLE_SLACK_ROWS, job_ids, memory_in_job, resident_bytes, table_words};
+
+    #[test]
+    fn an_owner_table_buffer_has_room_for_rows_added_after_the_size_query() {
+        assert_eq!(table_words(0), 0, "the size query takes no buffer");
+        for size in [24u32, 4 + 24 * 3, 4 + 56 * 5] {
+            let bytes = table_words(size) * size_of::<u64>();
+            let needed = size as usize + TABLE_SLACK_ROWS * size_of::<MIB_TCP6ROW_OWNER_PID>();
+            assert!(
+                bytes >= needed,
+                "{size} bytes need room for {needed}, got {bytes}"
+            );
+        }
+    }
 
     fn job() -> Job {
         Job::create_with_limit_info(ExtendedLimitInfo::new().limit_kill_on_job_close())
