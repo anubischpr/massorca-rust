@@ -23,6 +23,10 @@ lineage) comes later; the model must not block it.
 - **Git is the truth for which worktrees exist.** The store keeps identity and
   metadata. `show` and `list` report a workspace whose directory is gone as
   `missing` instead of hiding it.
+- **Lock and prune state.** `show`, `list` and unregistered worktrees carry git's
+  optional `locked` (its reason, `""` when none) and `prunable` (git's reason)
+  fields; `prunable` needs Git 2.31 and stays absent on older git, and `missing`
+  still comes from the directory.
 - **Create a worktree.** Branch defaults to the sanitized name; base defaults
   to the repository's `HEAD`. An existing local branch is used only with
   `--existing-branch`. Path is `<workspaces_root>/<name>` unless `--path` is

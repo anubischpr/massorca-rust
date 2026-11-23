@@ -164,6 +164,52 @@ async fn a_worktree_is_created_listed_shown_and_removed_with_its_events_in_order
 }
 
 #[tokio::test]
+async fn a_locked_worktree_reports_its_lock_reason_in_list_and_show() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "usb"))
+        .await
+        .expect("create");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "on a usb disk",
+            created.path.as_str(),
+        ],
+    );
+
+    let list: WorkspaceList = client
+        .call(
+            workspaces::LIST,
+            &WorkspaceListParams {
+                project: Some(project.id.clone()),
+            },
+        )
+        .await
+        .expect("list");
+    assert_eq!(list.workspaces[0].locked.as_deref(), Some("on a usb disk"));
+    let shown: Workspace = client
+        .call(
+            workspaces::SHOW,
+            &WorkspaceRef {
+                workspace: "usb".to_owned(),
+            },
+        )
+        .await
+        .expect("show");
+    assert_eq!(shown.locked.as_deref(), Some("on a usb disk"));
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn a_folder_workspace_is_forgotten_on_removal_and_its_directory_stays() {
     let home = temp_home();
     let folder = home.path().join("notes");

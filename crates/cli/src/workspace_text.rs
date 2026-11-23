@@ -21,8 +21,20 @@ pub fn workspace_kind(kind: WorkspaceKind) -> &'static str {
     }
 }
 
-/// The state, with `missing` added when the directory is gone.
+/// The state, with `missing`, and git's `locked` and `prunable` with their reasons.
 pub fn workspace_state(workspace: &Workspace) -> String {
+    let mut parts = vec![state_word(workspace)];
+    if let Some(reason) = &workspace.locked {
+        parts.push(reason_text("locked", reason));
+    }
+    if let Some(reason) = &workspace.prunable {
+        parts.push(reason_text("prunable", reason));
+    }
+    parts.join(", ")
+}
+
+/// The state word, with `missing` added when the directory is gone.
+fn state_word(workspace: &Workspace) -> String {
     let state = match workspace.state {
         WorkspaceState::Ready => "ready",
         WorkspaceState::Removing => "removing",
@@ -32,6 +44,15 @@ pub fn workspace_state(workspace: &Workspace) -> String {
         format!("{state}, missing")
     } else {
         state.to_owned()
+    }
+}
+
+/// `word: reason`, or `word` alone when git gives no reason.
+fn reason_text(word: &str, reason: &str) -> String {
+    if reason.is_empty() {
+        word.to_owned()
+    } else {
+        format!("{word}: {reason}")
     }
 }
 
@@ -81,7 +102,7 @@ pub fn workspace_line(workspace: &Workspace, verb: &str) -> String {
     )
 }
 
-/// The fields of one workspace, one per line; branch and base appear only when set.
+/// The fields of one workspace, one per line; branch, base, lock and prune appear only when set.
 pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
     let mut lines = vec![
         format!("id: {}", workspace.id),
@@ -96,7 +117,13 @@ pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
         lines.push(format!("base: {base}"));
     }
     lines.push(format!("path: {}", workspace.path));
-    lines.push(format!("state: {}", workspace_state(workspace)));
+    lines.push(format!("state: {}", state_word(workspace)));
+    if let Some(reason) = &workspace.locked {
+        lines.push(reason_text("locked", reason));
+    }
+    if let Some(reason) = &workspace.prunable {
+        lines.push(reason_text("prunable", reason));
+    }
     lines
 }
 

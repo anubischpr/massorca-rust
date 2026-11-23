@@ -492,6 +492,8 @@ pub(crate) mod fixtures {
             state: WorkspaceState::Ready,
             missing: false,
             created_at_ms: created,
+            locked: None,
+            prunable: None,
         }
     }
 

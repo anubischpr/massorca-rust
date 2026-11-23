@@ -50,6 +50,8 @@ fn sample_workspace() -> workspaces::Workspace {
         state: workspaces::WorkspaceState::Ready,
         missing: false,
         created_at_ms: 1_767_225_600_500_i64,
+        locked: None,
+        prunable: None,
     }
 }
 
@@ -331,6 +333,38 @@ fn workspace_omits_unset_branch_and_base_ref() {
 }
 
 #[test]
+fn workspace_carries_git_lock_and_prunable_reasons_only_when_set() {
+    let workspace = workspaces::Workspace {
+        locked: Some("on a usb disk".to_owned()),
+        prunable: Some(String::new()),
+        ..sample_workspace()
+    };
+    let mut expected = sample_workspace_json();
+    expected["locked"] = json!("on a usb disk");
+    expected["prunable"] = json!("");
+    assert_wire(&workspace, &expected);
+}
+
+#[test]
+fn unregistered_worktree_carries_git_lock_and_prunable_reasons_only_when_set() {
+    assert_wire(
+        &workspaces::UnregisteredWorktree {
+            project_id: "p1".into(),
+            path: "/work/ws/lost".into(),
+            branch: None,
+            locked: Some(String::new()),
+            prunable: Some("gitdir file points to non-existent location".into()),
+        },
+        &json!({
+            "project_id": "p1",
+            "path": "/work/ws/lost",
+            "locked": "",
+            "prunable": "gitdir file points to non-existent location"
+        }),
+    );
+}
+
+#[test]
 fn workspace_list_has_the_documented_shape() {
     assert_wire(
         &workspaces::WorkspaceList {
@@ -350,6 +384,8 @@ fn workspace_list_reports_unregistered_worktrees_and_an_older_list_still_decodes
                 project_id: "p1".into(),
                 path: "/work/ws/lost".into(),
                 branch: None,
+                locked: None,
+                prunable: None,
             }],
         },
         &json!({
