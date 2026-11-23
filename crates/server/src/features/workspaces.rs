@@ -6,11 +6,12 @@ use std::sync::Arc;
 use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
+use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
     WorkspaceRemoveParams, WorkspaceRemoved,
 };
-use massorca_protocol::{ErrorBody, capabilities};
+use massorca_protocol::{ErrorBody, capabilities, codes};
 
 use massorca_core_workspace::RemovalWaivers;
 
@@ -78,6 +79,67 @@ async fn list(ctx: RequestCtx, params: WorkspaceListParams) -> Result<WorkspaceL
     })
 }
 
+/// How many passes stop the runs of a workspace being removed. A run that started just before the removal began can
+/// appear after the first pass; none can start after it.
+const STOP_PASSES: usize = 3;
+
+/// Stops every agent run, then every terminal, of the workspace `id`, so its folder is removed with nothing running in
+/// it. A run that does not stop refuses the removal, which stays `removing`, so `rm` again retries it.
+async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
+    let agents = ctx.state.agents.clone();
+    let terminals = ctx.state.terminals.clone();
+    let id = id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        for _ in 0..STOP_PASSES {
+            let live: Vec<_> = agents
+                .list(Some(&id))
+                .map_err(ErrorBody::from)?
+                .into_iter()
+                .filter(|session| session.execution.state != TerminalState::Exited)
+                .collect();
+            for session in &live {
+                agents.stop(&session.id, false).map_err(ErrorBody::from)?;
+            }
+            let running: Vec<_> = terminals
+                .list(Some(&id))
+                .into_iter()
+                .filter(|terminal| terminal.exit.is_none())
+                .collect();
+            for terminal in &running {
+                let info = match terminals.kill(&terminal.id, false) {
+                    Ok(info) if info.exit.is_none() => terminals.kill(&terminal.id, true),
+                    other => other,
+                };
+                if let Ok(info) = info
+                    && info.exit.is_none()
+                {
+                    return Err(ErrorBody::new(
+                        codes::WORKSPACE_BUSY,
+                        format!(
+                            "terminal {} in the workspace did not stop; try again",
+                            info.id
+                        ),
+                    ));
+                }
+            }
+            if live.is_empty() && running.is_empty() {
+                return Ok(());
+            }
+        }
+        Err(ErrorBody::new(
+            codes::WORKSPACE_BUSY,
+            "runs kept starting in the workspace while it was being removed; try again",
+        ))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(ErrorBody::new(
+            codes::INTERNAL,
+            format!("stopping the workspace's runs failed: {error}"),
+        ))
+    })
+}
+
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_workspace(&params.workspace)).await
@@ -99,6 +161,7 @@ async fn remove(
         blocking(move || domain.begin_remove(&selector, waivers)).await?
     };
     publish(&ctx, TOPIC_WORKSPACE_REMOVING, &begun.id);
+    stop_runs(&ctx, &begun.id).await?;
     let id = begun.id.clone();
     let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
     publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
