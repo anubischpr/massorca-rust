@@ -21,7 +21,8 @@ pub enum MemoryMetric {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostMemory {
     pub metric: MemoryMetric,
-    /// The service plus every terminal, as a plain sum: a page shared by two processes counts twice.
+    /// The service plus every terminal that is not `unverifiable`, as a plain sum: a page shared by two processes
+    /// counts twice.
     pub total_bytes: u64,
     pub service: ProcessMemory,
     /// Live terminals, by creation time.
@@ -49,6 +50,10 @@ pub struct TerminalMemory {
     /// How many of the terminal's processes were read.
     pub processes: u32,
     pub bytes: u64,
+    /// The terminal's processes could not be listed or none could be read: its memory is unknown, not zero. Then
+    /// `processes` and `bytes` are 0 and must not be shown as a size, and the terminal is not in `total_bytes`.
+    #[serde(default)]
+    pub unverifiable: bool,
 }
 
 #[cfg(test)]
@@ -69,6 +74,7 @@ mod tests {
                     session_id: Some("s-1".to_owned()),
                     processes: 2,
                     bytes: 20,
+                    unverifiable: false,
                 },
                 TerminalMemory {
                     terminal_id: "t-2".to_owned(),
@@ -76,6 +82,7 @@ mod tests {
                     session_id: None,
                     processes: 0,
                     bytes: 0,
+                    unverifiable: true,
                 },
             ],
             unreadable: 1,
@@ -89,8 +96,8 @@ mod tests {
                 "total_bytes": 30,
                 "service": { "pid": 7, "bytes": 10 },
                 "terminals": [
-                    { "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1", "processes": 2, "bytes": 20 },
-                    { "terminal_id": "t-2", "workspace_id": "w-1", "processes": 0, "bytes": 0 }
+                    { "terminal_id": "t-1", "workspace_id": "w-1", "session_id": "s-1", "processes": 2, "bytes": 20, "unverifiable": false },
+                    { "terminal_id": "t-2", "workspace_id": "w-1", "processes": 0, "bytes": 0, "unverifiable": true }
                 ],
                 "unreadable": 1,
                 "sampled_at_ms": 1_700_000_000_000_i64
@@ -101,5 +108,11 @@ mod tests {
             serde_json::to_value(MemoryMetric::Resident).unwrap(),
             json!("resident")
         );
+        // An answer from a service that predates the flag reads as verified.
+        let older: TerminalMemory = serde_json::from_value(json!({
+            "terminal_id": "t-3", "workspace_id": "w-1", "processes": 1, "bytes": 4
+        }))
+        .unwrap();
+        assert!(!older.unverifiable);
     }
 }

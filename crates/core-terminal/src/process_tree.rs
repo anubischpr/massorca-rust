@@ -3,6 +3,8 @@
 
 use std::io;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use massorca_host_stats::{MemorySample, ProcessInfo};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -122,53 +124,92 @@ impl ProcessTree {
         }
     }
 
-    /// Live processes of the terminal, the shell included while it runs. Host memory reads them (decision 0081), as do
-    /// tests and diagnostics.
+    /// Live processes of the terminal, the shell included while it runs; for tests and diagnostics.
     /// Windows: the job's members, exact. Linux: the session's members, exact. macOS: the shell and every process below
-    /// it by parent id, so a process that detached from the shell's tree is missed. Empty once the shell is reaped, on
-    /// Windows once the job is gone, and on other Unix platforms.
-    pub fn members(&self) -> Vec<u32> {
+    /// it by parent id, so a process that detached from the shell's tree is missed. Empty once the shell is reaped and
+    /// on Windows once the job is gone. `None` when the processes cannot be listed (a job query failed, or a platform
+    /// with no listing): unknown, not none.
+    pub fn members(&self) -> Option<Vec<u32>> {
         #[cfg(target_os = "linux")]
         {
             let mut session = lock(&self.session);
             self.observe(&mut session, None);
-            session
-                .members
-                .iter()
-                .filter(|member| alive(member, self.shell))
-                .filter_map(|member| u32::try_from(member.pid).ok())
-                .collect()
+            Some(
+                session
+                    .members
+                    .iter()
+                    .filter(|member| alive(member, self.shell))
+                    .filter_map(|member| u32::try_from(member.pid).ok())
+                    .collect(),
+            )
         }
         #[cfg(target_os = "macos")]
         {
-            // Under the lock, so the shell is not reaped (and its pid reused) during the walk.
-            let session = lock(&self.session);
-            if session.reaped {
-                return Vec::new();
+            let table = massorca_host_stats::processes();
+            if lock(&self.session).reaped {
+                return Some(Vec::new());
             }
-            let Ok(shell) = u32::try_from(self.shell) else {
-                return Vec::new();
-            };
-            massorca_host_stats::descendants(shell, &massorca_host_stats::processes())
+            Some(massorca_host_stats::descendants(
+                u32::try_from(self.shell).ok()?,
+                &table,
+            ))
         }
         #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         {
-            Vec::new()
+            None
         }
         #[cfg(windows)]
         {
-            let job = lock(&self.job);
-            let Some(job) = job.as_ref() else {
-                return Vec::new();
-            };
-            job.query_process_id_list()
-                .map(|pids| {
-                    pids.into_iter()
-                        .filter_map(|pid| u32::try_from(pid).ok())
-                        .collect()
-                })
-                .unwrap_or_default()
+            match lock(&self.job).as_ref() {
+                Some(job) => massorca_host_stats::job_members(job),
+                None => Some(Vec::new()),
+            }
         }
+    }
+
+    /// The memory of the terminal's live processes (decision 0081). `None` when they cannot be known: the shell was
+    /// reaped (or, on Windows, its job is gone) though the exit is not recorded yet, the job cannot be listed, or the
+    /// platform has no listing. Never a guess of zero.
+    /// Unix: `table` is the process table taken once for every terminal before this call. The lock is held only to
+    /// check the reap: the reap is final, so an unreaped shell now was unreaped when `table` was taken, and the
+    /// shell's pid still named it (Linux: its session; macOS: the root of the parent walk).
+    /// Windows: `table` is unused; the job is listed and each process is read through it, under the job's lock.
+    pub fn memory(&self, table: &[ProcessInfo]) -> Option<MemorySample> {
+        #[cfg(target_os = "linux")]
+        {
+            let shell = self.unreaped_shell()?;
+            let pids: Vec<u32> = table
+                .iter()
+                .filter(|process| process.session == Some(shell))
+                .map(|process| process.pid)
+                .collect();
+            Some(massorca_host_stats::sample_memory(&pids))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let shell = self.unreaped_shell()?;
+            let pids = massorca_host_stats::descendants(shell, table);
+            Some(massorca_host_stats::sample_memory(&pids))
+        }
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+        {
+            let _ = table;
+            None
+        }
+        #[cfg(windows)]
+        {
+            let _ = table;
+            massorca_host_stats::sample_job(lock(&self.job).as_ref()?)
+        }
+    }
+
+    /// The shell's pid while it is unreaped, checked under the session lock; nothing is scanned while it is held.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn unreaped_shell(&self) -> Option<u32> {
+        if lock(&self.session).reaped {
+            return None;
+        }
+        u32::try_from(self.shell).ok()
     }
 
     /// Reaps the shell with `reap` once it has exited, after ending what it left running.

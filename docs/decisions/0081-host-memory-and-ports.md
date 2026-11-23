@@ -31,15 +31,19 @@ machine attributed to a workspace by working directory or command line, scanned 
   open and otherwise with its status refresh, ports every 30 seconds while visible, as the reference does. There is no
   event and no watch.
 - D4 Readers. One shared reader crate, `massorca-host-stats`, makes native calls only and never starts a program.
-  Windows: `OpenProcess` with `PROCESS_QUERY_LIMITED_INFORMATION` and `K32GetProcessMemoryInfo` for the working set,
-  and a Toolhelp32 snapshot for names and parent ids. Linux: `/proc/<pid>/status` (`VmRSS`) and `/proc/<pid>/stat`.
-  macOS: `proc_pidinfo` (`PROC_PIDTASKINFO`, `PROC_PIDTBSDINFO`) and `proc_listallpids` through `libc`. Process trees
-  come from `ProcessTree::members()` (Windows job, Linux session); on macOS it walks parent ids from the same reader,
-  from the terminal's shell down. Ports use the same crate (a sockets module beside the memory one). Unsafe calls stay
+  Windows: the terminal's job is listed (any size, the query is repeated with the size the job reports), and each
+  process is opened with `PROCESS_QUERY_LIMITED_INFORMATION`, checked with `IsProcessInJob` on that handle so a reused
+  pid is never read, and read with `K32GetProcessMemoryInfo`; a Toolhelp32 snapshot gives names and parent ids. Linux:
+  `/proc/<pid>/status` (`VmRSS`) and `/proc/<pid>/stat` (parent and session). macOS: `proc_pidinfo`
+  (`PROC_PIDTASKINFO`, `PROC_PIDTBSDINFO`) and `proc_listallpids` through `libc`. On Unix one process table is taken
+  per sample, for every terminal: Linux groups it by the shell's session id, macOS walks parent ids from the shell
+  down. The parent walk is Unix only: Windows parent ids can name a parent that exited. Ports use the same crate (a sockets module beside the memory one). Unsafe calls stay
   in named platform modules (decision 0007).
 - D5 Loss of contact. The service that answers is always the executing host. A client that cannot reach it reports
   `unverifiable` (CLI output and a non-zero exit, desktop state), never zero memory and never "no ports". A process that
   cannot be read (it exited, or access is denied) is skipped and counted in `unreadable`; it never fails the sample.
+  A terminal whose processes cannot be listed, or of which none could be read, is marked `unverifiable`, shown as
+  unknown, and left out of the total: never reported as zero.
 
 ## Alternatives
 

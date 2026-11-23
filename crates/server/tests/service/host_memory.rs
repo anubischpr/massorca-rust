@@ -134,6 +134,7 @@ async fn host_memory_counts_the_service_and_a_created_terminal() {
         "a plain terminal holds no agent run"
     );
     assert!(entry.bytes > 0, "{entry:?}");
+    assert!(!entry.unverifiable, "{entry:?}");
     assert!(memory.sampled_at_ms > 0);
 
     let _: Terminal = client
