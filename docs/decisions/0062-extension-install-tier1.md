@@ -84,10 +84,11 @@ file as read; its install still needs the pin.
   - the version;
   - the package hash;
   - the sorted permissions;
-  - the planned installer commands.
+  - the planned installer commands;
+  - each agent CLI's `verify` command and its `uninstall` command for this OS.
 
-  They are encoded as one JSON array, never a map, so the fingerprint does not
-  depend on key order.
+  They are encoded as one JSON array tagged `massorca.consent/2`, never a map,
+  so the fingerprint does not depend on key order.
 - `extensions.install { source, consent, run_installer, sha256? }` refuses with
   `extension.consent_required` when `consent` is missing. It refuses with
   `extension.consent_mismatch` when the package or plan changed since the review.
@@ -96,7 +97,8 @@ file as read; its install still needs the pin.
   review does not accept running a program.
 - The CLI never prompts. `massorca extension install <source>` prints the review
   and exits with `extension.consent_required`. `--yes` accepts the review it just
-  printed. `--yes-run-installer` also accepts running the vendor command. This is
+  printed. `--consent <FINGERPRINT>` accepts the review an earlier run printed,
+  exactly. `--yes-run-installer` also accepts running the vendor command. This is
   the headless-host path from 0059. The desktop sends the same fields from its
   review dialog.
 
@@ -108,7 +110,8 @@ file as read; its install still needs the pin.
 - It is never elevated by MassOrca. If the vendor's installer asks for elevation
   itself, that prompt is the vendor's, and the person answers it there.
 - Output goes to `data/<id>/install.log`, capped at 1 MiB. It runs with a
-  15-minute limit, and the child process is killed on timeout.
+  15-minute limit. On timeout the child and every process it started are
+  killed. It gets only an allowlisted part of the service environment.
 - Afterwards the `verify` command must exit 0, and `binary` must resolve.
   Otherwise the install fails with `extension.installer_failed` or
   `extension.verify_failed`. Nothing is registered, and the unpacked folder is
@@ -156,6 +159,13 @@ file as read; its install still needs the pin.
   - `path`: the absolute path of `agents/<id>.json`;
   - `enabled`;
   - `cli_installed_by_package`.
+  - `error`: set, with `path` empty, when the package's files no longer match the
+    lockfile (`extension.tampered`). Its kinds are still listed, from the
+    `agent_kinds` ids the lockfile records at install, so one changed package
+    never hides the others. The kind-conflict check on install uses the same
+    recorded ids. Only an unreadable lockfile fails the whole call.
+- `extensions.list` and `extensions.get` follow the same rule: a package whose files no longer match the lockfile
+  comes back with `problem` (`extension.tampered`) and only its lockfile record, instead of failing the call.
 - `catalogue_agent_kinds() -> Vec<CatalogueAgentKind>` returns, for every
   catalogue entry, the declaration bytes and its `cli` block. Each
   declaration's content is checked by `core-agents`, not here.
@@ -190,7 +200,9 @@ listing names.
 ### Protocol and CLI
 
 - Capability `extensions/1`. Methods, owner `core`:
-  - `extensions.list`, `get`, `catalogue`, `inspect` and `asset` require `Read`;
+  - `extensions.list`, `get`, `catalogue` and `asset` require `Read`;
+  - `extensions.inspect` requires `Read` for a `catalogue:` source and
+    `HostAdmin` for `dir:` and `file:`, which read a host path;
   - `extensions.install`, `set_enabled` and `remove` require `HostAdmin`,
     because they can run programs on the host.
 - Error codes are `extension.*` in `protocol::codes`. The format codes from
@@ -198,8 +210,8 @@ listing names.
   `invalid_source`, `not_found` (no catalogue entry), `not_installed`,
   `already_installed`, `kind_conflict`, `hash_required`, `consent_required`,
   `consent_mismatch`, `installer_consent_required`, `installer_failed`,
-  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`
-  and `io`. A guard's refusal keeps the guard's own code, such as
+  `verify_failed`, `asset_not_listed`, `asset_too_large`, `invalid_lockfile`,
+  `tampered` and `io`. A guard's refusal keeps the guard's own code, such as
   `agent.busy`.
 - The CLI group is `massorca extension`, with the reserved `massorca ext` as a
   visible alias:
@@ -207,13 +219,145 @@ listing names.
   - `show <id>`;
   - `catalogue`;
   - `inspect <source>`;
-  - `install <source> [--sha256] [--yes] [--yes-run-installer]`;
+  - `install <source> [--sha256] [--yes | --consent <fingerprint>] [--yes-run-installer]`;
   - `enable <id>`;
   - `disable <id>`;
   - `remove <id> [--delete-agent-homes] [--uninstall-cli]`.
 
   Each command has text and `--json` output. Every flow is tested end to end
   through the CLI.
+
+### As built
+
+- The wire types in `protocol::methods::extensions` are built from the service's own views. A result carries every
+  field of the view that the protocol type names; unknown fields are ignored by decoders.
+- `extensions.get` and `extensions.list` carry `installed.cli`: the lockfile's record of each CLI, with the vendor
+  command that ran. The desktop and `extension show` read what ran from there.
+- `--yes-run-installer` needs `--yes` or `--consent`. A script that wants the vendor command to run passes both.
+- Without `--yes` the CLI prints the review on stderr and fails with `extension.consent_required`. In `--json` mode
+  the review is the error's `data`. A relative `dir:` or `file:` path is made absolute by the CLI for the local
+  service; for a paired host the path is read on that host as typed.
+- The runner stops waiting for output two seconds after the child ends, then closes the log, so a process the
+  installer left behind cannot keep writing to it.
+
+### Security review
+
+The independent review of the path that runs a vendor command (2026-11-22) found two blockers and several
+hardening points. All were fixed before merge:
+
+- **Path aliases (blocker).** Windows drops a trailing dot or space, resolves 8.3 short names and maps device
+  names, so `extension.json.` could overwrite the reviewed manifest at unpack. Package paths now refuse a
+  trailing dot or space, `~` followed by a digit, and reserved device names on every OS. Unpacking creates
+  each file new, the unpacked folder must hash to the reviewed files before `lock.json` is written, and
+  the lockfile keeps that hash as `files_sha256`. Every manifest read back from disk (agent kinds, item
+  pages, removal) is checked against it first; a mismatch is `extension.tampered` and nothing it names runs.
+- **Inspect exposure (blocker).** `inspect` with `Read` let a read-only device probe any host path,
+  including devices, FIFOs and UNC shares. Host paths now need `HostAdmin`; `dir:` and `file:` refuse UNC
+  and device namespace paths; each file is opened once, must be a regular file on the opened handle, and is
+  read with its cap enforced while reading. Errors name only the path the caller sent.
+- **Process tree.** The installer runs in its own process group on Unix and in a kill-on-close job object
+  on Windows, so a timeout ends what it started.
+- **Environment.** Vendor commands get only `PATH`, `PATHEXT`, the home, profile and temporary folders,
+  `SystemRoot`, `SYSTEMDRIVE`, `ComSpec`, locale and proxy variables, never a token the service holds.
+  Relative `PATH` entries are skipped when the host resolves a program.
+- **Review fidelity.** Manifest validation refuses control characters in every CLI argv, and the CLI quotes
+  any argument with more than plain characters using Rust escaping.
+- **Consent.** The fingerprint now covers `verify` and `uninstall` (`massorca.consent/2`), the CLI prints
+  it, and `--consent` approves exactly a review read in an earlier run instead of re-inspecting.
+- **Smaller points.** Lockfile entries are validated on read (an extension id, a path inside `pkgs/<id>/`)
+  before any path is built from them, and the folder is synced after the rename on Unix. A failed verify
+  after a successful installer says, in the error data and in `install.log`, that the CLI may remain. The
+  catalogue's piped `bash -c` installs start with `set -o pipefail`.
+
+### Second review
+
+The second independent review of the install path (2026-11-22) found one blocker (B1) and required items. Each is
+fixed with a test, except where a row says otherwise.
+
+- **First-party identity (B1).** Publisher `massorca` and any `massorca.*` id are refused at review and at install
+  from every source except the built-in catalogue, with `extension.reserved_publisher`. A lock entry under such an id
+  counts as installed only when it is the catalogue's own install with the embedded content hash; any other entry is
+  shown with that problem, never as a built-in, never runs its kinds and never blocks a built-in install, which
+  replaces it. The reviews show the source (`catalogue`, `dir` or `file` with its reference) first.
+- **Review shows what runs.** The verify and uninstall commands for this system are listed with the install command. Each agent kind's program, arguments, environment names, credential home and files, and
+  each MCP server's command are listed. Values are not shown. Every installer step states that it installs the vendor's
+  current release and that the version is not pinned.
+- **Allowlist.** Install and uninstall commands start with `winget`, `brew`, `npm`, `powershell` or `bash`, bare. The
+  manifest refuses anything else, and the install refuses it again before it runs. Verify commands start with the
+  binary, as before.
+- **Verify is the gate.** `verify` is optional; without it the install succeeds when the binary resolves. A
+  PowerShell `irm | iex` can exit 0 after a failed download, so the gate is the verify command where the vendor documents
+  one. Tests with the fake runner cover an installer that exits 0 with a failing verify (Antigravity) and one that exits 0
+  with no binary (Codex). A real `irm | iex` cannot run in CI: it downloads and installs vendor software from the network
+  on a shared runner, so the behaviour is tested through the fake runner only.
+- **Lock released around the vendor command.** The change lock covers check, unpack and commit. The vendor command runs
+  between them with the package busy (`extension.busy`). Other packages can be enabled, disabled and removed meanwhile,
+  and a removal runs its uninstall commands outside the lock too. A test with a gated runner proves it.
+- **Vendor processes.** They start in a fresh private folder, removed after the run, never in the service's working
+  folder. They start suspended inside a kill-on-close job (the helper is `massorca_core_remote::windows_job`, moved from
+  core-git: core-git gains one edge to core-remote, which the service already depends on and which holds the other
+  process helpers; the alternative, a new crate, adds two edges and a crate for one function). Output is capped at 1 MiB
+  per run; the argv and the exit status or timeout are always written.
+- **Host paths.** A detected program's path reaches only a host administrator, in the review and the item views.
+- **Agent runs.** `massorca extension install --yes-run-installer` and `remove --uninstall-cli` refuse with
+  `extension.needs_person` when `MASSORCA_AGENT_SESSION` or `MASSORCA_AGENT_TOKEN` is set, before connecting. The CLI
+  forwards the run token as `agent_token`, and the service refuses a vendor installer or uninstaller for any request that
+  carries one. Limit: an agent that strips its environment is not detected by the CLI, and a direct call without the
+  token is not detected by the service. The real boundary is per-principal authentication, which is not built yet.
+- **Consent.** `--consent` sends the fingerprint the person read; a folder that changed after the review is refused with
+  `extension.consent_mismatch`. The CLI cannot re-inspect and resend a new fingerprint silently. A client that does
+  re-inspect and sends the new fingerprint is accepted: the server cannot know what the person saw, so the review is the
+  protection.
+- **Not covered by the fingerprint.** The program a bare name resolves to on the host's `PATH` (host state), and the
+  proxy variables (`HTTPS_PROXY` and the rest), which are passed through to vendor commands and may hold credentials.
+- **Fake vendor.** It is the example `massorca-fake-vendor`, not a binary: packaging copies `massorca` and the
+  `[[bin]]` targets only. `cargo test` does not build examples by default, so the extension tests build it once with
+  cargo into the same target folder.
+- **Forged data.** A lockfile entry whose path leaves its package folder, a publisher or id segment that names a
+  Windows device (`COM¹`, `LPT²`, superscript digits included), and a folder changed after review are each refused.
+  The lockfile is validated before it is written.
+- **Uninstall confirmation (V2).** `remove --uninstall-cli` runs the uninstall only after `--yes`, or `--uninstall-consent` with the fingerprint the refusal prints. A refusal changes nothing. The built-in review names no internal variable (V3); a third-party kind keeps naming its credential variables.
+- **Gentle Shell (open question for the owner).** The npm package and the binary name are unconfirmed and not shipped:
+  the package declares no vendor command, so it only detects and registers. Its binary stays `gentle-shell` as the
+  kind file has it. Its kind file reads `PI_CODING_AGENT_DIR` for credentials; the kind file is unchanged byte for byte
+  and that variable stays internal until a source is cited. No user-visible text names the unconfirmed package.
+
+#### Third-party vendor commands (refused in tier 1)
+
+Only a built-in catalogue package may declare a vendor command (`cli.install`, `cli.verify` or `cli.uninstall`). A package
+from a folder or an archive that declares one is refused at review and at install with
+`extension.vendor_command_refused`, before anything runs. The reasons: the argv allowlist still admits
+`powershell -Command <any script>` and `bash -c`, `verify` is not allowlisted, and the verify and uninstall commands
+were not shown in the review. Third-party vendor commands come back in a later tier, with a design of their own.
+
+#### Follow-ups (not code)
+
+- Opaque fetches: `npm` and `winget` install whatever the registry serves under a name, and `powershell -EncodedCommand`
+  hides its script. Neither is refused by the allowlist; a later tier must pin or show the content.
+- `bash` on Windows may be the WSL launcher, which runs a Linux distribution. Refusing `bash` on Windows is the
+  preferred fix; until then the built-in Antigravity command is the only user of it.
+- An installed built-in whose embedded catalogue hash changes in a later build. Options: keep it recognised as the
+  built-in while the id and the hash recorded at install match the catalogue's history, or show "update available".
+  Undecided; today it is shown as not built-in until it is reinstalled.
+- The `dir:` consent reading is confirmed: a folder changed after its review is refused for the reviewed consent, and
+  the CLI cannot re-inspect and resend a new fingerprint silently.
+
+#### Vendor commands
+
+Checked against the vendor pages on 2026-11-22. Each package's `cli` block records its source and the date.
+
+| Package | OS | Command | Source | Checked |
+|---|---|---|---|---|
+| `massorca.claude` | Windows | `winget install Anthropic.ClaudeCode` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.claude` | Linux | `npm install -g @anthropic-ai/claude-code@latest` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.claude` | macOS | `brew install --cask claude-code` | https://code.claude.com/docs/en/setup | 2026-11-22 |
+| `massorca.codex` | all | `npm install -g @openai/codex` (no verify, no uninstall: not documented) | https://github.com/openai/codex | 2026-11-22 |
+| `massorca.antigravity` | Windows | `powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 \| iex"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
+| `massorca.antigravity` | Linux, macOS | `bash -c "set -o pipefail; curl -fsSL https://antigravity.google/cli/install.sh \| bash"` | https://antigravity.google/docs/getting-started?tab=cli | 2026-11-22 |
+| `massorca.gentle-shell` | all | none (detect and register only; see the open question above) | https://github.com/Gentleman-Programming/gentle-shell | 2026-11-22 |
+
+Uninstall commands, where documented: Claude `winget uninstall Anthropic.ClaudeCode`, `npm uninstall -g
+@anthropic-ai/claude-code`, `brew uninstall --cask claude-code`. Antigravity and Codex document none.
 
 ## Alternatives
 

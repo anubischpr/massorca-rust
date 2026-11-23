@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use massorca_client::Autostart;
 use massorca_profile::Profile;
 
+use crate::launch_options::DebugPage;
+
 const CLI_NAME: &str = if cfg!(windows) {
     "massorca.exe"
 } else {
@@ -24,6 +26,8 @@ pub struct LaunchOptions {
     pub profile: Option<String>,
     pub home: Option<PathBuf>,
     pub no_autostart: bool,
+    /// Debug only: the page or dialog to open once its data has arrived (`--page`).
+    pub page: Option<DebugPage>,
 }
 
 impl LaunchOptions {
@@ -44,6 +48,7 @@ impl LaunchOptions {
                 "--no-autostart" => options.no_autostart = true,
                 "--profile" => options.profile = Some(value_of(&arg, args.next())?),
                 "--home" => options.home = Some(PathBuf::from(value_of(&arg, args.next())?)),
+                "--page" => options.page = Some(value_of(&arg, args.next())?.parse()?),
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -147,6 +152,28 @@ mod tests {
     fn unknown_arguments_and_missing_values_are_refused() {
         assert!(parse(&["--nope"], &[]).is_err());
         assert!(parse(&["--profile"], &[]).is_err());
+    }
+
+    #[test]
+    fn the_page_flag_selects_a_debug_page() {
+        let options = parse(&["--page", "remove-secret"], &[]).expect("parses");
+        assert_eq!(options.page, Some(DebugPage::RemoveSecret));
+        assert_eq!(parse(&[], &[]).expect("parses").page, None);
+    }
+
+    #[test]
+    fn an_unknown_page_is_refused_with_the_valid_names() {
+        let error = parse(&["--page", "nope"], &[]).expect_err("refused before any window");
+        assert!(error.starts_with("unknown page \"nope\""), "{error}");
+        assert!(error.ends_with(&DebugPage::names()), "{error}");
+    }
+
+    #[test]
+    fn the_page_flag_needs_a_value() {
+        assert_eq!(
+            parse(&["--page"], &[]),
+            Err("--page needs a value".to_owned())
+        );
     }
 
     #[test]

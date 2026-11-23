@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use massorca_core_agents::{Agents, Change};
+use massorca_core_extensions::Extensions;
 use massorca_core_store::Store;
 use massorca_core_terminal::TerminalManager;
 use massorca_core_vault::Vault;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub terminals: TerminalManager,
     /// Agent sessions and their runs (decision 0051).
     pub agents: Agents,
+    /// Installed extensions of the profile (decision 0062). Other features register remove guards and cleanups here.
+    pub extensions: Arc<Extensions>,
     /// Every agent status change with the full record, in the order the store applied them; `agent.watch` reads it.
     pub agent_changes: broadcast::Sender<Change>,
     pub server: PeerInfo,

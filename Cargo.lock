@@ -3551,6 +3551,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "vt100",
+ "zip",
 ]
 
 [[package]]
@@ -3599,6 +3600,7 @@ name = "massorca-core-extensions"
 version = "0.1.0"
 dependencies = [
  "massorca-ext-package",
+ "massorca-process",
  "massorca-profile",
  "serde",
  "serde_json",
@@ -3613,13 +3615,13 @@ name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "massorca-core-remote",
  "massorca-process",
  "massorca-protocol",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "win32job",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3632,6 +3634,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "win32job",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3803,6 +3807,7 @@ dependencies = [
  "interprocess",
  "massorca-client",
  "massorca-core-agents",
+ "massorca-core-extensions",
  "massorca-core-git",
  "massorca-core-remote",
  "massorca-core-store",
@@ -3810,11 +3815,13 @@ dependencies = [
  "massorca-core-vault",
  "massorca-core-watch",
  "massorca-core-workspace",
+ "massorca-ext-package",
  "massorca-net",
  "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "subtle",
@@ -3824,6 +3831,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "win32job",
 ]
 
 [[package]]
