@@ -337,6 +337,7 @@ async fn terminal_in_folder(home: &Path) -> String {
                 path: utf8(&folder),
                 name: Some("folder".to_owned()),
                 kind: Some(ProjectKind::Folder),
+                icon: None,
                 workspaces_root: Some(utf8(&home.join("ws-folder"))),
             },
         )

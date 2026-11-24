@@ -5,7 +5,7 @@ use std::path::Path;
 
 use massorca_core_git::WorktreeEntry;
 use massorca_core_store::{ProjectKind, ProjectRow, WorkspaceKind, WorkspaceRow, WorkspaceState};
-use massorca_protocol::methods::projects::{self, Project};
+use massorca_protocol::methods::projects::{self, Project, ProjectIcon};
 use massorca_protocol::methods::workspaces::{self, Workspace};
 
 pub(crate) fn project(row: &ProjectRow) -> Project {
@@ -17,6 +17,7 @@ pub(crate) fn project(row: &ProjectRow) -> Project {
         workspaces_root: row.workspaces_root.clone(),
         added_at_ms: row.added_at,
         base_ref: row.base_ref.clone(),
+        icon: row.icon.as_deref().and_then(ProjectIcon::from_stored),
     }
 }
 

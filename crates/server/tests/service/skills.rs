@@ -56,6 +56,7 @@ async fn discovery_lists_the_home_skills_and_the_registered_projects_skills() {
         name: None,
         kind: None,
         workspaces_root: None,
+        icon: None,
     };
     client
         .call::<_, Value>(projects::ADD, &added)

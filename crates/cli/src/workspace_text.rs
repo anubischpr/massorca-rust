@@ -1,6 +1,8 @@
 //! Human-readable lines for projects and workspaces: key-value blocks and aligned tables.
 
-use massorca_protocol::methods::projects::{Project, ProjectInspection, ProjectKind};
+use massorca_protocol::methods::projects::{
+    Project, ProjectIcon, ProjectIconSource, ProjectInspection, ProjectKind,
+};
 use massorca_protocol::methods::workspaces::{
     UnregisteredWorktree, Workspace, WorkspaceCheck, WorkspaceKind, WorkspaceRemoved,
     WorkspaceState,
@@ -116,6 +118,9 @@ pub fn project_details(project: &Project) -> Vec<String> {
     if let Some(base) = &project.base_ref {
         lines.push(format!("base: {base}"));
     }
+    if let Some(icon) = &project.icon {
+        lines.push(format!("icon: {}", icon_text(icon)));
+    }
     lines
 }
 
@@ -126,13 +131,17 @@ pub fn project_table(projects: &[Project]) -> Vec<String> {
             vec![
                 project.id.clone(),
                 project.name.clone(),
+                project
+                    .icon
+                    .as_ref()
+                    .map_or_else(|| "-".to_owned(), icon_text),
                 project_kind(project.kind).to_owned(),
                 project.base_ref.clone().unwrap_or_else(|| "-".to_owned()),
                 project.path.clone(),
             ]
         })
         .collect();
-    table(&["ID", "NAME", "KIND", "BASE", "PATH"], rows)
+    table(&["ID", "NAME", "ICON", "KIND", "BASE", "PATH"], rows)
 }
 
 /// One line for a workspace that was just created.
@@ -246,4 +255,27 @@ pub fn unregistered_line(worktree: &UnregisteredWorktree) -> String {
         worktree.path,
         worktree.branch.as_deref().unwrap_or("-")
     )
+}
+
+/// A project's icon as `emoji:<emoji>`, `lucide:<name>` or `image:<label> (upload|file)`, read as the forms `--icon` takes.
+pub fn icon_text(icon: &ProjectIcon) -> String {
+    match icon {
+        ProjectIcon::Emoji { emoji } => format!("emoji:{emoji}"),
+        ProjectIcon::Lucide { name } => format!("lucide:{name}"),
+        ProjectIcon::Image { source, label, .. } => {
+            let origin = match source {
+                ProjectIconSource::Upload => "upload",
+                ProjectIconSource::File => "file",
+            };
+            format!("image:{} ({origin})", label.as_deref().unwrap_or("image"))
+        }
+    }
+}
+
+/// One line for a project's icon, or for its lack of one.
+pub fn project_icon_line(project: &Project) -> String {
+    match &project.icon {
+        Some(icon) => format!("project {} icon is {}", project.name, icon_text(icon)),
+        None => format!("project {} has no icon", project.name),
+    }
 }

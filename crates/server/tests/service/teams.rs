@@ -1008,6 +1008,7 @@ fn git_repo(dir: &Path) {
 /// Registers `path` as a Workspaces project: git, unless `kind` says folder.
 async fn register_project(client: &Client, path: &Path, kind: Option<ProjectKind>) -> Project {
     let params = ProjectAddParams {
+        icon: None,
         path: path.to_str().expect("utf-8 path").to_owned(),
         name: None,
         kind,

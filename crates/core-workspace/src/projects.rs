@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use massorca_core_store::{ProjectKind as StoreKind, ProjectRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
-    Project, ProjectAddParams, ProjectInspection, ProjectKind, ProjectSetBaseParams,
+    Project, ProjectAddParams, ProjectIcon, ProjectInspection, ProjectKind, ProjectSetBaseParams,
+    ProjectUpdateParams,
 };
 
 use crate::error::DomainError;
 use crate::layout::WorkspaceLayout;
 use crate::names;
 use crate::paths;
+use crate::project_icon_detection::detect_project_icon;
 use crate::views;
 use crate::workspaces::Workspaces;
 
@@ -42,6 +44,10 @@ impl Workspaces {
                 })?,
         };
         names::project_name(&name)?;
+        let icon = params
+            .icon
+            .map(|icon| icon.normalized().map_err(invalid_icon))
+            .transpose()?;
         let path_key = paths::path_key(&root);
         if self.registered_at(&root)?.is_some() {
             return Err(DomainError::new(
@@ -74,6 +80,7 @@ impl Workspaces {
                 paths::path_text(&root)?
             }
         };
+        let icon = icon.or_else(|| detect_project_icon(&root));
         let row = ProjectRow {
             id: new_id(),
             kind,
@@ -83,6 +90,7 @@ impl Workspaces {
             workspaces_root,
             added_at: now_ms(),
             base_ref: None,
+            icon: stored_icon(icon.as_ref())?,
         };
         self.store
             .insert_project(&row)
@@ -230,6 +238,26 @@ impl Workspaces {
         }))
     }
 
+    /// Sets (`Some`), clears (`Some(None)`) or keeps (`None`) a project's icon. An invalid icon keeps the stored one.
+    pub fn update_project(&self, params: ProjectUpdateParams) -> Result<Project, DomainError> {
+        let _guard = self.lock_mutations();
+        let row = self.resolve_project(&params.project)?;
+        let Some(icon) = params.icon else {
+            return Ok(views::project(&row));
+        };
+        let icon = icon
+            .map(|icon| icon.normalized().map_err(invalid_icon))
+            .transpose()?;
+        let stored = stored_icon(icon.as_ref())?;
+        if !self.store.set_project_icon(&row.id, stored.as_deref())? {
+            return Err(not_found(&row.name));
+        }
+        Ok(views::project(&ProjectRow {
+            icon: stored,
+            ..row
+        }))
+    }
+
     /// The canonical main worktree of the repository containing `dir`, or `None` outside one. A linked
     /// worktree stands for its main repository, so it is never registered as a project of its own.
     fn repository_root(&self, dir: &Path) -> Result<Option<PathBuf>, DomainError> {
@@ -247,6 +275,20 @@ impl Workspaces {
             )),
         }
     }
+}
+
+/// The stored JSON of an icon; `None` is the default icon.
+fn stored_icon(icon: Option<&ProjectIcon>) -> Result<Option<String>, DomainError> {
+    icon.map(ProjectIcon::to_stored)
+        .transpose()
+        .map_err(|error| DomainError::new(codes::INTERNAL, error.to_string()))
+}
+
+fn invalid_icon(reason: String) -> DomainError {
+    DomainError::new(
+        codes::REQUEST_INVALID_PARAMS,
+        format!("invalid icon: {reason}"),
+    )
 }
 
 fn not_git(dir: &Path) -> DomainError {

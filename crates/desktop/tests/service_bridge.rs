@@ -109,6 +109,7 @@ async fn add_project(home: &Path, repo_dir: &Path) -> String {
     .expect("a client connects");
     client
         .project_add(&ProjectAddParams {
+            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
             kind: None,

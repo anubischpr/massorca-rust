@@ -59,6 +59,7 @@ async fn add_project(client: &Client, home: &Path, repo: &Path) -> Project {
                 path: repo.to_str().expect("utf-8").to_owned(),
                 name: None,
                 kind: None,
+                icon: None,
                 workspaces_root: Some(home.join("ws").to_str().expect("utf-8").to_owned()),
             },
         )

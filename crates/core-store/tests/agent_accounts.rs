@@ -16,6 +16,7 @@ fn project_row(name: &str, path_key: &str) -> ProjectRow {
         workspaces_root: format!("/repos/{name}-workspaces"),
         added_at: now_ms(),
         base_ref: None,
+        icon: None,
     }
 }
 

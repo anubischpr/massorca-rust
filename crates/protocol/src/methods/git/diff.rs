@@ -104,4 +104,23 @@ pub struct GitDiffFile {
     pub old_size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_size: Option<u64>,
+    /// Set for a submodule (gitlink) change in place of a text patch: the commits the parent records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submodule: Option<SubmodulePointer>,
+}
+
+/// A submodule's change, which git records as the commit a parent points at, not as file contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubmodulePointer {
+    /// The commit the old side records; absent where that side has no submodule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_commit: Option<String>,
+    /// The commit the new side records: the submodule's checked-out HEAD for a working-tree side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_commit: Option<String>,
+    /// Whether the submodule's working tree has changes; absent when the new side is not a checked-out working tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dirty: Option<bool>,
+    /// Git's one-line form, `Subproject commit <old>..<new>`, with one side when only one is known.
+    pub summary: String,
 }

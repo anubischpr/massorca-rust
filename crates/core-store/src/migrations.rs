@@ -488,6 +488,13 @@ CREATE TABLE agent_session_archives (
 "#,
         foreign_keys_off: false,
     },
+    // A project's icon (decision 0091): the JSON of a service `ProjectIcon`; NULL is the default icon.
+    Migration {
+        sql: r#"
+ALTER TABLE projects ADD COLUMN icon TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

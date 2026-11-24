@@ -140,6 +140,7 @@ pub async fn add_project_and_workspace(
     .await?;
     let project = client
         .project_add(&ProjectAddParams {
+            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
             kind: None,

@@ -49,10 +49,11 @@ pub struct ProjectRow {
     pub workspaces_root: String,
     pub added_at: i64,
     pub base_ref: Option<String>,
+    /// The project's icon as the JSON of a service `ProjectIcon`; `None` is the default icon.
+    pub icon: Option<String>,
 }
 
-const SELECT_PROJECTS: &str =
-    "SELECT id, kind, path, path_key, name, workspaces_root, added_at, base_ref FROM projects";
+const SELECT_PROJECTS: &str = "SELECT id, kind, path, path_key, name, workspaces_root, added_at, base_ref, icon FROM projects";
 
 fn project_from_row(row: &Row<'_>) -> rusqlite::Result<ProjectRow> {
     Ok(ProjectRow {
@@ -64,6 +65,7 @@ fn project_from_row(row: &Row<'_>) -> rusqlite::Result<ProjectRow> {
         workspaces_root: row.get("workspaces_root")?,
         added_at: row.get("added_at")?,
         base_ref: row.get("base_ref")?,
+        icon: row.get("icon")?,
     })
 }
 
@@ -71,7 +73,7 @@ impl Store {
     /// Inserts a project. A duplicate id, name or path key is `StoreError::Conflict`.
     pub fn insert_project(&self, row: &ProjectRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO projects (id, kind, path, path_key, name, workspaces_root, added_at, base_ref) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO projects (id, kind, path, path_key, name, workspaces_root, added_at, base_ref, icon) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 row.id,
                 row.kind,
@@ -80,7 +82,8 @@ impl Store {
                 row.name,
                 row.workspaces_root,
                 row.added_at,
-                row.base_ref
+                row.base_ref,
+                row.icon
             ],
         )?;
         Ok(())
@@ -91,6 +94,15 @@ impl Store {
         let updated = self.lock().execute(
             "UPDATE projects SET base_ref = ?2 WHERE id = ?1",
             params![id, base],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Sets or clears (`None`) a project's icon JSON. Returns whether a row was updated.
+    pub fn set_project_icon(&self, id: &str, icon: Option<&str>) -> Result<bool, StoreError> {
+        let updated = self.lock().execute(
+            "UPDATE projects SET icon = ?2 WHERE id = ?1",
+            params![id, icon],
         )?;
         Ok(updated > 0)
     }
