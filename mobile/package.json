@@ -2,6 +2,11 @@
   "name": "massorca-mobile",
   "version": "0.0.1",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anubischpr/massorca-rust.git",
+    "directory": "mobile"
+  },
   "scripts": {
     "android": "react-native run-android",
     "start": "react-native start",
@@ -14,6 +19,7 @@
   "dependencies": {
     "@react-navigation/native": "7.5.2",
     "@react-navigation/native-stack": "7.21.1",
+    "@ubjs/core": "0.31.0-7",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "react": "19.3.0",
@@ -47,5 +53,13 @@
   },
   "engines": {
     "node": ">= 22.18.0"
+  },
+  "codegenConfig": {
+    "name": "MassorcaMobile",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "dev.massorca.app.binding"
+    }
   }
 }
