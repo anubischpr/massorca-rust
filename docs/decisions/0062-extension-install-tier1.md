@@ -239,6 +239,9 @@ listing names.
   service; for a paired host the path is read on that host as typed.
 - The runner stops waiting for output two seconds after the child ends, then closes the log, so a process the
   installer left behind cannot keep writing to it.
+- The desktop Marketplace lists each built-in agent once, as its agent kind's item, and that item carries the
+  agent's package. Install, the Enabled switch and uninstall of the agent use the package calls, the same as any
+  other package. An agent kind with no package stays read-only.
 
 ### Security review
 

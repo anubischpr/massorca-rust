@@ -130,8 +130,8 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         .into_any_element()
 }
 
-/// Review and install of a catalogue package opens its review. Sample items and agent kinds, which the service
-/// installs another way, show the action unavailable.
+/// Review and install of a catalogue package opens its review. Sample items and agent kinds with no package show the
+/// action unavailable; an agent that carries its package installs like any other package.
 fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
     if item.extension.is_none() {
         return Button::new("marketplace-install", "Review and install")

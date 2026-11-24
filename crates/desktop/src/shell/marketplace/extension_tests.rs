@@ -4,9 +4,11 @@
 use super::InstallReview;
 use crate::model::marketplace::{ItemState, MarketplaceItemId, ProblemTone, problem_alert};
 use crate::model::navigation::MarketplacePage;
+use crate::service::fixtures::agent_kind;
 use crate::service::{Command, ExtensionCommand, ExtensionsRead, Refusal, StoreUpdate};
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
+use massorca_protocol::methods::agents::PackageState;
 use massorca_protocol::methods::extensions::{
     CliPlan, CliPlanState, ExtensionEnabled, ExtensionInstalled, ExtensionItem, ExtensionRemoved,
     ExtensionReview, ExtensionState, InstalledInfo, ItemProblem, Listing, Permission, Risk,
@@ -455,6 +457,177 @@ fn a_refused_removal_keeps_the_confirm_open_with_the_reason(cx: &mut TestAppCont
         .expect("the confirm stays open");
     assert!(!confirm.sending);
     assert_eq!(confirm.error.as_deref(), Some("A session uses this agent"));
+}
+
+/// A built-in agent's package as the catalogue lists it: it names the agent kind it provides.
+fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
+    let mut item = catalogue_package();
+    item.id = format!("massorca.{kind}");
+    item.publisher = "massorca".to_owned();
+    item.state = state;
+    item.listing.category = "agents".to_owned();
+    item.agents = vec![massorca_protocol::methods::extensions::AgentItem {
+        id: kind.to_owned(),
+        detected: false,
+        program_path: None,
+        cli_installed_by_package: false,
+        cli: None,
+    }];
+    item
+}
+
+/// A built-in agent's package once installed, on or off.
+fn installed_agent(kind: &str, enabled: bool) -> ExtensionItem {
+    let mut item = agent_package(
+        kind,
+        if enabled {
+            ExtensionState::Enabled
+        } else {
+            ExtensionState::Disabled
+        },
+    );
+    item.installed = Some(InstalledInfo {
+        version: "1.0.0".to_owned(),
+        source: SourceRef {
+            kind: SourceKind::Catalogue,
+            reference: format!("massorca.{kind}"),
+        },
+        sha256: "0123abcd".to_owned(),
+        installed_at_ms: 0,
+        cli: Vec::new(),
+    });
+    item
+}
+
+/// A connected shell that lists one agent kind and its package, with the agent's page open.
+fn open_agent<'a>(
+    cx: &'a mut TestAppContext,
+    kind: &str,
+    name: &str,
+    installed: Vec<ExtensionItem>,
+    catalogue: Vec<ExtensionItem>,
+) -> (Rig, &'a mut VisualTestContext, MarketplaceItemId) {
+    let (rig, cx) = rig(cx, &[]);
+    let state = match installed.first() {
+        None => PackageState::Available,
+        Some(package) if package.state == ExtensionState::Enabled => PackageState::Enabled,
+        Some(_) => PackageState::Disabled,
+    };
+    rig.updates
+        .send(StoreUpdate::AgentKindsResync(vec![agent_kind(
+            kind, name, state,
+        )]))
+        .expect("the store listens");
+    rig.updates
+        .send(StoreUpdate::Extensions(ExtensionsRead {
+            number: 1,
+            installed: Ok(installed),
+            catalogue: Ok(catalogue),
+        }))
+        .expect("the store listens");
+    cx.run_until_parked();
+    let id = rig
+        .shell
+        .read_with(cx, |shell, _| {
+            shell
+                .model()
+                .marketplace()
+                .items
+                .iter()
+                .find(|item| item.name == name)
+                .map(|item| item.id)
+        })
+        .expect("the agent is listed once, with its package");
+    rig.shell.update(cx, |shell, cx| {
+        shell.open_marketplace(MarketplacePage::Item(id), cx)
+    });
+    draw(cx);
+    (rig, cx, id)
+}
+
+#[gpui::test]
+fn a_built_in_agent_installs_through_the_review_like_any_package(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    click(cx, "button:marketplace-install");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, "catalogue:massorca.codex");
+            reply
+        }
+        _ => panic!("the review asks the service what installing the agent does"),
+    };
+    let _ = reply.send(Ok(review(false)));
+    cx.run_until_parked();
+    draw(cx);
+
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { params, reply })) => {
+            assert_eq!(params.source, "catalogue:massorca.codex");
+            assert_eq!(params.consent.as_deref(), Some(CONSENT));
+            let _ = reply.send(Ok(installed()));
+        }
+        _ => panic!("the press sends the agent's install with the reviewed consent"),
+    }
+}
+
+#[gpui::test]
+fn a_built_in_agent_switch_turns_its_package_on_and_off(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        vec![installed_agent("codex", false)],
+        vec![installed_agent("codex", false)],
+    );
+    click(cx, "marketplace-enabled-switch");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::SetEnabled { params, reply })) => {
+            assert_eq!(params.id, "massorca.codex");
+            assert!(params.enabled, "the switch turns the agent on");
+            let _ = reply.send(Ok(ExtensionEnabled {
+                id: "massorca.codex".to_owned(),
+                enabled: true,
+                changed: true,
+            }));
+        }
+        _ => panic!("the switch sends the agent's package to the service"),
+    }
+}
+
+#[gpui::test]
+fn a_built_in_agent_uninstall_removes_its_package_and_leaves_its_cli(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        vec![installed_agent("codex", true)],
+        vec![installed_agent("codex", true)],
+    );
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "massorca.codex");
+            assert!(
+                !params.uninstall_cli,
+                "the CLI stays unless the person asks"
+            );
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "massorca.codex".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("the confirm sends the agent's removal to the service"),
+    }
 }
 
 /// An installed package whose files the service found changed (`extension.tampered`).

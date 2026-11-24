@@ -203,6 +203,9 @@ Linux only. No automated run opens a visible window.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.
+- A built-in agent is one item: its agent kind's item carries the agent's package
+  (`massorca.<kind>`), so install, the Enabled switch and uninstall go to
+  `extensions.*` like any package. An agent kind with no package stays read-only.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 
