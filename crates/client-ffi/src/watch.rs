@@ -5,8 +5,8 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use massorca_client::{
-    Backoff, Client, ClientError, Link, Reopen, Resilient, ResilientSubscription, StreamItem,
-    Subscription,
+    Backoff, Client, ClientError, Connect, Link, Reopen, Resilient, ResilientSubscription,
+    StreamItem, Subscription,
 };
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::agents::AgentWatchParams;
@@ -82,31 +82,46 @@ impl Watched {
     }
 }
 
-/// How a watch reconnects: to the host's stored record and key, then it opens the stream again.
-pub(crate) struct Reconnect {
+/// How to reach a paired host again: its stored record and key, and this app's identity.
+#[derive(Clone)]
+pub(crate) struct Reach {
     hosts: SealedHosts,
     host: String,
     peer: PeerInfo,
+}
+
+impl Reach {
+    pub(crate) fn new(hosts: SealedHosts, host: String, peer: PeerInfo) -> Self {
+        Self { hosts, host, peer }
+    }
+
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+}
+
+impl Connect for Reach {
+    fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send {
+        let reach = self.clone();
+        async move { Client::connect_host(&reach.hosts, &reach.host, &reach.peer).await }
+    }
+}
+
+/// How a watch reconnects: to the host, then it opens the stream again.
+pub(crate) struct Reconnect {
+    reach: Reach,
     watched: Watched,
 }
 
 impl Reconnect {
-    pub(crate) fn new(hosts: SealedHosts, host: String, peer: PeerInfo, watched: Watched) -> Self {
-        Self {
-            hosts,
-            host,
-            peer,
-            watched,
-        }
+    pub(crate) fn new(reach: Reach, watched: Watched) -> Self {
+        Self { reach, watched }
     }
 }
 
 impl Reopen for Reconnect {
     fn connect(&mut self) -> impl Future<Output = Result<Client, ClientError>> + Send {
-        let hosts = self.hosts.clone();
-        let host = self.host.clone();
-        let peer = self.peer.clone();
-        async move { Client::connect_host(&hosts, &host, &peer).await }
+        Connect::connect(&mut self.reach)
     }
 
     fn open(
@@ -130,18 +145,35 @@ pub(crate) struct Feed<E> {
     closed: AtomicBool,
 }
 
-impl<E: From<LinkState> + Send + 'static> Feed<E> {
-    pub(crate) fn start(runtime: &Handle, reconnect: Reconnect, decode: Decode<E>) -> Self {
-        let host = reconnect.host.clone();
+impl<E: Send + 'static> Feed<E> {
+    /// Runs the task that `run` builds on `runtime`. The task hands each event over through the channel it is given,
+    /// which holds one event for `next`.
+    pub(crate) fn spawn<F>(
+        runtime: &Handle,
+        host: String,
+        run: impl FnOnce(mpsc::Sender<Result<E, ClientError>>) -> F,
+    ) -> Self
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let (events, received) = mpsc::channel(1);
-        let stream = ResilientSubscription::new(reconnect, Backoff::default());
-        let task = runtime.spawn(pump(stream, decode, events));
+        let task = runtime.spawn(run(events));
         Self {
             host,
             events: Mutex::new(received),
             task,
             closed: AtomicBool::new(false),
         }
+    }
+}
+
+impl<E: From<LinkState> + Send + 'static> Feed<E> {
+    pub(crate) fn start(runtime: &Handle, reconnect: Reconnect, decode: Decode<E>) -> Self {
+        let host = reconnect.reach.host().to_owned();
+        Self::spawn(runtime, host, move |events| {
+            let stream = ResilientSubscription::new(reconnect, Backoff::default());
+            pump(stream, decode, events)
+        })
     }
 
     /// The next event. `Ok(None)` once the watch is closed or the host ended the stream. An `Err` is final.
