@@ -17,8 +17,8 @@ use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreatePar
 use tokio::runtime::Runtime;
 use tokio::time::timeout;
 
-/// How long one read may take before the test calls it stuck.
-const WAIT: Duration = Duration::from_secs(10);
+/// How long one read may take before the test calls it stuck; git alone can take seconds on a Windows runner.
+const WAIT: Duration = Duration::from_secs(30);
 
 /// Waits for `future` on the test's runtime, at most `WAIT`.
 fn within<T>(test: &Runtime, future: impl Future<Output = T>) -> T {
@@ -65,6 +65,7 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
                     branch: None,
                     base: None,
                     existing_branch: false,
+                    refresh_base: false,
                     path: None,
                     request_id: None,
                 },
@@ -104,6 +105,7 @@ fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
                     branch: None,
                     base: None,
                     existing_branch: false,
+                    refresh_base: false,
                     path: None,
                     request_id: None,
                 },
