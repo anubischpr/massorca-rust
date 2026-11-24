@@ -297,6 +297,9 @@ pub struct Banner {
     pub image: Option<String>,
     #[serde(default)]
     pub examples: Vec<BannerExample>,
+    /// One or two `#RRGGBB` colours the banner is tinted with; empty when the listing gives none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

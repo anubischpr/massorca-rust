@@ -8,8 +8,8 @@ use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
     PARTS, Part, ProblemAlert, ProblemTone, absent_reason, account_block, advanced_rows,
-    connection_rows, information, information_links, problem_alert, settings_rows, state_chip,
-    uninstall_body,
+    banner_tag, connection_rows, information, information_links, problem_alert, settings_rows,
+    state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -25,11 +25,11 @@ use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::danger_zone::DangerZone;
 use massorca_ui::components::empty_state::EmptyState;
-use massorca_ui::components::invocation_banner::InvocationBanner;
+use massorca_ui::components::invocation_banner::{InvocationBanner, hex_colour};
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
-    RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
+    Color, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
     TYPE_BODY_STRONG, TYPE_TITLE_SM,
 };
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
@@ -188,10 +188,17 @@ fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
             .child(absent_note(reason, cx))
             .into_any_element();
     }
+    let mention = item
+        .extension
+        .as_deref()
+        .and_then(|entry| entry.listing.mention.as_deref());
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
-        format!("@{}", item.name),
+        banner_tag(mention, &item.name),
     );
+    if let Some((first, accent)) = banner_tint(item) {
+        banner = banner.tint(first, accent);
+    }
     for example in &item.examples {
         banner = banner.example(example.clone());
     }
@@ -199,6 +206,13 @@ fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
         .debug_selector(|| "marketplace-part-banner".to_owned())
         .child(banner)
         .into_any_element()
+}
+
+/// The colours the listing gives the banner, parsed; none when it gives none or one is not `#RRGGBB`.
+fn banner_tint(item: &MarketplaceItem) -> Option<(Color, Option<Color>)> {
+    let colors = &item.extension.as_deref()?.listing.banner.as_ref()?.colors;
+    let first = hex_colour(colors.first()?)?;
+    Some((first, colors.get(1).and_then(|text| hex_colour(text))))
 }
 
 /// Part 5: the agent's accounts, with Add account and where the sign-in token lives; or why there are none.

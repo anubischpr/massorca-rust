@@ -10,6 +10,7 @@ mod debug_focus;
 mod debug_page;
 mod delegate;
 mod diff_page;
+mod home_start;
 mod marketplace;
 mod pairing;
 mod palette;
@@ -92,9 +93,13 @@ mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
 #[cfg(test)]
+mod home_start_tests;
+#[cfg(test)]
 mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
+#[cfg(test)]
+mod rail_tests;
 #[cfg(test)]
 mod seen_tests;
 #[cfg(test)]
@@ -182,6 +187,10 @@ pub struct Shell {
     start_composers: HashMap<String, start_page::StartComposer>,
     /// The session a start is asking the service for, until the service answers.
     start_pending: Option<crate::model::start_page::StartingSession>,
+    /// The project the start page with no workspace creates in; `None` stands for the first one.
+    home_project: Option<String>,
+    /// The last start-page call was refused because the data folder is not secured.
+    profile_unsafe: bool,
     /// Each session's composer, kept so its draft survives redraws and switches between sessions.
     session_composers: HashMap<String, session_view::SessionComposer>,
     /// The call in flight for each session, if any: one at a time per session.
@@ -195,6 +204,8 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The menu of a team card, if one is open (screen 4.5).
+    team_menu: Option<teams::OpenTeamMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -212,8 +223,10 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
-    /// The install review of a catalogue package on screen, if any (decision 0062).
+    /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
+    /// The Add extension dialog on screen, if any.
+    marketplace_add: Option<marketplace::AddFolderDialog>,
     /// The last refused change to an installed package, with the item it concerns.
     marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
     /// The update checks of the installed packages, and the review each checked package returned (decision 0062).
@@ -487,6 +500,8 @@ impl Shell {
             debug_page: None,
             start_composers: HashMap::new(),
             start_pending: None,
+            home_project: None,
+            profile_unsafe: false,
             session_composers: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
@@ -494,6 +509,7 @@ impl Shell {
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            team_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -504,6 +520,7 @@ impl Shell {
             marketplace_error: None,
             marketplace_uninstall: None,
             marketplace_review: None,
+            marketplace_add: None,
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
@@ -716,7 +733,10 @@ impl Render for Shell {
                 .filter(|pending| pending.workspace == page.id)
                 .map(|pending| pending.status());
             let mode = self.start_mode(&page.id);
+            let kind_notice = self.kind_notice(&composer, cx);
             start_page::StartFrame {
+                profile_unsafe: self.profile_unsafe,
+                kind_notice,
                 page,
                 composer,
                 shell: shell.clone(),
@@ -725,6 +745,10 @@ impl Render for Shell {
                 mode,
             }
         });
+        let home = (self.model.canvas()
+            == crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces))
+        .then(|| self.home_frame(cx))
+        .flatten();
         let session = self.session_frame(cx);
         let connection = self.store.read(cx).state().connection.clone();
         let hosts = self
@@ -800,6 +824,7 @@ impl Render for Shell {
             canvas::PageFrames {
                 settings,
                 start,
+                home,
                 setup_rows,
                 work_panel,
                 project,
@@ -925,6 +950,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let team_menu = self
+            .team_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
             .revoke
             .as_ref()
@@ -1009,6 +1038,7 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
+            .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))

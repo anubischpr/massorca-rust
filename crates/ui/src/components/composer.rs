@@ -125,6 +125,8 @@ pub struct Composer {
     resume: bool,
     error: Option<SharedString>,
     enter_inserts_newline: bool,
+    /// Send works with a blank draft (the start page creates a workspace with no prompt).
+    sends_empty: bool,
     /// A control shown first in the bottom row (the start page's Chat / Terminal switch).
     leading: Option<LeadingControl>,
     /// Why sending is not possible yet: Send and Enter stay off and the draft stays put.
@@ -194,6 +196,7 @@ impl Composer {
             resume: false,
             error: None,
             enter_inserts_newline: false,
+            sends_empty: false,
             leading: None,
             send_unavailable: None,
             voice_unavailable: None,
@@ -286,6 +289,12 @@ impl Composer {
         cx.notify();
     }
 
+    /// Lets Send and Enter go through with a blank draft.
+    pub fn sends_empty(mut self) -> Self {
+        self.sends_empty = true;
+        self
+    }
+
     pub fn set_enter_inserts_newline(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.enter_inserts_newline = enabled;
         cx.notify();
@@ -343,7 +352,7 @@ impl Composer {
             agent_busy: self.agent_busy,
             host_confirmed: self.host_confirmed,
             disabled: self.disabled_reason.is_some() || self.send_unavailable.is_some(),
-            text_empty: area.text().is_empty(),
+            text_empty: area.text().is_empty() && !self.sends_empty,
             composing: area.is_composing(),
             queueing: self.queueing_offered,
         }
@@ -390,7 +399,7 @@ impl Composer {
     /// Sends or queues the draft, clears it and remembers it for Up.
     fn submit(&mut self, queue: bool, cx: &mut Context<Self>) {
         let text = self.draft(cx);
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && !self.sends_empty {
             return;
         }
         self.history.push(&text);
@@ -580,6 +589,17 @@ mod tests {
             composer.read_with(cx, |composer, cx| composer.primary_action(cx)),
             PrimaryAction::Stop
         );
+    }
+
+    #[gpui::test]
+    fn a_composer_that_sends_empty_sends_a_blank_draft_on_enter(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (composer, cx) =
+            cx.add_window_view(|_, cx| Composer::new(picker_state(), access(), cx).sends_empty());
+        let events = record(&composer, cx);
+        focus_and_draw(&composer, cx);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*events.borrow(), vec![ComposerEvent::Send(String::new())]);
     }
 
     #[gpui::test]

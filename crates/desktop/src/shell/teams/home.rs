@@ -3,9 +3,8 @@
 use super::super::Shell;
 use super::super::change;
 use super::access::access_control;
-use super::waiting_icon;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{Team, TeamPage, TeamsState};
+use crate::model::teams::{Team, TeamError, TeamPage, TeamsState};
 use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, WeakEntity, div, px};
 use massorca_ui::components::avatar::{Avatar, AvatarSize};
 use massorca_ui::components::badge::Badge;
@@ -13,6 +12,7 @@ use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::card::{Card, CardPadding};
 use massorca_ui::components::empty_state::EmptyState;
+use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::tokens::{SPACE_1, SPACE_4, SPACE_6, TYPE_BODY_SM, TYPE_HEADING};
 use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
 
@@ -81,18 +81,28 @@ fn new_team_button(shell: &WeakEntity<Shell>, connected: bool) -> Button {
 
 fn grid(state: &TeamsState, shell: &WeakEntity<Shell>, theme: &Theme) -> impl IntoElement {
     let connected = state.is_connected();
-    div().flex().flex_wrap().gap(px(SPACE_4)).children(
-        state
-            .teams()
-            .iter()
-            .map(|team| team_card(team, state.access_notice(team.id), shell, connected, theme)),
-    )
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(SPACE_4))
+        .children(state.teams().iter().map(|team| {
+            let removal = state.removal_notice(team.id);
+            team_card(
+                team,
+                state.access_notice(team.id),
+                removal,
+                shell,
+                connected,
+                theme,
+            )
+        }))
 }
 
 /// A team card: its name and mark, the lead bot, the bot count, the host and Workspaces (4.5).
 fn team_card(
     team: &Team,
     notice: Option<&str>,
+    removal: Option<&str>,
     shell: &WeakEntity<Shell>,
     connected: bool,
     theme: &Theme,
@@ -125,7 +135,15 @@ fn team_card(
                 let _ = shell.update(cx, |shell, cx| shell.open_add_bot(id, window, cx));
             })
     };
-    let more = waiting_icon(format!("team-more-{}", id.0), IconName::Ellipsis, "More");
+    let more = {
+        let shell = shell.clone();
+        IconButton::new(format!("team-more-{}", id.0), IconName::Ellipsis, "More")
+            .disabled(!connected)
+            .disabled_reason(TeamError::Unavailable.message())
+            .on_click(move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.open_team_menu(id, window, cx));
+            })
+    };
     let workspaces = if team.workspaces { "on" } else { "off" };
     div().w(px(CARD_WIDTH)).child(
         Card::new(format!("team-card-{}", id.0))
@@ -147,12 +165,21 @@ fn team_card(
                         format!("Workspaces in this team: {workspaces}"),
                         theme,
                     ))
-                    .child(access_control(team, notice, shell, connected, theme)),
+                    .child(access_control(team, notice, shell, connected, theme))
+                    .children(removal.map(|text| danger_line(text, theme))),
             )
             .footer_action(open)
             .footer_action(add_bot)
             .footer_action(more),
     )
+}
+
+/// A notice in the danger colour, under the card's details.
+fn danger_line(text: &str, theme: &Theme) -> impl IntoElement {
+    div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.status.danger_fg)
+        .child(text.to_owned())
 }
 
 pub(super) fn line(text: String, theme: &Theme) -> impl IntoElement {

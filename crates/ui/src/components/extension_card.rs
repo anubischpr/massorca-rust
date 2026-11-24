@@ -1,6 +1,7 @@
 //! Extension card (docs/design/components/ExtensionCard.md): one extension, skill, tool, agent or
 //! service in the Marketplace, with the one action that fits its state. Desktop only.
 
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
@@ -16,9 +17,9 @@ use crate::tokens::{
     TYPE_CAPTION, TYPE_MONO_SM, TYPE_TITLE_SM,
 };
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, ImageSource, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    img, px, relative,
+    AnyElement, App, ClickEvent, Div, ElementId, ImageSource, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Window, div, img, px, relative,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -110,6 +111,26 @@ fn route_click(
     }
 }
 
+/// The name's press: it opens the item page, and stops here so the card does not open the page a second time.
+fn name_press(
+    handler: &Option<ActionHandler>,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let handler = handler.clone();
+    move |_, window, cx| {
+        cx.stop_propagation();
+        if let Some(handler) = &handler {
+            handler(ExtensionAction::Open, window, cx);
+        }
+    }
+}
+
+/// A group of controls on the card: a press on it is the control's own, so the card does not also open its page.
+fn control_group(id: &ElementId, name: &'static str) -> Stateful<Div> {
+    div()
+        .id((id.clone(), name))
+        .on_click(|_, _, cx| cx.stop_propagation())
+}
+
 /// The switch handler: a toggle carries the state it switches to.
 fn route_toggle(handler: &Option<ActionHandler>) -> impl Fn(bool, &mut Window, &mut App) + 'static {
     let handler = handler.clone();
@@ -128,10 +149,12 @@ pub struct ExtensionCard {
     name: SharedString,
     publisher: SharedString,
     source: SharedString,
+    category: Option<SharedString>,
     version: SharedString,
     description: SharedString,
     icon: IconName,
     logo: Option<ImageSource>,
+    agent: Option<AgentKind>,
     adds: Vec<(IconName, SharedString)>,
     state: ExtensionState,
     install_host: Option<SharedString>,
@@ -162,10 +185,12 @@ impl ExtensionCard {
             name: name.into(),
             publisher: SharedString::default(),
             source: SharedString::default(),
+            category: None,
             version: SharedString::default(),
             description: SharedString::default(),
             icon: IconName::Puzzle,
             logo: None,
+            agent: None,
             adds: Vec::new(),
             state,
             install_host: None,
@@ -184,6 +209,12 @@ impl ExtensionCard {
     /// Where the extension comes from, such as "Marketplace".
     pub fn source(mut self, source: impl Into<SharedString>) -> Self {
         self.source = source.into();
+        self
+    }
+
+    /// The item's category, such as "Agent", as a label beside the publisher.
+    pub fn category(mut self, category: impl Into<SharedString>) -> Self {
+        self.category = Some(category.into());
         self
     }
 
@@ -206,6 +237,12 @@ impl ExtensionCard {
     /// The extension's logo, drawn in the plate in place of the icon.
     pub fn logo(mut self, logo: impl Into<ImageSource>) -> Self {
         self.logo = Some(logo.into());
+        self
+    }
+
+    /// The agent's own mark, the one the sidebar and model picker draw; it takes the plate over the icon and logo.
+    pub fn agent(mut self, agent: AgentKind) -> Self {
+        self.agent = Some(agent);
         self
     }
 
@@ -280,7 +317,7 @@ impl ExtensionCard {
                     .label("Enabled")
                     .disabled(stale)
                     .on_change(route_toggle(handler));
-                let mut row = div()
+                let mut row = control_group(id, "switch-row")
                     .flex()
                     .items_center()
                     .gap(px(SPACE_2))
@@ -513,10 +550,19 @@ impl RenderOnce for ExtensionCard {
         let p = theme.palette;
         let fills = Surface::Raised.fills(&theme);
         let id = self.id.clone();
+        let card_focus = window
+            .use_keyed_state(
+                ElementId::NamedChild(Arc::new(id.clone()), "card".into()),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
         let card = div()
             .id(id.clone())
             .role(Role::ListItem)
             .aria_label(self.name.clone())
+            .track_focus(&card_focus)
             .flex()
             .flex_col()
             .gap(px(SPACE_3))
@@ -533,6 +579,7 @@ impl RenderOnce for ExtensionCard {
         }
 
         let handler = self.on_action.clone();
+        let card = card.on_click(route_click(&handler, ExtensionAction::Open));
         let disabled_extension =
             matches!(self.state, ExtensionState::Installed { enabled: false, .. });
         let name_color = if disabled_extension {
@@ -561,7 +608,7 @@ impl RenderOnce for ExtensionCard {
             .text_color(name_color)
             .hover(|s| s.underline())
             .active(move |s| s.bg(fills.pressed))
-            .on_click(route_click(&handler, ExtensionAction::Open))
+            .on_click(name_press(&handler))
             .child(self.name.clone());
         let plate = div()
             .id((id.clone(), "icon"))
@@ -573,14 +620,17 @@ impl RenderOnce for ExtensionCard {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .on_click(route_click(&handler, ExtensionAction::Open))
-            .child(match self.logo.clone() {
-                Some(logo) => div()
+            .child(match (self.agent, self.logo.clone()) {
+                (Some(agent), _) => div()
+                    .debug_selector(|| "card-agent".into())
+                    .child(AgentIcon::new(agent).size(AgentIconSize::Large))
+                    .into_any_element(),
+                (None, Some(logo)) => div()
                     .debug_selector(|| "card-logo".into())
                     .size_full()
                     .child(img(logo).size_full())
                     .into_any_element(),
-                None => Icon::new(self.icon)
+                (None, None) => Icon::new(self.icon)
                     .size(IconSize::Large)
                     .color(p.text.secondary)
                     .into_any_element(),
@@ -613,6 +663,12 @@ impl RenderOnce for ExtensionCard {
                             .text_style(TYPE_BODY_SM)
                             .text_color(p.text.secondary)
                             .child(div().flex_1().min_w_0().truncate().child(byline))
+                            .children(self.category.clone().map(|category| {
+                                div()
+                                    .debug_selector(|| "extension-category".into())
+                                    .flex_none()
+                                    .child(Badge::text(category).category(true))
+                            }))
                             .child(
                                 div()
                                     .flex_none()
@@ -625,6 +681,7 @@ impl RenderOnce for ExtensionCard {
             );
         let mut card = card.child(header).child(
             div()
+                .debug_selector(|| "description".into())
                 .min_w_0()
                 .text_style(TYPE_BODY)
                 .text_color(p.text.secondary)
@@ -669,7 +726,7 @@ impl RenderOnce for ExtensionCard {
                         .child(footer.left),
                 )
                 .child(
-                    div()
+                    control_group(&id, "actions")
                         .flex()
                         .items_center()
                         .gap(px(SPACE_2))
@@ -687,6 +744,7 @@ impl RenderOnce for ExtensionCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::button::test_support::press_key;
     use std::cell::RefCell;
 
     #[test]
@@ -759,6 +817,91 @@ mod tests {
         cx.simulate_click(install, gpui::Modifiers::none());
 
         assert_eq!(*seen.borrow(), vec![ExtensionAction::Install]);
+    }
+
+    #[gpui::test]
+    fn the_card_names_its_category(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| CategoryHarness);
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("extension-category").is_some(),
+            "the category badge is drawn"
+        );
+    }
+
+    /// Hosts one catalog card with a category, as the Marketplace draws an agent.
+    struct CategoryHarness;
+
+    impl gpui::Render for CategoryHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(
+                ExtensionCard::new("acme", "Acme Metrics", ExtensionState::Catalog)
+                    .category("Agent"),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn an_agent_card_draws_the_agents_own_mark(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| AgentHarness);
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("card-agent").is_some(),
+            "the agent's mark is drawn in the plate"
+        );
+    }
+
+    /// Hosts one catalog card for an agent, as the Marketplace draws the Gentle Shell package.
+    struct AgentHarness;
+
+    impl gpui::Render for AgentHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(
+                ExtensionCard::new("gentle-shell", "Gentle Shell", ExtensionState::Catalog)
+                    .agent(AgentKind::GentleShell),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_press_on_the_card_body_opens_the_item_page(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: true,
+        });
+        cx.run_until_parked();
+
+        let body = cx
+            .debug_bounds("description")
+            .expect("description is drawn")
+            .center();
+        cx.simulate_click(body, gpui::Modifiers::none());
+
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Open]);
+    }
+
+    #[gpui::test]
+    fn enter_on_the_focused_card_opens_the_item_page(cx: &mut gpui::TestAppContext) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let (_, cx) = cx.add_window_view(|_, _| ActionHarness {
+            seen: seen.clone(),
+            catalog: true,
+        });
+        cx.run_until_parked();
+
+        // A press on the body focuses the card; Enter on the focused card then opens it.
+        let body = cx
+            .debug_bounds("description")
+            .expect("description is drawn")
+            .center();
+        cx.simulate_click(body, gpui::Modifiers::none());
+        seen.borrow_mut().clear();
+        press_key(cx, "enter");
+
+        assert_eq!(*seen.borrow(), vec![ExtensionAction::Open]);
     }
 
     /// Hosts one card, installed and enabled or in the catalog, and records the actions it sends.

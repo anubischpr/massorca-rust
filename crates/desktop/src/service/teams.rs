@@ -12,7 +12,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, Bot, BotAddParams, Team, TeamAccess, TeamCreateParams, TeamProject,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamUpdateParams,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -154,6 +154,14 @@ pub(crate) enum TeamCommand {
         access: TeamAccess,
         reply: oneshot::Sender<Result<Team, Refusal>>,
     },
+    UpdateTeam {
+        params: TeamUpdateParams,
+        reply: oneshot::Sender<Result<Team, Refusal>>,
+    },
+    RemoveTeam {
+        team: String,
+        reply: oneshot::Sender<Result<Team, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -229,6 +237,18 @@ pub(super) fn spawn_call(
                     .await
             });
         }
+        TeamCommand::UpdateTeam { params, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_update(&params).await
+            });
+        }
+        TeamCommand::RemoveTeam { team, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_remove(&TeamRemoveParams { team, force: false })
+                    .await
+            });
+        }
         TeamCommand::AddBot { params, reply } => {
             spawn_write(client, updates, sequence, reply, move |client| async move {
                 client.team_bot_add(&params).await
@@ -240,7 +260,10 @@ pub(super) fn spawn_call(
 /// Answers a write with `refusal`, while there is no connection to ask.
 pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
     match command {
-        TeamCommand::CreateTeam { reply, .. } | TeamCommand::SetAccess { reply, .. } => {
+        TeamCommand::CreateTeam { reply, .. }
+        | TeamCommand::SetAccess { reply, .. }
+        | TeamCommand::UpdateTeam { reply, .. }
+        | TeamCommand::RemoveTeam { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::AddBot { reply, .. } => {
@@ -322,6 +345,19 @@ impl ServiceHandle {
             })
         })
         .await
+    }
+
+    /// `team.update`. The team shows the change when the read that follows the answer lands.
+    pub async fn update_team(&self, params: TeamUpdateParams) -> Result<Team, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::UpdateTeam { params, reply }))
+            .await
+    }
+
+    /// `team.rm` without `force`: a team with a running task is refused, and the refusal says so. The team leaves
+    /// the teams when the read that follows the answer lands.
+    pub async fn remove_team(&self, team: String) -> Result<Team, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::RemoveTeam { team, reply }))
+            .await
     }
 }
 

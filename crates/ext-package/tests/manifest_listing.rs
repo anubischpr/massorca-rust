@@ -214,6 +214,32 @@ fn banner_examples_are_one_to_six_and_match_their_kind() {
 }
 
 #[test]
+fn a_banner_takes_one_or_two_hex_colours() {
+    let with_colors = |colors: Value| {
+        listing_with(json!({
+            "banner": { "examples": [{ "kind": "usage", "caption": "Use it" }], "colors": colors }
+        }))
+    };
+    assert!(load(&bytes(&with_colors(json!(["#D97757"])))).is_ok());
+    assert!(load(&bytes(&with_colors(json!(["#D97757", "#B5532F"])))).is_ok());
+    assert!(has_problem(
+        &problems(&with_colors(json!(["#D97757", "#B5532F", "#000000"]))),
+        "/listing/banner/colors",
+        "1 or 2"
+    ));
+    assert!(has_problem(
+        &problems(&with_colors(json!(["red"]))),
+        "/listing/banner/colors/0",
+        "#RRGGBB"
+    ));
+    assert!(has_problem(
+        &problems(&with_colors(json!(["#D9775"]))),
+        "/listing/banner/colors/0",
+        "#RRGGBB"
+    ));
+}
+
+#[test]
 fn a_command_example_names_a_declared_command_by_keys_or_id() {
     let by_keys = listing_with(json!({
         "banner": { "examples": [{ "kind": "command", "text": "Ctrl+Alt+N", "caption": "Add a note" }] }

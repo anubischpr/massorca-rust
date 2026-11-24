@@ -45,6 +45,40 @@ pub fn session_kind_choices(kinds: &[AgentKind]) -> Vec<KindChoice> {
         .collect()
 }
 
+/// Why a kind cannot start a session, as the start page's agent pick says it.
+pub const NOT_INSTALLED: &str = "Not installed";
+pub const DISABLED: &str = "Disabled";
+pub const CLI_NOT_FOUND: &str = "CLI not found";
+pub const DECLARATION_PROBLEM: &str = "Its declaration has problems";
+
+/// Every kind the service declares, for the start page's agent pick: the kinds that can start
+/// first, then the rest with why they cannot, each group in the service's order.
+pub fn start_kind_choices(kinds: &[AgentKind]) -> Vec<KindChoice> {
+    let (mut ready, blocked): (Vec<KindChoice>, Vec<KindChoice>) = kinds
+        .iter()
+        .map(|kind| KindChoice {
+            id: kind.id.clone(),
+            name: kind.name.clone(),
+            unavailable: start_reason(kind),
+        })
+        .partition(|choice| choice.unavailable.is_none());
+    ready.extend(blocked);
+    ready
+}
+
+/// Why a kind cannot start a session: a broken declaration, not installed, off, or its CLI not found.
+fn start_reason(kind: &AgentKind) -> Option<&'static str> {
+    if !kind.problems.is_empty() {
+        return Some(DECLARATION_PROBLEM);
+    }
+    match kind.package.state {
+        PackageState::Enabled if kind.detected => None,
+        PackageState::Enabled => Some(CLI_NOT_FOUND),
+        PackageState::Disabled => Some(DISABLED),
+        PackageState::Available | PackageState::Unknown => Some(NOT_INSTALLED),
+    }
+}
+
 /// The choice at `index` when it can be picked: an unavailable kind is refused here, whatever the form shows.
 pub fn choice_at(choices: &[KindChoice], index: usize) -> Option<&KindChoice> {
     choices
@@ -240,6 +274,37 @@ mod tests {
     fn a_turned_off_kind_is_unavailable_as_turned_off_even_when_detected() {
         let codex = agent_kind("codex", "Codex", PackageState::Disabled);
         assert_eq!(kind_unavailable_reason(&[codex], "codex"), Some(TURNED_OFF));
+    }
+
+    #[test]
+    fn the_start_pick_lists_every_declared_kind_ready_first_and_says_why_the_rest_cannot_start() {
+        let mut broken = agent_kind("broken", "Broken", PackageState::Enabled);
+        broken.problems = vec!["its declaration does not parse".into()];
+        let mut missing = agent_kind("gemini", "Gemini", PackageState::Enabled);
+        missing.detected = false;
+        let kinds = [
+            agent_kind("cursor", "Cursor", PackageState::Available),
+            agent_kind("codex", "Codex", PackageState::Disabled),
+            agent_kind("claude", "Claude", PackageState::Enabled),
+            broken,
+            missing,
+        ];
+        let choices = start_kind_choices(&kinds);
+        assert_eq!(
+            ids(&choices),
+            ["claude", "cursor", "codex", "broken", "gemini"]
+        );
+        let reasons: Vec<Option<&str>> = choices.iter().map(|choice| choice.unavailable).collect();
+        assert_eq!(
+            reasons,
+            [
+                None,
+                Some(NOT_INSTALLED),
+                Some(DISABLED),
+                Some(DECLARATION_PROBLEM),
+                Some(CLI_NOT_FOUND)
+            ]
+        );
     }
 
     #[test]

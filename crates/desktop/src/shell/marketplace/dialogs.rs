@@ -31,6 +31,9 @@ pub(in crate::shell) fn dialog(
     if let Some(dialog) = super::import::dialog(shell, weak, cx) {
         return Some(dialog);
     }
+    if let Some(dialog) = super::add_folder::dialog(shell, weak, cx) {
+        return Some(dialog);
+    }
     let snapshot = shell.model().marketplace();
     if let Some(flow) = &snapshot.sign_in {
         return Some(sign_in(shell, weak, snapshot, flow));
@@ -50,7 +53,7 @@ fn install_review(
     weak: &WeakEntity<Shell>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let item = snapshot.item(review.item)?;
+    let title = review_title(review, snapshot)?;
     let theme = *cx.theme();
     let p = &theme.palette;
     let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
@@ -103,22 +106,19 @@ fn install_review(
             }
         }
     }
-    let mut dialog = Dialog::new(
-        "marketplace-install-review",
-        format!("Install {}", item.name),
-    )
-    .open(true)
-    .child(body)
-    .action(action_label)
-    .cancel_label("Cancel")
-    .busy(review.sending)
-    .action_disabled(!may_install)
-    .on_action(move |_, cx| {
-        let _ = ok.update(cx, |shell, cx| shell.confirm_extension_install(cx));
-    })
-    .on_dismiss(move |_, cx| {
-        let _ = dismiss.update(cx, |shell, cx| shell.cancel_extension_review(cx));
-    });
+    let mut dialog = Dialog::new("marketplace-install-review", title)
+        .open(true)
+        .child(body)
+        .action(action_label)
+        .cancel_label("Cancel")
+        .busy(review.sending)
+        .action_disabled(!may_install)
+        .on_action(move |_, cx| {
+            let _ = ok.update(cx, |shell, cx| shell.confirm_extension_install(cx));
+        })
+        .on_dismiss(move |_, cx| {
+            let _ = dismiss.update(cx, |shell, cx| shell.cancel_extension_review(cx));
+        });
     if runs_installer {
         let tick_box = Checkbox::new("marketplace-install-run-installer", review.run_installer)
             .label("Run the vendor installer listed above")
@@ -144,6 +144,16 @@ fn install_review(
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
+}
+
+/// The install review's title: the catalogue item's name, or the name the review reports for a folder package.
+fn review_title(review: &InstallReview, snapshot: &MarketplaceSnapshot) -> Option<String> {
+    let name = match (review.item, &review.review) {
+        (Some(item), _) => snapshot.item(item)?.name.clone(),
+        (None, Some(answer)) => answer.name.clone(),
+        (None, None) => return Some("Install from a folder".to_owned()),
+    };
+    Some(format!("Install {name}"))
 }
 
 /// The account sign-in. Each stage's press runs one step of the source's sign-in.
