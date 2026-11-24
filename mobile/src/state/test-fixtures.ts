@@ -1,5 +1,18 @@
 // Sample data for tests. Placeholders only: the repository is public, so no real address, user or secret appears here.
-import type { AgentSessionSummary, HostSummary, WorkspaceSummary } from '../binding/types';
+import { FakeMassOrca, type FakeOptions } from '../binding/fake';
+import {
+  FfiException,
+  type AgentEvent,
+  type AgentSessionSummary,
+  type GitEvent,
+  type GitStatusSummary,
+  type Host,
+  type HostSummary,
+  type ProtocolInfo,
+  type WhoAmI,
+  type Watch,
+  type WorkspaceSummary,
+} from '../binding/types';
 
 export function hostSummary(name: string = 'home-pc'): HostSummary {
   return {
@@ -36,4 +49,70 @@ export function workspace(overrides: Partial<WorkspaceSummary> & { readonly id: 
     missing: false,
     ...overrides,
   };
+}
+
+/** A fake whose connect refuses with a protocol mismatch for the first `refusals` attempts, then connects. */
+export class ProtocolRefusingFake extends FakeMassOrca {
+  private refusals: number;
+
+  constructor(
+    private readonly range: { readonly min?: number; readonly max?: number },
+    refusals: number = Number.POSITIVE_INFINITY,
+    options: FakeOptions = { hosts: [hostSummary()] },
+  ) {
+    super(options);
+    this.refusals = refusals;
+  }
+
+  override async connect(hostName: string): Promise<Host> {
+    if (this.refusals > 0) {
+      this.refusals -= 1;
+      throw new FfiException({
+        tag: 'ProtocolMismatch',
+        message: `${hostName} refused the connection.`,
+        supportedMin: this.range.min,
+        supportedMax: this.range.max,
+      });
+    }
+    return super.connect(hostName);
+  }
+}
+
+/** A host whose workspace list never arrives, for the loading state. */
+class StalledHost implements Host {
+  constructor(private readonly inner: Host) {}
+
+  name(): string {
+    return this.inner.name();
+  }
+
+  whoami(): Promise<WhoAmI> {
+    return this.inner.whoami();
+  }
+
+  protocol(): ProtocolInfo {
+    return this.inner.protocol();
+  }
+
+  workspaces(): Promise<WorkspaceSummary[]> {
+    return new Promise<WorkspaceSummary[]>(() => undefined);
+  }
+
+  gitStatus(workspaceId: string): Promise<GitStatusSummary> {
+    return this.inner.gitStatus(workspaceId);
+  }
+
+  watchGit(workspaceId: string): Watch<GitEvent> {
+    return this.inner.watchGit(workspaceId);
+  }
+
+  watchAgents(workspace?: string): Watch<AgentEvent> {
+    return this.inner.watchAgents(workspace);
+  }
+}
+
+export class StalledWorkspacesFake extends FakeMassOrca {
+  override async connect(hostName: string): Promise<Host> {
+    return new StalledHost(await super.connect(hostName));
+  }
 }
