@@ -3,6 +3,7 @@
 
 use super::home_start::home_project_menu;
 use super::service_tests::{Rig, click, draw, rig};
+use super::workspace_dialogs::ProjectMenuChoice;
 use super::*;
 use crate::model::home_start::{HOME_START, NO_PROJECT_NEEDS_SERVICE};
 use crate::model::workspace_flow::NO_PROJECT_LABEL;
@@ -86,11 +87,10 @@ fn expect_start(script: &mut Script) -> StartCall {
 }
 
 #[gpui::test]
-fn plus_create_opens_the_start_page_and_not_the_new_workspace_form(cx: &mut TestAppContext) {
+fn plus_create_opens_the_start_page(cx: &mut TestAppContext) {
     let (rig, cx) = home_rig(cx);
     draw(cx);
     rig.shell.read_with(cx, |shell, _| {
-        assert!(shell.dialogs.create.is_none(), "the form stays closed");
         assert_eq!(
             shell.model().canvas(),
             crate::model::canvas::Canvas::Home(crate::model::navigation::Mode::Workspaces)
@@ -195,6 +195,15 @@ fn no_project_is_listed_but_off_and_says_it_needs_a_newer_service() {
     assert!(matches!(&entries[row], MenuEntry::Item(item) if item.is_disabled()));
     assert_eq!(choices[row], None, "the row stands for nothing to choose");
     assert_eq!(NO_PROJECT_NEEDS_SERVICE, "Needs a newer service.");
+}
+
+#[test]
+fn an_empty_start_page_menu_says_so_and_still_offers_add_a_project() {
+    let (entries, choices) = home_project_menu(&[], None);
+    // The caption, No project, a separator, then Add a project.
+    assert_eq!(entries.len(), 4);
+    assert_eq!(choices.first(), Some(&None), "the caption is not a choice");
+    assert_eq!(choices.last(), Some(&Some(ProjectMenuChoice::AddProject)));
 }
 
 #[gpui::test]

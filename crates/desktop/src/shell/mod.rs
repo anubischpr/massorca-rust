@@ -916,12 +916,6 @@ impl Render for Shell {
             (Some(palette), Some(input)) => Some(palette::palette(palette, &input, cx)),
             _ => None,
         };
-        let projects = self.store.read(cx).state().projects.clone();
-        let create = self
-            .dialogs
-            .create
-            .as_ref()
-            .map(|dialog| workspace_dialog_views::create_dialog(dialog, &projects, &shell, cx));
         let add_project = self
             .dialogs
             .add_project
@@ -1033,7 +1027,6 @@ impl Render for Shell {
             )
             .when_some(resize_grabs, |el, grabs| el.child(grabs))
             .when_some(palette, |el, palette| el.child(palette))
-            .when_some(create, |el, dialog| el.child(dialog))
             .when_some(add_project, |el, dialog| el.child(dialog))
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))

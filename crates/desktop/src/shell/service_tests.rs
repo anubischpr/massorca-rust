@@ -1,12 +1,12 @@
-//! Element tests of the shell on a service store: the notice and status item, the create form, and
-//! the remove flow with its waivers. A scripted handle stands in for the service, so each call is
-//! answered by hand and no window opens.
+//! Element tests of the shell on a service store: the notice and status item, the add-project
+//! dialog, and the remove flow with its waivers. A scripted handle stands in for the service, so
+//! each call is answered by hand and no window opens.
 
 use super::*;
 use crate::data::SampleDataSource;
 use crate::model::marketplace::{ItemKind, ServiceMarketplace, installed_agent_links};
 use crate::model::teams::{SampleTeamsSource, TeamsSource, UnavailableTeams};
-use crate::model::workspace_flow::{ProjectChoice, RemoveStage};
+use crate::model::workspace_flow::RemoveStage;
 use crate::service::fixtures::{agent_kind, project, workspace};
 use crate::service::{Command, ConnectionState, Refusal, Script, StoreUpdate};
 use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
@@ -231,136 +231,12 @@ fn the_banner_goes_away_when_the_link_is_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_create_dialog_needs_a_name_then_sends_the_call_and_closes_on_the_answer(
+fn add_a_project_is_refused_under_its_path_then_added_and_chosen_on_the_start_page(
     cx: &mut TestAppContext,
 ) {
     let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
     rig.shell
-        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
-    draw(cx);
-    assert!(cx.debug_bounds("dialog-panel").is_some());
-    rig.shell.read_with(cx, |shell, _| {
-        let form = &shell.dialogs.create.as_ref().expect("open").form;
-        assert_eq!(form.project, Some(ProjectChoice::Project("p1".into())));
-        assert!(!form.can_submit(), "no name yet");
-    });
-
-    cx.simulate_input("new-work");
-    click(cx, "dialog-action");
-    let Some(Command::Create { params, reply }) = rig.script.next() else {
-        panic!("a workspace.create call was expected");
-    };
-    assert_eq!(
-        (params.project.as_str(), params.name.as_str()),
-        ("p1", "new-work")
-    );
-    rig.shell.read_with(cx, |shell, _| {
-        assert!(shell.dialogs.create.as_ref().expect("open").form.busy);
-    });
-
-    // A refusal keeps the dialog, free again, with the reason under the name.
-    reply
-        .send(Err(Refusal::NameProblem {
-            message: "That name is taken.".into(),
-        }))
-        .expect("the shell waits");
-    cx.run_until_parked();
-    rig.shell.read_with(cx, |shell, _| {
-        let form = &shell.dialogs.create.as_ref().expect("still open").form;
-        assert!(!form.busy);
-        assert_eq!(form.name_error.as_deref(), Some("That name is taken."));
-    });
-
-    // Retrying with a new name sends again, and success closes the dialog.
-    cx.simulate_input("-2");
-    click(cx, "dialog-action");
-    let Some(Command::Create { reply, .. }) = rig.script.next() else {
-        panic!("a second workspace.create call was expected");
-    };
-    reply
-        .send(Ok(workspace("w2", "p1", "new-work-2", 2)))
-        .expect("the shell waits");
-    cx.run_until_parked();
-    rig.shell
-        .read_with(cx, |shell, _| assert!(shell.dialogs.create.is_none()));
-}
-
-#[gpui::test]
-fn the_project_menu_ends_with_no_project_which_cannot_create(cx: &mut TestAppContext) {
-    let (rig, cx) = rig(cx, &[("p1", "alpha"), ("p2", "beta")]);
-    rig.shell
-        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
-    cx.simulate_input("w");
-    rig.shell.update_in(cx, |shell, window, cx| {
-        shell.open_project_menu(window, cx);
-    });
-    draw(cx);
-    assert!(cx.debug_bounds("menu-panel").is_some());
-    rig.shell.read_with(cx, |shell, _| {
-        let menu = shell.dialogs.menu.as_ref().expect("the menu is open");
-        let workspace_dialogs::MenuTarget::Projects(choices) = &menu.target else {
-            panic!("a project menu was expected");
-        };
-        assert_eq!(
-            choices.len(),
-            5,
-            "two projects, No project, a separator, Add a project"
-        );
-        assert_eq!(
-            choices.last(),
-            Some(&Some(workspace_dialogs::ProjectMenuChoice::AddProject))
-        );
-    });
-
-    // Add a project is the last row, so one row up is "No project": nothing can be created from it.
-    cx.simulate_keystrokes("end up enter");
-    rig.shell.read_with(cx, |shell, _| {
-        let form = &shell.dialogs.create.as_ref().expect("open").form;
-        assert_eq!(form.project, Some(ProjectChoice::NoProject));
-        assert!(!form.can_submit());
-        assert!(form.no_project_note().is_some());
-        assert!(shell.dialogs.menu.is_none(), "the menu closed");
-    });
-}
-
-#[gpui::test]
-fn an_empty_project_menu_says_so_and_still_offers_add_a_project(cx: &mut TestAppContext) {
-    let (rig, cx) = rig(cx, &[]);
-    rig.shell
-        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
-    rig.shell.update_in(cx, |shell, window, cx| {
-        shell.open_project_menu(window, cx);
-    });
-    draw(cx);
-    rig.shell.read_with(cx, |shell, _| {
-        let menu = shell.dialogs.menu.as_ref().expect("the menu is open");
-        let workspace_dialogs::MenuTarget::Projects(rows) = &menu.target else {
-            panic!("a project menu was expected");
-        };
-        // The caption, No project, a separator, then Add a project.
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows.first(), Some(&None), "the caption is not a choice");
-        assert_eq!(
-            rows.last(),
-            Some(&Some(workspace_dialogs::ProjectMenuChoice::AddProject))
-        );
-    });
-}
-
-#[gpui::test]
-fn add_a_project_is_refused_under_its_path_then_added_and_chosen_in_the_create_form(
-    cx: &mut TestAppContext,
-) {
-    let (mut rig, cx) = rig(cx, &[("p1", "alpha")]);
-    rig.shell
-        .update_in(cx, |shell, window, cx| shell.open_create(window, cx));
-    cx.simulate_input("w");
-    rig.shell.update_in(cx, |shell, window, cx| {
-        shell.open_project_menu(window, cx);
-    });
-    draw(cx);
-    // Add a project is the last row, so End and Enter open its dialog.
-    cx.simulate_keystrokes("end enter");
+        .update_in(cx, |shell, window, cx| shell.open_add_project(window, cx));
     draw(cx);
     rig.shell
         .read_with(cx, |shell, _| assert!(shell.dialogs.add_project.is_some()));
@@ -403,13 +279,7 @@ fn add_a_project_is_refused_under_its_path_then_added_and_chosen_in_the_create_f
     cx.run_until_parked();
     rig.shell.read_with(cx, |shell, _| {
         assert!(shell.dialogs.add_project.is_none());
-        let form = &shell
-            .dialogs
-            .create
-            .as_ref()
-            .expect("the create form stays open")
-            .form;
-        assert_eq!(form.project, Some(ProjectChoice::Project("p9".into())));
+        assert_eq!(shell.home_project.as_deref(), Some("p9"));
     });
 }
 
@@ -498,15 +368,14 @@ fn a_removed_event_drops_the_row_from_the_sidebar(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn sample_data_has_no_service_so_create_and_remove_do_nothing(cx: &mut TestAppContext) {
+fn sample_data_has_no_service_so_remove_does_nothing(cx: &mut TestAppContext) {
     setup(cx);
     let (shell, cx) = cx.add_window_view(|window, cx| {
         Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx)
     });
-    shell.update_in(cx, |shell, window, cx| shell.open_create(window, cx));
     shell.update(cx, |shell, cx| shell.open_remove("w1", cx));
     shell.read_with(cx, |shell, _| {
-        assert!(shell.dialogs.create.is_none() && shell.dialogs.remove.is_none());
+        assert!(shell.dialogs.remove.is_none());
         assert!(shell.service.is_none());
         assert!(shell.model().snapshot().service_status.is_none());
     });

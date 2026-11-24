@@ -76,7 +76,7 @@ const TEAM_ADD_BOT_BUTTON: (f32, f32) = (556.0, 548.0);
 const REMOVE_ITEM: (f32, f32) = (170.0, 352.0);
 /// The Remove button of the remove dialog that opens from the row menu.
 const CONFIRM_REMOVE: (f32, f32) = (854.0, 483.0);
-/// The "Choose a project" button of the New workspace dialog.
+/// The project button of the start page with no workspace.
 const CHOOSE_PROJECT: (f32, f32) = (720.0, 350.0);
 
 /// The centre of Settings navigation item `index`, in the spec's order (232 px column, 32 px rows).
