@@ -5,12 +5,12 @@
 use super::super::Shell;
 use super::super::sidebar::row_focus;
 use super::access::access_control;
+use super::filters::board_filter_button;
 use super::team_pill;
-use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{
-    BoardMove, BoardOwner, CardView, Column, PickStep, TaskId, TeamError, board_move,
+    BoardMove, BoardOwner, CardView, Column, PickStep, ProjectFilter, TaskId, TeamError, board_move,
 };
 use crate::service::{Refusal, ServiceHandle};
 use gpui::{
@@ -21,10 +21,9 @@ use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::TeamCharacter;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::board_column::{BoardCard, BoardColumn};
-use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::scroll_area::{ScrollArea, ScrollAxis};
 use massorca_ui::tokens::{SPACE_3, SPACE_4, SPACE_5, TYPE_BODY_SM, TYPE_CAPTION, TYPE_TITLE_SM};
-use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, TextStyled, Theme};
 use std::future::Future;
 
 /// The keys a picked card reads: Space, the arrows and Escape.
@@ -84,13 +83,14 @@ pub(in crate::shell) fn board_page(
                 .child("Tasks come from the Conference room"),
         )
         .child(div().flex_1())
-        .child(
-            Button::new("board-filter", "Filter")
-                .variant(ButtonVariant::Ghost)
-                .leading_icon(IconName::ListFilter)
-                .disabled(true)
-                .tooltip(NOT_AVAILABLE),
-        );
+        .children(match owner {
+            BoardOwner::Team(team) => Some(board_filter_button(
+                team,
+                state.board_filter(team) != ProjectFilter::All,
+                shell,
+            )),
+            BoardOwner::Project(..) => None,
+        });
     // The columns start 16 px under the header and run to the window edge, where they scroll.
     div()
         .flex()
