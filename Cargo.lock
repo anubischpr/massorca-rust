@@ -3817,13 +3817,19 @@ dependencies = [
  "image",
  "massorca-client",
  "massorca-core-remote",
+ "massorca-net",
  "massorca-process",
  "massorca-profile",
  "massorca-protocol",
  "massorca-server",
  "massorca-ui",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

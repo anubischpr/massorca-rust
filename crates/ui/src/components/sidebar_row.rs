@@ -13,7 +13,7 @@ use crate::components::usage_ring::UsageSlot;
 use crate::icon::IconName;
 use crate::style::Surface;
 use crate::theme::ActiveTheme;
-use crate::tokens::{SIZE_ICON_SM, SPACE_2};
+use crate::tokens::{SIZE_ICON_SM, SPACE_2, TextStyleToken};
 use gpui::{
     App, ClickEvent, ElementId, FocusHandle, IntoElement, RenderOnce, SharedString, Window,
 };
@@ -181,6 +181,16 @@ impl SidebarRow {
         self.map_row(|r| r.selected(selected))
     }
 
+    /// The title in `body-strong` even when the row is not selected: an unread session (WS-33).
+    pub fn title_strong(self, strong: bool) -> Self {
+        self.map_row(|r| r.title_strong(strong))
+    }
+
+    /// The style the title is set in: `body` or `body-strong`.
+    pub fn title_style(&self) -> TextStyleToken {
+        self.row.title_style()
+    }
+
     /// Dims the row and its text, for a host that cannot be reached.
     pub fn dimmed(self, dimmed: bool) -> Self {
         self.map_row(|r| r.dimmed(dimmed))
@@ -251,7 +261,7 @@ mod tests {
     use super::*;
     use crate::components::button::test_support::{focus_and_draw, press_key};
     use crate::components::list_row::TREE_INDENT;
-    use crate::tokens::Palette;
+    use crate::tokens::{Palette, TYPE_BODY, TYPE_BODY_STRONG};
     use gpui::{InteractiveElement, Modifiers, ParentElement, Render, Styled, div, px};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -344,5 +354,12 @@ mod tests {
         focus_and_draw(cx, &focus);
         press_key(cx, "right");
         assert_eq!(*log.borrow(), vec!["click", "open"]);
+    }
+
+    #[test]
+    fn a_strong_title_is_body_strong_and_a_plain_one_is_body() {
+        let plain = SidebarRow::session("s", "Feed endpoints", AgentState::Idle, AgentKind::Claude);
+        assert_eq!(plain.title_style(), TYPE_BODY);
+        assert_eq!(plain.title_strong(true).title_style(), TYPE_BODY_STRONG);
     }
 }

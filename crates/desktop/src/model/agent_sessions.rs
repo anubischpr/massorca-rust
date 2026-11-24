@@ -66,6 +66,7 @@ fn session_row(
         can_bring_back: parent.is_some()
             && session.brought_back_at_ms.is_none()
             && matches!(status, AgentState::Done | AgentState::Error),
+        unread: is_unread(session, state.agent_seen),
         children: children
             .get(session.id.as_str())
             .into_iter()
@@ -73,6 +74,17 @@ fn session_row(
             .map(|child| session_row(child, Some(session), children, state))
             .collect(),
     }
+}
+
+/// Whether a session is unread: the service offers seen state (`agent-seen/1`) and the agent's latest `waiting` or
+/// `done` has no `seen_at_ms`. The service clears `seen_at_ms` when a newer activity arrives, so a fresh report is
+/// unread again. Without the capability nothing is unread.
+pub fn is_unread(session: &AgentSession, seen_offered: bool) -> bool {
+    seen_offered
+        && session.activity.as_ref().is_some_and(|activity| {
+            matches!(activity.state, ActivityState::Waiting | ActivityState::Done)
+                && activity.seen_at_ms.is_none()
+        })
 }
 
 /// The title a row shows: the service's, or a name that says what kind of session it is.
@@ -222,6 +234,59 @@ mod tests {
     use super::*;
     use crate::service::StoreUpdate;
     use crate::service::fixtures::{agent, project, workspace};
+
+    fn session_with(activity: Activity) -> AgentSession {
+        let mut session = agent("s", "w1", 1);
+        session.activity = Some(activity);
+        session
+    }
+
+    #[test]
+    fn a_waiting_or_done_report_without_a_seen_time_is_unread_only_when_the_service_offers_seen_state()
+     {
+        for state in [ActivityState::Waiting, ActivityState::Done] {
+            let session = session_with(reporting(state, None));
+            assert!(is_unread(&session, true), "{state:?}");
+            assert!(
+                !is_unread(&session, false),
+                "{state:?} without agent-seen/1"
+            );
+        }
+    }
+
+    #[test]
+    fn a_seen_report_and_the_other_states_are_not_unread() {
+        let mut seen = reporting(ActivityState::Done, Some(Outcome::Success));
+        seen.seen_at_ms = Some(9);
+        assert!(!is_unread(&session_with(seen), true));
+        for state in [
+            ActivityState::Working,
+            ActivityState::Idle,
+            ActivityState::Unknown,
+        ] {
+            assert!(
+                !is_unread(&session_with(reporting(state, None)), true),
+                "{state:?}"
+            );
+        }
+        assert!(!is_unread(&agent("s", "w1", 1), true), "no report yet");
+    }
+
+    #[test]
+    fn the_store_marks_a_row_unread_only_with_the_capability() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        state.apply(
+            StoreUpdate::AgentsResync(vec![session_with(reporting(ActivityState::Done, None))]),
+            now,
+        );
+        let unread = |state: &StoreState| sessions_by_workspace(state)["w1"][0].unread;
+        assert!(!unread(&state), "capability unknown");
+        state.apply(StoreUpdate::AgentSeenOffered(true), now);
+        assert!(unread(&state));
+        state.apply(StoreUpdate::AgentSeenOffered(false), now);
+        assert!(!unread(&state));
+    }
 
     fn reporting(state: ActivityState, outcome: Option<Outcome>) -> Activity {
         Activity {

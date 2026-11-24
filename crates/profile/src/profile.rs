@@ -6,6 +6,8 @@ use crate::endpoint::fnv1a_64;
 use crate::error::ProfileError;
 use crate::root_access::create_root;
 
+/// The desktop's remembered UI state file, inside the state folder of the profile's desktop folder.
+pub const UI_STATE_FILE: &str = "ui-state.json";
 const DEFAULT_PROFILE: &str = "default";
 const PROFILE_ENV: &str = "MASSORCA_PROFILE";
 const HOME_ENV: &str = "MASSORCA_HOME";
@@ -86,11 +88,45 @@ impl Profile {
         self.dir.join("service.sock")
     }
 
+    /// The desktop's own folder: its single-instance lock and endpoint, and its UI state (PLAT-07, SET-02).
+    pub fn desktop_dir(&self) -> PathBuf {
+        self.dir.join("desktop")
+    }
+
+    /// Held by the desktop that owns this profile; the operating system releases it when that process ends.
+    pub fn desktop_lock_path(&self) -> PathBuf {
+        self.desktop_dir().join("instance.lock")
+    }
+
+    /// The desktop's endpoint on Unix; Windows uses `desktop_pipe_name`.
+    pub fn desktop_socket_path(&self) -> PathBuf {
+        self.desktop_dir().join("instance.sock")
+    }
+
+    /// The folder of the desktop's remembered UI state (SET-02).
+    pub fn desktop_state_dir(&self) -> PathBuf {
+        self.desktop_dir().join("state")
+    }
+
+    /// The desktop's remembered UI state: the theme last applied and the regions left open (SET-02).
+    pub fn ui_state_path(&self) -> PathBuf {
+        self.desktop_state_dir().join(UI_STATE_FILE)
+    }
+
     /// Windows pipe name. FNV-1a keeps it identical across builds, which std's hashers do not. It hashes `pipe_key`,
     /// so every spelling of one directory names one pipe.
     pub fn pipe_name(&self) -> String {
+        self.named_pipe("massorca")
+    }
+
+    /// Windows pipe name of the desktop's endpoint: the same hash as `pipe_name`, under its own prefix.
+    pub fn desktop_pipe_name(&self) -> String {
+        self.named_pipe("massorca-desktop")
+    }
+
+    fn named_pipe(&self, prefix: &str) -> String {
         let hash = fnv1a_64(pipe_key(&self.dir).as_bytes());
-        format!("massorca-{}-{hash:016x}", self.name)
+        format!("{prefix}-{}-{hash:016x}", self.name)
     }
 }
 

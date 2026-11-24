@@ -17,6 +17,7 @@ use crate::tokens::{
     BORDER_WIDTH_THICK, Color, DURATION_TOOLTIP_DELAY, Palette, RADIUS_MD,
     SIZE_CONTROL_COMFORTABLE, SIZE_CONTROL_COMPACT, SIZE_CONTROL_DEFAULT, SIZE_ICON_SM,
     SIZE_ROW_TWO_LINE, SPACE_1, SPACE_2, SPACE_3, TYPE_BODY, TYPE_BODY_SM, TYPE_BODY_STRONG,
+    TextStyleToken,
 };
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, ElementId, FocusHandle, InteractiveElement,
@@ -430,6 +431,15 @@ impl ListRow {
         self
     }
 
+    /// The style the title is set in: `body-strong` when selected or asked for, else `body`.
+    pub(crate) fn title_style(&self) -> TextStyleToken {
+        if self.selected || self.title_strong {
+            TYPE_BODY_STRONG
+        } else {
+            TYPE_BODY
+        }
+    }
+
     /// Colours an enabled title, for example with a usage colour (P29).
     pub fn title_colour(mut self, colour: Color) -> Self {
         self.title_colour = Some(colour);
@@ -509,6 +519,7 @@ fn hover_slot(id: &ElementId, action: AnyElement) -> impl IntoElement {
 
 impl RenderOnce for ListRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let title_style = self.title_style();
         let theme = *cx.theme();
         let p = theme.palette;
         let height = row_height(self.lines, self.density);
@@ -669,11 +680,6 @@ impl RenderOnce for ListRow {
                         .child(text),
                 )
         });
-        let title_style = if self.selected || self.title_strong {
-            TYPE_BODY_STRONG
-        } else {
-            TYPE_BODY
-        };
         // A name keeps its width up to 60 percent of a one-line row, so its secondary line truncates first.
         let keeps_title = secondary.is_some() && self.lines == RowLines::One;
         let mut title = div()
