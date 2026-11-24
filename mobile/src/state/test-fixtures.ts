@@ -121,3 +121,46 @@ export class StalledWorkspacesFake extends FakeMassOrca {
     return new StalledHost(await super.connect(hostName));
   }
 }
+
+/** A host whose git status never arrives, for the loading state of the changes. */
+class StalledStatusHost implements Host {
+  constructor(private readonly inner: Host) {}
+
+  name(): string {
+    return this.inner.name();
+  }
+
+  whoami(): Promise<WhoAmI> {
+    return this.inner.whoami();
+  }
+
+  protocol(): ProtocolInfo {
+    return this.inner.protocol();
+  }
+
+  workspaces(project?: string): Promise<WorkspaceSummary[]> {
+    return this.inner.workspaces(project);
+  }
+
+  gitStatus(): Promise<GitStatusSummary> {
+    return new Promise<GitStatusSummary>(() => undefined);
+  }
+
+  watchGit(workspaceId: string): Watch<GitEvent> {
+    return this.inner.watchGit(workspaceId);
+  }
+
+  watchAgents(workspaceId?: string): Watch<AgentEvent> {
+    return this.inner.watchAgents(workspaceId);
+  }
+
+  attachTerminal(terminal: string, cols: number, rows: number): Promise<TerminalView> {
+    return this.inner.attachTerminal(terminal, cols, rows);
+  }
+}
+
+export class StalledGitStatusFake extends FakeMassOrca {
+  override async connect(hostName: string): Promise<Host> {
+    return new StalledStatusHost(await super.connect(hostName));
+  }
+}
