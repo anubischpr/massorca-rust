@@ -137,6 +137,15 @@ fn list_lines(diff: &GitDiff) -> Vec<String> {
 }
 
 fn patch_lines(patch: &GitDiffFile) -> Vec<String> {
+    if let Some(pointer) = &patch.submodule {
+        let mut lines = vec![format!("submodule {}: {}", patch.path, pointer.summary)];
+        match pointer.dirty {
+            Some(true) => lines.push("working tree dirty".to_owned()),
+            Some(false) => lines.push("working tree clean".to_owned()),
+            None => {}
+        }
+        return lines;
+    }
     if patch.binary {
         let size = |side: Option<u64>| {
             side.map_or_else(|| "none".to_owned(), |bytes| format!("{bytes} bytes"))

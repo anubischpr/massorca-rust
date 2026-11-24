@@ -13,12 +13,13 @@ use massorca_protocol::methods::git::{ChangeKind, LineCounts};
 use crate::error::GitError;
 use crate::git::{Captured, Git};
 use crate::status::EMPTY_TREE;
+use crate::submodule_pointer::GITLINK_MODE;
 
 /// Options that keep a user's diff drivers, colours and pagers out of every diff.
 const SAFE_OPTIONS: [&str; 3] = ["--no-ext-diff", "--no-textconv", "--no-color"];
 /// Git's own binary test: a NUL byte in the first 8000 bytes.
 const BINARY_PROBE: usize = 8000;
-const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+pub(crate) const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
 impl Git {
     /// The files `target` changes, sorted by path, at most `limit` of them.
@@ -75,6 +76,16 @@ impl Git {
                 ..empty_patch()
             });
         };
+        if record.old_mode == GITLINK_MODE || record.new_mode == GITLINK_MODE {
+            let old = (record.old_mode == GITLINK_MODE).then_some(record.old_oid.as_str());
+            let new = (record.new_mode == GITLINK_MODE).then_some(record.new_oid.as_str());
+            let pointer = self.submodule_pointer(dir, path, old, new, command.reads_worktree())?;
+            return Ok(GitDiffFile {
+                path: path.to_owned(),
+                submodule: Some(pointer),
+                ..empty_patch()
+            });
+        }
         let numstat = self.run(Some(dir), command.args(&["--numstat", "-z"], &paths))?;
         numstat.require_success()?;
         let lines = parse_numstat(&numstat)?.get(path).copied();
@@ -371,6 +382,7 @@ fn empty_patch() -> GitDiffFile {
         truncated: false,
         old_size: None,
         new_size: None,
+        submodule: None,
     }
 }
 
