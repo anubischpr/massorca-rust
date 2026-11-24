@@ -79,7 +79,15 @@ impl From<ClientError> for CliError {
             ClientError::Protocol(_) => "client.protocol",
             ClientError::Io(_) => "client.io",
             ClientError::HostUnreachable(_) => "host.unreachable",
-            ClientError::ServerIdentityMismatch => "host.identity_mismatch",
+            // Both keys travel in the data, so a script can show them without parsing the message (REM-04).
+            ClientError::ServerIdentityMismatch(mismatch) => {
+                return Self {
+                    code: massorca_client::IDENTITY_MISMATCH_CODE.to_owned(),
+                    message,
+                    data: Some(Box::new(mismatch.data())),
+                    exit_code,
+                };
+            }
             ClientError::HostNotFound(_) => "host.not_found",
             ClientError::HostExists(_) => "host.exists",
             ClientError::HostUnreadable { .. } => "host.unreadable",
@@ -191,6 +199,37 @@ mod tests {
     use serde_json::json;
 
     use super::{CliError, exit};
+
+    #[test]
+    fn a_changed_host_key_keeps_its_code_and_carries_both_keys() {
+        let changed = massorca_client::IdentityMismatch {
+            host: "vps".to_owned(),
+            trusted_from: massorca_client::TrustedFrom::Pairing,
+            expected: "sha256:old".to_owned(),
+            actual: Some("sha256:new".to_owned()),
+        };
+        let error = CliError::from(massorca_client::ClientError::ServerIdentityMismatch(
+            Box::new(changed),
+        ));
+        assert_eq!(error.code, "host.identity_mismatch");
+        assert_eq!(error.exit_code, 4);
+        assert!(
+            error
+                .message
+                .contains("massorca host remove vps --keep-device"),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.data.as_deref(),
+            Some(&json!({
+                "host": "vps",
+                "trusted_from": "pairing",
+                "expected": "sha256:old",
+                "actual": "sha256:new",
+            }))
+        );
+    }
 
     fn planted() -> PathBuf {
         PathBuf::from("profiles")
