@@ -1,6 +1,7 @@
 //! Bot Teams as plain data: teams, their Boards, projects, routines, memory and files (screens 4).
 //! No GPUI types here, so the rules test as Rust.
 
+mod access;
 mod board;
 mod live;
 mod page;
@@ -9,6 +10,7 @@ mod sidebar;
 mod state;
 mod types;
 
+pub use access::{access_change, access_line, new_team_access_hint};
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
 pub use live::{agent_of_kind, live_teams};
 pub use page::TeamPage;

@@ -2,6 +2,7 @@
 
 use super::super::Shell;
 use super::super::change;
+use super::access::access_control;
 use super::waiting_icon;
 use crate::model::shell_state::ShellModel;
 use crate::model::teams::{Team, TeamPage, TeamsState};
@@ -84,13 +85,14 @@ fn grid(state: &TeamsState, shell: &WeakEntity<Shell>, theme: &Theme) -> impl In
         state
             .teams()
             .iter()
-            .map(|team| team_card(team, shell, connected, theme)),
+            .map(|team| team_card(team, state.access_notice(team.id), shell, connected, theme)),
     )
 }
 
 /// A team card: its name and mark, the lead bot, the bot count, the host and Workspaces (4.5).
 fn team_card(
     team: &Team,
+    notice: Option<&str>,
     shell: &WeakEntity<Shell>,
     connected: bool,
     theme: &Theme,
@@ -144,7 +146,8 @@ fn team_card(
                     .child(line(
                         format!("Workspaces in this team: {workspaces}"),
                         theme,
-                    )),
+                    ))
+                    .child(access_control(team, notice, shell, connected, theme)),
             )
             .footer_action(open)
             .footer_action(add_bot)
@@ -152,7 +155,7 @@ fn team_card(
     )
 }
 
-fn line(text: String, theme: &Theme) -> impl IntoElement {
+pub(super) fn line(text: String, theme: &Theme) -> impl IntoElement {
     div()
         .text_style(TYPE_BODY_SM)
         .text_color(theme.palette.text.secondary)

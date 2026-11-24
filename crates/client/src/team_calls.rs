@@ -2,7 +2,8 @@
 //! (decision 0072).
 
 use massorca_protocol::methods::tasks::{
-    self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskUpdateParams,
+    self, Task, TaskCreateParams, TaskList, TaskListParams, TaskRef, TaskStopParams,
+    TaskUpdateParams,
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
@@ -156,6 +157,11 @@ impl Client {
     /// `task.reopen`: clears a task's outcome and error; refused while its agent session runs.
     pub async fn task_reopen(&self, params: &TaskRef) -> Result<Task, ClientError> {
         self.call(tasks::REOPEN, params).await
+    }
+
+    /// `task.stop`: stops the agent session a task runs in; the task keeps the session and shows Stopped.
+    pub async fn task_stop(&self, params: &TaskStopParams) -> Result<Task, ClientError> {
+        self.call(tasks::STOP, params).await
     }
 
     /// `task.rm`: removes a task; refused while its agent session runs.

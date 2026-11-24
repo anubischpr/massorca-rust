@@ -1,7 +1,7 @@
 //! The Bot Teams state and the changes made to it. Changes land here, in the sample store today;
 //! nothing in this module talks to a host, and every refusal names its reason.
 
-use massorca_protocol::methods::teams::TeamCharacter;
+use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 use super::live::agent_of_kind;
 use super::page::TeamPage;
@@ -79,6 +79,8 @@ pub struct TeamsState {
     memory_tab: MemoryTab,
     /// Why the last card move was refused, shown on the Board until the next pick.
     notice: Option<String>,
+    /// Why the last access change was refused, and for which team.
+    access_notice: Option<(TeamId, String)>,
     next_id: u32,
 }
 
@@ -99,6 +101,7 @@ impl TeamsState {
             pick: None,
             memory_tab: MemoryTab::default(),
             notice: None,
+            access_notice: None,
             next_id,
         }
     }
@@ -143,6 +146,7 @@ impl TeamsState {
         fresh.pick = pick;
         fresh.memory_tab = self.memory_tab;
         fresh.notice = self.notice.clone();
+        fresh.access_notice = self.access_notice.clone();
         fresh
     }
 
@@ -179,6 +183,8 @@ impl TeamsState {
             name,
             // The triangle is the character the service gives a team created without one.
             character: TeamCharacter::Triangle,
+            // New teams run full, as pv96: an unattended bot that stops to ask is a stuck task.
+            access: TeamAccess::Full,
             purpose: new.purpose.trim().to_owned(),
             host: host.name,
             reach: host.reach,
@@ -378,6 +384,27 @@ impl TeamsState {
         self.notice = notice;
     }
 
+    /// Sets a team's access on sample data; a connected service writes it itself.
+    pub fn set_access(&mut self, team: TeamId, access: TeamAccess) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        self.teams[index].access = access;
+        Ok(())
+    }
+
+    /// Why the last access change of `team` was refused, if it was.
+    pub fn access_notice(&self, team: TeamId) -> Option<&str> {
+        self.access_notice
+            .as_ref()
+            .filter(|(owner, _)| *owner == team)
+            .map(|(_, notice)| notice.as_str())
+    }
+
+    /// Keeps why an access change was refused, or clears it with `None`.
+    pub fn set_access_notice(&mut self, team: TeamId, notice: Option<String>) {
+        self.access_notice = notice.map(|notice| (team, notice));
+    }
+
     /// The team a page shows, when it belongs to a team that exists.
     pub fn page_team(&self, page: TeamPage) -> Option<&Team> {
         self.team(page.team())
@@ -460,6 +487,54 @@ mod tests {
             host,
             workspaces: true,
         }
+    }
+
+    #[test]
+    fn an_access_change_sets_the_team_access_and_keeps_its_refusal_for_that_team() {
+        let mut state = SampleTeamsSource.teams();
+        let desarrollo = TeamId(1);
+        assert_eq!(
+            state.team(desarrollo).map(|team| team.access),
+            Some(TeamAccess::Full)
+        );
+        state
+            .set_access(desarrollo, TeamAccess::Default)
+            .expect("the team is there");
+        assert_eq!(
+            state.team(desarrollo).map(|team| team.access),
+            Some(TeamAccess::Default)
+        );
+        assert_eq!(
+            state.set_access(TeamId(9), TeamAccess::Full),
+            Err(TeamError::Missing)
+        );
+        state.set_access_notice(
+            desarrollo,
+            Some("Only a host admin can give full access.".into()),
+        );
+        assert_eq!(
+            state.access_notice(desarrollo),
+            Some("Only a host admin can give full access.")
+        );
+        assert_eq!(state.access_notice(TeamId(2)), None);
+        state.set_access_notice(desarrollo, None);
+        assert_eq!(state.access_notice(desarrollo), None);
+    }
+
+    #[test]
+    fn a_new_team_is_full_and_an_unconnected_state_changes_no_access() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state
+            .create_team(new_team("Ops", 0))
+            .expect("the team is created");
+        assert_eq!(
+            state.team(id).map(|team| team.access),
+            Some(TeamAccess::Full)
+        );
+        assert_eq!(
+            TeamsState::unavailable().set_access(TeamId(1), TeamAccess::Default),
+            Err(TeamError::Unavailable)
+        );
     }
 
     #[test]

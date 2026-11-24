@@ -8,6 +8,9 @@ mod dialogs;
 mod extension_tests;
 mod import;
 mod item;
+mod item_images;
+#[cfg(test)]
+mod item_images_tests;
 mod package;
 mod review;
 mod sign_in;
@@ -19,6 +22,7 @@ use crate::model::marketplace::{
     AccountId, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
+use crate::service::ServiceHandle;
 use std::collections::BTreeSet;
 
 use gpui::{
@@ -40,6 +44,8 @@ pub(super) struct UninstallConfirm {
     pub error: Option<String>,
     /// The removal is with the service; the confirm waits for its answer.
     pub sending: bool,
+    /// The person's tick for removing the CLI the package installed too; only offered when the package installed one.
+    pub remove_cli: bool,
 }
 
 /// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
@@ -77,6 +83,8 @@ pub(super) struct MarketplaceFrame {
     live_accounts: bool,
     /// Why a kind's accounts could not be listed, by kind.
     list_refusals: Vec<(String, String)>,
+    /// The connected service, which serves the listed images; none offline.
+    service: Option<ServiceHandle>,
     shell: WeakEntity<Shell>,
 }
 
@@ -103,6 +111,7 @@ pub(super) fn frame(
             .and_then(|sign_in| sign_in.running_account()),
         live_accounts: shell.service.is_some(),
         list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
+        service: shell.service.clone(),
         shell: weak,
     }
 }
@@ -269,7 +278,16 @@ impl Shell {
             item,
             error: None,
             sending: false,
+            remove_cli: false,
         });
+        cx.notify();
+    }
+
+    /// The CLI tick of the uninstall confirm. Nothing is sent until the confirm's own action.
+    pub(super) fn set_marketplace_uninstall_cli(&mut self, remove: bool, cx: &mut Context<Self>) {
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.remove_cli = remove;
+        }
         cx.notify();
     }
 
@@ -287,7 +305,7 @@ impl Shell {
             return;
         }
         if let Some(package) = self.package_of(confirm.item) {
-            self.remove_package(confirm.item, package, cx);
+            self.remove_package(confirm.item, package, confirm.remove_cli, cx);
             return;
         }
         match self.change_marketplace(cx, |source| source.uninstall(confirm.item)) {

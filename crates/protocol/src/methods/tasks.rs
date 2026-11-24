@@ -21,6 +21,9 @@ pub const DONE: &str = "task.done";
 pub const START: &str = "task.start";
 /// Params: [`TaskRef`]. Result: [`Task`]. Clears the outcome and error; refused while the agent session runs.
 pub const REOPEN: &str = "task.reopen";
+/// Params: [`TaskStopParams`]. Result: [`Task`]. Stops the agent session the task runs in; the task keeps the session
+/// and shows Stopped. Refused with `task.not_running` when no session runs.
+pub const STOP: &str = "task.stop";
 /// Params: [`TaskRef`]. Result: [`Task`], the removed task. Refused while the agent session runs.
 pub const REMOVE: &str = "task.rm";
 
@@ -138,6 +141,15 @@ pub struct TaskList {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskRef {
     pub task: String,
+}
+
+/// Params of `task.stop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStopParams {
+    pub task: String,
+    /// Skip the grace period and end the agent's processes at once, as `agent.stop` does.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Params of `task.update`. An empty `bot` or `project` clears that link.
