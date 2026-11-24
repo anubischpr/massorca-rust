@@ -9,6 +9,7 @@ use massorca_client::{
     Subscription,
 };
 use massorca_protocol::PeerInfo;
+use massorca_protocol::methods::agents::AgentWatchParams;
 use massorca_protocol::methods::git::GitWorkspaceRef;
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex, mpsc};
@@ -55,11 +56,21 @@ impl From<Link> for LinkState {
 pub(crate) enum Watched {
     /// `git.watch` of one workspace.
     Git { workspace: String },
+    /// `agent.watch`: every session, or those of one workspace.
+    Agents { workspace: Option<String> },
 }
 
 impl Watched {
     async fn open(&self, client: &Client) -> Result<Subscription, ClientError> {
         match self {
+            Self::Agents { workspace } => {
+                client
+                    .agent_watch(&AgentWatchParams {
+                        workspace: workspace.clone(),
+                        session: None,
+                    })
+                    .await
+            }
             Self::Git { workspace } => {
                 client
                     .git_watch(&GitWorkspaceRef {

@@ -1,15 +1,16 @@
 //! The binding's reads and streams driven from Rust as the app drives them (decision 0080, task A4): the workspaces, the
-//! git status, and the git watch.
+//! git status, and the git and agent watches, which reconnect when the host stops and returns.
 
 mod common;
 
 use std::future::Future;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use common::{app, offer, owner, start, stop, temp_home};
-use massorca_client_ffi::{GitEvent, Host, MassOrca};
+use massorca_client_ffi::{AgentEvent, AgentItem, GitEvent, Host, LinkState, MassOrca};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
@@ -239,5 +240,103 @@ fn a_refused_watch_reports_the_refusal_once_and_then_ends() {
         within(&test, watch.next()).expect("the watch is over"),
         None
     );
+    test.block_on(stop(running));
+}
+
+/// A loopback port nothing listens on now, so a service can start on it, stop and start again.
+fn free_port() -> u16 {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("a free port")
+        .local_addr()
+        .expect("the port's address")
+        .port()
+}
+
+#[test]
+fn watch_agents_reports_the_snapshot_then_unverifiable_then_live_after_a_restart() {
+    let (_temp, home) = temp_home();
+    let port = free_port();
+    let test = Runtime::new().unwrap();
+    let running = test.block_on(start(&home, port));
+    let (_massorca, host) = connected(&test, &home);
+
+    let watch = host.watch_agents(None);
+    let first = within(&test, watch.next()).expect("the first item");
+    assert!(
+        matches!(
+            first,
+            Some(AgentEvent::Item {
+                item: AgentItem::Snapshot { .. }
+            })
+        ),
+        "{first:?}"
+    );
+
+    test.block_on(stop(running));
+    let lost = within(&test, watch.next()).expect("the loss is reported");
+    assert!(
+        matches!(
+            lost,
+            Some(AgentEvent::Link {
+                link: LinkState::Unverifiable { attempt: 1, .. }
+            })
+        ),
+        "{lost:?}"
+    );
+
+    let running = test.block_on(start(&home, port));
+    let mut attempts = Vec::new();
+    loop {
+        match within(&test, watch.next()).expect("the watch goes on") {
+            Some(AgentEvent::Link {
+                link: LinkState::Unverifiable { attempt, .. },
+            }) => attempts.push(attempt),
+            Some(AgentEvent::Link {
+                link: LinkState::Live,
+            }) => break,
+            other => panic!("expected the host to return, got {other:?}"),
+        }
+        assert!(
+            attempts.len() < 60,
+            "the host never came back: {attempts:?}"
+        );
+    }
+    assert!(
+        attempts.windows(2).all(|pair| pair[0] < pair[1]),
+        "{attempts:?}"
+    );
+    let again = within(&test, watch.next()).expect("the snapshot after the return");
+    assert!(
+        matches!(
+            again,
+            Some(AgentEvent::Item {
+                item: AgentItem::Snapshot { .. }
+            })
+        ),
+        "{again:?}"
+    );
+
+    watch.close();
+    assert_eq!(within(&test, watch.next()).expect("closed"), None);
+    test.block_on(stop(running));
+}
+
+#[test]
+fn close_ends_a_next_that_is_waiting_for_an_item() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().unwrap();
+    let running = test.block_on(start(&home, 0));
+    let (_massorca, host) = connected(&test, &home);
+    let watch = host.watch_agents(None);
+    within(&test, watch.next()).expect("the snapshot");
+
+    let waiting = test.block_on(async {
+        let (ended, ()) = tokio::join!(timeout(WAIT, watch.next()), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            watch.close();
+        });
+        ended.expect("ended in time")
+    });
+    assert_eq!(waiting.expect("no refusal"), None);
     test.block_on(stop(running));
 }

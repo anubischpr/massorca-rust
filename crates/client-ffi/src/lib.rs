@@ -3,6 +3,7 @@
 
 uniffi::setup_scaffolding!();
 
+mod agent_watch;
 mod error;
 mod git_status;
 mod git_watch;
@@ -13,6 +14,7 @@ mod watch;
 mod wire;
 mod workspaces;
 
+pub use agent_watch::{AgentEvent, AgentItem, AgentSessionSummary, AgentWatch};
 pub use error::FfiError;
 pub use git_status::{GitFileStatus, GitStatusSummary};
 pub use git_watch::{GitEvent, GitItem, GitWatch};
