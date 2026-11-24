@@ -7,7 +7,8 @@ use std::path::Path;
 use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ScriptKind,
+    self, Project, ProjectAddParams, ProjectKind, ProjectScript, ProjectScripts,
+    ProjectScriptsParams, ProjectTrustScriptParams, ScriptKind,
 };
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceArchive, WorkspaceCreateParams, WorkspaceKind, WorkspaceRemoveParams,
@@ -131,6 +132,50 @@ async fn an_untrusted_archive_script_is_skipped_and_the_removal_goes_ahead() {
     );
     assert!(!repo.join(ARCHIVED).exists());
     assert!(!Path::new(&created.path).exists());
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn an_archive_script_is_trusted_only_from_the_project_copy_removal_reads() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_archive(&repo, copy_script());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    let shown = shown_script(&client, &project.id, ScriptKind::Archive).await;
+    let created = create(&client, &project.id, "feature").await;
+
+    let copy: ProjectScripts = client
+        .call(
+            projects::SCRIPTS,
+            &ProjectScriptsParams {
+                project: project.id.clone(),
+                workspace: Some(created.id.clone()),
+            },
+        )
+        .await
+        .expect("show the workspace's scripts");
+    assert!(
+        copy.scripts
+            .iter()
+            .all(|script| script.kind != ScriptKind::Archive),
+        "a workspace's archive copy is shown although removal never runs it: {:?}",
+        copy.scripts
+    );
+    let refused = client
+        .call::<_, ProjectScript>(
+            projects::TRUST_SCRIPT,
+            &ProjectTrustScriptParams {
+                project: project.id.clone(),
+                kind: ScriptKind::Archive,
+                hash: shown.hash.clone(),
+                workspace: Some(created.id.clone()),
+            },
+        )
+        .await
+        .expect_err("a workspace's archive copy cannot be trusted");
+    assert_eq!(remote_code(&refused), codes::REQUEST_INVALID_PARAMS);
     stop(running).await;
 }
 

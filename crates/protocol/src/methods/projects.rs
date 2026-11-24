@@ -332,7 +332,8 @@ impl ScriptKind {
 }
 
 /// Params of `project.scripts`. With `workspace`, the scripts are read from that workspace's folder, which holds the
-/// copy a create of its branch runs, instead of the project's.
+/// copy a create of its branch runs, instead of the project's; only `setup` is read there, as removal reads `archive`
+/// from the project's copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectScriptsParams {
     pub project: String,

@@ -104,7 +104,13 @@ async fn scripts(
     on_pool(move || {
         let (project, dir) = source(&domain, &params.project, params.workspace.as_deref())?;
         let mut scripts = Vec::new();
-        for kind in KINDS {
+        // Removal reads the archive script from the project's copy only, so a workspace's copy shows setup alone.
+        let kinds: &[ScriptKind] = if params.workspace.is_some() {
+            &[ScriptKind::Setup]
+        } else {
+            &KINDS
+        };
+        for &kind in kinds {
             if let Some(script) = read(&dir, kind)? {
                 scripts.push(shown(&store, &project, kind, script)?);
             }
@@ -129,6 +135,12 @@ async fn trust_script(
             return Err(ErrorBody::new(
                 codes::REQUEST_INVALID_PARAMS,
                 "kind must be setup or archive",
+            ));
+        }
+        if params.kind == ScriptKind::Archive && params.workspace.is_some() {
+            return Err(ErrorBody::new(
+                codes::REQUEST_INVALID_PARAMS,
+                "the archive script is read from the project's orca.yaml; trust it without a workspace",
             ));
         }
         let (project, dir) = source(&domain, &params.project, params.workspace.as_deref())?;

@@ -39,8 +39,11 @@ The reference (pv96, read-only at commit d3c6311a531) does both:
 - **Trusting.** `project.scripts` (read) shows each script of the project's `orca.yaml`, or of a workspace's copy,
   with its hash, `trusted` and `changed`. `project.trust_script {project, kind, hash, workspace?}` trusts it only when
   `hash` is the hash of the content read now, else `script.changed`; no script of that kind is `script.not_found`. It
-  needs host-admin: trusting lets the host run the script for every later create or removal, so a reduced device or an
-  agent's token cannot grant it. Both are capability `script-trust/1`. The CLI is
+  needs host-admin: trusting lets the host run the script for every later create or removal, so a paired device with
+  reduced scopes cannot grant it. The local socket is the owner, so any process of the owner's account, an agent
+  session included, can; this guards against repository authors, not against the owner's own processes. With
+  `workspace`, only `setup` is shown or trusted (`archive` with a workspace is `request.invalid_params`), as removal
+  reads `archive` from the project's copy. Both are capability `script-trust/1`. The CLI is
   `massorca project trust-scripts <PROJECT> [--workspace W] [--hash H]...`; it trusts only a hash it has just shown.
 - **Archive.** `workspace.remove` of a worktree whose directory exists reads `scripts.archive` of the project's
   `orca.yaml` (the reference's source), checks trust, and runs it after `begin_remove` and `workspace.removing`, and
@@ -64,6 +67,10 @@ The reference (pv96, read-only at commit d3c6311a531) does both:
 - An unreadable or oversized `orca.yaml` still reports a failed setup (0086); for archive it counts as no script, as
   in the reference.
 - Trust is per project, not per execution host; the service is the host.
+- Trust covers the script's text, not what it runs: a trusted `pnpm install` or `./setup.sh` still runs the branch's
+  own package scripts or file.
+- An untrusted or changed archive script is skipped and the removal goes ahead, as in the reference: the reply's
+  `archive` says `untrusted`, but nothing is archived. An unreadable `orca.yaml` counts as no archive script.
 
 ## Consequences
 
