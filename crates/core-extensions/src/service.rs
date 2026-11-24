@@ -16,7 +16,7 @@ use massorca_profile::Profile;
 
 use crate::agents::catalogue_agent_kinds;
 use crate::catalogue;
-use crate::error::Error;
+use crate::error::{Diagnosis, Error};
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
@@ -647,6 +647,15 @@ impl Extensions {
         let _ = fs::remove_dir(self.layout.package_root(id));
     }
 
+    /// What a failed command was looked for and where, with the last lines of its log (decision 0092).
+    fn diagnosis(&self, programs: Vec<String>, log: Option<&Path>) -> Box<Diagnosis> {
+        Box::new(Diagnosis {
+            programs,
+            search: self.resolver.search(),
+            output_tail: log.map(last_log_lines).unwrap_or_default(),
+        })
+    }
+
     /// Runs the planned installers and their verify commands, and records what was done for each CLI.
     fn run_installers(&self, manifest: &Manifest, plan: &[CliPlan]) -> Result<Vec<LockCli>, Error> {
         let mut out = Vec::new();
@@ -670,6 +679,7 @@ impl Extensions {
                         return Err(Error::InstallerFailed {
                             agent: adapter.id.clone(),
                             message: "its program is not on the vendor allowlist".to_owned(),
+                            diagnosis: self.diagnosis(program_of(command), None),
                         });
                     }
                     let data = self.layout.data_dir(&manifest.id);
@@ -679,6 +689,7 @@ impl Extensions {
                     let failed = |message: String| Error::InstallerFailed {
                         agent: adapter.id.clone(),
                         message,
+                        diagnosis: self.diagnosis(program_of(command), Some(&log)),
                     };
                     let exit = self
                         .runner
@@ -687,12 +698,13 @@ impl Extensions {
                     if !exit.success() {
                         return Err(failed(describe(exit)));
                     }
-                    let unverified = |message: String| {
+                    let unverified = |message: String, programs: Vec<String>| {
                         note_remaining_cli(&log, command);
                         Error::VerifyFailed {
                             agent: adapter.id.clone(),
                             message,
                             installer: Some(command.clone()),
+                            diagnosis: self.diagnosis(programs, Some(&log)),
                         }
                     };
                     // Without a verify command the install succeeds when the binary resolves.
@@ -700,13 +712,16 @@ impl Extensions {
                         let verified = self
                             .runner
                             .run(verify, &log, INSTALLER_TIMEOUT)
-                            .map_err(|error| unverified(error.to_string()))?;
+                            .map_err(|error| unverified(error.to_string(), program_of(verify)))?;
                         if !verified.success() {
-                            return Err(unverified(describe(verified)));
+                            return Err(unverified(describe(verified), program_of(verify)));
                         }
                     }
                     if self.resolver.resolve(&cli.binary).is_none() {
-                        return Err(unverified(format!("`{}` does not resolve", cli.binary)));
+                        return Err(unverified(
+                            format!("`{}` does not resolve", cli.binary),
+                            vec![cli.binary.clone()],
+                        ));
                     }
                     record.installer = Some(InstallerRun {
                         command: command.clone(),
@@ -721,6 +736,24 @@ impl Extensions {
         }
         Ok(out)
     }
+}
+
+/// Lines of a vendor command's log that a failure carries, the last ones.
+const DIAGNOSIS_LINES: usize = 20;
+
+/// The program a command names: its first word.
+fn program_of(argv: &[String]) -> Vec<String> {
+    argv.first().cloned().into_iter().collect()
+}
+
+/// The last lines of a command's log, for the person who asks why it failed.
+fn last_log_lines(log: &Path) -> Vec<String> {
+    let text = fs::read_to_string(log).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(DIAGNOSIS_LINES)..]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect()
 }
 
 /// An install checked and unpacked, waiting for its vendor command. `_busy` keeps the package marked until it is

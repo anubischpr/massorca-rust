@@ -14,8 +14,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use massorca_core_agents::SearchEnv;
-use massorca_core_agents::resolve::{resolve, vendor_search_env};
-use massorca_core_extensions::host::{CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver};
+use massorca_core_agents::resolve::{PathSource, resolve, vendor_search_env};
+use massorca_core_extensions::host::{
+    CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver, ProgramSearch,
+};
 
 /// How often a running child is checked against its deadline.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -78,9 +80,17 @@ impl HostPrograms {
     /// The search path without relative entries (empty, `.`, `bin`), which would resolve against the service's
     /// working folder. Only this host side filters them; core-agents keeps its own rule.
     fn search_env(&self) -> SearchEnv {
-        let mut env = self.env.clone().unwrap_or_else(|| vendor_search_env().0);
+        self.search_path().0
+    }
+
+    /// The search path of bare names, absolute entries only, and where it came from (decision 0092).
+    fn search_path(&self) -> (SearchEnv, PathSource) {
+        let (mut env, source) = match &self.env {
+            Some(env) => (env.clone(), PathSource::Process),
+            None => vendor_search_env(),
+        };
         env.path = env.path.as_deref().map(absolute_entries);
-        env
+        (env, source)
     }
 
     /// The allowlisted variables present in the service environment.
@@ -112,6 +122,19 @@ fn absolute_entries(path: &OsStr) -> OsString {
 impl ProgramResolver for HostPrograms {
     fn resolve(&self, binary: &str) -> Option<PathBuf> {
         resolve(binary, &self.search_env())
+    }
+
+    fn search(&self) -> ProgramSearch {
+        let (env, source) = self.search_path();
+        let dirs = env.path.as_deref().map_or_else(Vec::new, |path| {
+            std::env::split_paths(path)
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .collect()
+        });
+        ProgramSearch {
+            source: source.name().to_owned(),
+            dirs,
+        }
     }
 }
 

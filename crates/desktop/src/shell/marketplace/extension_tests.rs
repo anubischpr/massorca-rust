@@ -1090,3 +1090,47 @@ fn add_account_turns_on_after_the_install_without_a_restart(cx: &mut TestAppCont
         _ => panic!("Add account sends the agent's account add once its package is on"),
     }
 }
+
+/// A refused install shows what was looked for and where, and Copy details puts all of it on the clipboard.
+#[gpui::test]
+fn copy_details_puts_the_refused_install_on_the_clipboard(cx: &mut TestAppContext) {
+    let refusal = "the installer for codex failed: `npm` was not found on PATH\nLooked for npm on the registry PATH.";
+    let (mut rig, cx, _) = open_agent(
+        cx,
+        "codex",
+        "Codex",
+        Vec::new(),
+        vec![agent_package("codex", ExtensionState::Available)],
+    );
+    click(cx, "button:marketplace-install");
+    let reply = match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Inspect { source, reply })) => {
+            assert_eq!(source, "catalogue:massorca.codex");
+            reply
+        }
+        _ => panic!("the review asks the service what installing does"),
+    };
+    let _ = reply.send(Ok(review(false)));
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Install { reply, .. })) => {
+            let _ = reply.send(Err(Refusal::Failed {
+                code: "extension.installer_failed".to_owned(),
+                message: refusal.to_owned(),
+            }));
+        }
+        _ => panic!("the press sends the agent's install"),
+    }
+    cx.run_until_parked();
+    draw(cx);
+    click(cx, "button:marketplace-install-copy");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(
+        copied
+            .as_deref()
+            .is_some_and(|text| text.contains("Looked for npm on the registry PATH.")),
+        "{copied:?}"
+    );
+}

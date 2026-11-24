@@ -23,7 +23,7 @@ pub use agents::{
     CatalogueAgentKind, InstalledAgentKind, PackageAgentKind, PackageKindsCache,
     catalogue_agent_kinds, installed_agent_kinds, package_agent_kinds,
 };
-pub use error::{Error, HookError, codes};
+pub use error::{Diagnosis, Error, HookError, codes};
 pub use layout::Layout;
 pub use lockfile::Lockfile;
 pub use service::Extensions;

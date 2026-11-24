@@ -8,9 +8,11 @@ use crate::model::marketplace::{
 };
 use crate::shell::Shell;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Styled, WeakEntity, div, px,
+    AnyElement, App, ClipboardItem, InteractiveElement, IntoElement, ParentElement, Styled,
+    WeakEntity, div, px,
 };
 use massorca_ui::components::account_sign_in_dialog::{AccountSignInDialog, SignInStage};
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::checkbox::Checkbox;
 use massorca_ui::components::dialog::{Dialog, DialogVariant};
 use massorca_ui::tokens::{SPACE_2, TYPE_BODY_SM};
@@ -104,6 +106,15 @@ fn install_review(
         );
     }
     if let Some(error) = &review.error {
+        // Copy details gives the whole refusal, with what was looked for and where, not only the line shown.
+        let text = error.clone();
+        dialog = dialog.child(
+            Button::new("marketplace-install-copy", "Copy details")
+                .variant(ButtonVariant::Ghost)
+                .on_click(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                }),
+        );
         dialog = dialog.error(error.clone());
     }
     Some(dialog.into_any_element())
