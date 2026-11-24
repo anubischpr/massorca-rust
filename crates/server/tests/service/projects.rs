@@ -1,4 +1,4 @@
-//! Projects over the wire: add, list, show and remove, their events, their refusals, and the default root read per call.
+//! Projects over the wire: add, list, show, inspect and remove, their events, their refusals, and the default root read per call.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,8 +11,8 @@ use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_REMOVED,
 };
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectList, ProjectRef, ProjectRemoveParams,
-    ProjectSetBaseParams,
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
+    ProjectList, ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::terminals::{
     self, Terminal, TerminalCreateParams, TerminalKillParams, TerminalList,
@@ -169,6 +169,76 @@ async fn unknown_and_invalid_project_requests_answer_typed_codes() {
         .await
         .expect_err("relative path");
     assert_eq!(remote_code(&relative), codes::REQUEST_INVALID_PARAMS);
+    stop(running).await;
+}
+
+fn inspect_params(path: &Path) -> ProjectInspectParams {
+    ProjectInspectParams {
+        path: path.to_str().expect("utf-8 path").to_owned(),
+    }
+}
+
+fn canonical_text(path: &Path) -> String {
+    dunce::canonicalize(path)
+        .expect("canonical path")
+        .to_str()
+        .expect("utf-8 path")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn inspect_answers_what_add_without_a_kind_registers_and_who_is_registered() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let nested = repo.join("src");
+    std::fs::create_dir_all(&nested).expect("create nested dir");
+    let notes = home.path().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let git: ProjectInspection = client
+        .call(projects::INSPECT, &inspect_params(&nested))
+        .await
+        .expect("project.inspect");
+    assert_eq!(git.kind, ProjectKind::Git);
+    assert_eq!(git.path, canonical_text(&repo));
+    assert_eq!(git.registered, None);
+
+    let folder: ProjectInspection = client
+        .call(projects::INSPECT, &inspect_params(&notes))
+        .await
+        .expect("project.inspect");
+    assert_eq!(folder.kind, ProjectKind::Folder);
+    assert_eq!(folder.path, canonical_text(&notes));
+    assert_eq!(folder.registered, None);
+
+    for (dir, inspected) in [(&nested, &git), (&notes, &folder)] {
+        let project: Project = client
+            .call(projects::ADD, &add_params(dir))
+            .await
+            .expect("project.add");
+        assert_eq!(project.kind, inspected.kind);
+        assert_eq!(project.path, inspected.path);
+        let again: ProjectInspection = client
+            .call(projects::INSPECT, &inspect_params(dir))
+            .await
+            .expect("project.inspect");
+        assert_eq!(again.registered, Some(project.id));
+    }
+
+    let missing = home.path().join("missing");
+    let inspect_error = client
+        .call::<_, ProjectInspection>(projects::INSPECT, &inspect_params(&missing))
+        .await
+        .expect_err("missing path");
+    let add_error = client
+        .call::<_, Project>(projects::ADD, &add_params(&missing))
+        .await
+        .expect_err("missing path");
+    assert_eq!(remote_code(&inspect_error), codes::PATH_NOT_FOUND);
+    assert_eq!(remote_code(&inspect_error), remote_code(&add_error));
     stop(running).await;
 }
 
