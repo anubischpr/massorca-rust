@@ -33,6 +33,7 @@ use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
 use crate::model::agent_kinds::{KindChoice, session_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
+use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
 use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
@@ -198,7 +199,7 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
 }
 
 /// The start in flight, under the composer until the service answers (D-AG-01 States).
-fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
+pub(super) fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
     div()
         .debug_selector(|| "start-status".to_owned())
         .text_style(TYPE_CAPTION)
@@ -243,7 +244,7 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
 }
 
 /// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
-fn key_hints(theme: &Theme) -> impl IntoElement {
+pub(super) fn key_hints(theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -468,7 +469,11 @@ impl Shell {
                         ComposerEvent::Send(prompt) => {
                             // The start page clears the prompt as it sends and gives it back on a refusal.
                             composer.update(cx, |composer, cx| composer.set_draft("", cx));
-                            shell.start_session(&workspace, prompt, composer.clone(), cx);
+                            if workspace == HOME_START {
+                                shell.start_from_home(prompt, composer.clone(), cx);
+                            } else {
+                                shell.start_session(&workspace, prompt, composer.clone(), cx);
+                            }
                         }
                         _ => {}
                     },
@@ -554,7 +559,11 @@ impl Shell {
             .start_pending
             .as_ref()
             .filter(|pending| pending.workspace == workspace_id);
-        let reason = send_reason(connected, kind_chosen, starting).map(SharedString::from);
+        let no_project =
+            workspace_id == HOME_START && self.store.read(cx).state().projects.is_empty();
+        let reason = send_reason(connected, kind_chosen, starting)
+            .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
+            .map(SharedString::from);
         composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
     }
 
@@ -570,29 +579,9 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let chosen = composer
-            .read(cx)
-            .picker()
-            .read(cx)
-            .state()
-            .choice()
-            .model
-            .to_string();
-        let choices = session_kind_choices(&self.store.read(cx).state().agent_kinds);
-        let Some(kind) = choices.into_iter().find(|kind| kind.id == chosen) else {
+        let Some((kind, permission_mode)) = self.chosen_start(&composer, cx) else {
             return;
         };
-        let permission_mode = self
-            .store
-            .read(cx)
-            .state()
-            .agent_kinds
-            .iter()
-            .find(|declared| declared.id == kind.id)
-            .and_then(|declared| {
-                let index = composer.read(cx).access_index();
-                start_choices(declared).get(index)?.id.clone()
-            });
         let params = start_params(workspace, &kind.id, prompt, permission_mode);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
@@ -611,10 +600,38 @@ impl Shell {
         cx.notify();
     }
 
+    /// The composer's chosen kind, and the permission mode its access chip picked, if any.
+    pub(super) fn chosen_start(
+        &self,
+        composer: &Entity<Composer>,
+        cx: &App,
+    ) -> Option<(KindChoice, Option<String>)> {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let kinds = &self.store.read(cx).state().agent_kinds;
+        let kind = session_kind_choices(kinds)
+            .into_iter()
+            .find(|kind| kind.id == chosen)?;
+        let permission_mode = kinds
+            .iter()
+            .find(|declared| declared.id == kind.id)
+            .and_then(|declared| {
+                let index = composer.read(cx).access_index();
+                start_choices(declared).get(index)?.id.clone()
+            });
+        Some((kind, permission_mode))
+    }
+
     /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
     /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
     /// back to the composer with its sentence.
-    fn finish_start(
+    pub(super) fn finish_start(
         &mut self,
         prompt: &str,
         composer: Entity<Composer>,

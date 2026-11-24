@@ -1,6 +1,7 @@
 //! The Canvas: the Conversation, the regions beside it and the overlay region (D-SH-01, A5).
 
 use super::Shell;
+use super::home_start::{self, HomeFrame};
 use super::marketplace::{self, MarketplaceFrame};
 use super::pairing::{self, PairingFrame};
 use super::session_view::{self, SessionFrame};
@@ -35,6 +36,8 @@ use massorca_ui::{ActiveTheme, TextStyled, Theme};
 pub(super) struct PageFrames<'a> {
     pub settings: SettingsFrame<'a>,
     pub start: Option<StartFrame>,
+    /// The start page with no workspace, while a service can start sessions.
+    pub home: Option<HomeFrame>,
     pub setup_rows: Vec<crate::model::setup::SetupRow>,
     /// The Work panel, while its region is on screen.
     pub work_panel: Option<WorkFrame>,
@@ -158,7 +161,10 @@ fn conversation(
         };
     }
     let body: AnyElement = match model.canvas() {
-        Canvas::Home(Mode::Workspaces) => start_page(theme).into_any_element(),
+        Canvas::Home(Mode::Workspaces) => match pages.home {
+            Some(frame) => home_start::home_page(frame, cx),
+            None => start_page(theme).into_any_element(),
+        },
         Canvas::Home(Mode::BotTeams) => teams::bot_teams_home(model, shell, cx),
         Canvas::Team(TeamPage::Board(team)) => {
             teams::board_page(model, shell, BoardOwner::Team(team), window, cx)
@@ -212,7 +218,8 @@ fn conversation(
         .into_any_element()
 }
 
-/// The start page with no session open: the rose logo and the question (A40).
+/// The start page on sample data, which has no service to start with: the rose logo and the
+/// question (A40).
 fn start_page(theme: &Theme) -> impl IntoElement {
     div()
         .flex()

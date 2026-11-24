@@ -92,6 +92,8 @@ pub(super) enum MenuTarget {
     StatusItems(Vec<Option<StatusItem>>),
     /// The start page's project menu: the rows of the project menu, chosen to open a start page.
     StartProject(Vec<Option<ProjectMenuChoice>>),
+    /// The project menu of the start page with no workspace: chosen to create the workspace in.
+    HomeProject(Vec<Option<ProjectMenuChoice>>),
 }
 
 #[derive(Debug)]
@@ -162,6 +164,13 @@ fn menu_icon(id: WorkspaceMenuId) -> IconName {
 
 impl Shell {
     /// Opens "New workspace". Sample data has no service to ask, so nothing opens.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "A88: \"+ Create\" opens the start page; the form stays as reference"
+        )
+    )]
     pub(super) fn open_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.service.is_none() || self.dialogs.create.is_some() {
             return;
@@ -201,6 +210,13 @@ impl Shell {
     }
 
     /// Copies what is typed into the form, and clears a name error once the name changes.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "A88: \"+ Create\" opens the start page; the form stays as reference"
+        )
+    )]
     fn read_create_fields(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.dialogs.create.as_mut() else {
             return;
@@ -417,6 +433,7 @@ impl Shell {
         match result {
             Ok(project) => {
                 self.dialogs.add_project = None;
+                self.home_project = Some(project.id.clone());
                 if let Some(create) = self.dialogs.create.as_mut() {
                     create.form.project = Some(ProjectChoice::Project(project.id));
                 }
@@ -535,6 +552,14 @@ impl Shell {
                 Some(ProjectMenuChoice::Project(choice)) => self.open_start_project(choice, cx),
                 Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
                 None => {}
+            },
+            MenuTarget::HomeProject(choices) => match choices.get(row).cloned().flatten() {
+                Some(ProjectMenuChoice::Project(ProjectChoice::Project(id))) => {
+                    self.home_project = Some(id);
+                }
+                Some(ProjectMenuChoice::AddProject) => self.open_add_project(window, cx),
+                // "No project" is off on this page, so its row stands for nothing.
+                Some(ProjectMenuChoice::Project(ProjectChoice::NoProject)) | None => {}
             },
         }
     }
