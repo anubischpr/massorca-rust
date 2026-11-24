@@ -1,7 +1,5 @@
 //! The core settings of decision 0070: their kinds on the wire, typed validation, reset, and `config.changed`.
 
-use std::time::Duration;
-
 use massorca_client::Subscription;
 use massorca_protocol::codes;
 use massorca_protocol::methods::config::{ConfigKey, ConfigSet};
@@ -28,7 +26,7 @@ fn set(key: &str, value: Value) -> ConfigSet {
 
 async fn next_event(subscription: &mut Subscription) -> ChangeEvent {
     timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         subscription.next_as::<ChangeEvent>(),
     )
     .await

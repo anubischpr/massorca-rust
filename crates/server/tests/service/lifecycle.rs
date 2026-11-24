@@ -89,7 +89,7 @@ async fn a_shutdown_request_stops_the_service_and_frees_the_profile() {
     // A pipe with a connected client cannot be taken over, so the client goes first, as a CLI would.
     drop(client);
     // Windows releases the pipe a moment after the accept loop ends, so the restart retries until the profile is free.
-    let restarted = timeout(Duration::from_secs(5), async {
+    let restarted = timeout(super::common::REPLY_WAIT, async {
         loop {
             match Service::start(service_config(home.path(), "default")).await {
                 Ok(running) => break running,
@@ -140,7 +140,7 @@ async fn requests_in_flight_finish_before_the_service_stops() {
             .call::<_, Value>("ext.demo.hold", &Value::Null)
             .await
     });
-    timeout(Duration::from_secs(5), entered.notified())
+    timeout(super::common::REPLY_WAIT, entered.notified())
         .await
         .expect("the held request started");
 
@@ -296,7 +296,7 @@ async fn a_handler_still_running_at_the_grace_limit_is_dropped_before_the_profil
             .call::<_, Value>("ext.demo.stuck", &Value::Null)
             .await
     });
-    timeout(Duration::from_secs(5), entered.notified())
+    timeout(super::common::REPLY_WAIT, entered.notified())
         .await
         .expect("the handler started");
 
@@ -350,7 +350,7 @@ async fn a_service_started_while_its_predecessor_drains_waits_for_the_profile() 
     let client = connect(home.path(), "default").await;
     let call =
         tokio::spawn(async move { client.call::<_, Value>("ext.demo.gate", &Value::Null).await });
-    timeout(Duration::from_secs(5), entered.notified())
+    timeout(super::common::REPLY_WAIT, entered.notified())
         .await
         .expect("the request started");
 
