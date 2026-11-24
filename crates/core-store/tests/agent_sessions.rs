@@ -56,6 +56,7 @@ fn a_session_round_trips_with_every_field() {
         outcome: Some("failure".to_owned()),
         source: "hook".to_owned(),
         at: 19,
+        seen_at: None,
     });
     row.result = Some("result text".to_owned());
     row.brought_back_at = Some(30);
@@ -238,6 +239,7 @@ fn a_status_change_writes_activity_and_result_and_learns_the_ref_once() {
         outcome: None,
         source: "hook".to_owned(),
         at: 11,
+        seen_at: None,
     };
 
     assert!(
@@ -255,6 +257,7 @@ fn a_status_change_writes_activity_and_result_and_learns_the_ref_once() {
         outcome: Some("success".to_owned()),
         source: "hook".to_owned(),
         at: 12,
+        seen_at: None,
     };
     store
         .set_agent_session_status(&row.id, Some(&done), Some("the result"), Some("other"))
@@ -297,6 +300,7 @@ fn a_restart_moves_an_exited_session_to_a_new_terminal_and_clears_its_exit_and_a
         outcome: Some("success".to_owned()),
         source: "hook".to_owned(),
         at: 19,
+        seen_at: None,
     });
     row.result = Some("kept".to_owned());
     store.insert_agent_session(&row).unwrap();
@@ -522,6 +526,147 @@ fn a_restart_takes_the_new_run_s_mode_and_the_wait_it_keeps() {
     assert_eq!(restarted.pending_permission_mode.as_deref(), Some("wild"));
 }
 
+fn activity(state: &str, outcome: Option<&str>, at: i64) -> StoredActivity {
+    StoredActivity {
+        state: state.to_owned(),
+        outcome: outcome.map(str::to_owned),
+        source: "hook".to_owned(),
+        at,
+        seen_at: None,
+    }
+}
+
+fn seen_at(store: &Store, id: &str) -> Option<i64> {
+    store
+        .get_agent_session(id)
+        .unwrap()
+        .unwrap()
+        .activity
+        .and_then(|activity| activity.seen_at)
+}
+
+#[test]
+fn a_seen_mark_holds_until_the_activity_changes() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+    let done = activity("done", Some("success"), 11);
+    store
+        .set_agent_session_status(&row.id, Some(&done), None, None)
+        .unwrap();
+    assert_eq!(seen_at(&store, &row.id), None, "a new done is unseen");
+
+    assert!(store.mark_agent_session_seen(&row.id, None, 20).unwrap());
+    assert_eq!(seen_at(&store, &row.id), Some(20));
+    assert!(
+        !store.mark_agent_session_seen(&row.id, None, 21).unwrap(),
+        "an activity already seen keeps its first mark"
+    );
+    assert_eq!(seen_at(&store, &row.id), Some(20));
+
+    store
+        .set_agent_session_status(&row.id, Some(&done), Some("same turn"), None)
+        .unwrap();
+    assert_eq!(
+        seen_at(&store, &row.id),
+        Some(20),
+        "rewriting the same activity keeps the mark"
+    );
+
+    let waiting = activity("waiting", None, 30);
+    store
+        .set_agent_session_status(&row.id, Some(&waiting), None, None)
+        .unwrap();
+    assert_eq!(
+        seen_at(&store, &row.id),
+        None,
+        "a new attention state is unseen"
+    );
+    let again = activity("done", Some("success"), 31);
+    store
+        .set_agent_session_status(&row.id, Some(&again), None, None)
+        .unwrap();
+    assert_eq!(seen_at(&store, &row.id), None);
+}
+
+#[test]
+fn only_waiting_or_done_can_be_marked_seen() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+    assert!(
+        !store.mark_agent_session_seen(&row.id, None, 20).unwrap(),
+        "no activity, nothing to see"
+    );
+    for state in ["working", "idle"] {
+        store
+            .set_agent_session_status(&row.id, Some(&activity(state, None, 11)), None, None)
+            .unwrap();
+        assert!(
+            !store.mark_agent_session_seen(&row.id, None, 20).unwrap(),
+            "{state}"
+        );
+        assert_eq!(seen_at(&store, &row.id), None, "{state}");
+    }
+    assert!(
+        !store
+            .mark_agent_session_seen("no-such-session", None, 20)
+            .unwrap()
+    );
+}
+
+#[test]
+fn a_restart_clears_the_seen_mark_with_the_activity() {
+    let (store, workspace) = store_with_workspace();
+    let mut row = session_row(&workspace, 10);
+    row.exit = Some(RunExit {
+        code: Some(0),
+        signal: None,
+        reason: RunExitReason::Exited,
+        at: 20,
+    });
+    row.activity = Some(activity("done", Some("success"), 19));
+    store.insert_agent_session(&row).unwrap();
+    assert!(store.mark_agent_session_seen(&row.id, None, 21).unwrap());
+
+    store
+        .restart_agent_session(&row.id, &new_id(), false, &RunMode::default(), None)
+        .unwrap();
+    store
+        .set_agent_session_status(
+            &row.id,
+            Some(&activity("done", Some("success"), 19)),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        seen_at(&store, &row.id),
+        None,
+        "the restart cleared the mark, so the same values come back unseen"
+    );
+}
+
+#[test]
+fn a_seen_mark_survives_reopening_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("store.db");
+    let id = {
+        let store = Store::open(&path).unwrap();
+        let project = project_row("app", "/repos/app");
+        store.insert_project(&project).unwrap();
+        let workspace = workspace_row(&project.id, "main", "/repos/app-workspaces/main");
+        store.insert_workspace(&workspace).unwrap();
+        let mut row = session_row(&workspace.id, 10);
+        row.activity = Some(activity("waiting", None, 11));
+        store.insert_agent_session(&row).unwrap();
+        assert!(store.mark_agent_session_seen(&row.id, None, 12).unwrap());
+        row.id
+    };
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(seen_at(&reopened, &id), Some(12));
+}
+
 fn account_row(kind: &str) -> AgentAccountRow {
     AgentAccountRow {
         id: new_id(),
@@ -591,4 +736,62 @@ fn used_kinds_unite_sessions_accounts_pending_sign_ins_account_history_and_bots(
             "from-session"
         ]
     );
+}
+
+#[test]
+fn a_mark_for_an_earlier_activity_does_not_mark_a_newer_one() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+    store
+        .set_agent_session_status(&row.id, Some(&activity("waiting", None, 11)), None, None)
+        .unwrap();
+    store
+        .set_agent_session_status(
+            &row.id,
+            Some(&activity("done", Some("success"), 13)),
+            None,
+            None,
+        )
+        .unwrap();
+
+    assert!(
+        !store
+            .mark_agent_session_seen(&row.id, Some(11), 20)
+            .unwrap(),
+        "the caller saw the waiting at 11, not this done"
+    );
+    assert_eq!(
+        seen_at(&store, &row.id),
+        None,
+        "the newer done stays unseen"
+    );
+
+    assert!(
+        store
+            .mark_agent_session_seen(&row.id, Some(13), 21)
+            .unwrap()
+    );
+    assert_eq!(
+        seen_at(&store, &row.id),
+        Some(21),
+        "the activity the caller saw is marked"
+    );
+}
+
+#[test]
+fn a_mark_without_the_activity_time_marks_the_current_one() {
+    let (store, workspace) = store_with_workspace();
+    let row = session_row(&workspace, 10);
+    store.insert_agent_session(&row).unwrap();
+    store
+        .set_agent_session_status(
+            &row.id,
+            Some(&activity("done", Some("success"), 13)),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(store.mark_agent_session_seen(&row.id, None, 20).unwrap());
+    assert_eq!(seen_at(&store, &row.id), Some(20));
 }

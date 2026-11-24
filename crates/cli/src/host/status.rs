@@ -109,7 +109,10 @@ pub fn status_of(name: &str, result: Result<Connected, ClientError>) -> HostStat
             status.server_version = Some(connected.server_version);
             status.scopes = Some(connected.scopes);
         }
-        Err(ClientError::ServerIdentityMismatch) => status.state = "identity_mismatch",
+        Err(ClientError::ServerIdentityMismatch(mismatch)) => {
+            status.state = "identity_mismatch";
+            status.detail = Some(mismatch.message());
+        }
         Err(ClientError::HostUnreachable(reason)) => {
             status.state = "unreachable";
             status.detail = Some(reason);
@@ -136,9 +139,13 @@ pub fn status_line(status: &HostStatus) -> String {
             let version = status.server_version.as_deref().unwrap_or("unknown");
             format!("{name}: connected, server {version}, scopes {scopes}")
         }
-        "identity_mismatch" => {
-            format!("{name}: identity mismatch: the server is not the one paired with")
-        }
+        "identity_mismatch" => format!(
+            "{name}: identity mismatch: {}",
+            status
+                .detail
+                .as_deref()
+                .unwrap_or("the server is not the one paired with")
+        ),
         state => format!(
             "{name}: {state} ({})",
             status.detail.as_deref().unwrap_or("no detail")
