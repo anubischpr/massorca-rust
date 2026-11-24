@@ -31,17 +31,21 @@ use std::io::Write;
 use super::Shell;
 use super::workspace_dialogs::{MenuTarget, project_menu};
 use crate::launch_options::DebugFocus;
-use crate::model::agent_kinds::{KindChoice, session_kind_choices};
+use crate::model::agent_kinds::{KindChoice, start_kind_choices};
 use crate::model::agent_sessions::agent_of_kind;
+use crate::model::home_start::{ADD_A_PROJECT, HOME_START};
+use crate::model::marketplace::ItemKind;
+use crate::model::navigation::MarketplacePage;
 use crate::model::permission_modes::{ModeChoice, start_choices};
 use crate::model::regions::Region;
 use crate::model::start_page::{
-    GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER, WorkspaceStart,
-    send_reason, start_params,
+    CHOOSE_AN_AGENT, GIT_LATER, KEY_HINTS, StartMode, StartingSession, TERMINAL_NOTE, VOICE_LATER,
+    WorkspaceStart, send_reason, start_params,
 };
 use crate::model::work_panel::terminal_unavailable;
 use crate::model::workspace_flow::ProjectChoice;
 use crate::service::Refusal;
+use massorca_protocol::codes;
 
 /// What the start page draws: the workspace, its composer, the shell to act through, and whether
 /// the service is connected, which "Open terminal" needs.
@@ -54,6 +58,69 @@ pub(super) struct StartFrame {
     pub starting: Option<String>,
     /// Where the session the composer starts opens.
     pub mode: StartMode,
+    /// Why the chosen agent cannot start, when it cannot.
+    pub kind_notice: Option<KindNotice>,
+    /// The service refused because the data folder is not secured.
+    pub profile_unsafe: bool,
+}
+
+/// Why the chosen agent cannot start, and the Marketplace page that can install or turn it on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct KindNotice {
+    pub text: String,
+    pub page: MarketplacePage,
+}
+
+/// The banner a data folder that is not secured gets: the service refuses every call until the
+/// owner runs the CLI, since no protocol method secures it (`profile.unsafe_location`).
+pub(super) const PROFILE_UNSAFE_TEXT: &str = "This data folder is not secured, so the service refuses every call. Run `massorca profile secure --yes` in a terminal, then try again.";
+
+/// The banner on both start pages while the last refusal was `profile.unsafe_location`.
+pub(super) fn profile_banner() -> impl IntoElement {
+    div()
+        .debug_selector(|| "start-profile-banner".to_owned())
+        .child(
+            Banner::new(
+                "start-profile-banner",
+                BannerVariant::Warning,
+                PROFILE_UNSAFE_TEXT,
+            )
+            .title("Secure the data folder"),
+        )
+}
+
+/// What the page says when the service declares no agent at all.
+const NO_AGENTS: &str = "No agent is installed. Add one from the Marketplace.";
+
+/// The refusal Send shows for a kind that cannot start.
+fn cannot_start(name: &str, reason: &str) -> String {
+    format!("{name} cannot start: {reason}.")
+}
+
+/// The notice under a start composer, with its direct action to the Marketplace.
+pub(super) fn kind_notice_row(
+    notice: KindNotice,
+    shell: WeakEntity<Shell>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let page = notice.page;
+    div()
+        .debug_selector(|| "start-kind-notice".to_owned())
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_2))
+        .text_style(TYPE_CAPTION)
+        .text_color(theme.palette.text.secondary)
+        .child(notice.text)
+        .child(
+            Button::new("start-kind-marketplace", "Open in Marketplace")
+                .variant(ButtonVariant::Secondary)
+                .on_click(move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.open_marketplace(page, cx));
+                }),
+        )
 }
 
 /// A workspace's start page composer, with the subscription that logs its drafts in a debug launch and
@@ -142,6 +209,9 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
                     .child(TERMINAL_NOTE),
             )
         })
+        .when_some(frame.kind_notice.clone(), |column, notice| {
+            column.child(kind_notice_row(notice, frame.shell.clone(), &theme))
+        })
         .child(key_hints(&theme))
         .when_some(frame.starting.clone(), |column, status| {
             column.child(starting_line(status, &theme))
@@ -172,6 +242,9 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
         .child(div().flex().justify_center().child(rose_logo()))
         .child(heading)
         .child(placement)
+        .when(frame.profile_unsafe, |column| {
+            column.child(profile_banner())
+        })
         .child(composer);
     if page.missing {
         column = column.child(
@@ -198,7 +271,7 @@ pub(super) fn start_page(frame: StartFrame, cx: &mut App) -> AnyElement {
 }
 
 /// The start in flight, under the composer until the service answers (D-AG-01 States).
-fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
+pub(super) fn starting_line(status: String, theme: &Theme) -> impl IntoElement {
     div()
         .debug_selector(|| "start-status".to_owned())
         .text_style(TYPE_CAPTION)
@@ -223,13 +296,17 @@ pub(super) fn access_modes(choices: &[ModeChoice]) -> Vec<AccessMode> {
 }
 
 /// The kinds as the picker's rail offers them: one agent each, with the kind as its only row, since the
-/// service declares no models yet.
+/// service declares no models yet. A kind that cannot start is listed as missing.
 fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
     choices
         .iter()
         .map(|choice| AgentOption {
             kind: super::rail::agent_kind(agent_of_kind(&choice.id)),
-            availability: AgentAvailability::Ready,
+            availability: if choice.unavailable.is_some() {
+                AgentAvailability::Missing
+            } else {
+                AgentAvailability::Ready
+            },
             list: ModelList::Loaded,
             models: vec![ModelOption {
                 id: choice.id.clone().into(),
@@ -243,7 +320,7 @@ fn picker_agents(choices: &[KindChoice]) -> Vec<AgentOption> {
 }
 
 /// The key hints under the composer: each key in a keycap, then what it does (D-AG-01).
-fn key_hints(theme: &Theme) -> impl IntoElement {
+pub(super) fn key_hints(theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -454,6 +531,7 @@ impl Shell {
                     Composer::new(picker, Vec::new(), cx)
                         .leading_control(switch)
                         .voice_unavailable(VOICE_LATER)
+                        .sends_empty()
                 });
                 let events = cx.subscribe(
                     &entity,
@@ -468,7 +546,11 @@ impl Shell {
                         ComposerEvent::Send(prompt) => {
                             // The start page clears the prompt as it sends and gives it back on a refusal.
                             composer.update(cx, |composer, cx| composer.set_draft("", cx));
-                            shell.start_session(&workspace, prompt, composer.clone(), cx);
+                            if workspace == HOME_START {
+                                shell.start_from_home(prompt, composer.clone(), cx);
+                            } else {
+                                shell.start_session(&workspace, prompt, composer.clone(), cx);
+                            }
                         }
                         _ => {}
                     },
@@ -517,7 +599,7 @@ impl Shell {
         let (choices, connected, kinds) = {
             let state = self.store.read(cx).state();
             (
-                session_kind_choices(&state.agent_kinds),
+                start_kind_choices(&state.agent_kinds),
                 state.connection.is_connected(),
                 state.agent_kinds.clone(),
             )
@@ -554,7 +636,11 @@ impl Shell {
             .start_pending
             .as_ref()
             .filter(|pending| pending.workspace == workspace_id);
-        let reason = send_reason(connected, kind_chosen, starting).map(SharedString::from);
+        let no_project =
+            workspace_id == HOME_START && self.store.read(cx).state().projects.is_empty();
+        let reason = send_reason(connected, kind_chosen, starting)
+            .or_else(|| no_project.then(|| ADD_A_PROJECT.to_owned()))
+            .map(SharedString::from);
         composer.update(cx, |composer, cx| composer.set_send_unavailable(reason, cx));
     }
 
@@ -570,29 +656,10 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
-        let chosen = composer
-            .read(cx)
-            .picker()
-            .read(cx)
-            .state()
-            .choice()
-            .model
-            .to_string();
-        let choices = session_kind_choices(&self.store.read(cx).state().agent_kinds);
-        let Some(kind) = choices.into_iter().find(|kind| kind.id == chosen) else {
-            return;
+        let (kind, permission_mode) = match self.chosen_start(&composer, cx) {
+            Ok(chosen) => chosen,
+            Err(refusal) => return refuse_send(prompt, &composer, refusal, cx),
         };
-        let permission_mode = self
-            .store
-            .read(cx)
-            .state()
-            .agent_kinds
-            .iter()
-            .find(|declared| declared.id == kind.id)
-            .and_then(|declared| {
-                let index = composer.read(cx).access_index();
-                start_choices(declared).get(index)?.id.clone()
-            });
         let params = start_params(workspace, &kind.id, prompt, permission_mode);
         let mode = self.start_mode(workspace);
         self.start_pending = Some(StartingSession {
@@ -611,10 +678,101 @@ impl Shell {
         cx.notify();
     }
 
+    /// Why the composer's chosen kind cannot start, with where to fix it; or why there is none.
+    pub(super) fn kind_notice(&self, composer: &Entity<Composer>, cx: &App) -> Option<KindNotice> {
+        let state = self.store.read(cx).state();
+        if state.agent_kinds.is_empty() {
+            return state.connection.is_connected().then(|| KindNotice {
+                text: NO_AGENTS.to_owned(),
+                page: MarketplacePage::Category(ItemKind::Agent),
+            });
+        }
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .clone();
+        let declared = state
+            .agent_kinds
+            .iter()
+            .find(|kind| kind.id == chosen.as_ref())?;
+        let choice = start_kind_choices(std::slice::from_ref(declared)).pop()?;
+        let reason = choice.unavailable?;
+        let item = declared.package.id.as_deref().and_then(|package| {
+            self.marketplace
+                .snapshot()
+                .search("")
+                .into_iter()
+                .find_map(|item| {
+                    (item.kind == ItemKind::Agent
+                        && item
+                            .extension
+                            .as_ref()
+                            .is_some_and(|entry| entry.id == package))
+                    .then_some(item.id)
+                })
+        });
+        Some(KindNotice {
+            text: cannot_start(&choice.name, reason),
+            page: item.map_or(
+                MarketplacePage::Category(ItemKind::Agent),
+                MarketplacePage::Item,
+            ),
+        })
+    }
+
+    /// The composer's chosen kind, and the permission mode its access chip picked; or the refusal Send
+    /// shows when no kind is chosen or the chosen one cannot start.
+    pub(super) fn chosen_start(
+        &self,
+        composer: &Entity<Composer>,
+        cx: &App,
+    ) -> Result<(KindChoice, Option<String>), String> {
+        let chosen = composer
+            .read(cx)
+            .picker()
+            .read(cx)
+            .state()
+            .choice()
+            .model
+            .to_string();
+        let kinds = &self.store.read(cx).state().agent_kinds;
+        let kind = start_kind_choices(kinds)
+            .into_iter()
+            .find(|kind| kind.id == chosen)
+            .ok_or_else(|| CHOOSE_AN_AGENT.to_owned())?;
+        if let Some(reason) = kind.unavailable {
+            return Err(cannot_start(&kind.name, reason));
+        }
+        let permission_mode = kinds
+            .iter()
+            .find(|declared| declared.id == kind.id)
+            .and_then(|declared| {
+                let index = composer.read(cx).access_index();
+                start_choices(declared).get(index)?.id.clone()
+            });
+        Ok((kind, permission_mode))
+    }
+
+    /// Keeps the data-folder banner in step with the last answer: on after `profile.unsafe_location`,
+    /// off after any call goes through.
+    pub(super) fn note_refusal(&mut self, refusal: Option<&Refusal>) {
+        match refusal {
+            None => self.profile_unsafe = false,
+            Some(refusal) if refusal.code() == Some(codes::PROFILE_UNSAFE_LOCATION) => {
+                self.profile_unsafe = true;
+            }
+            Some(_) => {}
+        }
+    }
+
     /// The service's answer to a start. In Chat the session opens once the Sidebar lists it; in
     /// Terminal its terminal opens in the Work panel and the page stays. A refusal gives the prompt
     /// back to the composer with its sentence.
-    fn finish_start(
+    pub(super) fn finish_start(
         &mut self,
         prompt: &str,
         composer: Entity<Composer>,
@@ -623,6 +781,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.start_pending = None;
+        self.note_refusal(answer.as_ref().err());
         match answer {
             Ok(session) => {
                 composer.update(cx, |composer, cx| composer.set_error(None, cx));
@@ -652,4 +811,18 @@ impl Shell {
         let composer = self.start_composer(&id, cx);
         composer.update(cx, |composer, cx| composer.focus(window, cx));
     }
+}
+
+/// Send was refused before any call: the prompt goes back with the reason above the composer.
+pub(super) fn refuse_send(
+    prompt: &str,
+    composer: &Entity<Composer>,
+    refusal: String,
+    cx: &mut Context<Shell>,
+) {
+    composer.update(cx, |composer, cx| {
+        composer.set_draft(prompt, cx);
+        composer.set_error(Some(refusal.into()), cx);
+    });
+    cx.notify();
 }
