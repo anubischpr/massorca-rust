@@ -20,6 +20,8 @@ pub const AGENTS: &str = "agents/1";
 pub const AGENT_MODES: &str = "agent-modes/1";
 /// The prompt queue (`agent.queue*`, decision 0084): queued prompts that the service delivers when the agent is ready.
 pub const AGENT_QUEUE: &str = "agent-queue/1";
+/// Seen state of an agent's attention states: `seen_at_ms` on a session's activity, and `agent.mark_seen`.
+pub const AGENT_SEEN: &str = "agent-seen/1";
 pub const GIT: &str = "git/1";
 /// The secret vault (`secret.*`, decision 0071).
 pub const SECRETS: &str = "secrets/1";

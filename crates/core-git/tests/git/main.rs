@@ -3,6 +3,7 @@
 mod base;
 mod branches;
 mod commit;
+mod config;
 mod diff;
 mod discovery;
 mod fixture;

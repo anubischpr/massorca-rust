@@ -399,6 +399,14 @@ mod tests {
             error: Box::new(revoked),
             supported: None,
         }));
-        assert!(!is_transient(&ClientError::ServerIdentityMismatch));
+        let changed = crate::IdentityMismatch {
+            host: "vps".to_owned(),
+            trusted_from: crate::TrustedFrom::Pairing,
+            expected: "sha256:old".to_owned(),
+            actual: None,
+        };
+        assert!(!is_transient(&ClientError::ServerIdentityMismatch(
+            Box::new(changed)
+        )));
     }
 }

@@ -17,16 +17,16 @@ use massorca_protocol::methods::agents::{
     AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, BringBackResult,
     PromptReceipt,
 };
-use massorca_protocol::methods::config::{ConfigList, ConfigSet, ConfigValue};
+use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
-    TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED,
-    TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED,
-    TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
-    TOPIC_WORKSPACE_REMOVING,
+    TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
+    TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
+    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
+    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -626,6 +626,12 @@ impl Link {
         self.emit(StoreUpdate::AgentKindsResync(kinds));
         let read_extensions = extensions::read(client, &self.extension_reads).await?;
         self.emit(StoreUpdate::Extensions(read_extensions));
+        // A service without `config.list` refuses it; the settings the store holds stay as they were.
+        match client.config_list().await {
+            Ok(list) => self.emit(StoreUpdate::ConfigResync(list.values)),
+            Err(ClientError::Remote(_) | ClientError::Protocol(_)) => {}
+            Err(error) => return Err(error),
+        }
         secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
         Ok(events)
     }
@@ -761,6 +767,19 @@ impl Link {
             | TOPIC_EXTENSION_REMOVED => extensions::read(client, &self.extension_reads)
                 .await
                 .map(StoreUpdate::Extensions),
+            // The event names `<owner>/<key>` and no value, so the changed setting is read again.
+            TOPIC_CONFIG_CHANGED => {
+                let Some((owner, key)) = id.split_once('/') else {
+                    return Outcome::Continue;
+                };
+                client
+                    .config_get(&ConfigKey {
+                        owner: Some(owner.to_owned()),
+                        key: key.to_owned(),
+                    })
+                    .await
+                    .map(StoreUpdate::ConfigChanged)
+            }
             TOPIC_WORKSPACE_REMOVED => Ok(StoreUpdate::WorkspaceGone(id)),
             TOPIC_PROJECT_REMOVED => Ok(StoreUpdate::ProjectGone(id)),
             TOPIC_AGENT_CHANGED => client
@@ -844,11 +863,16 @@ fn spawn_call(
             });
         }
         Command::SetConfig { params, reply } => {
+            let updates = updates.clone();
             tokio::spawn(async move {
                 let result = client
                     .config_set(&params)
                     .await
                     .map_err(|error| Refusal::from(&error));
+                // The store takes the value the service stored, as the change event will say too.
+                if let Ok(value) = &result {
+                    let _ = updates.send(StoreUpdate::ConfigChanged(value.clone()));
+                }
                 let _ = reply.send(result);
             });
         }

@@ -4,12 +4,12 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
-    QueuedPrompt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentMarkSeenParams,
+    AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams,
+    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
@@ -241,6 +241,20 @@ impl Client {
             force,
         };
         self.call(agents::STOP, &params).await
+    }
+
+    /// `agent.mark_seen`: marks a session's latest `waiting` or `done` as seen and answers with the session (capability
+    /// `agent-seen/1`). `at_ms` names the activity the caller showed, so a newer one stays unseen.
+    pub async fn agent_mark_seen(
+        &self,
+        session: &str,
+        at_ms: Option<i64>,
+    ) -> Result<AgentSession, ClientError> {
+        let params = AgentMarkSeenParams {
+            session: session.to_owned(),
+            at_ms,
+        };
+        self.call(agents::MARK_SEEN, &params).await
     }
 
     /// `agent.forget`: deletes the record of a session whose run has ended.

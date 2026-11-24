@@ -128,9 +128,11 @@ async fn wrong_pin_is_refused_and_never_upgraded() {
     let stranger = TlsIdentity::generate("stranger").expect("stranger");
     // The same server twice: a mismatch must not move on to the next address.
     let addresses = vec![server.address.clone(), server.address.clone()];
+    let presented = server.identity.pin();
     let result = connect(&addresses, stranger.pin(), &client_identity, TIMEOUT).await;
+    // The refusal names the key the server did present, so the client can show both.
     assert!(
-        matches!(result, Err(NetError::ServerPinMismatch)),
+        matches!(result, Err(NetError::ServerPinMismatch { actual: Some(pin) }) if pin == presented),
         "{result:?}"
     );
     assert!(accepted(server).await.is_err());
