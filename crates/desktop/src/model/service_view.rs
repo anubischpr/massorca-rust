@@ -531,25 +531,37 @@ mod tests {
         else {
             panic!("workspaces content expected");
         };
-        let sessions: Vec<(&str, usize, Option<&str>)> = tree
+        let sessions: Vec<(&str, usize, Option<&str>, bool)> = tree
             .iter()
             .filter_map(|row| match row {
                 TreeRow::Session {
                     title,
                     depth,
                     place,
+                    own_worktree,
                     ..
-                } => Some((title.as_str(), *depth, place.as_deref())),
+                } => Some((title.as_str(), *depth, place.as_deref(), *own_worktree)),
                 _ => None,
             })
             .collect();
         assert_eq!(
             sessions,
             vec![
-                ("Plan", 0, None),
-                ("Child session", 1, Some("feat/two")),
-                ("Check", 2, Some("Current worktree")),
+                ("Plan", 0, None, false),
+                ("Child session", 1, Some("feat/two"), true),
+                ("Check", 2, Some("Current worktree"), false),
             ]
+        );
+        let workspaces: Vec<&str> = tree
+            .iter()
+            .filter_map(|row| match row {
+                TreeRow::Workspace { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            workspaces.contains(&"w2"),
+            "the child's own worktree row stays listed"
         );
     }
 

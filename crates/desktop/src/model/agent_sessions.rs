@@ -61,6 +61,7 @@ fn session_row(
         agent: agent_of_kind(&session.kind),
         state: status,
         place: parent.map(|parent| place_of(session, parent, state)),
+        own_worktree: parent.is_some_and(|parent| parent.workspace_id != session.workspace_id),
         // Only a finished child under a parent it can merge into, and only until it is brought back.
         can_bring_back: parent.is_some()
             && session.brought_back_at_ms.is_none()
