@@ -1,8 +1,10 @@
 //! Sign-in to an account (decision 0059): the account's empty home, a service-owned terminal that runs the kind's login
 //! with the home variable set, and the decision when that terminal ends: keep the account with what its check found, or
 //! delete it. The startup sweep makes the same decision for a sign-in an earlier service left open, except that a check
-//! that cannot tell leaves that sign-in pending until a check decides it.
+//! that cannot tell leaves that sign-in pending until a check decides it. A sign-in again to an account that already
+//! exists runs the same login in the account's own home, and its end never deletes the account ([`SignInPurpose`]).
 
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,11 +17,12 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{AccountState, AccountsAdded};
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 
-use crate::account_check::{Verdict, account_strip_names, sign_in_env, state_name};
+use crate::account_check::{Verdict, account_strip_names, sign_in_env, state_name, unknown};
 use crate::accounts::{
     DEFAULT_LABEL, DecisionMark, ORIGIN_IMPORT, ORIGIN_SIGN_IN, refused_state, valid_label,
 };
 use crate::credentials;
+use crate::kind::KindDecl;
 use crate::sessions::{AgentError, Agents};
 
 /// How often a sign-in terminal's exit is looked for.
@@ -51,11 +54,6 @@ impl Agents {
             .clone()
             .filter(|_| decl.accounts_supported())
             .ok_or_else(|| unsupported(kind))?;
-        let login = decl
-            .accounts
-            .as_ref()
-            .map(|accounts| accounts.login.clone())
-            .unwrap_or_default();
         let account = new_id();
         let row = AgentAccountRow {
             id: account.clone(),
@@ -80,11 +78,83 @@ impl Agents {
                 .insert(account.clone(), String::new());
             home
         };
-        let env = sign_in_env(
+        let terminal = match self.create_login_terminal(
+            &account,
+            &decl,
+            &program,
             &credential_decl.home_env,
-            &home,
-            &account_strip_names(&decl),
+            home,
+        ) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                self.discard_account(kind, &account);
+                return Err(error);
+            }
+        };
+        let summary = self.summary(
+            &row,
+            self.store().get_active_agent_account(kind)?.as_deref(),
+        )?;
+        self.notify_account(kind, &account, AccountState::NeedsSignIn);
+        self.follow_sign_in(kind, &account, terminal.clone(), SignInPurpose::NewAccount);
+        Ok(AccountsAdded {
+            account: summary,
+            terminal_id: terminal,
+        })
+    }
+
+    /// Signs an existing account in again (decision 0059): the kind's login runs in a service-owned terminal with the
+    /// account's own home, exactly as a new account's sign-in runs it. The account is kept whatever the login ends with:
+    /// when the terminal ends, its check's state and identity are stored, and it is neither deleted nor signed out, because
+    /// it existed before this sign-in. Its active status and the projects that chose it do not change.
+    ///
+    /// Crash safety: the account is marked pending only in memory, never in the store. The startup sweep decides every
+    /// undecided sign-in in the store, and this one is not undecided, so a restart during the login leaves the row as it
+    /// was; the account's next check decides its state. A refusal, before anything starts: a kind that is not startable
+    /// (as for add), a kind without a sign-in (`agent.credentials_unsupported`), an unknown account or one of another kind
+    /// (`agent.account_not_found`), an account that is signing in, being removed or decided, or undecided in the store, or
+    /// one a live run uses (`agent.busy`), and an account whose home is gone (`agent.credentials_invalid`).
+    pub fn accounts_sign_in(&self, kind: &str, account: &str) -> Result<AccountsAdded, AgentError> {
+        let (decl, program) = self.startable_kind(kind)?;
+        let credential_decl = decl
+            .credentials
+            .clone()
+            .filter(|_| decl.accounts_supported())
+            .ok_or_else(|| unsupported(kind))?;
+        let (summary, home) = self.begin_sign_in_again(kind, account)?;
+        let terminal =
+            self.create_login_terminal(account, &decl, &program, &credential_decl.home_env, home)?;
+        self.follow_sign_in(
+            kind,
+            account,
+            terminal.clone(),
+            SignInPurpose::ExistingAccount,
         );
+        Ok(AccountsAdded {
+            account: summary,
+            terminal_id: terminal,
+        })
+    }
+
+    /// Creates the terminal that runs the kind's login for `account` (decision 0059): the declared login arguments, `home` as
+    /// the working directory and as the value of the home variable, and the sign-in environment. The account's pending mark
+    /// then holds the terminal's id. When the terminal cannot be created the mark is removed and the error returned, and
+    /// the caller decides what else follows: a new account is discarded, an existing one is kept. Shared by a sign-in and a
+    /// sign-in again, so both run the same login.
+    fn create_login_terminal(
+        &self,
+        account: &str,
+        decl: &KindDecl,
+        program: &Path,
+        home_env: &str,
+        home: PathBuf,
+    ) -> Result<String, AgentError> {
+        let login = decl
+            .accounts
+            .as_ref()
+            .map(|accounts| accounts.login.clone())
+            .unwrap_or_default();
+        let env = sign_in_env(home_env, &home, &account_strip_names(decl));
         let spec = CreateSpec {
             workspace_id: SIGN_IN_SCOPE.to_owned(),
             cwd: home,
@@ -104,35 +174,30 @@ impl Agents {
             request_id: None,
             holds_secrets: false,
         };
-        let terminal = match self.terminals().create(spec) {
-            Ok(terminal) => terminal,
-            Err(error) => {
-                self.account_busy().pending.remove(&account);
-                self.discard_account(kind, &account);
-                return Err(error.into());
+        match self.terminals().create(spec) {
+            Ok(terminal) => {
+                self.account_busy()
+                    .pending
+                    .insert(account.to_owned(), terminal.id.clone());
+                Ok(terminal.id)
             }
-        };
-        self.account_busy()
-            .pending
-            .insert(account.clone(), terminal.id.clone());
-        let summary = self.summary(
-            &row,
-            self.store().get_active_agent_account(kind)?.as_deref(),
-        )?;
-        self.notify_account(kind, &account, AccountState::NeedsSignIn);
+            Err(error) => {
+                self.account_busy().pending.remove(account);
+                Err(error.into())
+            }
+        }
+    }
+
+    /// Starts the thread that decides `account` when its login terminal ends (decision 0059), by `purpose`.
+    fn follow_sign_in(&self, kind: &str, account: &str, terminal: String, purpose: SignInPurpose) {
         let agents = self.clone();
-        let (kind_owned, watched, terminal_id) =
-            (kind.to_owned(), account.clone(), terminal.id.clone());
-        thread::spawn(move || agents.finish_sign_in(&kind_owned, &watched, &terminal_id));
-        Ok(AccountsAdded {
-            account: summary,
-            terminal_id: terminal.id,
-        })
+        let (kind_owned, watched) = (kind.to_owned(), account.to_owned());
+        thread::spawn(move || agents.finish_sign_in(&kind_owned, &watched, &terminal, purpose));
     }
 
     /// Runs when a sign-in terminal ends. A terminal still open at its time limit is closed first, and then decided as an
     /// ended sign-in is (decision 0059): the account is no longer pending, and is decided.
-    fn finish_sign_in(&self, kind: &str, account: &str, terminal: &str) {
+    fn finish_sign_in(&self, kind: &str, account: &str, terminal: &str, purpose: SignInPurpose) {
         let deadline = Instant::now() + self.sign_in_timeout();
         if !wait_for_exit(self.terminals(), terminal, Some(deadline)) {
             tracing::warn!(kind, "a sign-in left open past its time limit is closed");
@@ -143,7 +208,12 @@ impl Agents {
         }
         // The open mark becomes the decision's, so no other call acts on the account between the two (decision 0059).
         let mark = self.mark_now(account);
-        self.decide_marked(kind, account, SignInEnd::TerminalEnded, mark);
+        match purpose {
+            SignInPurpose::NewAccount => {
+                self.decide_marked(kind, account, SignInEnd::TerminalEnded, mark);
+            }
+            SignInPurpose::ExistingAccount => self.decide_signed_in_again(kind, account, mark),
+        }
     }
 
     /// Decides an undecided sign-in or import this service made (decision 0059), from its check, its declared files and what
@@ -191,6 +261,56 @@ impl Agents {
         };
         self.store_outcome(kind, account, outcome, mark, sign_out, refused);
     }
+
+    /// Decides a sign-in again to an existing account (decision 0059), while the caller holds its mark. The account is kept
+    /// whatever its login ended with, and is never deleted or signed out: it existed before the sign-in, so
+    /// [`decide_marked`](Self::decide_marked)'s rules for a new account do not apply here. The verdict of its check is
+    /// stored as it is found, with the check's identity: `signed_in` with the identity, or `expired`, `needs_sign_in`,
+    /// `conflict`, or `unknown` when the check cannot tell (a kind without a check, or one that cannot run, is `unknown`).
+    /// Nothing else changes: the active account and the project choices stay as they were. The account is announced once.
+    fn decide_signed_in_again(&self, kind: &str, account: &str, mark: DecisionMark) {
+        let row = match self.store().get_agent_account(account) {
+            Ok(Some(row)) if row.kind == kind => row,
+            _ => return,
+        };
+        let verdict = match self.runnable_kind(kind) {
+            Ok((decl, program)) => {
+                self.check_verdict(&decl, &program, account, row.identity.as_deref())
+            }
+            Err(_) => unknown(),
+        };
+        // Under the gate, so the comparison and the write are one step. A login that turned out to be another account's is
+        // a conflict: the recorded identity stays (ACC-03).
+        let (recorded, state) = {
+            let _gate = credentials::lock_homes();
+            let verdict = match verdict.identity.as_deref() {
+                Some(identity)
+                    if verdict.state == AccountState::SignedIn
+                        && matches!(self.duplicate_of(kind, account, identity), Ok(Some(_))) =>
+                {
+                    Verdict {
+                        state: AccountState::Conflict,
+                        identity: None,
+                    }
+                }
+                _ => verdict,
+            };
+            let recorded = self.store().set_agent_account_check(
+                account,
+                state_name(verdict.state),
+                verdict.identity.as_deref(),
+            );
+            (recorded, verdict.state)
+        };
+        match recorded {
+            Ok(true) => self.notify_account(kind, account, state),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(kind, code = %error, "a sign-in again could not be recorded");
+            }
+        }
+        drop(mark);
+    }
 }
 
 /// Waits until the terminal has exited, or can no longer be found (it was closed). With a `deadline`, gives up at it and
@@ -226,6 +346,18 @@ pub(crate) enum SignInEnd {
     /// The startup sweep decides a sign-in an earlier service left open: a check that cannot tell keeps the account
     /// pending, so the next start decides it again.
     StartupSweep,
+}
+
+/// Whose sign-in a login terminal is (decision 0059). A new account's sign-in is decided by [`SignInEnd`] and deleted when
+/// its check refuses it. A sign-in again belongs to an account that existed before the login, so its end never deletes the
+/// account, and it is never signed out. Only this purpose tells the two apart: the account's origin does not, since a
+/// re-signed-in account keeps the origin it was made with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignInPurpose {
+    /// The account was made by this sign-in.
+    NewAccount,
+    /// The account existed before this sign-in, which signs it in again.
+    ExistingAccount,
 }
 
 /// What a sign-in account becomes once it is decided (decision 0059).

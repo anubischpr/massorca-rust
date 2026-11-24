@@ -230,8 +230,18 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
     let shown = sandbox.json_ok("default", &["agent", "status", &session]);
     assert_eq!(shown["execution"]["state"], "exited");
     assert_eq!(shown["execution"]["exit"]["reason"], "service_stopped");
-    sandbox
-        .run("default", &["agent", "list"])
-        .success()
-        .stdout(contains("exited (service stopped)"));
+    // Either service may record the end: the stopping one with the program's exit code when it saw the program end
+    // (on Windows the stop's console interrupt, 0xC000013A), the next one with no code. Both read "service stopped".
+    let listed = sandbox.run("default", &["agent", "list"]).success();
+    let line = stdout_text(&listed)
+        .lines()
+        .find(|line| line.contains(&session))
+        .map(str::to_owned)
+        .expect("the session is listed");
+    let code = shown["execution"]["exit"]["code"].as_i64();
+    let expected = match code {
+        Some(code) => format!("exited (service stopped, code {code})"),
+        None => "exited (service stopped)".to_owned(),
+    };
+    assert!(line.contains(&expected), "{line}");
 }

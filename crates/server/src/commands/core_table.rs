@@ -601,6 +601,19 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.accounts.sign-in",
+            "Sign an existing account of an agent kind in again",
+            "agent.accounts.sign_in",
+            json!({
+                "type": "object",
+                "required": ["kind", "account"],
+                "properties": {
+                    "kind": { "type": "string" },
+                    "account": { "type": "string" }
+                }
+            }),
+        ),
+        command(
             "agent.accounts.import",
             "Import an agent kind's login files into a new account",
             "agent.accounts.import",

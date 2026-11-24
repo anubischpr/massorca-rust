@@ -79,7 +79,7 @@ machine.
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
-| `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
 | `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
 | `agent queue add <SESSION> <TEXT>` | Queues TEXT behind the session's busy agent and prints the queued prompt (`waiting`, with its reason). A kind that reports no activity is refused with `agent.queue_unavailable`; past 100 queued prompts with `agent.queue_full`. |
 | `agent queue list <SESSION>` | Lists the session's queued prompts, head first, with their states and reasons. |
@@ -108,6 +108,7 @@ machine.
 | `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
 | `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
 | `agent accounts add <KIND> [--label L] [--no-attach]` | Signs a new account in: runs the kind's login in a service-owned terminal, prints the account and the terminal, then attaches to it unless `--no-attach`. Refused with `--json` unless `--no-attach`. Built-in sign-in is declared for `claude` only (`claude auth login`); a kind without a sign-in is refused with `agent.credentials_unsupported`, which says to sign in from the vendor's CLI, then import the login. |
+| `agent accounts sign-in <KIND> <ACCOUNT> [--no-attach]` | Signs an existing account in again: runs the kind's login in its own home, prints the account and the terminal, then attaches unless `--no-attach`. The account is kept whatever the login ends with (an expired one stays listed, as `expired`, and is not deleted or signed out). Refused with `--json` unless `--no-attach`. Refused with `agent.account_not_found` for an unknown account or one of another kind, and with `agent.busy` while the account is signing in or a live run uses it. |
 | `agent accounts import <KIND> --from <DIR> [--label L]` | Copies the kind's declared login files from `DIR` into a new account, then checks it. Prints `imported`, `failed` (with the reason) or `not_found`. Names and sizes only. |
 | `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
 | `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
@@ -255,7 +256,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A parent in a folder workspace
   fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
-  cannot delegate: `agent.depth_exceeded`.
+  delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
+  delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
 - `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.

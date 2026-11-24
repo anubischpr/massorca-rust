@@ -86,15 +86,25 @@ pub fn verdict(check: &CheckDecl, exit: Option<i32>, output: &str) -> Verdict {
 }
 
 /// The state after a check, given the identity recorded for the account. A different identity than the recorded one is a
-/// `conflict`; the returned identity is then `None`, so the store keeps the recorded one.
+/// `conflict`; the returned identity is then `None`, so the store keeps the recorded one. Identities compare trimmed and
+/// without case.
 pub fn settle(found: Verdict, recorded: Option<&str>) -> Verdict {
     match (found.state, found.identity.as_deref(), recorded) {
-        (AccountState::SignedIn, Some(identity), Some(known)) if identity != known => Verdict {
-            state: AccountState::Conflict,
-            identity: None,
-        },
+        (AccountState::SignedIn, Some(identity), Some(known))
+            if normalized_identity(identity) != normalized_identity(known) =>
+        {
+            Verdict {
+                state: AccountState::Conflict,
+                identity: None,
+            }
+        }
         _ => found,
     }
+}
+
+/// An identity as two accounts are compared by it: trimmed, without case (ACC-03).
+pub(crate) fn normalized_identity(identity: &str) -> String {
+    identity.trim().to_lowercase()
 }
 
 fn pattern_matches(pattern: Option<&str>, output: &str) -> bool {
@@ -311,6 +321,19 @@ mod tests {
         assert_eq!(
             verdict(&check(Some("expired"), None), None, "expired").state,
             AccountState::Unknown
+        );
+    }
+
+    /// The same login with other case or spaces is the same identity, not a conflict (ACC-03).
+    #[test]
+    fn the_same_identity_in_other_case_is_not_a_conflict() {
+        let found = Verdict {
+            state: AccountState::SignedIn,
+            identity: Some(" Fake@Example.com".to_owned()),
+        };
+        assert_eq!(
+            settle(found, Some("fake@example.com")).state,
+            AccountState::SignedIn
         );
     }
 
