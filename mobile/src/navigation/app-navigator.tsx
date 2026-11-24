@@ -2,17 +2,16 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CONNECTION_LOG_TITLE } from '../copy/connection';
-import { SOURCE_CONTROL_TITLE } from '../copy/changes';
 import { TERMINAL_TITLE } from '../copy/terminal';
-import { PROJECTS_TITLE } from '../copy/workspaces';
+import { PROJECTS_TITLE, WORKSPACE_TITLE } from '../copy/workspaces';
 import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
-import { ChangesScreen } from '../screens/changes-screen';
 import { ConfirmPairingScreen } from '../screens/confirm-pairing-screen';
 import { ConnectionLogScreen } from '../screens/connection-log-screen';
 import { HomeScreen } from '../screens/home-screen';
 import { PairScreen } from '../screens/pair-screen';
 import { ProtocolGateScreen } from '../screens/protocol-gate-screen';
 import { TerminalScreen } from '../screens/terminal-screen';
+import { WorkspaceScreen } from '../screens/workspace-screen';
 import { WorkspacesScreen } from '../screens/workspaces-screen';
 import type { RootStackParamList } from './routes';
 
@@ -38,13 +37,16 @@ export function AppNavigator() {
             />
           )}
         </Stack.Screen>
-        <Stack.Screen name="Changes" options={{ title: SOURCE_CONTROL_TITLE }}>
+        <Stack.Screen name="Workspace" options={{ title: WORKSPACE_TITLE }}>
           {({ route, navigation }) => (
-            <ChangesScreen
+            <WorkspaceScreen
               host={route.params.host}
               workspace={route.params.workspace}
               noGit={route.params.noGit}
               onOpenDetails={() => navigation.navigate('ConnectionLog', { host: route.params.host })}
+              onOpenTerminal={(terminal) =>
+                navigation.navigate('Terminal', { host: route.params.host, terminal, workspace: route.params.workspace })
+              }
             />
           )}
         </Stack.Screen>

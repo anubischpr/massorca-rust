@@ -1,4 +1,6 @@
 export const PROJECTS_TITLE = 'Projects';
+export const WORKSPACE_TITLE = 'Workspace';
+export const WORKSPACE_VIEWS_LABEL = 'Workspace views';
 export const LOADING_WORKSPACES = 'Loading workspaces';
 export const NO_WORKSPACES_TITLE = 'No workspaces yet';
 export const NO_WORKSPACES_LINE = 'A workspace is a git worktree or a folder where an agent works.';
