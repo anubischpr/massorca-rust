@@ -20,7 +20,7 @@ use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
-use super::extensions::ExtensionsRead;
+use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
@@ -62,6 +62,8 @@ pub enum StoreUpdate {
     Teams(TeamsRead),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
+    /// What a paired host's Marketplace reads answered; the newest answer per host is kept.
+    HostMarketplace(HostMarketplaceRead),
     /// Every setting the service declares with its value, after a connect. Replaces what was held.
     ConfigResync(Vec<ConfigValue>),
     /// One setting the service changed or stored, read again by its owner and key.
@@ -224,6 +226,8 @@ pub struct StoreState {
     pub extension_read: u64,
     /// The installed packages and the catalogue, once read; `None` while the service cannot be asked.
     pub extensions: Option<ExtensionsRead>,
+    /// The newest Marketplace answer of each paired host, by host name.
+    pub host_listings: BTreeMap<String, HostMarketplaceRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
@@ -257,6 +261,7 @@ impl Default for StoreState {
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
+            host_listings: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
             agent_seen: false,
@@ -353,6 +358,7 @@ impl StoreState {
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
+            StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
                 replace_by(&mut self.config, value, |held| {
@@ -425,6 +431,18 @@ impl StoreState {
         }
         self.extension_read = read.number;
         self.extensions = Some(read);
+    }
+
+    /// Keeps the newest answer of each host, so an answer to an older request never replaces a newer one.
+    fn apply_host_marketplace(&mut self, read: HostMarketplaceRead) {
+        if self
+            .host_listings
+            .get(&read.host)
+            .is_some_and(|held| held.request > read.request)
+        {
+            return;
+        }
+        self.host_listings.insert(read.host.clone(), read);
     }
 
     /// Replaces the host records, keeping what each host's last check found. A host no longer listed is dropped.
@@ -652,6 +670,7 @@ mod tests {
 
     use super::fixtures::{agent, agent_kind, project, queued, team, workspace};
     use super::*;
+    use crate::service::extensions::HostListing;
 
     fn resynced() -> StoreState {
         let mut state = StoreState::default();
@@ -1134,5 +1153,24 @@ mod tests {
         state.apply(StoreUpdate::AgentQueueChanged(queue("s1", Vec::new())), now);
         state.apply(StoreUpdate::AgentGone("s2".into()), now);
         assert_eq!(held(&state), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_paired_host_keeps_the_newest_answer_not_the_last_one_to_arrive() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let newest = HostMarketplaceRead {
+            host: "vps".into(),
+            request: 2,
+            listing: HostListing::UpdateNeeded,
+        };
+        let older = HostMarketplaceRead {
+            host: "vps".into(),
+            request: 1,
+            listing: HostListing::UpdateNeeded,
+        };
+        state.apply(StoreUpdate::HostMarketplace(newest.clone()), now);
+        state.apply(StoreUpdate::HostMarketplace(older), now);
+        assert_eq!(state.host_listings.get("vps"), Some(&newest));
     }
 }

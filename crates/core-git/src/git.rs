@@ -1,8 +1,10 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::availability::GitAvailability;
 use crate::error::GitError;
 use crate::process::{Bounded, Output, run_bounded};
 use crate::untrusted::{self, EmptyHooks};
@@ -11,6 +13,9 @@ use crate::version::GitVersion;
 /// Time a single read-only git query may run before it is killed. Commands that
 /// change the repository have no timeout unless `Git::with_mutation_timeout` sets one.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Time the availability probe may run, so a hung git cannot hold up a status reply.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Environment variable that overrides the git executable.
 const BINARY_ENV: &str = "MASSORCA_GIT";
@@ -24,6 +29,8 @@ pub struct Git {
     mutation_timeout: Option<Duration>,
     /// Set for a caller without `workspace` permission: no program the repository names may run (decision 0078).
     untrusted: Option<EmptyHooks>,
+    /// The version of this binary once a probe read it, shared by clones; a missing or broken binary is not cached.
+    version_cache: Arc<OnceLock<GitVersion>>,
 }
 
 impl Git {
@@ -34,6 +41,7 @@ impl Git {
             timeout: DEFAULT_TIMEOUT,
             mutation_timeout: None,
             untrusted: None,
+            version_cache: Arc::new(OnceLock::new()),
         }
     }
 
@@ -72,14 +80,35 @@ impl Git {
         self
     }
 
-    /// The version of the git binary, from `git --version`.
+    /// The version of the git binary, from `git --version`. Not gated: it is the probe the gate itself runs.
     pub fn version(&self) -> Result<GitVersion, GitError> {
-        let captured = self.run(None, ["--version"])?;
+        let captured =
+            self.spawn_limited(None, ["--version"], Some(self.timeout), true, None, &[])?;
         captured.require_success()?;
         let text = captured.text()?;
         GitVersion::parse_version_output(text).ok_or_else(|| {
             captured.invalid_output(format!("unrecognised version line `{}`", text.trim()))
         })
+    }
+
+    /// Whether the binary is present and at or above the baseline. Probed on first need with a short timeout; a
+    /// version found is cached for this binary and its clones, while a missing or broken binary is probed again.
+    pub fn availability(&self) -> GitAvailability {
+        if let Some(found) = self.version_cache.get() {
+            return GitAvailability::of_version(*found);
+        }
+        let probe = self.clone().with_timeout(PROBE_TIMEOUT);
+        match probe.version() {
+            Ok(found) => {
+                // A concurrent probe may have stored the same version first; both read the same binary.
+                let _ = self.version_cache.set(found);
+                GitAvailability::of_version(found)
+            }
+            Err(GitError::Spawn(error)) if error.kind() == io::ErrorKind::NotFound => {
+                GitAvailability::Missing
+            }
+            Err(error) => GitAvailability::Unknown(error.to_string()),
+        }
     }
 
     /// Runs a read-only query in `cwd` (or the process directory) and returns its
@@ -151,7 +180,31 @@ impl Git {
         self.run_limited(cwd, args, Some(timeout), false, None, env)
     }
 
+    /// Refuses every command with `GitError::TooOld` when the binary predates the baseline (ADR 0014). A probe
+    /// that could not run git lets the command report its own failure.
     fn run_limited<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        timeout: Option<Duration>,
+        read_only: bool,
+        max_stdout: Option<usize>,
+        env: &[(&str, &str)],
+    ) -> Result<Captured, GitError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        if let GitAvailability::TooOld(found) = self.availability() {
+            return Err(GitError::TooOld {
+                found,
+                required: GitVersion::BASELINE,
+            });
+        }
+        self.spawn_limited(cwd, args, timeout, read_only, max_stdout, env)
+    }
+
+    fn spawn_limited<I, S>(
         &self,
         cwd: Option<&Path>,
         args: I,

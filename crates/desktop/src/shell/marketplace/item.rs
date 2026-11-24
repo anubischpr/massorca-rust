@@ -3,11 +3,12 @@
 
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
+use super::host_pick::host_picker_row;
 use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
-    Part, ProblemAlert, ProblemTone, advanced_rows, connection_rows, information, parts,
-    problem_alert, settings_rows, state_chip, uninstall_body,
+    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, advanced_rows, connection_rows,
+    information, information_links, problem_alert, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -27,10 +28,10 @@ use massorca_ui::components::invocation_banner::InvocationBanner;
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
-    RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
+    RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
     TYPE_BODY_STRONG, TYPE_TITLE_SM,
 };
-use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
+use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 /// The height of an item's banner image; its width is the page's.
 const BANNER_IMAGE_HEIGHT: f32 = 180.0;
@@ -59,10 +60,10 @@ pub(super) fn item_page(
     if let Some(alert) = problem_alert(item) {
         page = page.child(problem_banner(item.id, &alert));
     }
-    for part in parts(item) {
+    for part in PARTS {
         let section = match part {
             Part::Logo | Part::Name | Part::Host => continue,
-            Part::Banner => banner(item),
+            Part::Banner => banner(item, cx),
             Part::Connection => connection(frame, item, cx),
             Part::Information => information_section(item, cx),
             Part::Settings => settings_section(frame, item, cx),
@@ -109,9 +110,9 @@ pub(super) fn problem_banner(id: MarketplaceItemId, alert: &ProblemAlert) -> Any
         .into_any_element()
 }
 
-/// Parts 1 to 3: the plate and name with the state chip and Copy link, the meta line, the host
-/// and the install action, which is not available yet.
-fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+/// Parts 1 to 3: the plate with the listed logo or the kind icon, the name with the state chip and
+/// Copy link, the meta line, the host and the install action, which is not available yet.
+fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> AnyElement {
     let url = item.source_url.clone();
     let copy = Button::new("marketplace-copy-link", "Copy link")
         .variant(ButtonVariant::Ghost)
@@ -127,7 +128,10 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         item.publisher, item.version
     ))
     .copy_link(copy)
-    .host(host_selector(frame, item, cx));
+    .host(host_picker_row(frame, cx));
+    if let Some(logo) = item_images::logo(frame, item, cx) {
+        header = header.logo(logo);
+    }
     if !item.state.is_installed() {
         header = header.action(install_action(frame, item));
     }
@@ -155,43 +159,6 @@ fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
     )
 }
 
-/// The host the item runs on, drawn as a selector. Choosing another host needs the service, so
-/// the selector shows the host and its state without opening.
-fn host_selector(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
-    let theme = *cx.theme();
-    let p = &theme.palette;
-    let label = frame.snapshot.host(item.host).map_or_else(
-        || "No host".to_owned(),
-        |host| format!("{}, {}", host.name, host.state.word()),
-    );
-    div()
-        .debug_selector(|| "marketplace-host".to_owned())
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(SPACE_2))
-        .px(px(SPACE_3))
-        .py(px(SPACE_2))
-        .rounded(px(RADIUS_MD))
-        .border_1()
-        .border_color(p.border.default)
-        .bg(p.surface.raised)
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_style(TYPE_BODY_SM)
-                .text_color(p.text.primary)
-                .child(label),
-        )
-        .child(
-            Icon::new(IconName::ChevronDown)
-                .size(IconSize::Small)
-                .color(p.text.tertiary),
-        )
-        .into_any_element()
-}
-
 /// The package's banner image, drawn above the header once the service has sent it.
 fn banner_image(picture: ImageSource) -> AnyElement {
     div()
@@ -204,8 +171,14 @@ fn banner_image(picture: ImageSource) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat.
-fn banner(item: &MarketplaceItem) -> AnyElement {
+/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat; or why there are none.
+fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::Banner) {
+        return div()
+            .debug_selector(|| "marketplace-part-banner".to_owned())
+            .child(absent_note(reason, cx))
+            .into_any_element();
+    }
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
         format!("@{}", item.name),
@@ -219,8 +192,16 @@ fn banner(item: &MarketplaceItem) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 5: the agent's accounts, with Add account and where the sign-in token lives.
+/// Part 5: the agent's accounts, with Add account and where the sign-in token lives; or why there are none.
 fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::Connection) {
+        return part_section(
+            "marketplace-part-connection",
+            "Connection",
+            absent_note(reason, cx),
+            cx,
+        );
+    }
     let kind = item.agent_kind.clone().unwrap_or_default();
     let add = shell_button(
         &frame.shell,
@@ -334,6 +315,16 @@ fn account_status(state: AccountState) -> AccountStatus {
     }
 }
 
+/// The one sentence that says why a part does not apply, in the part's place.
+fn absent_note(reason: &'static str, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.secondary)
+        .child(reason)
+        .into_any_element()
+}
+
 /// A refusal that is not about one row, announced as an alert.
 fn alert(message: &str, cx: &App) -> AnyElement {
     let theme = *cx.theme();
@@ -377,6 +368,9 @@ fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
                 ),
         );
     }
+    for (label, url) in information_links(item) {
+        rows = rows.child(link_row(label, url, cx));
+    }
     let body = div()
         .flex()
         .flex_col()
@@ -389,6 +383,37 @@ fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
         )
         .child(rows);
     part_section("marketplace-part-information", "Information", body, cx)
+}
+
+/// One Information row whose value is a link: pressing it opens the page in the browser.
+fn link_row(label: &'static str, url: String, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let id = SharedString::from(format!(
+        "marketplace-link-{}",
+        label.to_lowercase().replace(' ', "-")
+    ));
+    let open = url.clone();
+    div()
+        .flex()
+        .items_start()
+        .gap(px(SPACE_4))
+        .child(
+            div()
+                .w(px(160.0))
+                .flex_none()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.tertiary)
+                .child(label),
+        )
+        .child(
+            div().flex_1().min_w_0().child(
+                Button::new(id, url)
+                    .variant(ButtonVariant::Ghost)
+                    .on_click(move |_, cx| cx.open_url(&open)),
+            ),
+        )
+        .into_any_element()
 }
 
 /// Part 7: the item's settings, or the reason there are none yet. The default agent is not
@@ -509,6 +534,12 @@ fn enabled_row(
 
 /// Part 8: the versions, the source and who can use the item, collapsed until it is opened.
 fn advanced_section(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::AdvancedOptions) {
+        return div()
+            .debug_selector(|| "marketplace-part-advanced".to_owned())
+            .child(absent_note(reason, cx))
+            .into_any_element();
+    }
     let theme = *cx.theme();
     let p = &theme.palette;
     let open = frame.advanced_open;

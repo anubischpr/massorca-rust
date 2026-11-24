@@ -89,6 +89,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ProfileCommand,
     },
+    /// Puts `massorca` on this user's PATH, and takes it off again. Works on this computer only.
+    Cli {
+        #[command(subcommand)]
+        command: CliCommand,
+    },
     /// Makes pairing offers for other computers, and pairs this computer with a server.
     Pair {
         #[command(subcommand)]
@@ -158,6 +163,18 @@ pub enum ServiceCommand {
     Restart,
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CliCommand {
+    /// Puts `massorca` on your PATH for this user only, without administrator rights: a link in `~/.local/bin` on
+    /// Unix, a command file in a folder added to your Windows user PATH. Running it again changes nothing.
+    Install,
+    /// Removes what `cli install` made: the link or command file, and its PATH entry once its folder is empty.
+    /// A file massorca did not make is left in place.
+    Uninstall,
+    /// Shows whether `massorca` is on your PATH and which binary it runs. Changes nothing.
+    Status,
 }
 
 #[derive(Debug, Subcommand)]

@@ -2,6 +2,7 @@
 //! category (teams-extensions-settings.md 7.1 and 7.4).
 
 use super::MarketplaceFrame;
+use super::host_pick::host_picker_row;
 use super::item::problem_banner;
 use super::item_images;
 use crate::model::marketplace::{
@@ -214,6 +215,7 @@ pub(super) fn catalogue_view(
         .items_center()
         .gap(px(SPACE_2))
         .child(div().w(px(SEARCH_WIDTH)).child(frame.search.clone()))
+        .child(host_picker_row(frame, cx))
         .child(
             div()
                 .text_style(TYPE_BODY_SM)
@@ -296,6 +298,7 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     card.on_action(move |action, _, cx| {
         let _ = shell.update(cx, |shell, cx| match action {
             ExtensionAction::Toggle(enabled) => shell.set_marketplace_enabled(id, enabled, cx),
+            ExtensionAction::Update => shell.update_package(id, cx),
             _ => shell.open_marketplace(MarketplacePage::Item(id), cx),
         });
     })

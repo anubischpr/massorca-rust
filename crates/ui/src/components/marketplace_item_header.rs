@@ -9,8 +9,9 @@ use crate::tokens::{
     TYPE_MONO_SM,
 };
 use gpui::{
-    AnyElement, App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, Div, ElementId, ImageSource, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, img,
+    px,
 };
 
 /// The plate behind the item icon, 56 px (teams-extensions-settings.md, 7.2); no token has it yet.
@@ -78,8 +79,23 @@ fn meta_line(meta: &str, p: &Palette) -> AnyElement {
     line.into_any_element()
 }
 
-/// The 56 px plate with the item icon at 24 px.
-fn plate(icon: IconName, p: &Palette) -> AnyElement {
+/// The 56 px plate: the logo when there is one, else the item icon at 24 px.
+fn plate(icon: IconName, logo: Option<ImageSource>, p: &Palette) -> AnyElement {
+    let content = match logo {
+        Some(logo) => div()
+            .debug_selector(|| "marketplace-header-logo".to_owned())
+            .size_full()
+            .child(img(logo).size_full())
+            .into_any_element(),
+        None => div()
+            .debug_selector(|| "marketplace-header-icon".to_owned())
+            .child(
+                Icon::new(icon)
+                    .size(IconSize::Large)
+                    .color(p.text.secondary),
+            )
+            .into_any_element(),
+    };
     div()
         .flex_none()
         .size(px(PLATE_SIZE))
@@ -88,11 +104,7 @@ fn plate(icon: IconName, p: &Palette) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .child(
-            Icon::new(icon)
-                .size(IconSize::Large)
-                .color(p.text.secondary),
-        )
+        .child(content)
         .into_any_element()
 }
 
@@ -102,6 +114,7 @@ pub struct MarketplaceItemHeader {
     id: ElementId,
     name: SharedString,
     icon: IconName,
+    logo: Option<ImageSource>,
     state: Option<SharedString>,
     meta: Option<SharedString>,
     copy_link: Option<Button>,
@@ -127,12 +140,19 @@ impl MarketplaceItemHeader {
             id: id.into(),
             name: name.into(),
             icon,
+            logo: None,
             state: None,
             meta: None,
             copy_link: None,
             host: None,
             action: None,
         }
+    }
+
+    /// The logo, drawn in the plate in place of the icon.
+    pub fn logo(mut self, logo: impl Into<ImageSource>) -> Self {
+        self.logo = Some(logo.into());
+        self
     }
 
     /// The state chip beside the name, for example "Connected".
@@ -204,7 +224,7 @@ impl RenderOnce for MarketplaceItemHeader {
             .items_start()
             .gap(px(SPACE_4))
             .min_w_0()
-            .child(plate(self.icon, p))
+            .child(plate(self.icon, self.logo, p))
             .child(identity);
         let mut root = div()
             .flex()
@@ -231,7 +251,8 @@ impl RenderOnce for MarketplaceItemHeader {
 mod tests {
     use super::*;
     use crate::a11y::probe::{reported, root};
-    use gpui::{TestAppContext, accesskit::Role};
+    use gpui::{Image, ImageFormat, TestAppContext, accesskit::Role};
+    use std::sync::Arc;
 
     #[test]
     fn marketplace_item_header_meta_sets_a_trailing_version_apart() {
@@ -265,5 +286,51 @@ mod tests {
         assert_eq!(node.role(), Role::Heading);
         assert_eq!(node.label(), Some("Claude"));
         assert_eq!(node.description(), Some("Connected"));
+    }
+
+    /// A one-pixel SVG, enough for the plate to draw an image.
+    const LOGO: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>";
+
+    #[gpui::test]
+    fn a_logo_replaces_the_kind_icon_in_the_plate(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| LogoHeader { logo: true });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("marketplace-header-logo").is_some(),
+            "the logo is drawn"
+        );
+        assert!(
+            cx.debug_bounds("marketplace-header-icon").is_none(),
+            "the kind icon makes way for the logo"
+        );
+    }
+
+    #[gpui::test]
+    fn without_a_logo_the_kind_icon_stays_in_the_plate(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| LogoHeader { logo: false });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("marketplace-header-logo").is_none(),
+            "no logo is drawn"
+        );
+        assert!(
+            cx.debug_bounds("marketplace-header-icon").is_some(),
+            "the kind icon is drawn"
+        );
+    }
+
+    /// Hosts one item header, with a logo when `logo` is set.
+    struct LogoHeader {
+        logo: bool,
+    }
+
+    impl gpui::Render for LogoHeader {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let mut header = MarketplaceItemHeader::new("name", "Notes", IconName::Puzzle);
+            if self.logo {
+                header = header.logo(Arc::new(Image::from_bytes(ImageFormat::Svg, LOGO.to_vec())));
+            }
+            header
+        }
     }
 }

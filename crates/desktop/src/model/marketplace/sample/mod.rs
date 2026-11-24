@@ -1,9 +1,10 @@
 //! The sample Marketplace: placeholder items, hosts and accounts that the pages show until a real
 //! service is connected. Changes stay in this value.
 
+use super::HostTarget;
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
-    AccountId, AccountState, AgentAccount, Host, HostId, HostState, ItemState, MarketplaceItem,
+    AccountId, AccountState, AgentAccount, Host, HostState, ItemState, MarketplaceItem,
     MarketplaceItemId, MarketplaceSnapshot, SignInFlow, SignInStep,
 };
 
@@ -36,12 +37,12 @@ impl Default for SampleMarketplaceSource {
             items: sample_items(),
             hosts: vec![
                 Host {
-                    id: HostId(1),
+                    id: HostTarget::Local.id(),
                     name: "This computer".to_owned(),
                     state: HostState::Connected,
                 },
                 Host {
-                    id: HostId(2),
+                    id: HostTarget::Paired("remote-host".to_owned()).id(),
                     name: "Remote host".to_owned(),
                     state: HostState::Unreachable,
                 },
