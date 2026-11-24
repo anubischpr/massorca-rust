@@ -78,7 +78,7 @@ async fn requests_on_one_connection_run_at_the_same_time() {
         })
         .collect();
     for call in calls {
-        let met = timeout(Duration::from_secs(5), call)
+        let met = timeout(super::common::REPLY_WAIT, call)
             .await
             .expect("the calls reached the barrier together")
             .expect("the task finishes")
@@ -129,11 +129,11 @@ async fn a_slow_request_does_not_hold_up_the_others() {
             .await
     });
     // The gated request has started before the other one is sent, so the other one can only overtake it.
-    timeout(Duration::from_secs(5), entered.notified())
+    timeout(super::common::REPLY_WAIT, entered.notified())
         .await
         .expect("the gated request started");
 
-    let info = timeout(Duration::from_secs(5), client.service_info())
+    let info = timeout(super::common::REPLY_WAIT, client.service_info())
         .await
         .expect("the other request is not held up")
         .expect("service.info answers");
@@ -212,7 +212,7 @@ async fn a_connection_holds_at_most_64_requests_in_flight() {
     wait_for_count(&entered, 65).await;
     gate.add_permits(64);
     for call in calls {
-        timeout(Duration::from_secs(5), call)
+        timeout(super::common::REPLY_WAIT, call)
             .await
             .expect("the call completes in time")
             .expect("the task finishes")
@@ -222,7 +222,7 @@ async fn a_connection_holds_at_most_64_requests_in_flight() {
 }
 
 async fn wait_for_count(count: &AtomicUsize, expected: usize) {
-    timeout(Duration::from_secs(5), async {
+    timeout(super::common::REPLY_WAIT, async {
         while count.load(Ordering::SeqCst) < expected {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -247,13 +247,13 @@ async fn a_disconnected_client_cancels_the_requests_it_left_in_flight() {
             .call::<_, Value>("ext.demo.stuck", &Value::Null)
             .await
     });
-    timeout(Duration::from_secs(5), entered.notified())
+    timeout(super::common::REPLY_WAIT, entered.notified())
         .await
         .expect("the call reached its handler");
 
     // Aborting the task drops its client, which closes the connection.
     call.abort();
-    timeout(Duration::from_secs(5), async {
+    timeout(super::common::REPLY_WAIT, async {
         while !dropped.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

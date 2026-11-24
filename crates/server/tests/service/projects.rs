@@ -79,7 +79,7 @@ async fn adding_a_repository_registers_it_as_a_git_project_and_publishes_project
 
     assert_eq!(project.kind, ProjectKind::Git);
     assert_eq!(project.name, "repo");
-    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+    let event = timeout(super::common::REPLY_WAIT, events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
         .expect("stream open")
@@ -134,7 +134,7 @@ async fn list_and_show_answer_what_was_added_and_remove_publishes_project_remove
         .await
         .expect("remove by id");
     assert_eq!(removed.id, added.id);
-    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+    let event = timeout(super::common::REPLY_WAIT, events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
         .expect("stream open")
@@ -268,7 +268,7 @@ async fn set_base_publishes_project_changed_and_show_reports_the_base_until_it_i
         .expect("project.set_base");
 
     assert_eq!(set.base_ref.as_deref(), Some("develop"));
-    let event = timeout(Duration::from_secs(5), events.next_as::<ChangeEvent>())
+    let event = timeout(super::common::REPLY_WAIT, events.next_as::<ChangeEvent>())
         .await
         .expect("the event arrives")
         .expect("stream open")
