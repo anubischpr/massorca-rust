@@ -6,8 +6,8 @@ use super::catalogue::kind_icon;
 use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
-    Part, ProblemAlert, ProblemTone, advanced_rows, connection_rows, information, parts,
-    problem_alert, settings_rows, state_chip, uninstall_body,
+    PARTS, Part, ProblemAlert, ProblemTone, absent_reason, advanced_rows, connection_rows,
+    information, problem_alert, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -59,10 +59,10 @@ pub(super) fn item_page(
     if let Some(alert) = problem_alert(item) {
         page = page.child(problem_banner(item.id, &alert));
     }
-    for part in parts(item) {
+    for part in PARTS {
         let section = match part {
             Part::Logo | Part::Name | Part::Host => continue,
-            Part::Banner => banner(item),
+            Part::Banner => banner(item, cx),
             Part::Connection => connection(frame, item, cx),
             Part::Information => information_section(item, cx),
             Part::Settings => settings_section(frame, item, cx),
@@ -207,8 +207,14 @@ fn banner_image(picture: ImageSource) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat.
-fn banner(item: &MarketplaceItem) -> AnyElement {
+/// Part 4: the example prompts, each tagged with the item, and how to ask it in any chat; or why there are none.
+fn banner(item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::Banner) {
+        return div()
+            .debug_selector(|| "marketplace-part-banner".to_owned())
+            .child(absent_note(reason, cx))
+            .into_any_element();
+    }
     let mut banner = InvocationBanner::new(
         SharedString::from(format!("marketplace-banner-{}", item.id.0)),
         format!("@{}", item.name),
@@ -222,8 +228,16 @@ fn banner(item: &MarketplaceItem) -> AnyElement {
         .into_any_element()
 }
 
-/// Part 5: the agent's accounts, with Add account and where the sign-in token lives.
+/// Part 5: the agent's accounts, with Add account and where the sign-in token lives; or why there are none.
 fn connection(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::Connection) {
+        return part_section(
+            "marketplace-part-connection",
+            "Connection",
+            absent_note(reason, cx),
+            cx,
+        );
+    }
     let kind = item.agent_kind.clone().unwrap_or_default();
     let add = shell_button(
         &frame.shell,
@@ -335,6 +349,16 @@ fn account_status(state: AccountState) -> AccountStatus {
         AccountState::Conflict => AccountStatus::Conflict,
         AccountState::Unknown => AccountStatus::Unknown,
     }
+}
+
+/// The one sentence that says why a part does not apply, in the part's place.
+fn absent_note(reason: &'static str, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    div()
+        .text_style(TYPE_BODY_SM)
+        .text_color(theme.palette.text.secondary)
+        .child(reason)
+        .into_any_element()
 }
 
 /// A refusal that is not about one row, announced as an alert.
@@ -512,6 +536,12 @@ fn enabled_row(
 
 /// Part 8: the versions, the source and who can use the item, collapsed until it is opened.
 fn advanced_section(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+    if let Some(reason) = absent_reason(item, Part::AdvancedOptions) {
+        return div()
+            .debug_selector(|| "marketplace-part-advanced".to_owned())
+            .child(absent_note(reason, cx))
+            .into_any_element();
+    }
     let theme = *cx.theme();
     let p = &theme.palette;
     let open = frame.advanced_open;

@@ -194,7 +194,8 @@ Linux only. No automated run opens a visible window.
 - **The Marketplace** (`Page::Marketplace`) is a full page with a left
   navigation: Discover, Installed, Updates and the five categories. Its lists
   are in `model/marketplace/catalogue.rs`; an item page shows its nine parts in
-  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2).
+  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2). A part that does not
+  apply to the item says why in its place.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled
