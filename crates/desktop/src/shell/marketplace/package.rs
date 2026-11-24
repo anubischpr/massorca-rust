@@ -8,8 +8,22 @@ use crate::service::Refusal;
 use crate::shell::Shell;
 use gpui::Context;
 use massorca_protocol::methods::extensions::{
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionSetEnabledParams,
+    CliRemoval, CliRemovalAction, ExtensionRemoveParams, ExtensionRemoved,
+    ExtensionSetEnabledParams,
 };
+
+/// Why a CLI the person asked to remove is still on this computer, as a sentence; none when its removal ran.
+fn cli_not_removed(removal: &CliRemoval) -> Option<String> {
+    match &removal.action {
+        CliRemovalAction::Failed { message, .. } => {
+            Some(format!("The CLI was not removed: {message}"))
+        }
+        CliRemovalAction::NoCommand => {
+            Some("The CLI was not removed: this system has no uninstall command for it.".to_owned())
+        }
+        _ => None,
+    }
+}
 
 impl Shell {
     /// The package an item stands for, when the service lists it as an extension package.
@@ -60,11 +74,12 @@ impl Shell {
     }
 
     /// Removes an installed package the person confirmed. The confirm waits for the answer; a refusal keeps it open
-    /// with its sentence. The vendor's own uninstall stays with the person: it is not run from here.
+    /// with its sentence. The CLI the package installed is removed only when the person ticked it (`uninstall_cli`).
     pub(super) fn remove_package(
         &mut self,
         item: MarketplaceItemId,
         package: String,
+        uninstall_cli: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(service) = self.service.clone() else {
@@ -80,24 +95,25 @@ impl Shell {
                 .remove_extension(ExtensionRemoveParams {
                     id: package,
                     delete_agent_homes: false,
-                    uninstall_cli: false,
+                    uninstall_cli,
                     agent_token: None,
                     uninstall_consent: None,
                 })
                 .await;
             let _ = this.update(cx, |shell, cx| {
-                shell.finish_package_removal(item, result, cx)
+                shell.finish_package_removal(item, result, uninstall_cli, cx)
             });
         })
         .detach();
     }
 
-    /// A removal that worked closes the confirm. A step that did not finish is shown under the item, since the
-    /// package is gone and the item page is the place to read why.
+    /// A removal that worked closes the confirm. A step that did not finish, or a CLI the person asked to remove that is
+    /// still there, is shown under the item, since the package is gone and the item page is the place to read why.
     fn finish_package_removal(
         &mut self,
         item: MarketplaceItemId,
         result: Result<ExtensionRemoved, Refusal>,
+        uninstall_cli: bool,
         cx: &mut Context<Self>,
     ) {
         match result {
@@ -109,12 +125,15 @@ impl Shell {
                 {
                     self.marketplace_uninstall = None;
                 }
-                if !removed.failures.is_empty() {
-                    let steps: Vec<String> = removed
-                        .failures
-                        .iter()
-                        .map(|failure| failure.message.clone())
-                        .collect();
+                let mut steps: Vec<String> = removed
+                    .failures
+                    .iter()
+                    .map(|failure| failure.message.clone())
+                    .collect();
+                if uninstall_cli {
+                    steps.extend(removed.cli.iter().filter_map(cli_not_removed));
+                }
+                if !steps.is_empty() {
                     self.marketplace_item_error = Some((
                         item,
                         format!("Removed, but not every step finished. {}", steps.join(" ")),

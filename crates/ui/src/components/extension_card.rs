@@ -16,8 +16,9 @@ use crate::tokens::{
     TYPE_CAPTION, TYPE_MONO_SM, TYPE_TITLE_SM,
 };
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
+    AnyElement, App, ClickEvent, ElementId, ImageSource, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    img, px, relative,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -130,6 +131,7 @@ pub struct ExtensionCard {
     version: SharedString,
     description: SharedString,
     icon: IconName,
+    logo: Option<ImageSource>,
     adds: Vec<(IconName, SharedString)>,
     state: ExtensionState,
     install_host: Option<SharedString>,
@@ -163,6 +165,7 @@ impl ExtensionCard {
             version: SharedString::default(),
             description: SharedString::default(),
             icon: IconName::Puzzle,
+            logo: None,
             adds: Vec::new(),
             state,
             install_host: None,
@@ -197,6 +200,12 @@ impl ExtensionCard {
     /// The icon, a Lucide glyph drawn in the secondary text colour.
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = icon;
+        self
+    }
+
+    /// The extension's logo, drawn in the plate in place of the icon.
+    pub fn logo(mut self, logo: impl Into<ImageSource>) -> Self {
+        self.logo = Some(logo.into());
         self
     }
 
@@ -565,11 +574,17 @@ impl RenderOnce for ExtensionCard {
             .justify_center()
             .cursor_pointer()
             .on_click(route_click(&handler, ExtensionAction::Open))
-            .child(
-                Icon::new(self.icon)
+            .child(match self.logo.clone() {
+                Some(logo) => div()
+                    .debug_selector(|| "card-logo".into())
+                    .size_full()
+                    .child(img(logo).size_full())
+                    .into_any_element(),
+                None => Icon::new(self.icon)
                     .size(IconSize::Large)
-                    .color(p.text.secondary),
-            );
+                    .color(p.text.secondary)
+                    .into_any_element(),
+            });
 
         let byline = [self.publisher.to_string(), self.source.to_string()]
             .into_iter()

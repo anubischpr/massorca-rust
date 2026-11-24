@@ -3,6 +3,7 @@
 
 use super::MarketplaceFrame;
 use super::item::problem_banner;
+use super::item_images;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
     no_match_text, problem_alert,
@@ -237,7 +238,7 @@ pub(super) fn catalogue_view(
             if let Some(alert) = problem_alert(item) {
                 cell = cell.child(problem_banner(item.id, &alert));
             }
-            grid = grid.child(cell.child(card(frame, item)));
+            grid = grid.child(cell.child(card(frame, item, cx)));
         }
         grid.into_any_element()
     };
@@ -272,7 +273,7 @@ fn card_state(item: &MarketplaceItem) -> ExtensionState {
 
 /// One item as a card. Its Switch changes the sample; every other press opens the item's page,
 /// where its actions live (Review and install is not available yet).
-fn card(frame: &MarketplaceFrame, item: &MarketplaceItem) -> ExtensionCard {
+fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> ExtensionCard {
     let id = item.id;
     let shell = frame.shell.clone();
     let mut card = ExtensionCard::new(
@@ -286,6 +287,9 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem) -> ExtensionCard {
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
     .settings(item.has_settings);
+    if let Some(logo) = item_images::logo(frame, item, cx) {
+        card = card.logo(logo);
+    }
     for add in &item.adds {
         card = card.add(IconName::Plus, add.clone());
     }
