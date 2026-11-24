@@ -5,6 +5,7 @@ pub mod agent_delegate;
 pub mod agent_kinds;
 pub mod agent_sessions;
 pub mod canvas;
+pub mod close_confirm;
 pub mod devices;
 pub mod hosts;
 pub mod marketplace;
