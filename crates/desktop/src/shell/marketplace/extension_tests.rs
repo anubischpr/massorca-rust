@@ -573,6 +573,7 @@ fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
         id: kind.to_owned(),
         detected: false,
         program_path: None,
+        path_source: None,
         cli_installed_by_package: false,
         cli: None,
     }];
