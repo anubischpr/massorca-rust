@@ -10,7 +10,7 @@ Inventory IDs: D-EX-01 (extension browser, the Marketplace page), D-EX-03 (exten
 
 - Card: `surface.raised`, `border.default`, `radius.lg`, `shadow.e1`, padding `space.4`. Minimum width 280 px; the page lays cards out in a grid (1 column under 560 px, 2 from 560, 3 from 880 within `layout.page.default` 1120). Gap `space.4`.
 - Icon plate: 40 px (`size.avatar.lg`), `surface.sunken`, `radius.md`. The extension's icon is single-ink, drawn at 24 px in `text.secondary` (its state colour; it cannot choose a colour). Agents and providers with a supplied brand mark show that mark.
-- Title row: name in `title-sm` as a link (opens the item page, D-EX-08), one line. Under it: publisher and source in `body-sm` `text.secondary` ("Acme, Marketplace"), and the version in `mono-sm` tabular `text.tertiary` ("1.4.2").
+- Title row: name in `title-sm` as a link (opens the item page, D-EX-08), one line. Under it: publisher and source in `body-sm` `text.secondary` ("Acme, Marketplace"), the item's category as a category-style Badge in the same row ("Agent", "Extension", "Skill", "Service", "Theme"), and the version in `mono-sm` tabular `text.tertiary` ("1.4.2").
 - Description: `body`, `text.secondary`, two lines, ellipsis after.
 - "Adds" line: chips (Badge, `radius.sm`, `size.control.compact`) for what it contributes, with an icon each: "Rail item", "3 commands", "Theme", "Status item", "Settings". At most two rows; the rest becomes "+3".
 - Footer row: state on the left, action on the right.
@@ -52,9 +52,9 @@ Density affects only the footer button height (24, 28, 32). Card padding does no
 
 ## Behaviour (handoff)
 
-- **Keyboard.** The card is a list item, not a tab stop. Tab visits, in order: the name link, the primary control (Install, Switch or Update), Settings, More. The card grid is roving: arrow keys move between cards, and Tab moves between the controls inside a card and out of the grid (8.3). Enter on the name opens the item page; Space toggles a focused Switch; Enter on More opens its menu.
+- **Keyboard.** The card is a list item, not a tab stop. Tab visits, in order: the name link, the primary control (Install, Switch or Update), Settings, More. The card grid is roving: arrow keys move between cards, and Tab moves between the controls inside a card and out of the grid (8.3). Enter or Space on the card, or on its name link, opens the item page; Space toggles a focused Switch; Enter on More opens its menu.
 - **Focus order.** Row by row, left to right, within the page.
-- **Pointer.** Click the name or the icon to open the item page. Hover shows the whole-card fill but the card itself is not a button. Switch toggles apply on release and confirm from the host before the Switch settles.
+- **Pointer.** Click anywhere on the card's body, its name or its icon to open the item page. The controls keep their own press: the Switch, Install, Update, Settings, Cancel, View log and More do not also open the page. Hover shows the whole-card fill. Switch toggles apply on release and confirm from the host before the Switch settles.
 - **Enable and disable.** Disable keeps the files. Remove and Roll back open the confirm dialog (X-DLG-01), the destructive variant for Remove ("Remove Acme Metrics? Its settings are deleted."). New extensions are enabled at once after install (A13).
 - **Resizing.** Grid columns follow the page width. A card is never narrower than 280 px; when the page cannot fit two columns the grid falls back to one, and the page never scrolls horizontally.
 - **Motion.** Fill steps over `duration.fast`. The Switch uses its own motion. The progress bar fills without easing. Reduced motion: instant.
@@ -87,5 +87,5 @@ Desktop only.
 
 - Token gap: none.
 - Open: whether the Marketplace marks publishers as verified. No such concept exists in the inventory, so the card has no verified mark; adding one needs a source of trust (signing) first.
-- Open: the Marketplace also lists tools, agents, skills and services (pv96); this card covers them with the same layout, with "Adds" replaced by the item's kind.
+- Open: the Marketplace also lists tools, agents, skills and services (pv96); this card covers them with the same layout, with the item's kind as the category Badge in the byline row and the "Adds" line kept for what the item contributes.
 - Open: length limits for name, description and chip count come from the manifest limits (D-EX-02); the manifest limits for name and description are not set yet. Proposed: name 40, description 160.

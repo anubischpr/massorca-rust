@@ -39,7 +39,12 @@
     "developer": { "name": "MassOrca" },
     "mention": "claude",
     "banner": {
-      "examples": [{ "kind": "mention", "text": "@claude", "caption": "Ask Claude to review the workspace changes" }]
+      "colors": ["#D97757", "#B5532F"],
+      "examples": [
+        { "kind": "mention", "text": "@claude", "caption": "@claude review the workspace changes and list the risks" },
+        { "kind": "mention", "text": "@claude", "caption": "@claude explain how this module works" },
+        { "kind": "mention", "text": "@claude", "caption": "@claude write tests for the function I select" }
+      ]
     },
     "connections": [{ "id": "account", "kind": "agent-login", "title": "Claude account", "multiple": true }]
   }

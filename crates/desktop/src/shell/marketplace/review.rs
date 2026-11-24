@@ -44,7 +44,7 @@ impl Shell {
         };
         let source = format!("catalogue:{package}");
         self.marketplace_review = Some(InstallReview {
-            item,
+            item: Some(item),
             source: source.clone(),
             review: None,
             run_installer: false,
@@ -62,16 +62,37 @@ impl Shell {
             let _ = this.update(cx, |shell, cx| {
                 // An answer for a host no longer picked is dropped.
                 if shell.marketplace_pick.target() == &picked {
-                    shell.finish_inspect(item, result, cx);
+                    shell.finish_inspect(Some(item), result, cx);
                 }
             });
         })
         .detach();
     }
 
+    /// Opens the review of a package in a folder on This computer, which asks the service what installing it does.
+    pub(super) fn open_folder_review(&mut self, source: String, cx: &mut Context<Self>) {
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        self.marketplace_review = Some(InstallReview {
+            item: None,
+            source: source.clone(),
+            review: None,
+            run_installer: false,
+            sending: false,
+            error: None,
+        });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = service.inspect_extension(source).await;
+            let _ = this.update(cx, |shell, cx| shell.finish_inspect(None, result, cx));
+        })
+        .detach();
+    }
+
     fn finish_inspect(
         &mut self,
-        item: MarketplaceItemId,
+        item: Option<MarketplaceItemId>,
         result: Result<ExtensionReview, Refusal>,
         cx: &mut Context<Self>,
     ) {
@@ -107,7 +128,7 @@ impl Shell {
         let Some(item) = self.marketplace_review.as_ref().map(|dialog| dialog.item) else {
             return;
         };
-        let host = self.paired_host_of(item);
+        let host = item.and_then(|id| self.paired_host_of(id));
         let request = self.marketplace_pick.request();
         let picked = self.marketplace_pick.target().clone();
         let Some(dialog) = self.marketplace_review.as_mut() else {
@@ -147,7 +168,7 @@ impl Shell {
     /// An install that worked closes the review; the list follows the reads that the service sends after it.
     fn finish_install(
         &mut self,
-        item: MarketplaceItemId,
+        item: Option<MarketplaceItemId>,
         result: Result<ExtensionInstalled, Refusal>,
         cx: &mut Context<Self>,
     ) {

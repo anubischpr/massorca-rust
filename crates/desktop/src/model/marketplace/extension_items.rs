@@ -103,7 +103,7 @@ fn item(
         category: kind.singular().to_owned(),
         permissions: permissions_text(&entry.permissions),
         found_on_this_pc: None,
-        examples: mention_examples(entry),
+        examples: banner_prompts(entry),
         agent_kind: agent_kind_of(entry),
         source_url: source_of(entry),
         previous_version: None,
@@ -200,15 +200,16 @@ pub fn risk_word(level: RiskLevel) -> &'static str {
     }
 }
 
-/// The banner's mention examples, such as "@claude", which start a prompt for the item.
-fn mention_examples(entry: &ExtensionItem) -> Vec<String> {
+/// The banner's prompts: the caption of each mention example, which starts with the item's tag, such as "@claude".
+fn banner_prompts(entry: &ExtensionItem) -> Vec<String> {
     entry
         .listing
         .banner
         .iter()
         .flat_map(|banner| banner.examples.iter())
         .filter(|example| example.kind == "mention")
-        .filter_map(|example| example.text.clone())
+        .map(|example| example.caption.clone())
+        .filter(|caption| !caption.trim().is_empty())
         .collect()
 }
 
@@ -385,6 +386,7 @@ mod tests {
         ];
         entry.listing.banner = Some(Banner {
             image: None,
+            colors: Vec::new(),
             examples: vec![
                 BannerExample {
                     kind: "mention".to_owned(),
@@ -403,7 +405,7 @@ mod tests {
             found[0].permissions.as_deref(),
             Some("Storage, Files (read)")
         );
-        assert_eq!(found[0].examples, vec!["@notes".to_owned()]);
+        assert_eq!(found[0].examples, vec!["Ask it".to_owned()]);
     }
 
     #[test]

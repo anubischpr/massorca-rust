@@ -82,7 +82,7 @@ replaced by `listing.logo`.
 - `website`, `privacy`, `terms`: optional links to the publisher's website, privacy policy and terms of service. Each
   must be https, as `developer.url` is. The item page's Information part shows each one the package names.
 - `mention`: no `@`, no whitespace, at most 32 characters.
-- `banner`: `{ image?, examples }`, with one to six examples. A `mention` example's `text` must equal `@` + `mention`.
+- `banner`: `{ image?, colors?, examples }`, with one to six examples. A `mention` example's `text` must equal `@` + `mention`, and its `caption` is the prompt the banner shows. `colors` is one or two `#RRGGBB` values: the first tints the banner, the second draws its border.
   A `command` example's `text` must equal a declared command's `keys` or `id`, compared literally. A `usage` example is a
   caption only. `image` is a package path.
 - `connections`: `{ id, kind, title, multiple? }`, with `kind` `oauth`, `api-key` or `agent-login`. `multiple: true`
