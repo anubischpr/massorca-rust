@@ -1,5 +1,5 @@
 //! The Board's keyboard move (D-WS-30, BoardColumn): pick a card up, move it between columns and
-//! places, then drop it or cancel. A move changes the column only; it starts and stops nothing.
+//! places, then drop it or cancel. A drop changes the column only; the shell sends the call it asks for.
 
 use super::state::{TeamError, TeamsState};
 use super::types::{BoardOwner, Column, Pick, Task, TaskId};

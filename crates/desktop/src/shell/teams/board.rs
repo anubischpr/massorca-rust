@@ -1,6 +1,6 @@
 //! The Board (D-WS-30, screens 4.3): four columns of cards. Space picks a card up, the arrow keys move
 //! it between columns and places, Space drops it and Escape puts it back. The Board changes only on
-//! the drop, and a move never starts or stops an agent.
+//! the drop, and a drop asks the service for the call its move makes (`board_move`).
 
 use super::super::Shell;
 use super::super::sidebar::row_focus;
@@ -9,7 +9,9 @@ use super::team_pill;
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
 use crate::model::shell_state::ShellModel;
-use crate::model::teams::{BoardOwner, CardView, Column, PickStep, TaskId};
+use crate::model::teams::{
+    BoardMove, BoardOwner, CardView, Column, PickStep, TaskId, TeamError, board_move,
+};
 use crate::service::{Refusal, ServiceHandle};
 use gpui::{
     AnyElement, App, Context, FocusHandle, ParentElement, Styled, WeakEntity, Window, div,
@@ -30,9 +32,6 @@ const PICK_KEYS: [&str; 6] = ["space", "left", "right", "up", "down", "escape"];
 
 /// The height of the Board's header row, the rule under it included (bt-board `.head`, 56 px).
 const HEADER_HEIGHT: f32 = 56.0;
-
-/// What a refused move says: the Board only moves cards to Done, and back to Open from Done.
-const MOVE_NOT_AVAILABLE: &str = "This move is not available yet.";
 
 /// The Board page of a team: its header, the team pill and the four columns (4.3).
 pub(in crate::shell) fn board_page(
@@ -213,8 +212,8 @@ fn note(text: impl Into<String>, theme: &Theme) -> impl IntoElement {
 }
 
 impl Shell {
-    /// Drops the picked card on the service. Only a move to Done, or back to Open from Done, has a call; any
-    /// other move says so. The card moves when the read that follows the service's answer lands.
+    /// Sends the call a drop asks for: start, stop, finish or reopen. The card moves when the read that follows the
+    /// service's answer lands; a refusal shows on the Board until the next pick.
     fn drop_live_pick(&mut self, service: ServiceHandle, cx: &mut Context<Self>) {
         let Some(pick) = self.model.teams_mut().take_pick() else {
             return;
@@ -232,18 +231,28 @@ impl Shell {
             .team_ids
             .key(pick.task.0)
             .map(str::to_owned);
-        match (from, pick.column, key) {
-            (Some(from), to, _) if from == to => {}
-            (_, Column::Done, Some(task)) => {
-                self.answer_drop(cx, async move { service.finish_task(task).await });
+        let call = from.map_or(BoardMove::Stay, |from| board_move(from, pick.column));
+        match (call, key) {
+            (BoardMove::Stay, _) => {}
+            (BoardMove::Refused(reason), _) => {
+                self.model.teams_mut().set_notice(Some(reason.to_owned()))
             }
-            (Some(Column::Done), Column::Open, Some(task)) => {
-                self.answer_drop(cx, async move { service.reopen_task(task).await });
-            }
-            _ => self
+            (_, None) => self
                 .model
                 .teams_mut()
-                .set_notice(Some(MOVE_NOT_AVAILABLE.to_owned())),
+                .set_notice(Some(TeamError::Missing.message().to_owned())),
+            (BoardMove::Start, Some(task)) => {
+                self.answer_drop(cx, async move { service.start_task(task).await });
+            }
+            (BoardMove::Stop, Some(task)) => {
+                self.answer_drop(cx, async move { service.stop_task(task).await });
+            }
+            (BoardMove::Finish, Some(task)) => {
+                self.answer_drop(cx, async move { service.finish_task(task).await });
+            }
+            (BoardMove::Reopen, Some(task)) => {
+                self.answer_drop(cx, async move { service.reopen_task(task).await });
+            }
         }
         cx.notify();
     }
