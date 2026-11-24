@@ -28,7 +28,7 @@ describe('pairing from the first screen', () => {
 
     await fireEvent.press(screen.getByRole('button', { name: 'Pair' }));
 
-    expect(await screen.findByText('Home')).toBeTruthy();
+    expect(await screen.findByText('vps')).toBeTruthy();
     expect(fake.hosts().map((host) => host.name)).toEqual(['vps']);
   });
 
@@ -70,7 +70,7 @@ describe('pairing from the first screen', () => {
       await screen.findByText("Could not pair: vps can't be reached. Check that both are on the same network."),
     ).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('Home')).toBeTruthy();
+    expect(await screen.findByText('vps')).toBeTruthy();
     expect(fake.hosts()).toHaveLength(1);
   });
 
