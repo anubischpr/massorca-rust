@@ -220,6 +220,9 @@ pub fn agent_of_kind(kind: &str) -> Agent {
         "codex" => Agent::Codex,
         "antigravity" => Agent::Antigravity,
         "gentle-shell" => Agent::GentleShell,
+        "gemini" => Agent::Gemini,
+        "opencode" => Agent::OpenCode,
+        "cursor" => Agent::Cursor,
         _ => Agent::Unknown,
     }
 }
@@ -371,10 +374,9 @@ mod tests {
         assert_eq!(agent_of_kind("codex"), Agent::Codex);
         assert_eq!(agent_of_kind("antigravity"), Agent::Antigravity);
         assert_eq!(agent_of_kind("gentle-shell"), Agent::GentleShell);
-        // Gemini, OpenCode and Cursor are not built-in kinds, so a service's kind of those names has no mark.
-        assert_eq!(agent_of_kind("gemini"), Agent::Unknown);
-        assert_eq!(agent_of_kind("opencode"), Agent::Unknown);
-        assert_eq!(agent_of_kind("cursor"), Agent::Unknown);
+        assert_eq!(agent_of_kind("gemini"), Agent::Gemini);
+        assert_eq!(agent_of_kind("opencode"), Agent::OpenCode);
+        assert_eq!(agent_of_kind("cursor"), Agent::Cursor);
         assert_eq!(agent_of_kind("my-own-kind"), Agent::Unknown);
     }
 

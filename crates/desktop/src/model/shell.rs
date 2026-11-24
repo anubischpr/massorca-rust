@@ -8,6 +8,9 @@ pub enum Agent {
     Codex,
     Antigravity,
     GentleShell,
+    Gemini,
+    OpenCode,
+    Cursor,
     /// A kind the desktop has no mark for, such as one the profile declares.
     Unknown,
 }
