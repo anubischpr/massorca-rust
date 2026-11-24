@@ -2,10 +2,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
+import { PROJECTS_TITLE } from '../copy/workspaces';
 import { ConfirmPairingScreen } from '../screens/confirm-pairing-screen';
 import { HomeScreen } from '../screens/home-screen';
 import { PairScreen } from '../screens/pair-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
+import { ProtocolGateScreen } from '../screens/protocol-gate-screen';
 import type { RootStackParamList } from './routes';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -18,11 +20,9 @@ export function AppNavigator() {
         <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'MassOrca' }} />
         <Stack.Screen name="Connect" component={PairScreen} options={{ title: PAIR_TITLE }} />
         <Stack.Screen name="ConfirmPairing" component={ConfirmPairingScreen} options={{ title: CONFIRM_TITLE }} />
-        <Stack.Screen name="ProtocolGate" options={{ title: 'Protocol check' }}>
-          {() => <PlaceholderScreen title="Protocol check" />}
-        </Stack.Screen>
-        <Stack.Screen name="Workspaces" options={{ title: 'Projects' }}>
-          {() => <PlaceholderScreen title="Projects" />}
+        <Stack.Screen name="ProtocolGate" component={ProtocolGateScreen} options={{ title: 'Protocol check' }} />
+        <Stack.Screen name="Workspaces" options={{ title: PROJECTS_TITLE }}>
+          {() => <PlaceholderScreen title={PROJECTS_TITLE} />}
         </Stack.Screen>
         <Stack.Screen name="Terminal" options={{ title: 'Terminal' }}>
           {() => <PlaceholderScreen title="Terminal" />}

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '../theme/palette';
@@ -16,11 +17,13 @@ export function StatePage({
   title,
   line,
   detail,
+  children,
   actions = [],
 }: {
   readonly title: string;
   readonly line?: string;
   readonly detail?: string;
+  readonly children?: ReactNode;
   readonly actions?: readonly PageAction[];
 }) {
   const palette = usePalette();
@@ -31,6 +34,7 @@ export function StatePage({
           {title}
         </Text>
         {line !== undefined && <Text style={[styles.line, { color: palette['text.secondary'] }]}>{line}</Text>}
+        {children}
         {detail !== undefined && <Text style={[styles.detail, { color: palette['text.tertiary'] }]}>{detail}</Text>}
       </ScrollView>
       {actions.length > 0 && (

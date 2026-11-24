@@ -85,4 +85,14 @@ describe('Home host cards', () => {
 
     expect(await screen.findByLabelText('Pairing mode')).toBeTruthy();
   });
+
+  it('sends a host that speaks another protocol to the protocol gate', async () => {
+    await render(<App binding={new ProtocolRefusingFake({ min: 2, max: 3 })} />);
+
+    expect(await screen.findByText('Update needed')).toBeTruthy();
+
+    await fireEvent.press(screen.getByRole('button', { name: 'home-pc, Update needed' }));
+
+    expect(await screen.findByText('This app needs an update')).toBeTruthy();
+  });
 });
