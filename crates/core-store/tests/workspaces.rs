@@ -215,3 +215,49 @@ fn only_a_folder_workspace_can_share_its_writers() {
     assert!(!store.share_workspace_writers("missing").unwrap());
     assert!(!store.workspace_shares_writers("missing").unwrap());
 }
+
+#[test]
+fn update_renames_and_comments_one_workspace_and_keeps_its_directory_and_branch() {
+    let (store, project) = store_with_project();
+    let row = workspace_row(&project.id, "feature", "ws-feature");
+    store.insert_workspace(&row).unwrap();
+    let other = workspace_row(&project.id, "other", "ws-other");
+    store.insert_workspace(&other).unwrap();
+
+    assert!(
+        store
+            .update_workspace(&row.id, "renamed", Some("waiting on review"))
+            .unwrap()
+    );
+    let found = store.get_workspace(&row.id).unwrap().unwrap();
+    assert_eq!(found.name, "renamed");
+    assert_eq!(found.comment.as_deref(), Some("waiting on review"));
+    assert_eq!(found.path, row.path);
+    assert_eq!(found.branch, row.branch);
+    assert_eq!(
+        store.get_workspace(&other.id).unwrap().unwrap().comment,
+        None
+    );
+
+    assert!(store.update_workspace(&row.id, "renamed", None).unwrap());
+    assert_eq!(store.get_workspace(&row.id).unwrap().unwrap().comment, None);
+    assert!(!store.update_workspace("missing", "renamed", None).unwrap());
+}
+
+#[test]
+fn update_to_a_name_another_workspace_of_the_project_holds_changes_nothing() {
+    let (store, project) = store_with_project();
+    store
+        .insert_workspace(&workspace_row(&project.id, "feature", "ws-feature"))
+        .unwrap();
+    let other = workspace_row(&project.id, "other", "ws-other");
+    store.insert_workspace(&other).unwrap();
+
+    let result = store
+        .update_workspace(&other.id, "feature", Some("note"))
+        .map(|_| ());
+    assert_conflict(result, "workspaces.name");
+    let kept = store.get_workspace(&other.id).unwrap().unwrap();
+    assert_eq!(kept.name, "other");
+    assert_eq!(kept.comment, None);
+}

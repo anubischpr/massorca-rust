@@ -33,6 +33,7 @@ pub fn workspace_row(project_id: &str, name: &str, path_key: &str) -> WorkspaceR
         state: WorkspaceState::Ready,
         request_id: None,
         created_at: now_ms(),
+        comment: None,
     }
 }
 

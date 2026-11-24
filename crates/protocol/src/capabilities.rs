@@ -5,6 +5,10 @@ pub const PROJECTS: &str = "projects/1";
 /// `project.update` (decision 0091): changing a project's icon.
 pub const PROJECT_UPDATE: &str = "project-update/1";
 pub const WORKSPACES: &str = "workspaces/1";
+/// Renaming a workspace and setting its comment (`workspace.update`).
+pub const WORKSPACE_UPDATE: &str = "workspace-update/1";
+/// Checking a workspace's folder and its git registration (`workspace.check`).
+pub const WORKSPACE_CHECK: &str = "workspace-check/1";
 /// The containing-workspace lookup (`workspace.current`), offered apart so a client knows the service answers it.
 pub const WORKSPACE_CURRENT: &str = "workspace-current/1";
 pub const EVENTS: &str = "events/1";

@@ -8,6 +8,8 @@ pub const SUBSCRIBE: &str = "events.subscribe";
 pub const TOPIC_WORKSPACE_CREATED: &str = "workspace.created";
 pub const TOPIC_WORKSPACE_REMOVING: &str = "workspace.removing";
 pub const TOPIC_WORKSPACE_REMOVED: &str = "workspace.removed";
+/// A workspace's name or comment changed; the id is the workspace id.
+pub const TOPIC_WORKSPACE_UPDATED: &str = "workspace.updated";
 pub const TOPIC_PROJECT_ADDED: &str = "project.added";
 pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
 /// A project's base was set or cleared; the id is the project id.

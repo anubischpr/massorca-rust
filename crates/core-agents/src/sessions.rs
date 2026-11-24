@@ -1863,6 +1863,7 @@ pub(crate) mod tests {
             state: WorkspaceState::Ready,
             request_id: None,
             created_at: now_ms(),
+            comment: None,
         };
         store.insert_workspace(&workspace).unwrap();
         let agents = Agents::new(AgentsConfig {

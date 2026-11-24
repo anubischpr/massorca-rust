@@ -284,11 +284,12 @@ impl Workspaces {
             state: StoreWorkspaceState::Ready,
             request_id: params.request_id.clone(),
             created_at: now_ms(),
+            comment: None,
         };
         if let Err(error) = self.store.insert_workspace(&row) {
             let leftovers =
                 self.roll_back_worktree(repo, &target, created_branch.then_some(branch));
-            return Err(with_leftovers(refused_insert(error), &leftovers));
+            return Err(with_leftovers(refused_write(error), &leftovers));
         }
         Ok(Workspace {
             base_refresh: refresh,
@@ -334,8 +335,9 @@ impl Workspaces {
             state: StoreWorkspaceState::Ready,
             request_id: params.request_id.clone(),
             created_at: now_ms(),
+            comment: None,
         };
-        self.store.insert_workspace(&row).map_err(refused_insert)?;
+        self.store.insert_workspace(&row).map_err(refused_write)?;
         Ok(Some(views::workspace(&row)))
     }
 
@@ -371,8 +373,9 @@ impl Workspaces {
             state: StoreWorkspaceState::Ready,
             request_id: params.request_id.clone(),
             created_at: now_ms(),
+            comment: None,
         };
-        self.store.insert_workspace(&row).map_err(refused_insert)?;
+        self.store.insert_workspace(&row).map_err(refused_write)?;
         Ok(views::workspace(&row))
     }
 
@@ -431,8 +434,8 @@ fn is_occupied(target: &Path) -> bool {
     }
 }
 
-/// The domain meaning of a row insert that the store refused.
-fn refused_insert(error: StoreError) -> DomainError {
+/// The domain meaning of a row write (an insert or a rename) that the store refused.
+pub(crate) fn refused_write(error: StoreError) -> DomainError {
     match error {
         StoreError::Conflict { constraint } if constraint.contains("path_key") => DomainError::new(
             codes::WORKSPACE_PATH_TAKEN,

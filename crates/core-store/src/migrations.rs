@@ -465,6 +465,13 @@ ALTER TABLE team_projects ADD COLUMN code_source TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // A workspace's comment: the short status line its owner sets with `workspace update --comment` (decision 0089).
+    Migration {
+        sql: r#"
+ALTER TABLE workspaces ADD COLUMN comment TEXT;
+"#,
+        foreign_keys_off: false,
+    },
     // A project's icon (decision 0091): the JSON of a service `ProjectIcon`; NULL is the default icon.
     Migration {
         sql: r#"

@@ -40,7 +40,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         paths.iter().any(|path| path == "service.run"),
         "the walk must see `service run`: {paths:?}"
     );
-    for client_only in LOCAL_COMMANDS {
+    for &client_only in LOCAL_COMMANDS {
         assert!(
             paths.iter().any(|path| path == client_only),
             "`{client_only}` is not a CLI command"
@@ -51,7 +51,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
         .into_iter()
         .map(|descriptor| descriptor.id)
         .collect();
-    for client_only in LOCAL_COMMANDS {
+    for &client_only in LOCAL_COMMANDS {
         assert!(
             !ids.contains(client_only),
             "`{client_only}` makes no service request and must not have a descriptor"
@@ -159,11 +159,13 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "service.restart",
             "service.status",
             "service.stop",
+            "workspace.check",
             "workspace.create",
             "workspace.current",
             "workspace.list",
             "workspace.rm",
             "workspace.show",
+            "workspace.update",
             "terminal.attach",
             "terminal.close",
             "terminal.create",

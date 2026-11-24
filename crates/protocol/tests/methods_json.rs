@@ -55,6 +55,7 @@ fn sample_workspace() -> workspaces::Workspace {
         locked: None,
         prunable: None,
         base_refresh: None,
+        comment: None,
         setup: None,
     }
 }
@@ -104,6 +105,8 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::SHOW, "workspace.show");
     assert_eq!(workspaces::CURRENT, "workspace.current");
     assert_eq!(workspaces::REMOVE, "workspace.remove");
+    assert_eq!(workspaces::UPDATE, "workspace.update");
+    assert_eq!(workspaces::CHECK, "workspace.check");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");
     assert_eq!(config::SET, "config.set");
@@ -440,6 +443,88 @@ fn workspace_remove_params_carry_the_ignored_and_orphan_waivers() {
             "force": true,
             "discard_ignored": true,
             "forget_orphan": true
+        }),
+    );
+}
+
+#[test]
+fn workspace_update_params_send_only_the_fields_they_change() {
+    assert_wire(
+        &workspaces::WorkspaceUpdateParams {
+            workspace: "feat-x".to_owned(),
+            name: None,
+            comment: Some(String::new()),
+        },
+        &json!({ "workspace": "feat-x", "comment": "" }),
+    );
+}
+
+#[test]
+fn workspace_carries_its_comment_only_when_one_is_set() {
+    let mut workspace = sample_workspace();
+    assert!(
+        serde_json::to_value(&workspace)
+            .unwrap()
+            .get("comment")
+            .is_none()
+    );
+    workspace.comment = Some("waiting on review".to_owned());
+    assert_eq!(
+        serde_json::to_value(&workspace).unwrap()["comment"],
+        "waiting on review"
+    );
+}
+
+#[test]
+fn workspace_check_omits_registration_for_a_folder_and_reason_when_all_pass() {
+    assert_wire(
+        &workspaces::WorkspaceCheck {
+            id: "w-1".to_owned(),
+            name: "notes".to_owned(),
+            kind: workspaces::WorkspaceKind::Folder,
+            path: "/notes".to_owned(),
+            exists: true,
+            readable: true,
+            registered: None,
+            ok: true,
+            reason: None,
+        },
+        &json!({
+            "id": "w-1",
+            "name": "notes",
+            "kind": "folder",
+            "path": "/notes",
+            "exists": true,
+            "readable": true,
+            "ok": true
+        }),
+    );
+}
+
+#[test]
+fn workspace_check_carries_git_registration_and_the_first_failure() {
+    assert_wire(
+        &workspaces::WorkspaceCheck {
+            id: "w-2".to_owned(),
+            name: "feat-x".to_owned(),
+            kind: workspaces::WorkspaceKind::Worktree,
+            path: "/work/app/feat-x".to_owned(),
+            exists: true,
+            readable: true,
+            registered: Some(false),
+            ok: false,
+            reason: Some("git no longer lists this worktree".to_owned()),
+        },
+        &json!({
+            "id": "w-2",
+            "name": "feat-x",
+            "kind": "worktree",
+            "path": "/work/app/feat-x",
+            "exists": true,
+            "readable": true,
+            "registered": false,
+            "ok": false,
+            "reason": "git no longer lists this worktree"
         }),
     );
 }

@@ -163,6 +163,17 @@ pub enum ServiceCommand {
     Restart,
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
+    /// The local trace logs of the profile.
+    Log {
+        #[command(subcommand)]
+        command: ServiceLogCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceLogCommand {
+    /// Prints the logs folder and the newest service and desktop log files. Never starts the service.
+    Path,
 }
 
 #[derive(Debug, Subcommand)]
@@ -334,6 +345,22 @@ pub enum WorkspaceCommand {
         /// Forget a workspace whose directory git does not recognise, keeping the directory.
         #[arg(long)]
         forget_orphan: bool,
+    },
+    /// Renames a workspace or sets its comment. A worktree's directory and branch keep their names.
+    Update {
+        /// Workspace id, name or path.
+        workspace: String,
+        /// The new name, checked the way a name given to `workspace create` is.
+        #[arg(long)]
+        name: Option<String>,
+        /// The comment shown on the workspace; an empty one clears it.
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// Checks that a workspace's folder exists and is readable and, for a worktree, that git still lists it.
+    Check {
+        /// Workspace id, name or path.
+        workspace: String,
     },
 }
 

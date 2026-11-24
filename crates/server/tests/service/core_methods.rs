@@ -15,7 +15,7 @@ use tokio::time::timeout;
 use super::common::{SERVER_VERSION, connect, echo, remote_code, start, stop, temp_home};
 
 /// Every method of the Phase 1 surface.
-const PHASE1_METHODS: [&str; 16] = [
+const PHASE1_METHODS: &[&str] = &[
     service::INFO,
     service::SHUTDOWN,
     events::SUBSCRIBE,
@@ -35,7 +35,7 @@ const PHASE1_METHODS: [&str; 16] = [
 ];
 
 /// Phase 2 terminal methods (decision 0035).
-const DEVICE_METHODS: [&str; 7] = [
+const DEVICE_METHODS: &[&str] = &[
     "device.list",
     "device.revoke",
     "device.forget",
@@ -45,7 +45,7 @@ const DEVICE_METHODS: [&str; 7] = [
     "network.status",
 ];
 
-const TERMINAL_METHODS: [&str; 8] = [
+const TERMINAL_METHODS: &[&str] = &[
     "terminal.create",
     "terminal.list",
     "terminal.show",
@@ -57,7 +57,7 @@ const TERMINAL_METHODS: [&str; 8] = [
 ];
 
 /// The agent methods this build registers (capability `agents/1`).
-const AGENT_METHODS: [&str; 14] = [
+const AGENT_METHODS: &[&str] = &[
     "agent.kinds",
     "agent.start",
     "agent.list",
@@ -75,7 +75,7 @@ const AGENT_METHODS: [&str; 14] = [
 ];
 
 /// The Bot Teams methods this build registers (capability `teams/1`).
-const TEAM_METHODS: [&str; 26] = [
+const TEAM_METHODS: &[&str] = &[
     "team.create",
     "team.list",
     "team.show",
@@ -105,7 +105,7 @@ const TEAM_METHODS: [&str; 26] = [
 ];
 
 /// The extension methods this build registers (capability `extensions/1`).
-const EXTENSION_METHODS: [(&str, Permission); 9] = [
+const EXTENSION_METHODS: &[(&str, Permission)] = &[
     (extensions::LIST, Permission::Read),
     (extensions::GET, Permission::Read),
     (extensions::CATALOGUE, Permission::Read),
@@ -139,6 +139,8 @@ const CLI_COMMAND_IDS: &[&str] = &[
     "workspace.show",
     "workspace.current",
     "workspace.rm",
+    "workspace.update",
+    "workspace.check",
     "secret.status",
     "secret.list",
     "secret.set",
@@ -283,7 +285,7 @@ async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
         matches!(wrong_owner, MethodError::ExtensionPrefixMissing { .. }),
         "got {wrong_owner:?}"
     );
-    for (method, permission) in EXTENSION_METHODS {
+    for &(method, permission) in EXTENSION_METHODS {
         let info = methods
             .methods()
             .into_iter()
@@ -338,10 +340,10 @@ async fn every_core_method_has_a_command_descriptor() {
     }
     for method in PHASE1_METHODS
         .iter()
-        .chain(&TERMINAL_METHODS)
-        .chain(&DEVICE_METHODS)
-        .chain(&AGENT_METHODS)
-        .chain(&TEAM_METHODS)
+        .chain(TERMINAL_METHODS)
+        .chain(DEVICE_METHODS)
+        .chain(AGENT_METHODS)
+        .chain(TEAM_METHODS)
         .chain(EXTENSION_METHODS.iter().map(|(method, _)| method))
     {
         assert!(

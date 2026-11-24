@@ -623,6 +623,7 @@ pub(crate) mod fixtures {
             locked: None,
             prunable: None,
             base_refresh: None,
+            comment: None,
             setup: None,
         }
     }

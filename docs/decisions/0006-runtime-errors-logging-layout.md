@@ -21,7 +21,12 @@ allowed only in the `massorca` binary's `main`.
 rotated daily, seven files kept (`tracing-appender`), filter from
 `MASSORCA_LOG` (default `info`). The CLI logs warnings and errors to stderr
 only, never to stdout, which belongs to command output. No secrets in logs:
-tokens and credentials are never formatted with `Debug`.
+tokens and credentials are never formatted with `Debug`, and every line passes
+through `massorca_net::RedactedFormat` before it is written, which masks values
+under secret-looking keys, URL passwords and prefixed tokens (`sk-`, `ghp_`,
+pairing offers). A desktop log in the same folder uses the prefix `desktop`
+(`massorca_net::DESKTOP_LOG_PREFIX`) and the same helpers. `massorca service
+log path` prints the folder and the newest file of each.
 
 **Crates.** Package names are prefixed `massorca-`; directories follow
 `docs/PLAN.md`. Phase 1 builds:

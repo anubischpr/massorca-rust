@@ -32,10 +32,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
     Workspace {
         id: row.id.clone(),
         project_id: row.project_id.clone(),
-        kind: match row.kind {
-            WorkspaceKind::Worktree => workspaces::WorkspaceKind::Worktree,
-            WorkspaceKind::Folder => workspaces::WorkspaceKind::Folder,
-        },
+        kind: workspace_kind(row.kind),
         name: row.name.clone(),
         path: row.path.clone(),
         branch: row.branch.clone(),
@@ -50,7 +47,16 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         locked: None,
         prunable: None,
         base_refresh: None,
+        comment: row.comment.clone(),
         setup: None,
+    }
+}
+
+/// The protocol kind of a store kind.
+pub(crate) fn workspace_kind(kind: WorkspaceKind) -> workspaces::WorkspaceKind {
+    match kind {
+        WorkspaceKind::Worktree => workspaces::WorkspaceKind::Worktree,
+        WorkspaceKind::Folder => workspaces::WorkspaceKind::Folder,
     }
 }
 

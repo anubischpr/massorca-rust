@@ -1,0 +1,21 @@
+export const PAIR_TITLE = 'Pair desktop';
+export const SCAN_TAB = 'Scan';
+export const PASTE_TAB = 'Paste';
+export const SCAN_LATER = 'Scanning comes later. Paste the pairing code from your computer for now.';
+export const PASTE_CODE_INSTEAD = 'Paste code instead';
+export const PAIRING_CODE_LABEL = 'Pairing code';
+export const CONNECT = 'Connect';
+export const INVALID_CODE = 'Not a valid pairing code. Copy it from your computer and paste it again.';
+
+export const CONFIRM_TITLE = 'Pair phone';
+export const CONFIRM_HEADING = 'Pair with this desktop?';
+export const CONFIRM_LINE = 'Check that this is your computer. A paired phone can see your workspaces and answer your agents.';
+export const ADDRESS_LABEL = 'Address';
+export const HOST_NAME_LABEL = 'Name on this phone';
+export const HOST_NAME_HELP = 'Letters, digits, - and _. Starts with a letter or digit.';
+export const HOST_NAME_INVALID = 'Use 1 to 32 letters, digits, - and _, starting with a letter or digit.';
+export const PAIR = 'Pair';
+export const CANCEL = 'Cancel';
+export const BACK_TO_HOME = 'Back to home';
+export const PAIR_FAILED_LINE = 'Check that both are on the same network.';
+export const pairFailed = (message: string): string => `Could not pair: ${message}`;

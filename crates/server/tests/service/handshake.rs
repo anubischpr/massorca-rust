@@ -47,7 +47,9 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::TEAMS,
             capabilities::TERMINAL_WAIT,
             capabilities::TERMINALS,
+            capabilities::WORKSPACE_CHECK,
             capabilities::WORKSPACE_CURRENT,
+            capabilities::WORKSPACE_UPDATE,
             capabilities::WORKSPACES,
         ]
     );
