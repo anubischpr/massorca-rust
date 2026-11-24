@@ -128,8 +128,7 @@ pub(super) fn home_page(frame: HomeFrame, cx: &mut App) -> AnyElement {
 }
 
 impl Shell {
-    /// "+ Create": the start page with no workspace, its composer focused (D-AG-01). The New
-    /// workspace form stays for reference only (A88).
+    /// "+ Create": the start page with no workspace, its composer focused (D-AG-01).
     pub(super) fn open_create_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.close_session();
         self.model.select_workspace(None);
