@@ -60,7 +60,8 @@ impl Shell {
         self.marketplace_item_error = None;
         cx.notify();
         let host = self.paired_host_of(item);
-        let request = self.marketplace_requests.request();
+        let request = self.marketplace_pick.request();
+        let picked = self.marketplace_pick.target().clone();
         cx.spawn(async move |this, cx| {
             let params = ExtensionSetEnabledParams {
                 id: package,
@@ -75,7 +76,10 @@ impl Shell {
                 None => service.set_extension_enabled(params).await,
             };
             let _ = this.update(cx, |shell, cx| {
-                shell.finish_package_change(item, result.map(|_| ()), cx);
+                // An answer for a host no longer picked is dropped.
+                if shell.marketplace_pick.target() == &picked {
+                    shell.finish_package_change(item, result.map(|_| ()), cx);
+                }
             });
         })
         .detach();
@@ -99,7 +103,8 @@ impl Shell {
         }
         cx.notify();
         let host = self.paired_host_of(item);
-        let request = self.marketplace_requests.request();
+        let request = self.marketplace_pick.request();
+        let picked = self.marketplace_pick.target().clone();
         cx.spawn(async move |this, cx| {
             let params = ExtensionRemoveParams {
                 id: package,
@@ -113,7 +118,10 @@ impl Shell {
                 None => service.remove_extension(params).await,
             };
             let _ = this.update(cx, |shell, cx| {
-                shell.finish_package_removal(item, result, uninstall_cli, cx)
+                // An answer for a host no longer picked is dropped.
+                if shell.marketplace_pick.target() == &picked {
+                    shell.finish_package_removal(item, result, uninstall_cli, cx);
+                }
             });
         })
         .detach();

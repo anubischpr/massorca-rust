@@ -3,6 +3,7 @@
 
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
+use super::host_pick::host_picker_row;
 use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
@@ -27,10 +28,10 @@ use massorca_ui::components::invocation_banner::InvocationBanner;
 use massorca_ui::components::marketplace_item_header::MarketplaceItemHeader;
 use massorca_ui::components::switch::Switch;
 use massorca_ui::tokens::{
-    RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
+    RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TYPE_BODY, TYPE_BODY_SM,
     TYPE_BODY_STRONG, TYPE_TITLE_SM,
 };
-use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
+use massorca_ui::{ActiveTheme, IconName, TextStyled};
 
 /// The height of an item's banner image; its width is the page's.
 const BANNER_IMAGE_HEIGHT: f32 = 180.0;
@@ -127,7 +128,7 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Any
         item.publisher, item.version
     ))
     .copy_link(copy)
-    .host(host_selector(frame, item, cx));
+    .host(host_picker_row(frame, cx));
     if let Some(logo) = item_images::logo(frame, item, cx) {
         header = header.logo(logo);
     }
@@ -156,43 +157,6 @@ fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
         ButtonVariant::Primary,
         move |shell, cx| shell.open_extension_review(id, cx),
     )
-}
-
-/// The host the item runs on, drawn as a selector. Choosing another host needs the service, so
-/// the selector shows the host and its state without opening.
-fn host_selector(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
-    let theme = *cx.theme();
-    let p = &theme.palette;
-    let label = frame.snapshot.host(&item.host).map_or_else(
-        || "No host".to_owned(),
-        |host| format!("{}, {}", host.name, host.state.word()),
-    );
-    div()
-        .debug_selector(|| "marketplace-host".to_owned())
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(SPACE_2))
-        .px(px(SPACE_3))
-        .py(px(SPACE_2))
-        .rounded(px(RADIUS_MD))
-        .border_1()
-        .border_color(p.border.default)
-        .bg(p.surface.raised)
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_style(TYPE_BODY_SM)
-                .text_color(p.text.primary)
-                .child(label),
-        )
-        .child(
-            Icon::new(IconName::ChevronDown)
-                .size(IconSize::Small)
-                .color(p.text.tertiary),
-        )
-        .into_any_element()
 }
 
 /// The package's banner image, drawn above the header once the service has sent it.

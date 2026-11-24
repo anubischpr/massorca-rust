@@ -63,6 +63,7 @@ use gpui::{
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
+use massorca_ui::components::select::SelectView;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
@@ -209,8 +210,13 @@ pub struct Shell {
     marketplace_updates: marketplace::UpdateChecks,
     /// What the Connection part knows beyond the service's account lists.
     marketplace_accounts: marketplace::AccountsUi,
-    /// The numbers of the requests the Marketplace sends to paired hosts.
-    marketplace_requests: marketplace::HostRequests,
+    /// The host the Marketplace is aimed at, and the answer it waits for.
+    marketplace_pick: marketplace::HostPick,
+    /// The hosts the Marketplace's picker offers, in its order.
+    marketplace_offers: Vec<crate::model::marketplace::HostTarget>,
+    /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
+    marketplace_host_select: Entity<SelectView>,
+    _marketplace_host_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -307,6 +313,11 @@ impl Shell {
                 let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
             }
+            let offers = match shell.service {
+                Some(_) => crate::model::hosts::offered_targets(store.read(cx).state()),
+                None => vec![crate::model::marketplace::HostTarget::Local],
+            };
+            shell.follow_host_offers(offers, cx);
             if let Some(teams) = store.read(cx).teams() {
                 shell.model.refresh_teams(teams);
             }
@@ -326,7 +337,7 @@ impl Shell {
                             .map(|checks| (read, checks))
                     });
                 shell.follow_service_accounts(state);
-                shell.model.set_marketplace(shell.marketplace.snapshot());
+                shell.show_marketplace(cx);
                 if let Some((read, checks)) = checks {
                     shell.start_update_checks(read, checks, cx);
                 }
@@ -356,6 +367,11 @@ impl Shell {
                     shell.set_marketplace_query(query.as_ref(), cx);
                 }
             },
+        );
+        let (marketplace_host_select, marketplace_host_changes) = marketplace::host_picker_for(
+            &[crate::model::marketplace::HostTarget::Local],
+            &crate::model::marketplace::HostTarget::Local,
+            cx,
         );
         let marketplace_code = cx.new(|cx| {
             TextField::new(cx)
@@ -467,7 +483,10 @@ impl Shell {
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
-            marketplace_requests: marketplace::HostRequests::default(),
+            marketplace_pick: marketplace::HostPick::default(),
+            marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
+            marketplace_host_select,
+            _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,

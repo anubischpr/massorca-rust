@@ -2,6 +2,7 @@
 //! category (teams-extensions-settings.md 7.1 and 7.4).
 
 use super::MarketplaceFrame;
+use super::host_pick::host_picker_row;
 use super::item::problem_banner;
 use super::item_images;
 use crate::model::marketplace::{
@@ -214,6 +215,7 @@ pub(super) fn catalogue_view(
         .items_center()
         .gap(px(SPACE_2))
         .child(div().w(px(SEARCH_WIDTH)).child(frame.search.clone()))
+        .child(host_picker_row(frame, cx))
         .child(
             div()
                 .text_style(TYPE_BODY_SM)

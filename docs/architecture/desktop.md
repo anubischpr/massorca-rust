@@ -200,8 +200,13 @@ Linux only. No automated run opens a visible window.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled
-  with "Not available yet": installing, the host choice, the default agent and
-  item settings.
+  with "Not available yet": installing, the default agent and item settings.
+- The host picker (`shell/marketplace/host_pick.rs`) aims the Marketplace at This computer or a connected paired host.
+  Items carry a stable host key (`local`, `runtime:<name>`, `model/marketplace/host_target.rs`). A paired host's lists
+  are read on its own connection, and each request carries its number: only the newest answer for the picked host is
+  shown, so a late answer never replaces a newer pick. A pick whose host is not connected shows This computer and
+  returns when the host connects. The pick lives for the session only; no preference store holds it yet. Accounts
+  and update checks stay on This computer.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.

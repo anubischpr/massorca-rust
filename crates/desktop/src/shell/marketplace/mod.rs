@@ -21,21 +21,23 @@ mod tests;
 
 use super::Shell;
 use crate::model::marketplace::{
-    AccountId, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
+    AccountId, HostTarget, MarketplaceItemId, MarketplaceSnapshot, MarketplaceSource, SourceError,
 };
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::ServiceHandle;
 pub(super) use extension_updates::UpdateChecks;
-pub(super) use host_pick::HostRequests;
+pub(super) use host_pick::{HostPick, host_picker_for};
 use std::collections::BTreeSet;
 
 use gpui::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
-    prelude::*, px,
+    AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, WeakEntity,
+    Window, div, prelude::*, px,
 };
 use massorca_protocol::methods::extensions::ExtensionReview;
+use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::search_field::SearchField;
-use massorca_ui::tokens::SPACE_6;
+use massorca_ui::components::select::SelectView;
+use massorca_ui::tokens::{SPACE_4, SPACE_6};
 
 use accounts::AccountWrite;
 pub(super) use accounts::AccountsUi;
@@ -89,6 +91,12 @@ pub(super) struct MarketplaceFrame {
     list_refusals: Vec<(String, String)>,
     /// The connected service, which serves the listed images; none offline.
     service: Option<ServiceHandle>,
+    /// The note above a paired host's items while its answer is pending or refused.
+    host_note: Option<String>,
+    /// The host picker, which aims the Marketplace at This computer or a paired host.
+    host_picker: Entity<SelectView>,
+    /// The status word beside the picker, for the host it shows.
+    host_status: &'static str,
     shell: WeakEntity<Shell>,
 }
 
@@ -116,6 +124,9 @@ pub(super) fn frame(
         live_accounts: shell.service.is_some(),
         list_refusals: accounts::list_refusals(shell.store.read(cx).state()),
         service: shell.service.clone(),
+        host_note: shell.picked_note(cx),
+        host_picker: shell.marketplace_host_select.clone(),
+        host_status: shell.picker_status(cx),
         shell: weak,
     }
 }
@@ -126,6 +137,20 @@ pub(super) fn page(frame: MarketplaceFrame, window: &mut Window, cx: &mut App) -
     let content = match frame.page {
         MarketplacePage::Item(id) => item::item_page(&frame, id, cx),
         page => catalogue::catalogue_view(&frame, page, cx),
+    };
+    let content = match &frame.host_note {
+        Some(note) => div()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_4))
+            .child(Banner::new(
+                SharedString::from("marketplace-host-note"),
+                BannerVariant::Info,
+                note.clone(),
+            ))
+            .child(content)
+            .into_any_element(),
+        None => content,
     };
     div()
         .size_full()
@@ -161,7 +186,7 @@ impl Shell {
         change: impl FnOnce(&mut dyn MarketplaceSource) -> Result<(), SourceError>,
     ) -> Result<(), SourceError> {
         let result = change(self.marketplace.as_mut());
-        self.model.set_marketplace(self.marketplace.snapshot());
+        self.show_marketplace(cx);
         cx.notify();
         result
     }
@@ -207,6 +232,15 @@ impl Shell {
 
     /// Add account: on a connected service the sign-in runs in a service terminal inside the dialog.
     pub(super) fn add_marketplace_account(&mut self, agent_kind: &str, cx: &mut Context<Self>) {
+        // Accounts are This computer's only; a paired host's accounts are not read yet.
+        if matches!(self.marketplace_pick.target(), HostTarget::Paired(_)) {
+            self.marketplace_error = Some((
+                None,
+                "Agent accounts are not available from the service yet.".to_owned(),
+            ));
+            cx.notify();
+            return;
+        }
         if self.service.is_some() {
             self.marketplace_error = None;
             self.start_service_sign_in(agent_kind, cx);
@@ -269,7 +303,7 @@ impl Shell {
     /// Done and Cancel both end the sign-in; a finished account is already in the snapshot.
     pub(super) fn end_sign_in(&mut self, cx: &mut Context<Self>) {
         self.marketplace.cancel_sign_in();
-        self.model.set_marketplace(self.marketplace.snapshot());
+        self.show_marketplace(cx);
         cx.notify();
     }
 

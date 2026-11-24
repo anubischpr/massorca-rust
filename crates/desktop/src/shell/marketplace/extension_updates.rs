@@ -93,7 +93,7 @@ impl Shell {
         }
         self.marketplace
             .follow_update_reviews(&self.marketplace_updates.held_reviews());
-        self.model.set_marketplace(self.marketplace.snapshot());
+        self.show_marketplace(cx);
         cx.notify();
     }
 
