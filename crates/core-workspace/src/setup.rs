@@ -1,5 +1,5 @@
-//! A project's setup script (decision 0086): `scripts.setup` of the new worktree's `orca.yaml`. The runner that a
-//! service terminal starts is in `setup_runner`.
+//! A project's `orca.yaml` scripts: `scripts.setup` of the new worktree's copy (decision 0086) and `scripts.archive`
+//! of the project's copy (decision 0092). The runner that a service terminal starts is in `setup_runner`.
 
 use std::fmt;
 use std::path::Path;
@@ -12,7 +12,17 @@ pub const MAX_SETUP_FILE_BYTES: u64 = 256 * 1024;
 /// The setup script of the worktree at `workspace_dir`, or `None` when it has none. An unreadable or oversized
 /// `orca.yaml` is an error, so the create can report it instead of skipping setup unseen.
 pub fn read_setup_script(workspace_dir: &Path) -> Result<Option<String>, SetupFileError> {
-    let path = workspace_dir.join(SETUP_FILE);
+    read_script(workspace_dir, SETUP_KEY)
+}
+
+/// The key of the setup script under `scripts:`.
+pub const SETUP_KEY: &str = "setup";
+/// The key of the archive script under `scripts:` (decision 0092).
+pub const ARCHIVE_KEY: &str = "archive";
+
+/// `scripts.<key>` of the `orca.yaml` in `dir`, or `None` when it has none; errors as [`read_setup_script`].
+pub fn read_script(dir: &Path, key: &str) -> Result<Option<String>, SetupFileError> {
+    let path = dir.join(SETUP_FILE);
     let metadata = match std::fs::metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -26,7 +36,7 @@ pub fn read_setup_script(workspace_dir: &Path) -> Result<Option<String>, SetupFi
     }
     let text =
         std::fs::read_to_string(&path).map_err(|error| SetupFileError::Read(error.to_string()))?;
-    Ok(parse_setup_script(&text))
+    Ok(parse_script(&text, key))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +60,11 @@ impl fmt::Display for SetupFileError {
 /// `scripts.setup` of an `orca.yaml` text, trimmed; `None` when absent or empty. Reads the block-mapping subset the
 /// file uses: a plain, single- or double-quoted one-line value, or a `|` / `>` block. Any other form reads as absent.
 pub fn parse_setup_script(text: &str) -> Option<String> {
+    parse_script(text, SETUP_KEY)
+}
+
+/// `scripts.<key>` of an `orca.yaml` text, read as [`parse_setup_script`] reads `scripts.setup`.
+pub fn parse_script(text: &str, key: &str) -> Option<String> {
     let lines: Vec<&str> = text
         .split('\n')
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
@@ -70,7 +85,7 @@ pub fn parse_setup_script(text: &str) -> Option<String> {
         if indent != child {
             continue;
         }
-        if let Some(value) = key_value(line, "setup") {
+        if let Some(value) = key_value(line, key) {
             return scalar(value, &lines[index + 1..], child).filter(|script| !script.is_empty());
         }
     }
@@ -214,6 +229,28 @@ mod tests {
         assert_eq!(
             parse_setup_script("scripts:\n    setup: >-\n      echo a\n      b\n").as_deref(),
             Some("echo a b")
+        );
+    }
+
+    #[test]
+    fn the_archive_script_is_read_beside_setup() {
+        let text = "scripts:
+  setup: pnpm install
+  archive: |
+    tar czf ../backup.tgz .
+";
+        assert_eq!(
+            parse_script(text, ARCHIVE_KEY).as_deref(),
+            Some("tar czf ../backup.tgz .")
+        );
+        assert_eq!(
+            parse_script(
+                "scripts:
+  setup: x
+",
+                ARCHIVE_KEY
+            ),
+            None
         );
     }
 

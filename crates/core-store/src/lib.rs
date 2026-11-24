@@ -10,6 +10,7 @@ mod devices;
 mod error;
 mod migrations;
 mod projects;
+mod script_trust;
 mod secret_key_check;
 mod secrets;
 mod settings;

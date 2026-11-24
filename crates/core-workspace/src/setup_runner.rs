@@ -1,4 +1,5 @@
-//! The runner file of a setup script and the program a service terminal starts to run it (decision 0086).
+//! The runner file of a setup or archive script and the program a service terminal starts to run it (decisions 0086,
+//! 0092).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -75,7 +76,7 @@ impl fmt::Display for RunnerRefusal {
             Self::NoBash => f.write_str("bash was not found"),
             Self::UnsafeValue(name) => write!(
                 f,
-                "the setup script was not run: {name} holds a character cmd would run as a command ({})",
+                "the script was not run: {name} holds a character cmd would run as a command ({})",
                 CMD_UNSAFE_VALUE_CHARS
                     .iter()
                     .collect::<String>()
@@ -91,10 +92,26 @@ impl fmt::Display for RunnerRefusal {
     }
 }
 
-/// Chooses and writes out the runner for `script` in `runner_dir`. On Windows it is a `.cmd` unless the script starts
-/// with a `#!` line naming a POSIX shell and Git Bash exists; the user's terminal shell never decides it.
+/// The runner file stem of a setup script.
+pub const SETUP_RUNNER: &str = "setup-runner";
+/// The runner file stem of an archive script (decision 0092).
+pub const ARCHIVE_RUNNER: &str = "archive-runner";
+
+/// Chooses and writes out the setup runner for `script` in `runner_dir`. On Windows it is a `.cmd` unless the script
+/// starts with a `#!` line naming a POSIX shell and Git Bash exists; the user's terminal shell never decides it.
 pub fn plan_runner(
     script: &str,
+    host: RunnerHost,
+    runner_dir: &Path,
+    interpreters: &Interpreters,
+) -> Result<SetupRunner, RunnerRefusal> {
+    plan_named_runner(script, SETUP_RUNNER, host, runner_dir, interpreters)
+}
+
+/// [`plan_runner`] for a runner file named `stem` plus the runner's extension.
+pub fn plan_named_runner(
+    script: &str,
+    stem: &str,
     host: RunnerHost,
     runner_dir: &Path,
     interpreters: &Interpreters,
@@ -102,7 +119,7 @@ pub fn plan_runner(
     let shebang = shebang_interpreter(script);
     if host == RunnerHost::Posix {
         let bash = interpreters.bash.clone().ok_or(RunnerRefusal::NoBash)?;
-        let path = runner_dir.join("setup-runner.sh");
+        let path = runner_dir.join(format!("{stem}.sh"));
         return Ok(SetupRunner {
             kind: RunnerKind::Posix,
             args: vec![path.to_string_lossy().into_owned()],
@@ -115,7 +132,7 @@ pub fn plan_runner(
         .as_deref()
         .is_some_and(|name| POSIX_SHELLS.contains(&name));
     if let (true, Some(bash)) = (posix_shell, &interpreters.bash) {
-        let path = runner_dir.join("setup-runner.sh");
+        let path = runner_dir.join(format!("{stem}.sh"));
         return Ok(SetupRunner {
             kind: RunnerKind::Posix,
             args: vec![posix_shell_path(&path.to_string_lossy())],
@@ -125,7 +142,7 @@ pub fn plan_runner(
         });
     }
     let cmd = interpreters.cmd.clone().ok_or(RunnerRefusal::NoCmd)?;
-    let path = runner_dir.join("setup-runner.cmd");
+    let path = runner_dir.join(format!("{stem}.cmd"));
     let text = path.to_string_lossy().into_owned();
     // A path with spaces stays one argument: cmd keeps exactly two quotes around an existing file's name.
     if text.contains(CMD_UNSAFE_PATH_CHARS) || text.contains('"') {
