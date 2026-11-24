@@ -219,10 +219,13 @@ fn rail_item(
                 name: theme_label(dark).into(),
                 label: theme_label(dark).into(),
             };
+            let shell = shell.clone();
             rail_button(
                 slot,
                 rail_icon(icon, false, theme),
-                |_, cx| Theme::toggle(cx),
+                move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.toggle_app_theme(cx));
+                },
                 theme,
             )
         }

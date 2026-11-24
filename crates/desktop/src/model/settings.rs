@@ -115,6 +115,18 @@ impl FolderSetting {
         self.status = None;
     }
 
+    /// The store holds a value the service reports, which may have changed elsewhere. The draft
+    /// follows it unless the user has typed.
+    pub fn follow(&mut self, value: FolderValue) {
+        if self.stored.as_ref() == Some(&value) {
+            return;
+        }
+        if !self.dirty() {
+            self.draft.clone_from(&value.path);
+        }
+        self.stored = Some(value);
+    }
+
     /// The service stored the value. Only now does the row say so.
     pub fn saved(&mut self, value: FolderValue) {
         self.loaded(value);
@@ -289,5 +301,40 @@ mod tests {
             message: "Boom.".into(),
         };
         assert_eq!(folder_refusal_text(&other), "Boom.");
+    }
+
+    #[test]
+    fn a_followed_folder_replaces_the_stored_value_and_an_untouched_draft() {
+        let mut folder = FolderSetting::default();
+        folder.loaded(value("/srv/a", true));
+        folder.follow(value("/srv/b", false));
+        assert_eq!(folder.stored, Some(value("/srv/b", false)));
+        assert_eq!(folder.draft, "/srv/b");
+        assert!(!folder.dirty());
+    }
+
+    #[test]
+    fn a_followed_folder_keeps_the_draft_the_user_typed() {
+        let mut folder = FolderSetting::default();
+        folder.loaded(value("/srv/a", true));
+        folder.typed("/srv/mine");
+        folder.follow(value("/srv/b", false));
+        assert_eq!(folder.stored, Some(value("/srv/b", false)));
+        assert_eq!(folder.draft, "/srv/mine");
+        assert!(folder.dirty());
+    }
+
+    #[test]
+    fn following_the_value_already_held_changes_nothing() {
+        let mut folder = FolderSetting::default();
+        folder.loaded(value("/srv/a", true));
+        folder.typed("/srv/mine");
+        folder.refused("Enter a full folder path.");
+        folder.follow(value("/srv/a", true));
+        assert_eq!(folder.draft, "/srv/mine");
+        assert_eq!(
+            folder.status,
+            Some(FolderStatus::Failed("Enter a full folder path.".into()))
+        );
     }
 }

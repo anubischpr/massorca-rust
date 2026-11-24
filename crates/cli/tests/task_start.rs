@@ -223,6 +223,42 @@ fn a_start_that_fails_keeps_the_task_open_with_the_reason_and_can_be_retried() {
 }
 
 #[test]
+fn three_failed_starts_in_a_row_break_the_circuit_until_the_task_is_reopened() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "ghost", "no-such-agent");
+    let task = create_task(&sandbox, "Parse the headers", &["--bot", "ghost"]);
+
+    for _ in 0..2 {
+        let refused = error_of(&sandbox, &["task", "start", task.as_str()]);
+        assert_eq!(refused["code"], "agent.kind_not_found", "{refused}");
+    }
+    let third = error_of(&sandbox, &["task", "start", task.as_str()]);
+    assert_eq!(third["code"], "task.circuit_broken", "{third}");
+    let reason = third["message"].as_str().expect("a reason");
+    assert!(reason.starts_with("Circuit broken: "), "{reason}");
+    assert!(reason.contains("no-such-agent"), "{reason}");
+    let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+    assert_eq!(shown["error_code"], "task.circuit_broken", "{shown}");
+    assert_eq!(shown["error"], reason, "{shown}");
+
+    // A broken task is refused even once its cause is fixed, and no agent starts.
+    sandbox.json_ok(
+        "default",
+        &["team", "bot", "update", "alpha", "ghost", "--agent", "fake"],
+    );
+    let refused = error_of(&sandbox, &["task", "start", task.as_str()]);
+    assert_eq!(refused["code"], "task.circuit_broken", "{refused}");
+    let sessions = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(sessions["sessions"], json!([]), "{sessions}");
+
+    // A reopen resets the breaker.
+    sandbox.json_ok("default", &["task", "reopen", task.as_str()]);
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"].as_str().expect("linked session");
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
 fn a_task_without_a_bot_is_refused_and_stays_unchanged() {
     let (sandbox, _root) = team_sandbox();
     let task = create_task(&sandbox, "Parse the headers", &[]);
@@ -564,7 +600,12 @@ fn a_task_on_a_linked_folder_runs_in_that_folder_and_has_no_branch() {
 fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
     let (sandbox, root) = team_sandbox();
     add_bot(&sandbox, "mara", "fake");
-    sandbox.json_ok("default", &["team", "project", "add", "alpha", "loose"]);
+    sandbox.json_ok(
+        "default",
+        &[
+            "team", "project", "add", "alpha", "loose", "--goal", "Ship it",
+        ],
+    );
     let task = create_task(
         &sandbox,
         "Parse the headers",
@@ -589,5 +630,68 @@ fn a_task_whose_project_links_no_source_runs_in_the_team_folder() {
         .join(team["id"].as_str().expect("team id"));
     assert!(same_dir(&shown, &folder), "{workspace}");
     let session = started["session_id"].as_str().expect("linked session");
+    // The prompt names the task's project and its goal.
+    let record = sandbox.json_ok("default", &["agent", "status", session]);
+    let terminal = record["terminal_id"].as_str().expect("terminal id");
+    eventually("the project on the agent's screen", || {
+        let screen = sandbox.json_ok("default", &["terminal", "screen", terminal]);
+        let text: String = screen["lines"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        (text.contains("part of the project \"loose\"") && text.contains("Goal: Ship it"))
+            .then_some(())
+    });
     sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
+#[test]
+fn a_stopped_task_keeps_its_session_and_shows_stopped_until_reopened() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let task = create_task(
+        &sandbox,
+        "Parse the headers",
+        &["--bot", "mara", "--body", "Start with hold, then stop."],
+    );
+    let refused = error_of(&sandbox, &["task", "stop", task.as_str()]);
+    assert_eq!(refused["code"], "task.not_running", "{refused}");
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let session = started["session_id"]
+        .as_str()
+        .expect("linked session")
+        .to_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "status",
+            session.as_str(),
+            "--until",
+            "working",
+            "--timeout",
+            UNTIL_SECS,
+        ],
+    );
+
+    let stopped = sandbox.json_ok("default", &["task", "stop", task.as_str(), "--force"]);
+    assert_eq!(stopped["session_id"], session.as_str(), "{stopped}");
+    let shown = eventually("the stopped task shows Stopped", || {
+        let shown = sandbox.json_ok("default", &["task", "show", task.as_str()]);
+        (shown["state"] == "stopped").then_some(shown)
+    });
+    assert_eq!(shown["column"], "waiting", "{shown}");
+    assert_eq!(shown["session_id"], session.as_str(), "{shown}");
+
+    // Stopping it again is refused, and the stopped task can be reopened.
+    let again = error_of(&sandbox, &["task", "stop", task.as_str()]);
+    assert_eq!(again["code"], "task.not_running", "{again}");
+    let reopened = sandbox.json_ok("default", &["task", "reopen", task.as_str()]);
+    assert_eq!(reopened["column"], "open", "{reopened}");
 }

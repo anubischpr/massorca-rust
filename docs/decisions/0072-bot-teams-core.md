@@ -88,7 +88,10 @@ means "cannot tell", never "dead" (AGENTS.md, SSH use case).
   2. It creates the team's folder workspace if there is none.
   3. It starts the bot's agent through the agents domain's in-process API,
      passing the workspace, the agent kind and the prompt. The prompt gives the
-     bot its name, its team and its job, then the task text.
+     bot its name, its team and its job, then the task text. A task in a
+     project also gets, as in pv96, the line "This task is part of the project
+     "NAME"." (with "Read its brief before you start." when it has a brief),
+     the project's goal, and its brief.
   4. It records the session only once delivery succeeded. A failed delivery
      leaves the task Not started, with `error` set (AUTO-14).
 - `task.done` marks a task done by hand, for work that finished outside an
@@ -501,8 +504,59 @@ has two values, as in pv96, and there is no per-bot mode.
 - `team.create` without `access` still makes a `full` team, so an older client
   that sends none gets the new default without the sentence. `default` is a new
   wire value: an older client reads it as unknown.
-- Not in this change: the desktop New team dialog and the team card, which will
-  name the access and offer the change in a follow-up.
+- The desktop's New team dialog names the access, and the team card and the Board
+  header show it with a one-step change. Not in this change: the Routines, Memory,
+  Project and Files headers, which do not show it yet.
 
 Decision 0083 is unchanged: a mode is still passed only when someone chose it.
 Here the owner chooses it once for the team.
+
+## Amendment 2026-11-23: the start circuit breaker
+
+A task whose starts keep failing stops being retried, as pv96's dispatch
+circuit breaker does (AUTO-16). We have no dispatch or escalation, so only
+failed `task.start` calls count.
+
+- Every failed start of a task adds one to its count (`tasks.start_failures`,
+  migration step 26). A start that links a session resets it, and so does
+  `task.reopen`.
+- The third failure in a row is recorded on the task as
+  `task.circuit_broken`, with the reason "Circuit broken: <why the start
+  failed>", as pv96 words it.
+- While the count is three or more, `task.start` refuses the task with
+  `task.circuit_broken` before it spawns anything, even when the cause is
+  fixed, and the count does not grow. `massorca task reopen TASK` resets it.
+- A routine run makes a new task each time, so each run has its own count; the
+  breaker never blocks a routine's later runs.
+
+## Amendment 2026-11-23: a team project's code source
+
+A team project records where its code is, as pv96 does (AUTO-33): "Existing
+repository" or "New folder with git" (`code_source`: `existing_repository` or
+`new_folder_with_git`; `massorca team project add|update --code-source`).
+
+- It is recorded only: nothing is cloned, created or initialised with git, as
+  in pv96. A task runs where `source_project` (the linked Workspaces project)
+  says, never where `code_source` does.
+- As in pv96, only a team with Workspaces on records one; otherwise the call is
+  refused with `request.invalid_params` and says how to turn Workspaces on.
+- `code_source` is an optional wire field (migration step 27);
+  an older host neither stores nor returns it.
+
+## Amendment 2026-11-23: stopping a task
+
+`task.stop` (`massorca task stop TASK [--force]`, capability `teams/1`) stops
+the agent session a task runs in, as `agent.stop` does, with the same
+permission. It runs under the start gate, so a start in flight links its session
+before the stop reads it.
+
+- The task keeps its session link. When the run exits it shows Stopped in
+  "Waiting for you", as the table above says for an exited session without Done.
+  From there it can be marked done or reopened.
+- A task with no running session is refused with `task.not_running`.
+- pv96 has no Board stop: its chat Stop cancels the current turn and leaves the
+  session running. Here the run ends, because a turn cancel is not available for
+  every agent kind.
+- Older hosts answer `method.not_found`; the method is additive, so no
+  capability was added.
+- Not in this change: a Stop control on the desktop Board.

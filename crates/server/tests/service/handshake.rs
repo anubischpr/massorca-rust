@@ -32,6 +32,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_SEEN,
             capabilities::AGENTS,
             capabilities::BINARY_FRAMES,
+            capabilities::COMMANDS,
             capabilities::CONFIG,
             capabilities::DEVICES,
             capabilities::EVENTS,

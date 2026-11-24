@@ -2,6 +2,7 @@
 
 mod agent_redaction;
 mod agents;
+mod command_schema;
 mod config;
 mod config_keys;
 mod devices;
@@ -62,6 +63,7 @@ pub(crate) fn register_core(
     handles.extend(git::register(registries)?);
     handles.extend(secrets::register(registries)?);
     handles.extend(teams::register(registries)?);
+    handles.extend(command_schema::register(registries)?);
     handles.extend(crate::commands::register_core(&registries.commands)?);
     Ok(handles)
 }

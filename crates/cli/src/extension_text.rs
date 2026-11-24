@@ -260,6 +260,11 @@ fn record_line(record: &CliRecord) -> String {
     }
 }
 
+/// What removing the CLI does beyond this package: it stops working outside MassOrca too. Every uninstall offer and
+/// confirmation for a CLI says it.
+pub const UNINSTALL_CLI_WARNING: &str =
+    "This removes the CLI from this computer, so it stops working outside MassOrca too.";
+
 fn removal_line(removal: &CliRemoval) -> String {
     let cli = format!("cli {} ({})", removal.agent, removal.binary);
     match &removal.action {
@@ -270,7 +275,7 @@ fn removal_line(removal: &CliRemoval) -> String {
             format!("{cli}: installed by the package, but it declares no uninstall command here")
         }
         CliRemovalAction::Offered { command } => format!(
-            "{cli}: installed by the package; run `{}` to uninstall it, or remove with --uninstall-cli --yes",
+            "{cli}: installed by the package; run `{}` to uninstall it, or remove with --uninstall-cli --yes. {UNINSTALL_CLI_WARNING}",
             command_text(command)
         ),
         CliRemovalAction::Ran { command, .. } => {

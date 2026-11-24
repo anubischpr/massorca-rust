@@ -32,6 +32,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             no_args(),
         ),
         command(
+            "agent-context",
+            "List every command with its method, permission and parameters",
+            "commands.describe",
+            no_args(),
+        ),
+        command(
             "host.memory",
             "Show the memory of the service and its terminals",
             "host.memory",

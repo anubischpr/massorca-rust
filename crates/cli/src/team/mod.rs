@@ -9,8 +9,8 @@ use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::teams::{
-    BoardParams, BotAddParams, BotRemoveParams, TeamAccess, TeamCharacter, TeamCreateParams,
-    TeamProjectAddParams, TeamRef, TeamRemoveParams,
+    BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
+    TeamCreateParams, TeamProjectAddParams, TeamRef, TeamRemoveParams,
 };
 
 use crate::connect::connect;
@@ -201,6 +201,9 @@ pub struct TeamProjectAddArgs {
     /// The Workspaces project (id, name or path) the code comes from.
     #[arg(long, value_name = "PROJECT")]
     pub source: Option<String>,
+    /// Where the code is, recorded only (nothing is cloned or created). Needs Workspaces in the team.
+    #[arg(long, value_enum, value_name = "KIND")]
+    pub code_source: Option<CodeSourceArg>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -303,6 +306,27 @@ pub struct TeamProjectUpdateArgs {
     /// The Workspaces project (id, name or path) the code comes from. An empty value clears it.
     #[arg(long, value_name = "PROJECT")]
     pub source: Option<String>,
+    /// Where the code is, recorded only (nothing is cloned or created). Needs Workspaces in the team.
+    #[arg(long, value_enum, value_name = "KIND")]
+    pub code_source: Option<CodeSourceArg>,
+}
+
+/// Where a team project's code is (pv96's "Existing repository" or "New folder with git").
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CodeSourceArg {
+    /// An existing repository.
+    ExistingRepository,
+    /// A new folder with git.
+    NewFolderWithGit,
+}
+
+impl From<CodeSourceArg> for CodeSource {
+    fn from(source: CodeSourceArg) -> Self {
+        match source {
+            CodeSourceArg::ExistingRepository => Self::ExistingRepository,
+            CodeSourceArg::NewFolderWithGit => Self::NewFolderWithGit,
+        }
+    }
 }
 
 /// Runs one `team` subcommand against the service of `profile`.
@@ -448,6 +472,7 @@ async fn run_project(
                     goal: args.goal,
                     brief: args.brief,
                     source_project: args.source,
+                    code_source: args.code_source.map(CodeSource::from),
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "updated")]);
@@ -466,6 +491,7 @@ async fn run_project(
                     goal: args.goal,
                     brief: None,
                     source_project: args.source,
+                    code_source: args.code_source.map(CodeSource::from),
                 })
                 .await?;
             output.success(&project, &[text::project_line(&project, "added")]);

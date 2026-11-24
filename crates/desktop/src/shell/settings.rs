@@ -13,6 +13,7 @@ use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::list_row::{ListRow, RowLeading};
 use massorca_ui::components::search_field::SearchField;
+use massorca_ui::components::segmented_control::{Segment, SegmentedControl};
 use massorca_ui::components::settings_row::RowStatus;
 use massorca_ui::components::settings_row::{SettingsRow, SettingsSection as SettingsGroup};
 use massorca_ui::components::text_field::TextField;
@@ -22,19 +23,20 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, Icon, IconName, TextStyled, Theme};
 
 use super::Shell;
+use crate::model::app_theme::ThemeChoice;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::model::secret_vault::VaultPage;
 use crate::model::settings::{
-    FolderSetting, FolderStatus, FolderValue, SettingsModel, folder_reason, folder_refusal_text,
-    folder_request,
+    FolderSetting, FolderStatus, FolderValue, LOADING, NOT_CONNECTED, SettingsModel, folder_reason,
+    folder_refusal_text, folder_request,
 };
 use crate::model::settings_sections::{
     CONVERSATIONS_FOLDER, Hit, NOT_AVAILABLE, RowBody, RowSpec, SettingsSection,
     WORKSPACE_FOLDER_KEY, hit_line, rows, search,
 };
-use crate::service::ConnectionState;
+use crate::service::{ConnectionState, StoreState};
 use massorca_protocol::methods::config::ConfigSet;
 
 #[path = "settings_planned.rs"]
@@ -61,6 +63,8 @@ pub(super) struct SettingsFrame<'a> {
     pub shell: WeakEntity<Shell>,
     pub folder: &'a FolderSetting,
     pub folder_field: &'a Entity<TextField>,
+    /// The app theme the store holds, or `None` until a read has listed it.
+    pub app_theme: Option<ThemeChoice>,
     /// The installed agents, each linking to its Marketplace page (decision 0059).
     pub agents: Vec<AgentLink>,
     /// The secret vault as the store holds it: its key, and the names by scope (decision 0071).
@@ -335,6 +339,10 @@ fn row(
             let (row, control) = folder_row(row, frame);
             (row, Some(control))
         }
+        RowBody::AppTheme => {
+            let (row, control) = app_theme_row(row, frame);
+            (row, Some(control))
+        }
         RowBody::ThisPc => (row, Some(value_box(host_word(&frame.connection), &theme))),
         // group() draws one row per paired host in place of this marker.
         RowBody::PairedHosts => (row, None),
@@ -464,6 +472,34 @@ fn folder_status(folder: &FolderSetting) -> Option<RowStatus> {
     }
 }
 
+/// The app theme: System, Dark and Light as one choice, which writes `appearance.theme` on change.
+/// It is off until the service is connected and has listed the setting.
+fn app_theme_row(row: SettingsRow, frame: &SettingsFrame<'_>) -> (SettingsRow, AnyElement) {
+    let mut row = row;
+    let connected = frame.connection.is_connected();
+    if !connected {
+        row = row.disabled_reason(NOT_CONNECTED);
+    } else if frame.app_theme.is_none() {
+        row = row.disabled_reason(LOADING);
+    }
+    let segments: Vec<Segment> = ThemeChoice::ALL
+        .iter()
+        .map(|choice| Segment::text(choice.label()))
+        .collect();
+    let shell = frame.shell.clone();
+    let control = SegmentedControl::new("settings-app-theme", "Theme", segments)
+        .selected(frame.app_theme.map_or(0, ThemeChoice::index))
+        .disabled(!connected || frame.app_theme.is_none())
+        .on_change(move |index, _, cx| {
+            let Some(choice) = ThemeChoice::ALL.get(index).copied() else {
+                return;
+            };
+            let _ = shell.update(cx, |shell, cx| shell.save_app_theme(choice, cx));
+        })
+        .into_any_element();
+    (row, control)
+}
+
 /// How long "Saved" stays on the row (SettingsRow.md: about two seconds).
 const SAVED_FOR: Duration = Duration::from_secs(2);
 
@@ -481,6 +517,13 @@ impl Shell {
         if let Some(service) = &self.service {
             self.settings_hosts_asked = true;
             service.refresh_hosts();
+        }
+    }
+
+    /// The folder the store holds becomes the one the row shows, so a change made elsewhere shows here.
+    pub(super) fn follow_service_folder(&mut self, state: &StoreState) {
+        if let Some(value) = state.config_value(WORKSPACE_FOLDER_KEY) {
+            self.settings.folder.follow(FolderValue::from_config(value));
         }
     }
 
