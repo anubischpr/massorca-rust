@@ -1,6 +1,7 @@
 //! The Board's keyboard move (D-WS-30, BoardColumn): pick a card up, move it between columns and
 //! places, then drop it or cancel. A drop changes the column only; the shell sends the call it asks for.
 
+use super::filters::keeps;
 use super::state::{TeamError, TeamsState};
 use super::types::{BoardOwner, Column, Pick, Task, TaskId};
 use crate::model::shell::HostReach;
@@ -70,12 +71,12 @@ impl TeamsState {
         let tasks = self.tasks(board).ok_or(TeamError::Missing)?;
         let at = tasks
             .iter()
-            .position(|item| item.id == task)
+            .position(|item| item.id == task && self.shows(board, item.id))
             .ok_or(TeamError::Missing)?;
         let column = tasks[at].column;
         let index = tasks[..at]
             .iter()
-            .filter(|item| item.column == column)
+            .filter(|item| item.column == column && self.shows(board, item.id))
             .count();
         self.set_pick(Some(Pick {
             board,
@@ -97,7 +98,9 @@ impl TeamsState {
         let others = |column: Column| {
             tasks
                 .iter()
-                .filter(|item| item.column == column && item.id != pick.task)
+                .filter(|item| {
+                    item.column == column && item.id != pick.task && self.shows(pick.board, item.id)
+                })
                 .count()
         };
         let next = match step {
@@ -129,6 +132,7 @@ impl TeamsState {
     pub fn drop_pick(&mut self) -> Result<Landing, TeamError> {
         let pick = self.pick().cloned().ok_or(TeamError::Missing)?;
         self.set_pick(None);
+        let shown = self.shown_ids(pick.board);
         let tasks = self.tasks_mut(pick.board).ok_or(TeamError::Missing)?;
         let at = tasks
             .iter()
@@ -139,7 +143,7 @@ impl TeamsState {
         let places: Vec<usize> = tasks
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.column == pick.column)
+            .filter(|(_, item)| item.column == pick.column && shown.contains(&item.id))
             .map(|(position, _)| position)
             .collect();
         let insert_at = places
@@ -184,7 +188,9 @@ impl TeamsState {
                 let mut cards: Vec<CardView> = tasks
                     .iter()
                     .filter(|task| {
-                        task.column == column && pick.is_none_or(|pick| pick.task != task.id)
+                        task.column == column
+                            && pick.is_none_or(|pick| pick.task != task.id)
+                            && self.shows(board, task.id)
                     })
                     .map(card)
                     .collect();
@@ -199,6 +205,29 @@ impl TeamsState {
         Some(BoardView { columns })
     }
 
+    /// Whether the Board `board` draws the card: a team Board draws the cards its project filter keeps.
+    fn shows(&self, board: BoardOwner, task: TaskId) -> bool {
+        match board {
+            BoardOwner::Team(team) => self
+                .team(team)
+                .is_some_and(|team| keeps(self.board_filter(team.id), team, task)),
+            BoardOwner::Project(..) => true,
+        }
+    }
+
+    /// The cards of a Board the page draws, in the order they are stored.
+    fn shown_ids(&self, board: BoardOwner) -> Vec<TaskId> {
+        self.tasks(board)
+            .map(|tasks| {
+                tasks
+                    .iter()
+                    .filter(|item| self.shows(board, item.id))
+                    .map(|item| item.id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Puts the picked card back without a change.
     pub fn cancel_pick(&mut self) {
         self.set_pick(None);
@@ -207,9 +236,10 @@ impl TeamsState {
 
 #[cfg(test)]
 mod tests {
+    use super::super::filters::{ProjectFilter, desarrollo_with_project_card};
     use super::super::sample::SampleTeamsSource;
     use super::super::sample::TeamsSource;
-    use super::super::types::TeamId;
+    use super::super::types::{ProjectId, TeamId};
     use super::*;
 
     fn team() -> TeamId {
@@ -316,5 +346,33 @@ mod tests {
         assert_eq!(running.len(), 4);
         assert!(running[0].lifted && running[0].title == "Write release notes for oppm");
         assert_eq!(running[1].bot.as_deref(), Some("Mara"));
+    }
+
+    #[test]
+    fn a_filtered_board_draws_and_picks_only_the_cards_its_filter_keeps() {
+        let mut state = TeamsState::connected(Vec::new(), vec![desarrollo_with_project_card()]);
+        let board = BoardOwner::Team(team());
+        state
+            .set_board_filter(team(), ProjectFilter::Project(ProjectId(1)))
+            .unwrap();
+        let drawn: usize = state
+            .board_view(board)
+            .unwrap()
+            .columns
+            .iter()
+            .map(|column| column.cards.len())
+            .sum();
+        assert_eq!(drawn, 1, "only the project's card is drawn");
+        assert_eq!(
+            state.pick_task(board, TaskId(1)),
+            Err(TeamError::Missing),
+            "a card the filter hides cannot be picked up"
+        );
+        state.pick_task(board, TaskId(7)).unwrap();
+        assert!(state.step_pick(PickStep::Right));
+        assert_eq!(
+            state.drop_pick().unwrap().announcement(),
+            "Moved to Running, position 1 of 1."
+        );
     }
 }
