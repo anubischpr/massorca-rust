@@ -25,7 +25,7 @@ Every log line is redacted before it is written: values under secret-looking key
 prefix (`sk-`, `ghp_`, a pairing offer) are written as `[redacted]`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
-`service stop`, `service restart`, `service unit`, `open`, `pair accept` and the `host` commands except
+`service stop`, `service restart`, `service unit`, `service log path`, `open`, `pair accept` and the `host` commands except
 `host memory` and `host ports` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
 `service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
 machine.
@@ -36,6 +36,7 @@ machine.
 |---|---|
 | `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
 | `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
+| `service log path` | Prints the profile's logs folder, then the newest service and desktop log file names (`none` when there is none). `--json`: `{dir, service, desktop}`, each file name or `null`. Never starts the service. Logs are daily `service.<date>.log` and `desktop.<date>.log` files, seven kept each, never sent anywhere. |
 | `service status` | Shows whether the service runs. Never starts it. |
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities). Starts the service when it is not running. |
 | `service stop` | Stops the service. Succeeds when it is not running. |
