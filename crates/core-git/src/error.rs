@@ -1,12 +1,20 @@
 use std::io;
 use std::path::PathBuf;
 
+use crate::version::GitVersion;
+
 /// Why a git command did not produce the answer its caller asked for.
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
     /// No `git` executable was found on PATH or at `MASSORCA_GIT`.
     #[error("git executable not found (install git or set MASSORCA_GIT)")]
     NotFound,
+    /// The binary is older than the baseline, so the command was not run (ADR 0014).
+    #[error("git {found} is older than the required {required}")]
+    TooOld {
+        found: GitVersion,
+        required: GitVersion,
+    },
     /// The process could not be started, or its output could not be read.
     #[error("failed to run git: {0}")]
     Spawn(#[source] io::Error),

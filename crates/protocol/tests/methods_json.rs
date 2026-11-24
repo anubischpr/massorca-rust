@@ -144,6 +144,7 @@ fn service_info_has_the_documented_shape() {
         profile: "default".to_owned(),
         pid: 4242,
         started_at_ms: 1_767_225_600_000_i64,
+        git: None,
     };
     assert_wire(
         &info,
@@ -156,6 +157,49 @@ fn service_info_has_the_documented_shape() {
             "started_at_ms": 1_767_225_600_000_i64
         }),
     );
+}
+
+#[test]
+fn git_status_has_one_shape_per_state() {
+    let cases = [
+        (
+            service::GitStatus::Present {
+                version: "2.49.0".to_owned(),
+            },
+            json!({ "state": "present", "version": "2.49.0" }),
+        ),
+        (service::GitStatus::Missing, json!({ "state": "missing" })),
+        (
+            service::GitStatus::TooOld {
+                version: "2.24.0".to_owned(),
+                required: "2.25.0".to_owned(),
+            },
+            json!({ "state": "too_old", "version": "2.24.0", "required": "2.25.0" }),
+        ),
+        (
+            service::GitStatus::Unknown {
+                reason: "unrecognised version line".to_owned(),
+            },
+            json!({ "state": "unknown", "reason": "unrecognised version line" }),
+        ),
+    ];
+    for (status, expected) in &cases {
+        assert_wire(status, expected);
+    }
+}
+
+#[test]
+fn service_info_from_an_older_service_has_no_git_status() {
+    let info: service::ServiceInfo = serde_json::from_value(json!({
+        "version": "0.1.0",
+        "protocol": 1,
+        "capabilities": [],
+        "profile": "default",
+        "pid": 1,
+        "started_at_ms": 0
+    }))
+    .expect("an older service's reply decodes");
+    assert_eq!(info.git, None);
 }
 
 #[test]
