@@ -5,6 +5,7 @@ use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 use super::live::agent_of_kind;
 use super::page::TeamPage;
+use super::team_edit::TeamChange;
 use super::types::{
     AddressId, BoardOwner, Bot, BotId, HostChoice, MemoryId, MemoryTab, Pick, Project, ProjectId,
     RoutineId, Task, Team, TeamId,
@@ -81,6 +82,8 @@ pub struct TeamsState {
     notice: Option<String>,
     /// Why the last access change was refused, and for which team.
     access_notice: Option<(TeamId, String)>,
+    /// Why the last removal of a team was refused, and for which team.
+    removal_notice: Option<(TeamId, String)>,
     next_id: u32,
 }
 
@@ -102,6 +105,7 @@ impl TeamsState {
             memory_tab: MemoryTab::default(),
             notice: None,
             access_notice: None,
+            removal_notice: None,
             next_id,
         }
     }
@@ -405,6 +409,60 @@ impl TeamsState {
         self.access_notice = notice.map(|notice| (team, notice));
     }
 
+    /// Changes a team's fields on sample data; a connected service writes them itself. A name another team on the
+    /// same host has is refused, as the service refuses it.
+    pub fn change_team(&mut self, team: TeamId, change: &TeamChange) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        if let Some(name) = &change.name {
+            let host = &self.teams[index].host;
+            let taken = self.teams.iter().any(|other| {
+                other.id != team && other.host == *host && other.name.eq_ignore_ascii_case(name)
+            });
+            if taken {
+                return Err(TeamError::NameTaken);
+            }
+        }
+        let target = &mut self.teams[index];
+        if let Some(name) = &change.name {
+            target.name = name.clone();
+        }
+        if let Some(purpose) = &change.purpose {
+            target.purpose = purpose.clone();
+        }
+        if let Some(character) = change.character {
+            target.character = character;
+        }
+        if let Some(workspaces) = change.workspaces {
+            target.workspaces = workspaces;
+        }
+        Ok(())
+    }
+
+    /// Removes a team with what it holds, on sample data; a connected service removes it itself.
+    pub fn remove_team(&mut self, team: TeamId) -> Result<(), TeamError> {
+        self.require_connected()?;
+        let index = self.index_of(team)?;
+        self.teams.remove(index);
+        if self.selected == Some(team) {
+            self.selected = None;
+        }
+        Ok(())
+    }
+
+    /// Why the last removal of `team` was refused, if it was.
+    pub fn removal_notice(&self, team: TeamId) -> Option<&str> {
+        self.removal_notice
+            .as_ref()
+            .filter(|(owner, _)| *owner == team)
+            .map(|(_, notice)| notice.as_str())
+    }
+
+    /// Keeps why a removal of a team was refused, or clears it with `None`.
+    pub fn set_removal_notice(&mut self, team: TeamId, notice: Option<String>) {
+        self.removal_notice = notice.map(|notice| (team, notice));
+    }
+
     /// The team a page shows, when it belongs to a team that exists.
     pub fn page_team(&self, page: TeamPage) -> Option<&Team> {
         self.team(page.team())
@@ -519,6 +577,53 @@ mod tests {
         assert_eq!(state.access_notice(TeamId(2)), None);
         state.set_access_notice(desarrollo, None);
         assert_eq!(state.access_notice(desarrollo), None);
+    }
+
+    #[test]
+    fn a_team_edit_changes_only_its_fields_and_refuses_a_name_another_team_has() {
+        let mut state = SampleTeamsSource.teams();
+        let ops = state
+            .create_team(new_team("Ops", 0))
+            .expect("the team is created");
+        let dev = state
+            .create_team(new_team("Dev", 0))
+            .expect("the team is created");
+        let taken = TeamChange {
+            name: Some("ops".into()),
+            ..TeamChange::default()
+        };
+        assert_eq!(state.change_team(dev, &taken), Err(TeamError::NameTaken));
+        let before = state.team(dev).cloned().expect("the team is there");
+        let edit = TeamChange {
+            name: Some("Platform".into()),
+            workspaces: Some(!before.workspaces),
+            ..TeamChange::default()
+        };
+        state.change_team(dev, &edit).expect("the team is changed");
+        let after = state.team(dev).expect("the team is there");
+        assert_eq!(after.name, "Platform");
+        assert_eq!(after.purpose, before.purpose);
+        assert_eq!(after.workspaces, !before.workspaces);
+        assert_eq!(state.team(ops).map(|team| team.name.as_str()), Some("Ops"));
+    }
+
+    #[test]
+    fn a_removed_team_leaves_the_state_and_its_selection_and_a_refused_removal_is_kept() {
+        let mut state = SampleTeamsSource.teams();
+        let id = state
+            .create_team(new_team("Ops", 0))
+            .expect("the team is created");
+        state.remove_team(id).expect("the team is removed");
+        assert!(state.team(id).is_none());
+        assert_eq!(state.selected(), None);
+        assert_eq!(state.remove_team(id), Err(TeamError::Missing));
+        assert_eq!(
+            TeamsState::unavailable().remove_team(TeamId(1)),
+            Err(TeamError::Unavailable)
+        );
+        state.set_removal_notice(TeamId(1), Some("A task is running.".into()));
+        assert_eq!(state.removal_notice(TeamId(1)), Some("A task is running."));
+        assert_eq!(state.removal_notice(TeamId(2)), None);
     }
 
     #[test]
