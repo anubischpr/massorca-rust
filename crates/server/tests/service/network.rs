@@ -18,9 +18,13 @@ use massorca_protocol::methods::extensions::{
 };
 use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
 use massorca_protocol::methods::secrets::{self, SecretSet};
+use massorca_protocol::methods::skills::{self as skills, SkillDiscovery, SkillsDiscoverParams};
 use massorca_protocol::pairing::Offer;
 use massorca_protocol::{PeerInfo, codes};
-use massorca_server::{ListenSpec, NetworkConfig, RunningService, Scopes, Service};
+use massorca_server::{
+    DiscoveryOptions, ListenSpec, NetworkConfig, RunningService, Scopes, Service,
+};
+use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
 use crate::common::{connect, profile, remote_code, service_config, stop, temp_home};
@@ -32,17 +36,29 @@ pub(crate) fn peer() -> PeerInfo {
     }
 }
 
-/// A service listening on an ephemeral loopback port.
+/// A service listening on an ephemeral loopback port, with no home folder for skill discovery to read.
 pub(crate) async fn start_listening(home: &Path) -> RunningService {
+    start_listening_with_discovery(home, DiscoveryOptions::default()).await
+}
+
+/// A service listening on an ephemeral loopback port, whose skill discovery reads `discovery`.
+pub(crate) async fn start_listening_with_discovery(
+    home: &Path,
+    discovery: DiscoveryOptions,
+) -> RunningService {
     let network = NetworkConfig {
         listen: vec![ListenSpec::Address(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
             0,
         )))],
     };
-    let running = Service::start_with_network(service_config(home, "server"), network)
-        .await
-        .expect("the service starts");
+    let running = Service::start_with_network_and_discovery(
+        service_config(home, "server"),
+        network,
+        discovery,
+    )
+    .await
+    .expect("the service starts");
     // The listener binds in the background; wait until an offer can name it.
     let owner = connect(home, "server").await;
     for _ in 0..100 {
@@ -902,5 +918,60 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
             .contains("clean")
     );
     drop((owner, reader));
+    stop(running).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_sees_skills_without_any_host_path() {
+    let home = temp_home();
+    let fake = TempDir::new().expect("a temporary folder");
+    let user_home = fake.path().join("user-home");
+    let skill = user_home.join(".codex/skills/alpha");
+    std::fs::create_dir_all(&skill).expect("the skill folder");
+    std::fs::write(skill.join("SKILL.md"), "---\nname: alpha\n---\n").expect("the skill file");
+    let discovery = DiscoveryOptions {
+        home: Some(user_home),
+        env: Default::default(),
+    };
+    let running = start_listening_with_discovery(home.path(), discovery).await;
+    let (_client_home, hosts) = client_side();
+    let standard_offer = offer(home.path(), false, None).await;
+    let _ = pair(&hosts, &standard_offer, "reader").await.unwrap();
+    let store = Store::open(profile(home.path(), "server").store_path()).unwrap();
+    let standard_set = Scopes::STANDARD.names();
+    let device = store
+        .list_devices()
+        .unwrap()
+        .into_iter()
+        .find(|device| device.scopes == standard_set)
+        .expect("the paired device holds the standard scopes");
+    assert!(
+        store
+            .set_device_scopes(&device.id, &["read".to_owned()])
+            .unwrap()
+    );
+    drop(store);
+    let reader = Client::connect_host(&hosts, "reader", &peer())
+        .await
+        .expect("the narrowed device reconnects");
+
+    let found: SkillDiscovery = reader
+        .call(skills::DISCOVER, &SkillsDiscoverParams::default())
+        .await
+        .expect("a read-only device may discover skills");
+
+    let names: Vec<&str> = found
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect();
+    assert_eq!(names, ["alpha"]);
+    assert!(found.skills.iter().all(|skill| {
+        skill.root_path.is_none()
+            && skill.root_paths.is_empty()
+            && skill.directory_path.is_none()
+            && skill.skill_file_path.is_none()
+    }));
+    assert!(found.sources.iter().all(|source| source.path.is_none()));
     stop(running).await;
 }
