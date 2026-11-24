@@ -13,6 +13,7 @@ mod handshake;
 mod host_storage;
 #[cfg(feature = "local")]
 mod hosts;
+mod identity_mismatch;
 #[cfg(feature = "local")]
 mod options;
 mod pump;
@@ -38,6 +39,7 @@ pub use handshake::Welcome;
 pub use host_storage::{HostRecord, HostRemoved, HostStorage, validate_host_name};
 #[cfg(feature = "local")]
 pub use hosts::Hosts;
+pub use identity_mismatch::{IDENTITY_MISMATCH_CODE, IdentityMismatch, TrustedFrom};
 #[cfg(feature = "local")]
 pub use options::{Autostart, ConnectOptions};
 pub use reconnect::{

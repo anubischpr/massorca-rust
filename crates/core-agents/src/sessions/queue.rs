@@ -751,6 +751,7 @@ mod tests {
                     outcome: None,
                     source: "hook".to_owned(),
                     at: now_ms(),
+                    seen_at: None,
                 }),
                 None,
                 None,

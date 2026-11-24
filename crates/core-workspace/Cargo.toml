@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 dunce.workspace = true
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 massorca-core-git.workspace = true
 massorca-core-store.workspace = true
 massorca-protocol.workspace = true

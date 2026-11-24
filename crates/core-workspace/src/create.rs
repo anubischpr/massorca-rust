@@ -1,6 +1,7 @@
 //! Creating workspaces (ADR 0008): a new worktree and branch in a git project, or a
 //! registration of an existing directory in a folder project.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,11 +13,20 @@ use massorca_core_store::{
 use massorca_protocol::codes;
 use massorca_protocol::methods::workspaces::{BaseRefresh, Workspace, WorkspaceCreateParams};
 
+use crate::branch_prefix;
 use crate::error::DomainError;
+use crate::generated_names;
 use crate::names;
 use crate::paths;
 use crate::views;
 use crate::workspaces::Workspaces;
+
+/// Where a new workspace's name comes from: the caller's, or a generated creature name.
+#[derive(Clone, Copy)]
+enum Naming {
+    Typed,
+    Generated,
+}
 
 // Held under the mutation lock, so far below decision 0013's five-minute remote cap.
 const BASE_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,14 +46,37 @@ impl Workspaces {
         &self,
         params: WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
-        self.create_workspace_once(params)
+        self.create(params, Naming::Typed)
+            .map(|created| created.workspace)
+    }
+
+    /// `create_workspace` under a generated name (ADR 0008); `params.name` is ignored.
+    pub fn create_workspace_with_generated_name(
+        &self,
+        params: WorkspaceCreateParams,
+    ) -> Result<Workspace, DomainError> {
+        self.create(params, Naming::Generated)
             .map(|created| created.workspace)
     }
 
     /// Like `create_workspace`, and says whether this call made the workspace or a repeated `request_id` found it.
+    /// A blank name asks for a generated one.
     pub fn create_workspace_once(
         &self,
         params: WorkspaceCreateParams,
+    ) -> Result<Created, DomainError> {
+        let naming = if params.name.trim().is_empty() {
+            Naming::Generated
+        } else {
+            Naming::Typed
+        };
+        self.create(params, naming)
+    }
+
+    fn create(
+        &self,
+        params: WorkspaceCreateParams,
+        naming: Naming,
     ) -> Result<Created, DomainError> {
         let _guard = self.lock_mutations();
         if let Some(request_id) = params.request_id.as_deref() {
@@ -58,7 +91,11 @@ impl Workspaces {
             }
         }
         let project = self.resolve_project(&params.project)?;
-        names::workspace_name(&params.name)?;
+        let name = match naming {
+            Naming::Typed => names::clean_workspace_name(&params.name)?,
+            Naming::Generated => self.generated_name(&project)?,
+        };
+        let params = WorkspaceCreateParams { name, ..params };
         if self
             .store
             .find_workspace_by_name(&project.id, &params.name)?
@@ -82,6 +119,48 @@ impl Workspaces {
         })
     }
 
+    /// A creature name that no workspace, branch or directory of `project` already takes.
+    fn generated_name(&self, project: &ProjectRow) -> Result<String, DomainError> {
+        let names: HashSet<String> = self
+            .store
+            .list_workspaces(Some(&project.id))?
+            .into_iter()
+            .map(|row| row.name.to_lowercase())
+            .collect();
+        let free = match project.kind {
+            StoreKind::Folder => generated_names::generated_name(
+                |name| names.contains(name),
+                generated_names::random_choice(),
+            ),
+            StoreKind::Git => {
+                let repo = Path::new(&project.path);
+                let segment = self.branch_prefix.segment(&self.git, repo)?;
+                let branches: HashSet<String> = self
+                    .git
+                    .branches(repo)?
+                    .into_iter()
+                    .map(|branch| branch.name.to_lowercase())
+                    .collect();
+                let root = paths::absolute(&project.workspaces_root)?;
+                generated_names::generated_name(
+                    |name| {
+                        let branch = branch_prefix::branch_name(segment.as_deref(), name);
+                        names.contains(name)
+                            || branches.contains(&branch.to_lowercase())
+                            || is_occupied(&root.join(name))
+                    },
+                    generated_names::random_choice(),
+                )
+            }
+        };
+        free.ok_or_else(|| {
+            DomainError::new(
+                codes::WORKSPACE_NAME_TAKEN,
+                "every generated name is taken; give one",
+            )
+        })
+    }
+
     /// A new branch checked out in a new worktree, or an existing local branch when asked.
     fn create_worktree(
         &self,
@@ -89,7 +168,16 @@ impl Workspaces {
         params: &WorkspaceCreateParams,
     ) -> Result<Workspace, DomainError> {
         let repo = Path::new(&project.path);
-        let branch = params.branch.as_deref().unwrap_or(params.name.as_str());
+        // Why: a named or existing branch is used as given; only a new one takes the prefix.
+        let branch = match params.branch.as_deref() {
+            Some(explicit) => explicit.to_owned(),
+            None if params.existing_branch => params.name.clone(),
+            None => {
+                let segment = self.branch_prefix.segment(&self.git, repo)?;
+                branch_prefix::branch_name(segment.as_deref(), &params.name)
+            }
+        };
+        let branch = branch.as_str();
         if !self.git.check_branch_name(repo, branch)? {
             return Err(DomainError::new(
                 codes::WORKSPACE_NAME_INVALID,

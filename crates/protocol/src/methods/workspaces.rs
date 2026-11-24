@@ -33,10 +33,11 @@ pub enum WorkspaceState {
     Unknown,
 }
 
-/// Params of `workspace.create`.
+/// Params of `workspace.create`. A blank or omitted `name` asks the service for a generated one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceCreateParams {
     pub project: String,
+    #[serde(default)]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

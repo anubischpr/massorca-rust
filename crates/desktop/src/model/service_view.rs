@@ -485,6 +485,7 @@ mod tests {
             outcome,
             source: ActivitySource::Hook,
             at_ms: 1,
+            seen_at_ms: None,
         };
         let mut working = agent("s1", "w1", 10);
         working.activity = Some(report(ActivityState::Working, None));

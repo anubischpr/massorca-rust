@@ -107,6 +107,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "agent.queue.resume",
             "agent.queue.send-now",
             "agent.resume",
+            "agent.seen",
             "agent.start",
             "agent.status",
             "agent.stop",

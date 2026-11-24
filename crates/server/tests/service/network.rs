@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::common::TempHome;
-use massorca_client::{Client, ClientError, HostRecord, Hosts};
+use massorca_client::{Client, ClientError, HostRecord, Hosts, TrustedFrom};
 use massorca_core_store::Store;
 use massorca_net::TlsIdentity;
 use massorca_protocol::methods::agents;
@@ -199,10 +199,56 @@ async fn a_wrong_server_key_is_never_trusted() {
     let mut forged = offer(home.path(), false, None).await;
     forged.pin = TlsIdentity::generate("impostor").unwrap().pin().to_string();
     let refused = pair(&hosts, &forged, "vps").await.expect_err("refused");
+    match &refused {
+        ClientError::ServerIdentityMismatch(mismatch) => {
+            assert_eq!(mismatch.trusted_from, TrustedFrom::Offer);
+            assert_eq!(mismatch.expected, forged.pin);
+            assert_ne!(mismatch.actual.as_deref(), Some(forged.pin.as_str()));
+            assert!(mismatch.actual.is_some(), "{mismatch:?}");
+        }
+        other => panic!("expected an identity mismatch, got {other:?}"),
+    }
+    assert!(!hosts.exists("vps"), "nothing was paired");
+    stop(running).await;
+}
+
+/// A paired host whose server key changed is refused with both keys and the way to pair again (REM-04). The client's
+/// pinned key is replaced, which is what the client sees when the server's key is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_changed_server_key_names_both_keys_and_how_to_pair_again() {
+    let home = temp_home();
+    let running = start_listening(home.path()).await;
+    let (client_home, hosts) = client_side();
+    let made = offer(home.path(), true, None).await;
+    let (_, record) = pair(&hosts, &made, "vps").await.expect("paired");
+    let stale = TlsIdentity::generate("old-server")
+        .unwrap()
+        .pin()
+        .to_string();
+    let file = profile(client_home.path(), "client")
+        .dir()
+        .join("hosts")
+        .join("vps")
+        .join("host.json");
+    let text = std::fs::read_to_string(&file).expect("the host file");
+    std::fs::write(&file, text.replace(&record.pin, &stale)).expect("rewritten");
+
+    let refused = Client::connect_host(&hosts, "vps", &peer())
+        .await
+        .expect_err("refused");
+    let ClientError::ServerIdentityMismatch(mismatch) = &refused else {
+        panic!("expected an identity mismatch, got {refused:?}");
+    };
+    assert_eq!(mismatch.host, "vps");
+    assert_eq!(mismatch.trusted_from, TrustedFrom::Pairing);
+    assert_eq!(mismatch.expected, stale);
+    assert_eq!(mismatch.actual.as_deref(), Some(record.pin.as_str()));
+    let message = refused.to_string();
     assert!(
-        matches!(refused, ClientError::ServerIdentityMismatch),
-        "{refused:?}"
+        message.contains("massorca host remove vps --keep-device"),
+        "{message}"
     );
+    assert_eq!(refused.exit_code(), 4);
     stop(running).await;
 }
 

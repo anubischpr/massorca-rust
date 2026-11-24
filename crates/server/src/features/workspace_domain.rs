@@ -4,46 +4,59 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use massorca_core_workspace::{DomainError, Workspaces};
+use massorca_core_workspace::{BranchPrefix, DomainError, Workspaces};
 use massorca_protocol::methods::events::ChangeEvent;
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::Value;
 
 use crate::context::RequestCtx;
-use crate::features::config::WORKSPACES_DEFAULT_ROOT;
+use crate::features::config::{
+    WORKSPACES_BRANCH_PREFIX, WORKSPACES_BRANCH_PREFIX_CUSTOM, WORKSPACES_DEFAULT_ROOT,
+};
 use crate::owner::Owner;
 use crate::store_blocking;
 
-/// The domain handle for one mutating call: the default root the setting holds now.
+/// The domain handle for one mutating call: the root and branch prefix the settings hold now.
 pub(crate) async fn for_mutation(ctx: &RequestCtx) -> Result<Workspaces, ErrorBody> {
-    let stored = store_blocking::run(&ctx.state, |store| {
-        store.get_setting("core", WORKSPACES_DEFAULT_ROOT)
-    })
-    .await?;
-    let value = match stored {
-        Some(json) => serde_json::from_str::<Value>(&json).map_err(|error| {
-            ErrorBody::new(
-                codes::INTERNAL,
-                format!("a stored setting is not valid JSON: {error}"),
-            )
-        })?,
-        None => ctx
-            .state
-            .registries
-            .settings
-            .find(&Owner::Core, WORKSPACES_DEFAULT_ROOT)
-            .map(|decl| decl.default)
-            .ok_or_else(|| {
-                ErrorBody::new(codes::INTERNAL, "workspaces.default_root is not declared")
-            })?,
-    };
+    let value = core_setting(ctx, WORKSPACES_DEFAULT_ROOT).await?;
     let root = value.as_str().map(PathBuf::from).ok_or_else(|| {
         ErrorBody::new(
             codes::CONFIG_INVALID_VALUE,
             "workspaces.default_root must be a path",
         )
     })?;
-    Ok(ctx.state.workspaces.with_default_root(root))
+    let source = core_setting(ctx, WORKSPACES_BRANCH_PREFIX).await?;
+    let custom = core_setting(ctx, WORKSPACES_BRANCH_PREFIX_CUSTOM).await?;
+    let prefix = BranchPrefix::from_setting(
+        source.as_str().unwrap_or_default(),
+        custom.as_str().unwrap_or_default(),
+    )?;
+    Ok(ctx
+        .state
+        .workspaces
+        .with_default_root(root)
+        .with_branch_prefix(prefix))
+}
+
+/// The value the core setting `key` holds now, or its declared default.
+async fn core_setting(ctx: &RequestCtx, key: &'static str) -> Result<Value, ErrorBody> {
+    let stored =
+        store_blocking::run(&ctx.state, move |store| store.get_setting("core", key)).await?;
+    match stored {
+        Some(json) => serde_json::from_str::<Value>(&json).map_err(|error| {
+            ErrorBody::new(
+                codes::INTERNAL,
+                format!("a stored setting is not valid JSON: {error}"),
+            )
+        }),
+        None => ctx
+            .state
+            .registries
+            .settings
+            .find(&Owner::Core, key)
+            .map(|decl| decl.default)
+            .ok_or_else(|| ErrorBody::new(codes::INTERNAL, format!("{key} is not declared"))),
+    }
 }
 
 /// The shared domain handle, for reads that take no default root.

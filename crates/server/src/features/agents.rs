@@ -11,12 +11,12 @@ use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
     AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchEvent, AgentWatchParams, BringBackResult,
-    CredentialsImportParams, CredentialsImported, CredentialsKindRef, CredentialsRemoved,
-    CredentialsShown, PromptReceipt, QueuedPrompt,
+    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentMarkSeenParams,
+    AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent,
+    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
+    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -42,6 +42,9 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         registries
             .capabilities
             .register(capabilities::AGENT_MODES, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::AGENT_SEEN, Owner::Core)?,
         // The prompt queue (decision 0084) has its own capability, so a client knows the service keeps queued prompts.
         registries
             .capabilities
@@ -101,6 +104,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::AGENT_MODES,
             Permission::Workspace,
             set_mode,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::MARK_SEEN,
+            capabilities::AGENT_SEEN,
+            Permission::Workspace,
+            mark_seen,
         )?,
         methods.register(
             Owner::Core,
@@ -284,6 +294,18 @@ async fn show(ctx: RequestCtx, params: AgentSessionRef) -> Result<AgentSession, 
 async fn stop(ctx: RequestCtx, params: AgentStopParams) -> Result<AgentSession, ErrorBody> {
     let session = on_agents(&ctx, move |agents| {
         agents.stop(&params.session, params.force)
+    })
+    .await?;
+    Ok(for_caller(&ctx, session))
+}
+
+/// Marks a session's latest `waiting` or `done` as seen (inventory STAT-19); watchers get the change.
+async fn mark_seen(
+    ctx: RequestCtx,
+    params: AgentMarkSeenParams,
+) -> Result<AgentSession, ErrorBody> {
+    let session = on_agents(&ctx, move |agents| {
+        agents.mark_seen(&params.session, params.at_ms)
     })
     .await?;
     Ok(for_caller(&ctx, session))

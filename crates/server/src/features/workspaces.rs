@@ -73,6 +73,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Workspace, ErrorBody> {
     let no_setup = params.no_setup;
     let domain = for_mutation(&ctx).await?;
+    // Why: a blank name asks for a generated one; the domain refuses a blank typed name.
     let created = blocking(move || domain.create_workspace_once(params)).await?;
     let mut workspace = created.workspace;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
