@@ -637,3 +637,168 @@ fn a_custom_branch_prefix_set_through_config_prefixes_the_branch_of_a_named_work
     assert_eq!(created["name"], "feature");
     assert_eq!(created["branch"], "team/feature");
 }
+
+#[test]
+fn a_folder_workspace_is_renamed_and_commented_and_an_empty_comment_clears_it() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    let created = sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+    assert_eq!(created["kind"], "folder");
+
+    let updated = sandbox.json_ok(
+        "default",
+        &[
+            "workspace",
+            "update",
+            "main",
+            "--name",
+            "draft",
+            "--comment",
+            "waiting on review",
+        ],
+    );
+    assert_eq!(updated["name"], "draft");
+    assert_eq!(updated["comment"], "waiting on review");
+    assert_eq!(
+        updated["path"], created["path"],
+        "the folder keeps its path"
+    );
+    assert!(notes.is_dir(), "renaming never touches the folder");
+
+    let shown = sandbox.json_ok("default", &["workspace", "show", "draft"]);
+    assert_eq!(shown["comment"], "waiting on review");
+    sandbox
+        .run("default", &["workspace", "show", "draft"])
+        .success()
+        .stdout(contains("comment: waiting on review"));
+
+    sandbox
+        .run(
+            "default",
+            &["workspace", "update", "draft", "--comment", ""],
+        )
+        .success()
+        .stdout(contains("updated workspace draft"));
+    let cleared = sandbox.json_ok("default", &["workspace", "show", "draft"]);
+    assert!(
+        cleared.get("comment").is_none(),
+        "an empty comment clears it"
+    );
+}
+
+#[test]
+fn an_update_with_nothing_to_change_or_a_taken_or_invalid_name_changes_nothing() {
+    let sandbox = Sandbox::new();
+    add_repo_project(&sandbox);
+    sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+    sandbox.json_ok("default", &["workspace", "create", "repo", "other"]);
+
+    let nothing = sandbox
+        .run("default", &with_json(&["workspace", "update", "feature"]))
+        .code(1);
+    assert_eq!(
+        single_document(&nothing)["error"]["code"],
+        "request.invalid_params"
+    );
+
+    let taken = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "update", "other", "--name", "feature"]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&taken)["error"]["code"],
+        "workspace.name_taken"
+    );
+
+    let invalid = sandbox
+        .run(
+            "default",
+            &with_json(&["workspace", "update", "other", "--name", "..."]),
+        )
+        .code(1);
+    assert_eq!(
+        single_document(&invalid)["error"]["code"],
+        "workspace.name_invalid"
+    );
+
+    sandbox
+        .run(
+            "default",
+            &["workspace", "update", "nowhere", "--name", "x"],
+        )
+        .code(1)
+        .stderr(contains("workspace.not_found"));
+
+    let shown = sandbox.json_ok("default", &["workspace", "show", "other"]);
+    assert_eq!(shown["name"], "other", "a refused update changes nothing");
+    assert!(shown.get("comment").is_none());
+}
+
+#[test]
+fn check_reports_a_worktree_git_no_longer_lists_and_exits_zero() {
+    let sandbox = Sandbox::new();
+    let repo = add_repo_project(&sandbox);
+    let feature = sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+    let feature_path = feature["path"].as_str().expect("path").to_owned();
+
+    let healthy = sandbox.json_ok("default", &["workspace", "check", "feature"]);
+    assert_eq!(healthy["ok"], true);
+    assert_eq!(healthy["exists"], true);
+    assert_eq!(healthy["readable"], true);
+    assert_eq!(healthy["registered"], true);
+    assert!(healthy.get("reason").is_none());
+
+    git(
+        &repo,
+        &["worktree", "remove", "--force", feature_path.as_str()],
+    );
+    std::fs::create_dir_all(&feature_path).expect("recreate the directory");
+    let unlisted = sandbox.json_ok("default", &["workspace", "check", "feature"]);
+    assert_eq!(unlisted["exists"], true);
+    assert_eq!(unlisted["registered"], false);
+    assert_eq!(unlisted["ok"], false);
+    assert_eq!(unlisted["reason"], "git no longer lists this worktree");
+    sandbox
+        .run("default", &["workspace", "check", "feature"])
+        .success()
+        .stdout(contains("feature: git no longer lists this worktree"));
+}
+
+#[test]
+fn check_reports_a_folder_whose_directory_is_gone_and_exits_zero() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let notes_text = notes.to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &["project", "add", notes_text.as_str(), "--folder"],
+    );
+    sandbox.json_ok("default", &["workspace", "create", "notes", "main"]);
+
+    let present = sandbox.json_ok("default", &["workspace", "check", "main"]);
+    assert_eq!(present["kind"], "folder");
+    assert_eq!(present["ok"], true);
+    assert!(
+        present.get("registered").is_none(),
+        "a folder has no git registration"
+    );
+
+    std::fs::remove_dir_all(&notes).expect("remove the folder");
+    let gone = sandbox.json_ok("default", &["workspace", "check", "main"]);
+    assert_eq!(gone["exists"], false);
+    assert_eq!(gone["ok"], false);
+    assert_eq!(gone["reason"], "the folder is missing");
+    sandbox
+        .run("default", &["workspace", "check", "main"])
+        .success()
+        .stdout(contains("main: the folder is missing"));
+}

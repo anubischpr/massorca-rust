@@ -15,7 +15,7 @@ use crate::transport::FrameIo;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The capabilities the typed helpers use. The service records them and offers its own list in `welcome` either way.
-const OFFERED: [&str; 5] = [
+const OFFERED: &[&str] = &[
     capabilities::SERVICE,
     capabilities::EVENTS,
     capabilities::CONFIG,
