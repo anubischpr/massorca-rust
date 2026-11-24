@@ -1,0 +1,136 @@
+<!doctype html>
+<!--
+  The terminal page of the Android app (decision 0080, screen M-TM-01). mobile/scripts/generate-terminal-asset.ts
+  inlines xterm.js, its CSS and the fit addon where the __XTERM_* markers stand, and writes the result to
+  mobile/android/app/src/main/assets/terminal/index.html. Edit this template, then run the generator.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Terminal</title>
+    <style>
+__XTERM_CSS__
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+      #terminal {
+        position: absolute;
+        inset: 0;
+        padding: 4px;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <script>
+__XTERM_JS__
+    </script>
+    <script>
+__FIT_ADDON_JS__
+    </script>
+    <script>
+      // Messages to the app: ready (with the size fitted), input (what the user typed, as text), resize, error.
+      // Calls from the app: write, restore, resize, key, setReadOnly, setTheme (see src/terminal/terminal-bridge.ts).
+      (function () {
+        'use strict';
+        function post(message) {
+          window.ReactNativeWebView.postMessage(JSON.stringify(message));
+        }
+        try {
+          if (typeof Terminal !== 'function' || !window.FitAddon) {
+            throw new Error('xterm.js did not load');
+          }
+          var FitAddon = window.FitAddon.FitAddon || window.FitAddon;
+          var term = new Terminal({
+            allowProposedApi: true,
+            convertEol: false,
+            cursorBlink: true,
+            fontFamily: 'monospace',
+            fontSize: 12,
+            scrollback: 5000,
+          });
+          var fit = new FitAddon();
+          term.loadAddon(fit);
+          term.open(document.getElementById('terminal'));
+
+          function bytesOf(base64) {
+            var binary = atob(base64);
+            var bytes = new Uint8Array(binary.length);
+            for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes;
+          }
+
+          // Arrows follow the program's cursor mode: SS3 when it asked for application keys, CSI otherwise.
+          function cursor(letter) {
+            return (term.modes.applicationCursorKeysMode ? '\u001bO' : '\u001b[') + letter;
+          }
+
+          function keySequence(name) {
+            switch (name) {
+              case 'esc':
+                return '\u001b';
+              case 'tab':
+                return '\t';
+              case 'up':
+                return cursor('A');
+              case 'down':
+                return cursor('B');
+              case 'right':
+                return cursor('C');
+              case 'left':
+                return cursor('D');
+              default:
+                return '';
+            }
+          }
+
+          term.onData(function (text) {
+            post({ kind: 'input', text: text });
+          });
+          term.onResize(function (size) {
+            post({ kind: 'resize', cols: size.cols, rows: size.rows });
+          });
+          window.addEventListener('resize', function () {
+            fit.fit();
+          });
+
+          window.massorcaTerminal = {
+            write: function (base64) {
+              term.write(bytesOf(base64));
+            },
+            restore: function (cols, rows, base64) {
+              term.resize(cols, rows);
+              term.reset();
+              term.write(bytesOf(base64));
+            },
+            resize: function (cols, rows) {
+              if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+            },
+            key: function (name) {
+              var sequence = keySequence(name);
+              if (sequence !== '') term.input(sequence, true);
+            },
+            setReadOnly: function (readOnly) {
+              term.options.disableStdin = readOnly === true;
+            },
+            setTheme: function (theme) {
+              term.options.theme = theme;
+              document.body.style.background = theme.background;
+            },
+          };
+
+          fit.fit();
+          post({ kind: 'ready', cols: term.cols, rows: term.rows });
+        } catch (error) {
+          post({ kind: 'error', message: String(error && error.message ? error.message : error) });
+        }
+      })();
+    </script>
+  </body>
+</html>

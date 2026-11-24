@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 use crate::error::FfiError;
 use crate::offer;
 use crate::store::{HostStore, SealedHosts};
-use crate::watch::{Decode, Feed, LinkState, Reconnect, Watched};
+use crate::watch::{Decode, Feed, LinkState, Reach, Reconnect, Watched};
 
 /// A paired host as the app lists it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -252,18 +252,17 @@ impl Host {
 }
 
 impl Host {
+    /// How to reach this host again, for a stream that reconnects.
+    pub(crate) fn reach(&self) -> Reach {
+        Reach::new(self.hosts.clone(), self.name.clone(), self.peer.clone())
+    }
+
     /// Follows `watched` on this host. The stream reconnects by itself and reports each loss (decision 0040).
     pub(crate) fn follow<E: From<LinkState> + Send + 'static>(
         &self,
         watched: Watched,
         decode: Decode<E>,
     ) -> Feed<E> {
-        let reconnect = Reconnect::new(
-            self.hosts.clone(),
-            self.name.clone(),
-            self.peer.clone(),
-            watched,
-        );
-        Feed::start(&self.runtime, reconnect, decode)
+        Feed::start(&self.runtime, Reconnect::new(self.reach(), watched), decode)
     }
 }
