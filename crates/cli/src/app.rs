@@ -14,6 +14,7 @@ use crate::agent_context;
 use crate::agent_hook;
 use crate::args::{
     Cli, Commands, HostCommand, PairCommand, ProfileCommand, ServerCommand, ServiceCommand,
+    ServiceLogCommand,
 };
 use crate::config;
 use crate::device;
@@ -26,7 +27,7 @@ use crate::pair;
 use crate::profile_secure;
 use crate::project;
 use crate::server_status;
-use crate::service::{control, foreground, unit};
+use crate::service::{control, foreground, log_path, unit};
 use crate::target::{Target, reject_host};
 use crate::terminal;
 use crate::workspace;
@@ -227,6 +228,13 @@ fn service_command(
         ServiceCommand::Unit(args) => {
             globals.local_only("service unit")?;
             unit::print(&args, globals.home.as_deref(), output)
+        }
+        ServiceCommand::Log {
+            command: ServiceLogCommand::Path,
+        } => {
+            globals.local_only("service log path")?;
+            log_path::print(&globals.profile()?, output);
+            Ok(())
         }
     }
 }

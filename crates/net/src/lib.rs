@@ -5,8 +5,10 @@ mod error;
 mod frames;
 mod identity;
 mod log_guard;
+mod log_redaction;
 mod pin;
 mod tls;
+mod trace_log;
 mod transport;
 
 pub use error::NetError;
@@ -16,8 +18,12 @@ pub use frames::{
 };
 pub use identity::TlsIdentity;
 pub use log_guard::{FRAME_DUMPING_TARGETS, frame_dump_guard};
+pub use log_redaction::{REDACTED, RedactedFormat, redact_secret_values};
 pub use pin::Pin;
 pub use tls::{client_tls_config, server_tls_config};
+pub use trace_log::{
+    DESKTOP_LOG_PREFIX, KEPT_LOG_FILES, SERVICE_LOG_PREFIX, daily_log_file, newest_log_file,
+};
 pub use transport::{Accepted, ClientWs, ServerWs, accept, connect};
 
 /// The only path a server upgrades to WebSocket.

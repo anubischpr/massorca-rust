@@ -158,6 +158,17 @@ pub enum ServiceCommand {
     Restart,
     /// Prints the systemd user unit that runs the service on a Linux server.
     Unit(UnitArgs),
+    /// The local trace logs of the profile.
+    Log {
+        #[command(subcommand)]
+        command: ServiceLogCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceLogCommand {
+    /// Prints the logs folder and the newest service and desktop log files. Never starts the service.
+    Path,
 }
 
 #[derive(Debug, Subcommand)]
