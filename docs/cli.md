@@ -22,7 +22,7 @@ letters, digits, `-` or `_`.
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
-`service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands except
+`service stop`, `service restart`, `service unit`, `open`, `pair accept` and the `host` commands except
 `host memory` and `host ports` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
 `service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
 machine.
@@ -37,6 +37,7 @@ machine.
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities). Starts the service when it is not running. |
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
+| `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
 | `config get <KEY> [--owner OWNER]` | Shows one setting and whether it still has its default value. |
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
@@ -341,7 +342,7 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The service answered with an error, or local data could not be used. The code is printed. |
+| 1 | The service answered with an error, or local data could not be used. The code is printed. `open` exits 1 with `desktop.not_found` when no desktop app is found. |
 | 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
 | 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable` (`host ports`: `ports.unverifiable`), with the original code in `data.cause`; identity mismatches and refusals keep their code. |
@@ -352,6 +353,10 @@ Each profile lives in `<home>/profiles/<name>/`. The service writes daily log fi
 `logs/` as `service.<date>.log`, keeping the last seven days.
 
 ## Desktop app
+
+`massorca open` starts this app on the profile of the command, passing `--profile` and `--home`, and
+returns at once. The app has no single-instance hand-off yet, so an `open` while it runs starts a second
+window. Its stderr is not shown, so a start that fails after launch is silent.
 
 `massorca-desktop` opens the MassOrca window on a profile's service, or on sample data with
 `--sample`. It takes `--profile`, `--home` and `--no-autostart` as the CLI does, and two flags of its

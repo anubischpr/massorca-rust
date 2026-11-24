@@ -7,15 +7,17 @@ use clap::CommandFactory;
 use massorca_cli::args::Cli;
 use massorca_server::core_commands;
 
-/// Commands that run in the CLI itself: they read or write the client's own files, run SSH or Tailscale, or print
-/// text. They make no service request, and the server's descriptor test needs every descriptor to name a core method.
-const CLIENT_ONLY: [&str; 9] = [
+/// Commands that run in the CLI itself: they read or write the client's own files, run SSH or Tailscale, start the
+/// desktop app, or print text. They make no service request, and the server's descriptor test needs every descriptor to
+/// name a core method.
+const CLIENT_ONLY: [&str; 10] = [
     "host.add-ssh",
     "host.discover",
     "host.list",
     "host.remove",
     "host.show",
     "host.status",
+    "open",
     "pair.accept",
     "profile.secure",
     "service.unit",

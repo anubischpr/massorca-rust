@@ -19,6 +19,7 @@ pub mod extension_text;
 pub mod git;
 pub mod host;
 pub mod logging;
+pub mod open;
 pub mod output;
 pub mod pair;
 pub mod profile_secure;
