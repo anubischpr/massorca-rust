@@ -80,6 +80,7 @@ fn root_lines(sources: &[SkillSource]) -> Vec<String> {
             let state = match (source.exists, source.skipped_reason) {
                 (_, Some(SkipReason::Missing)) | (false, None) => "missing",
                 (_, Some(SkipReason::Unreadable)) => "unreadable",
+                (_, Some(SkipReason::Truncated)) => "truncated",
                 (_, Some(SkipReason::Unknown)) => "skipped",
                 (true, None) => "read",
             };

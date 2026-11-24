@@ -6,8 +6,9 @@ use std::path::Path;
 
 /// Only this many leading bytes of a skill file are read.
 const MAX_READ_BYTES: u64 = 256 * 1024;
-/// A first paragraph stops growing once it passes this many UTF-16 units.
-const PARAGRAPH_LIMIT: usize = 240;
+/// A description keeps at most this many UTF-16 units: a frontmatter description is cut here, and the fallback
+/// paragraph stops growing once it passes it.
+const DESCRIPTION_UNITS: usize = 240;
 
 /// What a skill file says about itself, as discovery shows it.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -46,7 +47,7 @@ fn summarize(markdown: &str) -> SkillSummary {
             .map(str::to_owned)
             .or_else(|| first_heading(body)),
         description: field("description")
-            .map(str::to_owned)
+            .map(|text| cut_units(text, DESCRIPTION_UNITS).to_owned())
             .or_else(|| first_paragraph(body)),
         disable_slash_command: field("disable-slash-command") == Some("true"),
     }
@@ -105,6 +106,18 @@ fn is_key(key: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
+/// The longest prefix of `text` that holds at most `limit` UTF-16 units, cut between characters and trimmed at the end.
+fn cut_units(text: &str, limit: usize) -> &str {
+    let mut units = 0;
+    for (index, character) in text.char_indices() {
+        units += character.len_utf16();
+        if units > limit {
+            return text[..index].trim_end();
+        }
+    }
+    text
+}
+
 /// The value without surrounding whitespace and one pair of matching quotes.
 fn unquote(value: &str) -> &str {
     let value = value.trim();
@@ -136,7 +149,7 @@ fn first_paragraph(body: &str) -> Option<String> {
             continue;
         }
         paragraph.push(trimmed);
-        if paragraph.join(" ").encode_utf16().count() > PARAGRAPH_LIMIT {
+        if paragraph.join(" ").encode_utf16().count() > DESCRIPTION_UNITS {
             break;
         }
     }

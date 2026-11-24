@@ -44,12 +44,18 @@ pub struct DiscoveredSkill {
     pub disable_slash_command: bool,
 }
 
-/// Why a root was not read: it does not exist, or it exists but cannot be listed as a folder.
+/// Why a root was not read in full: it does not exist, it cannot be listed as a folder, or the scan's entry budget ran
+/// out inside it. A truncated root's skills are the ones found before the budget ran out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     Missing,
     Unreadable,
+    Truncated,
 }
+
+/// The directory entries one scan may examine across all its roots. Once they run out, the root being read is marked
+/// truncated, and so is every later root with entries, since none of those entries can be examined.
+pub const MAX_SCAN_ENTRIES: usize = 10_000;
 
 /// One scanned root, as the report shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,11 +85,12 @@ pub fn discover(request: &DiscoveryRequest) -> SkillDiscovery {
     let mut sources = Vec::new();
     let mut skills: Vec<DiscoveredSkill> = Vec::new();
     let mut position: HashMap<PathBuf, usize> = HashMap::new();
+    let mut budget = MAX_SCAN_ENTRIES;
     for root in discovery_roots(request)
         .iter()
         .filter(|root| root_may_hold(root, wanted))
     {
-        let (exists, skipped_reason, found) = scan_root(root);
+        let (exists, skipped_reason, found) = scan_root(root, &mut budget);
         sources.push(SkillSource {
             id: root.id.clone(),
             label: root.label.clone(),
@@ -144,20 +151,24 @@ fn max_file_depth(kind: SkillSourceKind) -> usize {
 }
 
 /// Whether the root exists, why it was skipped, and each skill it holds keyed by the real path of its `SKILL.md`.
-fn scan_root(root: &SkillRoot) -> (bool, Option<SkipReason>, Vec<(PathBuf, DiscoveredSkill)>) {
+fn scan_root(
+    root: &SkillRoot,
+    budget: &mut usize,
+) -> (bool, Option<SkipReason>, Vec<(PathBuf, DiscoveredSkill)>) {
     match fs::metadata(&root.path) {
         Err(_) => (false, Some(SkipReason::Missing), Vec::new()),
         Ok(meta) if !meta.is_dir() => (true, Some(SkipReason::Unreadable), Vec::new()),
-        Ok(_) => match find_skill_files(&root.path, max_file_depth(root.kind)) {
+        Ok(_) => match find_skill_files(&root.path, max_file_depth(root.kind), budget) {
             Err(_) => (true, Some(SkipReason::Unreadable), Vec::new()),
-            Ok(files) => (
-                true,
-                None,
-                files
+            Ok(walk) => {
+                let reason = walk.truncated.then_some(SkipReason::Truncated);
+                let found = walk
+                    .files
                     .into_iter()
                     .filter_map(|file| scan_file(root, file))
-                    .collect(),
-            ),
+                    .collect();
+                (true, reason, found)
+            }
         },
     }
 }

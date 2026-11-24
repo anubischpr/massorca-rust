@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use massorca_core_extensions::skills::{
-    DiscoveredSkill, DiscoveryRequest, SkillDiscovery, SkillProvider, SkillRootEnv, SkillSource,
-    SkillSourceKind, SkipReason, discover,
+    DiscoveredSkill, DiscoveryRequest, MAX_SCAN_ENTRIES, SkillDiscovery, SkillProvider,
+    SkillRootEnv, SkillSource, SkillSourceKind, SkipReason, discover,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -307,4 +307,48 @@ fn a_claude_plugin_is_read_from_each_install_that_applies_when_enabled() {
             .iter()
             .any(|name| name.starts_with("elsewhere") || name.starts_with("off"))
     );
+}
+
+/// A folder link, or an error where creating links needs a privilege the host does not grant.
+#[cfg(unix)]
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[test]
+fn a_folder_linked_back_to_its_parent_is_walked_once() {
+    let temp = TempDir::new().expect("a temporary folder");
+    let root = temp.path().join(".agents/skills");
+    skill_at(&root, "alpha", "alpha");
+    // Without the privilege to create a link (some Windows accounts lack it) the test has nothing to check.
+    if link_dir(&root, &root.join("alpha/back")).is_err() {
+        return;
+    }
+
+    let report = scan(temp.path());
+
+    assert_eq!(names(&report), ["alpha"]);
+}
+
+#[test]
+fn a_tree_wider_than_the_scan_budget_is_cut_off_and_marked_truncated() {
+    let temp = TempDir::new().expect("a temporary folder");
+    let wide = temp.path().join(".agents/skills/wide");
+    fs::create_dir_all(&wide).expect("the wide folder");
+    for index in 0..=MAX_SCAN_ENTRIES {
+        fs::write(wide.join(format!("entry{index}.txt")), "x").expect("an entry");
+    }
+
+    let report = scan(temp.path());
+
+    assert_eq!(
+        source(&report, "Agent skills home").skipped_reason,
+        Some(SkipReason::Truncated)
+    );
+    assert!(report.skills.len() <= MAX_SCAN_ENTRIES);
 }

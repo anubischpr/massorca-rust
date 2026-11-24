@@ -91,12 +91,14 @@ pub enum SkillProvider {
     Unknown,
 }
 
-/// Why a root was not read: it is missing, or it exists but cannot be listed as a folder.
+/// Why a root was not read in full: it is missing, it cannot be listed as a folder, or the scan's entry budget ran out
+/// inside it. A truncated root's skills are the ones found before the budget ran out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkipReason {
     Missing,
     Unreadable,
+    Truncated,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,

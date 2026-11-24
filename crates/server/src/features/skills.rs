@@ -152,6 +152,7 @@ fn wire_reason(reason: core::SkipReason) -> wire::SkipReason {
     match reason {
         core::SkipReason::Missing => wire::SkipReason::Missing,
         core::SkipReason::Unreadable => wire::SkipReason::Unreadable,
+        core::SkipReason::Truncated => wire::SkipReason::Truncated,
     }
 }
 

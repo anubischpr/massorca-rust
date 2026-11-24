@@ -67,3 +67,14 @@ fn withheld_paths_are_left_out_and_the_discovery_reads_back() {
     let back: SkillDiscovery = serde_json::from_value(value).expect("decodes");
     assert_eq!(back, discovery);
 }
+
+#[test]
+fn a_root_cut_off_by_the_scan_budget_is_truncated_on_the_wire() {
+    let reason: SkipReason = serde_json::from_value(json!("truncated")).expect("decodes");
+
+    assert_eq!(reason, SkipReason::Truncated);
+    assert_eq!(
+        serde_json::to_value(SkipReason::Truncated).expect("encodes"),
+        json!("truncated")
+    );
+}

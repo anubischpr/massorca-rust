@@ -19,6 +19,13 @@ and the composer menu come later. This record covers the core scan, the protocol
 - **Depth and reads.** A `SKILL.md` counts when it sits at most five folders below a home or folder root, or ten below a
   plugin cache. Only the first 256 KiB of a file are read. A `.system` folder under a home root is bundled. A skill that
   several roots reach is listed once, with every root that reached it.
+- **Bounds.** One scan examines at most 10,000 directory entries across all its roots (`MAX_SCAN_ENTRIES`). When the
+  budget runs out, the root being read is reported `truncated`, and so is every later root with entries, because none of
+  their entries are examined; the skills listed
+  are the ones found before that. A frontmatter description keeps at most 240 UTF-16 units, the same limit the fallback
+  paragraph stops at. A scan is shared for ten seconds, and a caller that asks for a refresh while a scan of the same
+  request runs joins that scan instead of starting another. pv96 bounds its Claude command folder scan with the same kind
+  of per-scan entry budget, at 1,000 entries; the 10,000 here is MassOrca's own choice.
 - **Skipped roots.** Not built yet: the Antigravity plugin roots (they need its config reader), the Hermes fallback to
   `%LOCALAPPDATA%\hermes` on Windows (Hermes uses `~/.hermes/skills`), the 128-root cap on repository roots, marketplace
   source labels, WSL and remote scans, and the CLI's current directory (folders come from registered projects, because

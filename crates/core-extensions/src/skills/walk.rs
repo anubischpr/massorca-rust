@@ -7,14 +7,26 @@ use std::path::{Path, PathBuf};
 
 const SKILL_FILE_NAME: &str = "SKILL.md";
 
-/// The `SKILL.md` files below `root`, at most `max_file_depth` folders deep with the file counted. `Err` only when
-/// `root` itself cannot be listed; a folder below it that cannot be read is skipped.
-pub fn find_skill_files(root: &Path, max_file_depth: usize) -> io::Result<Vec<PathBuf>> {
+/// What one walk found: the `SKILL.md` files, and whether the entry budget ran out before the walk finished.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Walk {
+    pub files: Vec<PathBuf>,
+    pub truncated: bool,
+}
+
+/// The `SKILL.md` files below `root`, at most `max_file_depth` folders deep with the file counted. Each directory entry
+/// the walk examines takes one unit of `budget`; when none is left the walk stops and reports itself truncated. `Err`
+/// only when `root` itself cannot be listed; a folder below it that cannot be read is skipped.
+pub fn find_skill_files(
+    root: &Path,
+    max_file_depth: usize,
+    budget: &mut usize,
+) -> io::Result<Walk> {
     fs::read_dir(root)?;
-    let mut found = Vec::new();
+    let mut walk = Walk::default();
     let mut visited = HashSet::new();
-    visit(root, 0, max_file_depth - 1, &mut visited, &mut found);
-    Ok(found)
+    visit(root, 0, max_file_depth - 1, &mut visited, budget, &mut walk);
+    Ok(walk)
 }
 
 fn visit(
@@ -22,8 +34,12 @@ fn visit(
     depth: usize,
     max_folder_depth: usize,
     visited: &mut HashSet<PathBuf>,
-    found: &mut Vec<PathBuf>,
+    budget: &mut usize,
+    walk: &mut Walk,
 ) {
+    if walk.truncated {
+        return;
+    }
     // A symlinked folder can point back up the tree, so each real folder is walked once.
     let real = fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     if !visited.insert(real) {
@@ -33,10 +49,15 @@ fn visit(
         return;
     };
     for entry in entries.flatten() {
+        if *budget == 0 {
+            walk.truncated = true;
+            return;
+        }
+        *budget -= 1;
         let path = entry.path();
         if entry.file_name() == SKILL_FILE_NAME {
             if fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
-                found.push(path);
+                walk.files.push(path);
             }
             continue;
         }
@@ -46,7 +67,7 @@ fn visit(
             Err(_) => false,
         };
         if is_folder && depth < max_folder_depth {
-            visit(&path, depth + 1, max_folder_depth, visited, found);
+            visit(&path, depth + 1, max_folder_depth, visited, budget, walk);
         }
     }
 }
