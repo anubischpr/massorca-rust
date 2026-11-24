@@ -16,6 +16,7 @@ mod palette;
 mod project_sidebar;
 mod rail;
 mod resize_edges;
+mod secret_requests;
 mod service_banner;
 mod session_view;
 mod settings;
@@ -197,6 +198,8 @@ pub struct Shell {
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
     vault_remove: Option<settings_remove_dialog::RemoveDialog>,
+    /// The last refused answer to a secret request, with the request it concerns (decision 0071).
+    request_notice: Option<(String, String)>,
     /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
     marketplace: Box<dyn MarketplaceSource>,
     /// The catalogue's search field; its settled text becomes the Marketplace query.
@@ -462,6 +465,7 @@ impl Shell {
             team_confirm: None,
             vault_dialog: None,
             vault_remove: None,
+            request_notice: None,
             marketplace,
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
@@ -713,6 +717,11 @@ impl Render for Shell {
                 let state = self.store.read(cx).state();
                 crate::model::secret_vault::VaultPage::from_state(&state.secrets, &state.projects)
             },
+            requests: {
+                let state = self.store.read(cx).state();
+                crate::model::secret_requests::request_rows(&state.secrets, &state.projects)
+            },
+            request_notice: self.request_notice.clone(),
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),
