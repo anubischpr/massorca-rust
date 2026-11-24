@@ -3,15 +3,18 @@
 
 mod access;
 mod board;
+mod card_menu;
 mod live;
 mod page;
 mod sample;
 mod sidebar;
 mod state;
+mod team_edit;
 mod types;
 
 pub use access::{access_change, access_line, new_team_access_hint};
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
+pub use card_menu::{CardMenuRow, card_menu_rows};
 pub use live::{agent_of_kind, live_teams};
 pub use page::TeamPage;
 pub use sample::{SampleTeamsSource, TeamsSource, UnavailableTeams};
@@ -19,6 +22,7 @@ pub use sidebar::{
     ChildRow, ProjectRow, ProjectRowKind, ProjectsSection, TeamRow, TeamsSidebar, teams_sidebar,
 };
 pub use state::{LINK_NOT_SAVED, NAME_LIMIT, NewBot, NewTeam, TeamError, TeamsState, check_name};
+pub use team_edit::{CHARACTER_CHOICES, TeamChange, TeamForm};
 pub use types::{
     AddressId, BoardOwner, Bot, BotId, Cadence, Column, FileId, HostChoice, MemoryEntry, MemoryId,
     MemoryTab, Pick, Project, ProjectId, Routine, RoutineId, RunOutcome, Task, TaskId, Team,

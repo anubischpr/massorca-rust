@@ -197,6 +197,8 @@ pub struct Shell {
     team_dialog: Option<teams::TeamDialog>,
     /// The confirm before a project is deleted, if one is open.
     team_confirm: Option<teams::TeamConfirm>,
+    /// The menu of a team card, if one is open (screen 4.5).
+    team_menu: Option<teams::OpenTeamMenu>,
     /// The Add or Rotate secret dialog on screen, if any (X-VT-01, decision 0071).
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
@@ -498,6 +500,7 @@ impl Shell {
             source_control: SourceControl::new(commit_field, commit_changes),
             team_dialog: None,
             team_confirm: None,
+            team_menu: None,
             vault_dialog: None,
             vault_remove: None,
             request_notice: None,
@@ -930,6 +933,10 @@ impl Render for Shell {
             .team_confirm
             .as_ref()
             .map(|confirm| teams::team_confirm_view(confirm, &shell, cx));
+        let team_menu = self
+            .team_menu
+            .as_ref()
+            .map(|open| menu_overlay(&open.menu, MenuOrigin::At(open.at), cx));
         let revoke = self
             .revoke
             .as_ref()
@@ -1014,6 +1021,7 @@ impl Render for Shell {
             .when_some(remove, |el, dialog| el.child(dialog))
             .when_some(discard, |el, dialog| el.child(dialog))
             .when_some(menu, |el, menu| el.child(menu))
+            .when_some(team_menu, |el, menu| el.child(menu))
             .when_some(team_dialog, |el, dialog| el.child(dialog))
             .when_some(team_confirm, |el, dialog| el.child(dialog))
             .when_some(revoke, |el, dialog| el.child(dialog))

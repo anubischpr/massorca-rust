@@ -2,6 +2,7 @@
 
 mod access;
 mod board;
+mod card_menu;
 mod dialogs;
 mod files;
 mod home;
@@ -19,6 +20,7 @@ use massorca_ui::tokens::{SIZE_CONTROL_DEFAULT, SPACE_1, SPACE_2, SPACE_HALF, TY
 use massorca_ui::{Icon, IconName, IconSize, TextStyled, Theme};
 
 pub(super) use board::{board_columns, board_page};
+pub(super) use card_menu::OpenTeamMenu;
 pub(super) use dialogs::{TeamConfirm, TeamDialog, team_confirm_view, team_dialog_view};
 pub(super) use files::files_page;
 pub(super) use home::bot_teams_home;

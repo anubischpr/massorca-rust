@@ -15,7 +15,7 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    BotAddParams, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef,
+    BotAddParams, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef, TeamUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -843,5 +843,179 @@ async fn a_team_access_change_reaches_the_service_and_the_read_shows_it() {
         .await
         .expect("the team is read");
     assert_eq!(stored.access, TeamAccess::Default);
+    stop_service(service).await;
+}
+
+/// The service's id of the team named `name`, as the store numbered it.
+fn team_key_named(state: &StoreState, name: &str) -> String {
+    let view = teams_view(state);
+    let team = view
+        .teams()
+        .iter()
+        .find(|team| team.name == name)
+        .expect("the team is listed");
+    state
+        .team_ids
+        .key(team.id.0)
+        .expect("the team is numbered")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_team_update_through_the_bridge_changes_only_the_fields_given() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    handle
+        .create_team(TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: Some("Run it".to_owned()),
+            character: None,
+            access: None,
+            workspaces: Some(false),
+        })
+        .await
+        .expect("the team is created");
+    until(&mut updates, &mut state, "the team to be read", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.name == "Ops")
+    })
+    .await;
+
+    let renamed = handle
+        .update_team(TeamUpdateParams {
+            team: team_key_named(&state, "Ops"),
+            name: Some("Platform".to_owned()),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is renamed");
+    assert_eq!(
+        (
+            renamed.name.as_str(),
+            renamed.purpose.as_str(),
+            renamed.workspaces
+        ),
+        ("Platform", "Run it", false)
+    );
+    until(
+        &mut updates,
+        &mut state,
+        "the new name to be read",
+        |state| {
+            teams_view(state)
+                .teams()
+                .iter()
+                .any(|team| team.name == "Platform")
+        },
+    )
+    .await;
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_renamed_to_a_name_another_team_has_is_refused_as_a_name_problem() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    for name in ["Ops", "Dev"] {
+        handle
+            .create_team(TeamCreateParams {
+                name: name.to_owned(),
+                purpose: None,
+                character: None,
+                access: None,
+                workspaces: None,
+            })
+            .await
+            .expect("the team is created");
+    }
+    until(&mut updates, &mut state, "both teams to be read", |state| {
+        teams_view(state).teams().len() == 2
+    })
+    .await;
+
+    let refusal = handle
+        .update_team(TeamUpdateParams {
+            team: team_key_named(&state, "Dev"),
+            name: Some("Ops".to_owned()),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect_err("the name is taken");
+    assert!(
+        matches!(&refusal, Refusal::NameProblem { message } if message.contains("another team")),
+        "{refusal:?}"
+    );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_removed_through_the_bridge_leaves_the_read_and_a_second_removal_is_refused() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    handle
+        .create_team(TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+    until(&mut updates, &mut state, "the team to be read", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.name == "Ops")
+    })
+    .await;
+    let key = team_key_named(&state, "Ops");
+
+    let removed = handle
+        .remove_team(key.clone())
+        .await
+        .expect("the team is removed");
+    assert_eq!(removed.name, "Ops");
+    until(
+        &mut updates,
+        &mut state,
+        "the team to leave the read",
+        |state| teams_view(state).teams().is_empty(),
+    )
+    .await;
+    let refusal = handle
+        .remove_team(key)
+        .await
+        .expect_err("a team that is gone is refused");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
+        "{refusal:?}"
+    );
     stop_service(service).await;
 }
