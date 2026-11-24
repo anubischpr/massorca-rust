@@ -4,7 +4,9 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use massorca_protocol::methods::config::ConfigList;
-use massorca_protocol::methods::{config, events, extensions, projects, service, workspaces};
+use massorca_protocol::methods::{
+    config, events, extensions, projects, service, skills, workspaces,
+};
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
     MethodError, MethodInfo, Owner, Permission, RegistrationError, RequestCtx, core_commands,
@@ -116,6 +118,9 @@ const EXTENSION_METHODS: [(&str, Permission); 9] = [
     (extensions::REMOVE, Permission::HostAdmin),
     (extensions::UPDATE, Permission::HostAdmin),
 ];
+
+/// The skill methods this build registers (capability `skills/1`).
+const SKILL_METHODS: [(&str, Permission); 1] = [(skills::DISCOVER, Permission::Read)];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
 const CLI_COMMAND_IDS: [&str; 30] = [
@@ -292,6 +297,16 @@ async fn core_methods_named_extension_are_not_under_the_reserved_prefix() {
         assert_eq!(info.capability, capabilities::EXTENSIONS, "{method}");
         assert_eq!(info.permission, permission, "{method}");
     }
+    for (method, permission) in SKILL_METHODS {
+        let info = methods
+            .methods()
+            .into_iter()
+            .find(|info| info.method == method)
+            .unwrap_or_else(|| panic!("{method} is registered"));
+        assert_eq!(info.owner, Owner::Core, "{method}");
+        assert_eq!(info.capability, capabilities::SKILLS, "{method}");
+        assert_eq!(info.permission, permission, "{method}");
+    }
     stop(running).await;
 }
 
@@ -342,6 +357,7 @@ async fn every_core_method_has_a_command_descriptor() {
         .chain(&AGENT_METHODS)
         .chain(&TEAM_METHODS)
         .chain(EXTENSION_METHODS.iter().map(|(method, _)| method))
+        .chain(SKILL_METHODS.iter().map(|(method, _)| method))
     {
         assert!(
             commands.iter().any(|command| command.method == *method),

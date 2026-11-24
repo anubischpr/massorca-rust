@@ -10,6 +10,7 @@ use massorca_core_agents::{
     Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
     ProviderError,
 };
+use massorca_core_extensions::skills::SkillRootEnv;
 use massorca_core_extensions::{Extensions, HookError};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
@@ -74,6 +75,43 @@ impl VaultOptions {
     }
 }
 
+/// Where skill discovery looks on this host (SKL-01): the user's home folder and the folder overrides agent tools read
+/// from the environment. Tests point `home` at a temporary folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveryOptions {
+    /// The user's home folder. `None` leaves nothing to scan, so `skills.discover` fails.
+    pub home: Option<PathBuf>,
+    /// `CLAUDE_CONFIG_DIR`, `GROK_HOME` and `HERMES_HOME`, as the agent tools read them.
+    pub env: SkillRootEnv,
+}
+
+/// Overrides the user's home folder that skill discovery reads; tests set it so no scan reaches the real home.
+pub const SKILL_HOME_ENV: &str = "MASSORCA_SKILL_HOME";
+
+impl DiscoveryOptions {
+    /// `SKILL_HOME_ENV` or else the platform's home folder, and each folder override the environment sets to an absolute
+    /// path.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            home: absolute_var(SKILL_HOME_ENV)
+                .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())),
+            env: SkillRootEnv {
+                claude_config_dir: absolute_var("CLAUDE_CONFIG_DIR"),
+                grok_home: absolute_var("GROK_HOME"),
+                hermes_home: absolute_var("HERMES_HOME"),
+            },
+        }
+    }
+}
+
+/// The value of an environment variable when it is an absolute path.
+fn absolute_var(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 /// Starts services.
 #[derive(Debug)]
 pub struct Service;
@@ -89,7 +127,24 @@ impl Service {
         config: ServiceConfig,
         vault_options: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, NetworkConfig::default(), vault_options, None).await
+        let discovery = DiscoveryOptions::from_env();
+        Self::start_inner(
+            config,
+            NetworkConfig::default(),
+            vault_options,
+            discovery,
+            None,
+        )
+        .await
+    }
+
+    /// [`Service::start`] with explicit skill discovery options instead of the environment's.
+    pub async fn start_with_discovery(
+        config: ServiceConfig,
+        discovery: DiscoveryOptions,
+    ) -> Result<RunningService, ServiceError> {
+        let vault = VaultOptions::from_env();
+        Self::start_inner(config, NetworkConfig::default(), vault, discovery, None).await
     }
 
     /// As `start`, and also listens on the network as `network` says (decision 0045).
@@ -97,7 +152,8 @@ impl Service {
         config: ServiceConfig,
         network: NetworkConfig,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, VaultOptions::from_env(), None).await
+        let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
+        Self::start_inner(config, network, vault, discovery, None).await
     }
 
     /// As `start_with_network`, for a caller that has just checked the profile root itself with `secure_root` and got
@@ -108,13 +164,15 @@ impl Service {
         network: NetworkConfig,
         checked: RootAccess,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, VaultOptions::from_env(), Some(checked)).await
+        let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
+        Self::start_inner(config, network, vault, discovery, Some(checked)).await
     }
 
     async fn start_inner(
         config: ServiceConfig,
         network: NetworkConfig,
         vault_options: VaultOptions,
+        discovery_options: DiscoveryOptions,
         checked: Option<RootAccess>,
     ) -> Result<RunningService, ServiceError> {
         let mut timings = StartTimings::new();
@@ -220,6 +278,7 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
             network: network_state,
             server: PeerInfo {

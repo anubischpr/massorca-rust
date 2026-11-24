@@ -15,8 +15,8 @@ use massorca_protocol::{
     ProtocolRange, read_message, write_message,
 };
 use massorca_server::{
-    CapabilityHandle, Owner, Permission, RegistrationHandle, RequestCtx, RunningService, Service,
-    ServiceConfig,
+    CapabilityHandle, DiscoveryOptions, Owner, Permission, RegistrationHandle, RequestCtx,
+    RunningService, Service, ServiceConfig,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -63,6 +63,17 @@ pub fn service_config(home: &Path, name: &str) -> ServiceConfig {
 /// Starts an in-process service for `name` under `home`.
 pub async fn start(home: &Path, name: &str) -> RunningService {
     Service::start(service_config(home, name))
+        .await
+        .expect("the service starts")
+}
+
+/// Starts an in-process service whose skill discovery reads `discovery` instead of the user's real home folder.
+pub async fn start_with_discovery(
+    home: &Path,
+    name: &str,
+    discovery: DiscoveryOptions,
+) -> RunningService {
+    Service::start_with_discovery(service_config(home, name), discovery)
         .await
         .expect("the service starts")
 }
