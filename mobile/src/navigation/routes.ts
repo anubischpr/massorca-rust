@@ -1,10 +1,13 @@
-/** The compact navigation stack (M-SH-01, compact form). Parameters arrive with the screens that need them. */
+export type PairMode = 'scan' | 'paste';
+
+/** The compact navigation stack (M-SH-01, compact form). Each screen names the parameters it needs. */
 export type RootStackParamList = {
   Home: undefined;
-  Connect: undefined;
-  ProtocolGate: undefined;
-  Workspaces: undefined;
+  Connect: { readonly mode?: PairMode } | undefined;
+  ConfirmPairing: { readonly offer: string };
+  ProtocolGate: { readonly host: string };
+  Workspaces: { readonly host: string };
   Terminal: undefined;
   Changes: undefined;
-  ConnectionLog: undefined;
+  ConnectionLog: { readonly host: string };
 };
