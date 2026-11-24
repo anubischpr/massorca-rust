@@ -8,7 +8,9 @@ use crate::model::shell::{Agent, AgentState, HostReach};
 use crate::model::sidebar::{NavKind, NavRow, TreeRow};
 use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*};
 use massorca_ui::IconName;
-use massorca_ui::components::agent_status::AgentState as GlyphState;
+use massorca_ui::components::agent_status::{
+    AgentState as GlyphState, AgentStatus, AgentStatusSize,
+};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
 use massorca_ui::components::sidebar_row::{
@@ -110,16 +112,17 @@ pub(super) fn tree_row(
         TreeRow::ShowMore {
             workspace_id,
             count,
+            worst,
         } => {
             let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
-            fold_row(id, format!("Show {count} more")).on_click(move |_, _, cx| {
+            fold_row(id, format!("Show {count} more"), *worst).on_click(move |_, _, cx| {
                 let id = workspace_id.clone();
                 change(&shell, cx, move |shell| shell.sidebar_folds.unfold(&id));
             })
         }
         TreeRow::ShowLess { workspace_id } => {
             let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
-            fold_row(id, "Show less".to_owned()).on_click(move |_, _, cx| {
+            fold_row(id, "Show less".to_owned(), None).on_click(move |_, _, cx| {
                 let id = workspace_id.clone();
                 change(&shell, cx, move |shell| shell.sidebar_folds.fold(&id));
             })
@@ -155,8 +158,15 @@ fn fold_selector(row: &TreeRow) -> Option<String> {
 }
 
 /// A fold row at session level in tertiary text: a control under the sessions, not one of them.
-fn fold_row(id: SharedString, label: String) -> SidebarRow {
-    SidebarRow::new(id, label).level(SESSION_LEVEL).dimmed(true)
+/// Its trailing glyph marks the worst state it hides, if any.
+fn fold_row(id: SharedString, label: String, worst: Option<AgentState>) -> SidebarRow {
+    let row = SidebarRow::new(id, label).level(SESSION_LEVEL).dimmed(true);
+    match worst {
+        Some(state) => {
+            row.trailing(AgentStatus::new(glyph_state(state)).size(AgentStatusSize::XSmall))
+        }
+        None => row,
+    }
 }
 
 /// The row action that opens the bring-back confirm for a finished child. It shows on hover or focus.

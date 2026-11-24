@@ -71,6 +71,8 @@ pub enum TreeRow {
     ShowMore {
         workspace_id: String,
         count: usize,
+        /// The worst state among the hidden sessions, if the row marks it (Error, Waiting).
+        worst: Option<AgentState>,
     },
     /// Folds a workspace's sessions back behind "Show N more", once they are all listed.
     ShowLess {
@@ -250,6 +252,17 @@ fn fold_blocks(
         });
         return rows;
     }
+    let worst = worst_hidden_state(
+        blocks
+            .iter()
+            .zip(&hidden)
+            .filter(|(_, hidden)| **hidden)
+            .flat_map(|(block, _)| block)
+            .filter_map(|row| match row {
+                TreeRow::Session { state, .. } => Some(*state),
+                _ => None,
+            }),
+    );
     let mut rows: Vec<TreeRow> = blocks
         .into_iter()
         .zip(hidden)
@@ -259,6 +272,7 @@ fn fold_blocks(
     rows.push(TreeRow::ShowMore {
         workspace_id: workspace_id.to_owned(),
         count: folded,
+        worst,
     });
     rows
 }
@@ -268,6 +282,15 @@ fn stays_listed(block: &[TreeRow]) -> bool {
     block.iter().any(|row| {
         matches!(row, TreeRow::Session { state, selected, .. } if *selected || state.never_folds())
     })
+}
+
+/// The worst state a fold row marks among the sessions it hides: Error, else Waiting. Every other
+/// state marks nothing; Unreachable is a lost link, not a failure.
+fn worst_hidden_state(states: impl IntoIterator<Item = AgentState>) -> Option<AgentState> {
+    let states: Vec<AgentState> = states.into_iter().collect();
+    [AgentState::Error, AgentState::Waiting]
+        .into_iter()
+        .find(|worst| states.contains(worst))
 }
 
 #[cfg(test)]
@@ -602,5 +625,58 @@ mod tests {
         let folding = [AgentState::Idle, AgentState::Unreachable, AgentState::Done];
         assert!(pinned.iter().all(|state| state.never_folds()));
         assert!(folding.iter().all(|state| !state.never_folds()));
+    }
+
+    #[test]
+    fn the_fold_row_marks_error_before_waiting_and_nothing_else() {
+        assert_eq!(
+            worst_hidden_state([AgentState::Waiting, AgentState::Error, AgentState::Idle]),
+            Some(AgentState::Error)
+        );
+        assert_eq!(
+            worst_hidden_state([AgentState::Done, AgentState::Waiting]),
+            Some(AgentState::Waiting)
+        );
+        for rest in [
+            vec![AgentState::Idle, AgentState::Done, AgentState::Unreachable],
+            vec![AgentState::Running],
+            Vec::new(),
+        ] {
+            assert_eq!(worst_hidden_state(rest.iter().copied()), None, "{rest:?}");
+        }
+    }
+
+    #[test]
+    fn a_fold_row_marks_nothing_for_hidden_sessions_that_are_done_idle_or_unreachable() {
+        let mut sessions = idle_sessions("s", 8);
+        sessions[5].state = AgentState::Done;
+        sessions[6].state = AgentState::Unreachable;
+        sessions[6].children = vec![session("c7", AgentState::Done)];
+        let tree = snapshot(vec![("w", sessions)], None);
+        assert!(
+            folded(&tree, &SidebarFolds::default()).contains(&TreeRow::ShowMore {
+                workspace_id: "w".into(),
+                count: 3,
+                worst: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_waiting_or_failed_session_stays_listed_so_the_fold_row_never_hides_it() {
+        let mut sessions = idle_sessions("s", 8);
+        sessions[5].state = AgentState::Waiting;
+        sessions[6].state = AgentState::Error;
+        let tree = snapshot(vec![("w", sessions)], None);
+        let rows = folded(&tree, &SidebarFolds::default());
+        assert_eq!(
+            shown(&rows),
+            ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "Show 1 more"]
+        );
+        assert!(rows.contains(&TreeRow::ShowMore {
+            workspace_id: "w".into(),
+            count: 1,
+            worst: None,
+        }));
     }
 }
