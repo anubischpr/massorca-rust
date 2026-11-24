@@ -2,6 +2,7 @@
 
 mod actions;
 mod add_host;
+mod app_theme;
 mod bring_back;
 mod canvas;
 mod debug_focus;
@@ -62,7 +63,7 @@ use gpui::{
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
-use massorca_ui::{ActiveTheme, IconName, TextStyled, Theme};
+use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
 use source_control::SourceControl;
 use std::collections::{BTreeMap, HashMap};
@@ -72,6 +73,8 @@ use zones::ZoneFocus;
 
 #[cfg(test)]
 mod add_host_tests;
+#[cfg(test)]
+mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
 #[cfg(test)]
@@ -211,6 +214,10 @@ pub struct Shell {
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The delegate form under the open session, if any (X-CH-06).
     delegate: Option<delegate::DelegateForm>,
+    /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
+    theme_notice: Option<String>,
+    /// Follows the operating system's appearance, which the `system` choice shows.
+    _appearance_changes: Subscription,
 }
 
 impl Shell {
@@ -266,6 +273,8 @@ impl Shell {
             true
         });
         let snapshot = store.read(cx).snapshot(Instant::now());
+        let appearance_changes =
+            cx.observe_window_appearance(window, |shell, _, cx| shell.follow_app_theme(cx));
         let store_changes = cx.observe(&store, |shell, store, cx| {
             let snapshot = store.read(cx).snapshot(Instant::now());
             let connected = store.read(cx).state().connection.is_connected();
@@ -275,6 +284,8 @@ impl Shell {
                 shell.devices_asked = false;
             }
             shell.service_connected = connected;
+            shell.follow_app_theme(cx);
+            shell.follow_service_folder(store.read(cx).state());
             if connected {
                 shell.settings.folder.forget_read_failure();
             }
@@ -440,6 +451,8 @@ impl Shell {
             terminal_notice: None,
             bring_back: None,
             delegate: None,
+            theme_notice: None,
+            _appearance_changes: appearance_changes,
         }
     }
 
@@ -527,7 +540,7 @@ impl Shell {
         };
         self.dismiss_palette(window, cx);
         match action {
-            PaletteAction::Command(Command::ToggleTheme) => Theme::toggle(cx),
+            PaletteAction::Command(Command::ToggleTheme) => self.toggle_app_theme(cx),
             other => self.model.run_palette_action(&other),
         }
         cx.notify();
@@ -640,6 +653,7 @@ impl Render for Shell {
             shell: shell.clone(),
             folder: &self.settings.folder,
             folder_field: &self.settings_folder,
+            app_theme: self.stored_app_theme(cx),
             agents: crate::model::marketplace::installed_agent_links(self.model.marketplace()),
             vault: {
                 let state = self.store.read(cx).state();
@@ -711,6 +725,10 @@ impl Render for Shell {
             .service_notice
             .as_ref()
             .map(|notice| service_banner::service_banner(notice, &shell));
+        let theme_banner = self
+            .theme_notice
+            .as_deref()
+            .map(|notice| app_theme::theme_notice_banner(notice, &shell));
         // Inline Sidebar, canvas, then an overlay Sidebar on top. A click on the body outside
         // an overlay closes it; the overlays stop their own clicks from reaching the body.
         let body = div()
@@ -740,6 +758,7 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .when_some(banner, |el, banner| el.child(banner))
+                    .when_some(theme_banner, |el, banner| el.child(banner))
                     .child(canvas)
                     .child(status),
             )
