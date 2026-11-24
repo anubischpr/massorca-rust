@@ -133,9 +133,10 @@ lineage) comes later; the model must not block it.
 
 ## Deferred (recorded so it is not forgotten)
 
-Branch prefixes, generated names and their retirement, setup scripts, terminal and agent guards on
+Branch prefixes, generated names and their retirement, terminal and agent guards on
 removal, squash-merge detection, id aliases after a folder rename, remote
-hosts. Each lands with its phase and its own tests.
+hosts. Each lands with its phase and its own tests. Setup scripts were deferred here and are
+now decided in 0086.
 
 ## Consequences
 

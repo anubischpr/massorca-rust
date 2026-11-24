@@ -43,7 +43,7 @@ Paths a paired `workspace` device has today (main at the time of writing):
 | 11 | `project.add` and `workspace.create` with a host path | `server/src/features/projects.rs:23-27`; `protocol/src/methods/projects.rs:26-34`; `protocol/src/methods/workspaces.rs:46` | Points MassOrca at any directory, including one with hooks or config from rows 9 and 10. |
 | 12 | Prompts (`agent.start` prompt, `agent.prompt`, `agent.delegate`, `bring_back` with `prompt`) | `agents.rs:44-49`, `:72-77`, `:100-105`, `:114-119` | The agent runs tools. With approval prompts answered (row 4) or switched off by its launch, that is any program the prompt describes. |
 | 13 | Extension install, enable, remove, and `dir:`/`file:` inspect | `server/src/features/extensions.rs:59-79`, `:126-130` | Already `host-admin`. No change. |
-| 14 | Workspace setup scripts | none in this repository | Not implemented. Any future one is a row of this table. |
+| 14 | Workspace setup scripts | `server/src/features/workspace_setup.rs` (decision 0086) | `workspace.create` runs the `orca.yaml` setup script of the new worktree. It needs `workspace`, so `operate` alone never reaches it. |
 
 Agent kinds are read from built-ins, the catalogue and `agents/kinds/*.json`
 in the profile (`core-agents/src/catalog.rs:74`). No device method writes

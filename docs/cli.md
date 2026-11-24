@@ -44,7 +44,7 @@ machine.
 | `project list` | Lists every project, ordered by name. |
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
-| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
@@ -386,5 +386,5 @@ In PowerShell, set the variable first: `$env:MASSORCA_DESKTOP_BACKGROUND = "1"`,
 ## Not yet available
 
 Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
-generated names, setup scripts, terminal and agent guards on removal, squash-merge detection) are
+generated names, terminal and agent guards on removal, squash-merge detection) are
 not available yet.
