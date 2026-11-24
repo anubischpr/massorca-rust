@@ -13,6 +13,8 @@ pub const DEVICES: &str = "devices/1";
 pub const NETWORK: &str = "network/1";
 /// Terminal methods (`terminal.*`) and the attach stream.
 pub const TERMINALS: &str = "terminals/1";
+/// `terminal.wait`: a bounded wait for a terminal's exit (decision 0087).
+pub const TERMINAL_WAIT: &str = "terminal-wait/1";
 /// Binary frame kinds beyond JSON; terminal output rides on frame kind `0x02`.
 pub const BINARY_FRAMES: &str = "binary-frames/1";
 /// Agent methods (`agent.*`) and the agent watch stream (decision 0057).

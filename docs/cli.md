@@ -60,6 +60,7 @@ machine.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
 | `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
