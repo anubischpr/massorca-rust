@@ -50,6 +50,7 @@ machine.
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
 | `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
+| `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
 | `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |

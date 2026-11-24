@@ -509,3 +509,47 @@ fn watch_survives_a_service_restart_and_reports_the_gap() {
     );
     assert!(child.wait().expect("wait").success());
 }
+
+#[test]
+fn patch_of_a_submodule_shows_its_pointer_in_text_and_json() {
+    let sandbox = Sandbox::new();
+    let dir = workspace(&sandbox);
+    let library = sandbox.home().join("lib");
+    git_repo(&library);
+    std::fs::write(library.join("lib.txt"), "two\n").expect("write");
+    harness::git(&library, &["add", "lib.txt"]);
+    harness::git(&library, &["commit", "-q", "-m", "lib two"]);
+    let second = harness::git(&library, &["rev-parse", "HEAD"]).trim().to_owned();
+    let first = harness::git(&library, &["rev-parse", "HEAD~1"]).trim().to_owned();
+    let library_text = library.to_string_lossy().into_owned();
+    harness::git(
+        &dir,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &library_text,
+            "vendor/lib",
+        ],
+    );
+    harness::git(&dir, &["commit", "-q", "-m", "add the library"]);
+    harness::git(&dir.join("vendor/lib"), &["checkout", "-q", &first]);
+    let summary = format!("Subproject commit {second}..{first}");
+
+    let text = sandbox
+        .run("default", &["git", "patch", "vendor/lib", "-w", "feature"])
+        .success();
+    let text = stdout_text(&text);
+    assert!(
+        text.contains(&format!("submodule vendor/lib: {summary}")),
+        "{text}"
+    );
+    assert!(text.contains("working tree clean"), "{text}");
+
+    let json = sandbox.json_ok("default", &["git", "patch", "vendor/lib", "-w", "feature"]);
+    assert_eq!(json["submodule"]["summary"], summary);
+    assert_eq!(json["submodule"]["dirty"], false);
+    assert!(json.get("patch").is_none(), "{json}");
+}
