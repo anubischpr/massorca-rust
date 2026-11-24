@@ -451,6 +451,13 @@ ALTER TABLE agent_sessions ADD COLUMN activity_seen_at INTEGER;
 "#,
         foreign_keys_off: false,
     },
+    // A task's failed starts in a row (AUTO-16): three trip its circuit breaker until it is reopened.
+    Migration {
+        sql: r#"
+ALTER TABLE tasks ADD COLUMN start_failures INTEGER NOT NULL DEFAULT 0;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

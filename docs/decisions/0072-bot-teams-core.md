@@ -509,3 +509,21 @@ has two values, as in pv96, and there is no per-bot mode.
 
 Decision 0083 is unchanged: a mode is still passed only when someone chose it.
 Here the owner chooses it once for the team.
+
+## Amendment 2026-11-23: the start circuit breaker
+
+A task whose starts keep failing stops being retried, as pv96's dispatch
+circuit breaker does (AUTO-16). We have no dispatch or escalation, so only
+failed `task.start` calls count.
+
+- Every failed start of a task adds one to its count (`tasks.start_failures`,
+  migration step 26). A start that links a session resets it, and so does
+  `task.reopen`.
+- The third failure in a row is recorded on the task as
+  `task.circuit_broken`, with the reason "Circuit broken: <why the start
+  failed>", as pv96 words it.
+- While the count is three or more, `task.start` refuses the task with
+  `task.circuit_broken` before it spawns anything, even when the cause is
+  fixed, and the count does not grow. `massorca task reopen TASK` resets it.
+- A routine run makes a new task each time, so each run has its own count; the
+  breaker never blocks a routine's later runs.

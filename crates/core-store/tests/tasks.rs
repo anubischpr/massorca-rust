@@ -522,3 +522,34 @@ fn the_pending_start_attempt_is_read_without_changing_it() {
     );
     assert_eq!(store.task_start_attempt("missing").unwrap(), None);
 }
+
+#[test]
+fn failed_starts_are_counted_until_a_link_or_a_reopen_resets_them() {
+    let store = store();
+    let team = team_row("alpha");
+    store.insert_team(&team).unwrap();
+    let row = task_row(&team.id, "parse", 10);
+    store.insert_task(&row).unwrap();
+    assert_eq!(store.task_start_failures(&row.id).unwrap(), 0);
+
+    for at in [20, 21] {
+        store
+            .set_task_start_error(&row.id, "agent.kind_not_found", "no such agent kind", at)
+            .unwrap();
+    }
+    assert_eq!(store.task_start_failures(&row.id).unwrap(), 2);
+
+    // A successful start resets the count.
+    assert!(store.link_task_session(&row.id, "session-1", 30).unwrap());
+    assert_eq!(store.task_start_failures(&row.id).unwrap(), 0);
+
+    // So does a reopen.
+    assert!(store.reopen_task(&row.id, Some("session-1"), 40).unwrap());
+    store
+        .set_task_start_error(&row.id, "agent.kind_not_found", "no such agent kind", 50)
+        .unwrap();
+    assert_eq!(store.task_start_failures(&row.id).unwrap(), 1);
+    assert!(store.reopen_task(&row.id, None, 60).unwrap());
+    assert_eq!(store.task_start_failures(&row.id).unwrap(), 0);
+    assert_eq!(store.task_start_failures("missing").unwrap(), 0);
+}
