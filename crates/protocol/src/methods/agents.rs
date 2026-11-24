@@ -49,6 +49,8 @@ pub const CREDENTIALS_REMOVE: &str = "agent.credentials.remove";
 
 pub const ACCOUNTS_LIST: &str = "agent.accounts.list";
 pub const ACCOUNTS_ADD: &str = "agent.accounts.add";
+/// Params: [`AccountsSignInParams`]. Result: [`AccountsAdded`]. Signs an existing account in again (decision 0059).
+pub const ACCOUNTS_SIGN_IN: &str = "agent.accounts.sign_in";
 pub const ACCOUNTS_IMPORT: &str = "agent.accounts.import";
 pub const ACCOUNTS_ACTIVATE: &str = "agent.accounts.activate";
 pub const ACCOUNTS_REMOVE: &str = "agent.accounts.remove";
@@ -844,6 +846,13 @@ pub struct AccountsAddParams {
 pub struct AccountsAdded {
     pub account: AccountSummary,
     pub terminal_id: String,
+}
+
+/// Params of `agent.accounts.sign_in`: the existing account to sign in again, as `accounts list` names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountsSignInParams {
+    pub kind: String,
+    pub account: String,
 }
 
 /// Params of `agent.accounts.import`.
