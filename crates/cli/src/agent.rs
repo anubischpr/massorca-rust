@@ -66,6 +66,11 @@ pub enum AgentCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Marks a session's Waiting for you or Done state as seen, which clears its marker in every client.
+    Seen {
+        /// Session id, or a unique prefix of at least 8 characters.
+        session: String,
+    },
     /// Queues prompts behind a busy agent: each is typed once the agent is idle or done, in order (decision 0084).
     Queue {
         #[command(subcommand)]
@@ -402,6 +407,13 @@ pub async fn execute(
                 })
                 .await?;
             output.success(&set, &agent_text::mode_set_lines(&set));
+        }
+        AgentCommand::Seen { session } => {
+            // Mark only the activity shown here, never one that arrived after it was read.
+            let shown = client.agent_show(&session).await?;
+            let at_ms = shown.activity.as_ref().map(|activity| activity.at_ms);
+            let seen = client.agent_mark_seen(&shown.id, at_ms).await?;
+            output.success(&seen, &agent_text::session_details(&seen));
         }
         AgentCommand::Queue { command } => {
             queue_command(&client, command, output).await?;

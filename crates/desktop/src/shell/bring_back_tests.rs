@@ -25,6 +25,7 @@ fn finished_child(cx: &mut TestAppContext) -> (Rig, &mut VisualTestContext) {
         outcome: Some(Outcome::Success),
         source: ActivitySource::Hook,
         at_ms: 5,
+        seen_at_ms: None,
     });
     rig.updates
         .send(StoreUpdate::WorkspaceChanged(workspace(
