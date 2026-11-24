@@ -44,6 +44,18 @@ different version. CI already builds Git 2.25.5 from source and runs the
 - A test that needs a newer git does not silently skip. It names the version
   it needs and asserts the fallback's behaviour.
 
+### A git below the baseline is refused by name
+
+- Every git command first checks the binary's version. Below 2.25 it fails with
+  `git.too_old`, naming the found and the required version, instead of an
+  odd error later.
+- The check runs `git --version` once per binary, with a 5-second timeout, and
+  caches a version found for the service's lifetime. A missing or broken binary
+  is probed again on the next call, so `git.unavailable` stays per call.
+- The service never runs git at start (#169). `service.info` reports the host's
+  git as `present`, `missing`, `too_old` or `unknown`; the probe runs when that
+  request is answered. Older services omit the field, and the CLI says so.
+
 ## Consequences
 
 - Some outputs are parsed from older, more verbose forms. For example, fetch

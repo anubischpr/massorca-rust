@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use massorca_protocol::methods::service::{self, ServiceInfo};
+use massorca_core_git::{GitAvailability, GitVersion};
+use massorca_protocol::methods::service::{self, GitStatus, ServiceInfo};
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities};
 use tokio::time::timeout;
 
@@ -39,7 +40,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     ])
 }
 
-/// What `service.info` reports. `RunningService::info` reads the same source.
+/// What `service.info` reports. `RunningService::info` reads the same source. It never probes git: the request probes it.
 pub(crate) fn info_of(state: &AppState) -> ServiceInfo {
     ServiceInfo {
         version: state.server.version.clone(),
@@ -48,11 +49,35 @@ pub(crate) fn info_of(state: &AppState) -> ServiceInfo {
         profile: state.profile.name().to_owned(),
         pid: std::process::id(),
         started_at_ms: state.started_at_ms,
+        git: None,
     }
 }
 
+/// Probes the host's git on the blocking pool, so a slow git cannot stall the reactor (ADR 0014).
 async fn info(ctx: RequestCtx, _params: NoParams) -> Result<ServiceInfo, ErrorBody> {
-    Ok(info_of(&ctx.state))
+    let mut info = info_of(&ctx.state);
+    let git = ctx.state.git.clone();
+    let status = tokio::task::spawn_blocking(move || git_status(git.availability()))
+        .await
+        .unwrap_or_else(|error| GitStatus::Unknown {
+            reason: error.to_string(),
+        });
+    info.git = Some(status);
+    Ok(info)
+}
+
+fn git_status(availability: GitAvailability) -> GitStatus {
+    match availability {
+        GitAvailability::Present(found) => GitStatus::Present {
+            version: found.to_string(),
+        },
+        GitAvailability::Missing => GitStatus::Missing,
+        GitAvailability::TooOld(found) => GitStatus::TooOld {
+            version: found.to_string(),
+            required: GitVersion::BASELINE.to_string(),
+        },
+        GitAvailability::Unknown(reason) => GitStatus::Unknown { reason },
+    }
 }
 
 /// Requests shutdown and answers once the service has stopped listening, so a client that connects right after the answer

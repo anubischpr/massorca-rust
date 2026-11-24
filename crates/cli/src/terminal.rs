@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::{AttachUpdate, Client, ClientError, TerminalAttachment};
 use massorca_core_terminal::screen::SCROLLBACK_ROWS;
 use massorca_protocol::methods::terminals::{
@@ -20,10 +20,13 @@ use crate::error::{CliError, exit};
 use crate::output::Output;
 use crate::target::Target;
 use crate::terminal_attach;
+use crate::terminal_wait;
 use crate::workspace_text;
 
 /// How long `screen` waits for the service to send the terminal's snapshot.
 const SNAPSHOT_WAIT: Duration = Duration::from_secs(5);
+/// How long `wait` runs when `--timeout` is not given.
+const DEFAULT_WAIT_SECS: u64 = 300;
 
 #[derive(Debug, Subcommand)]
 pub enum TerminalCommand {
@@ -54,6 +57,8 @@ pub enum TerminalCommand {
         /// Terminal id.
         terminal: String,
     },
+    /// Waits until the terminal's process exits, up to --timeout seconds, and prints its exit code.
+    Wait(TerminalWaitArgs),
 }
 
 #[derive(Debug, Args)]
@@ -137,6 +142,30 @@ pub struct TerminalKillArgs {
     pub force: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct TerminalWaitArgs {
+    /// Terminal id.
+    pub terminal: String,
+    /// What to wait for: `exit`, the terminal's process has ended.
+    #[arg(
+        long = "for",
+        value_name = "CONDITION",
+        value_enum,
+        default_value = "exit"
+    )]
+    pub condition: WaitCondition,
+    /// Seconds to wait before giving up.
+    #[arg(long, value_name = "SECS", default_value_t = DEFAULT_WAIT_SECS)]
+    pub timeout: u64,
+}
+
+/// The conditions `terminal wait --for` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum WaitCondition {
+    /// The terminal's process has ended.
+    Exit,
+}
+
 /// The `screen` result: the terminal and its visible rows as plain text.
 #[derive(Debug, Serialize)]
 struct ScreenDocument {
@@ -212,6 +241,10 @@ pub async fn execute(
         TerminalCommand::Close { terminal } => {
             let closed = client.terminal_close(&terminal).await?;
             output.success(&closed, &[format!("closed terminal {}", closed.id)]);
+        }
+        TerminalCommand::Wait(args) => {
+            let answer = terminal_wait::run(&client, &args).await?;
+            output.success(&answer, &terminal_wait::lines(&answer));
         }
         TerminalCommand::Attach { .. } => unreachable!("attach returned above"),
     }

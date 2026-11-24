@@ -20,6 +20,10 @@ pub const RESIZE: &str = "terminal.resize";
 pub const KILL: &str = "terminal.kill";
 /// Params: [`TerminalRef`]. Result: [`Terminal`].
 pub const CLOSE: &str = "terminal.close";
+/// Params: [`TerminalWaitParams`]. Result: [`TerminalWait`]. Capability `terminal-wait/1` (decision 0087).
+pub const WAIT: &str = "terminal.wait";
+/// Most time one `terminal.wait` call holds its connection; a client that waits longer sends the wait again.
+pub const MAX_WAIT_MS: u64 = 60_000;
 
 /// Most bytes one `terminal.input` call may write, after base64 decoding.
 pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -153,6 +157,34 @@ pub struct TerminalKillParams {
     pub terminal: String,
     #[serde(default)]
     pub force: bool,
+}
+
+/// What `terminal.wait` waits for. `exit`: the terminal's process has ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalWaitCondition {
+    Exit,
+}
+
+/// Params of `terminal.wait`. An absent `timeout_ms` means [`MAX_WAIT_MS`], and a larger one is capped at it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalWaitParams {
+    pub terminal: String,
+    pub condition: TerminalWaitCondition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// Result of `terminal.wait`. `satisfied` is false when this call's own timeout passed first; `status` is then `live`
+/// or `unverifiable`, never `exited`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalWait {
+    pub terminal: String,
+    pub condition: TerminalWaitCondition,
+    pub satisfied: bool,
+    pub status: TerminalState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<TerminalExit>,
 }
 
 /// Whether the host that runs the process can prove it is alive.

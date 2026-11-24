@@ -15,6 +15,9 @@ use harness::{
 use serde_json::{Value, json};
 
 const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
+/// A fake token of a second login: another identity, so it is not refused as the first one again (ACC-03).
+const OTHER_TOKEN: &str =
+    r#"{"fake":true,"email":"other@example.com","refresh":"fake-secret-value"}"#;
 /// A token the fake agent's check reports as expired.
 const EXPIRED_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 
@@ -293,7 +296,7 @@ fn activate_per_project_changes_which_account_a_started_agent_uses() {
     let (_, notes_workspace) = project_with_main(&sandbox, "notes");
     let (docs, docs_workspace) = project_with_main(&sandbox, "docs");
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
-    let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
+    let second = source_with(&sandbox, "second", &[("token.json", OTHER_TOKEN)]);
     let first_id = import(&sandbox, &first, "first")["account"]["id"]
         .as_str()
         .expect("an account id")
@@ -881,7 +884,7 @@ fn a_removed_active_account_refuses_the_next_start_until_another_is_activated() 
     declare_fake(&sandbox);
     let (_, workspace) = project_with_main(&sandbox, "notes");
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
-    let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
+    let second = source_with(&sandbox, "second", &[("token.json", OTHER_TOKEN)]);
     let first_id = import(&sandbox, &first, "first")["account"]["id"]
         .as_str()
         .expect("an account id")
@@ -1448,9 +1451,327 @@ fn the_account_list_gives_each_accounts_origin() {
     eventually("the sign-in to keep the account", || {
         (account_labelled_or_none(&sandbox, "signed")?["state"] == "signed_in").then_some(())
     });
-    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let source = source_with(&sandbox, "source", &[("token.json", OTHER_TOKEN)]);
     import(&sandbox, &source, "imported");
 
     assert_eq!(account_labelled(&sandbox, "signed")["origin"], "sign_in");
     assert_eq!(account_labelled(&sandbox, "imported")["origin"], "import");
+}
+
+/// Writes `token` as the fake token of an account's home, as an expired login would be found.
+fn write_token(sandbox: &Sandbox, account: &str, token: &str) {
+    fs::write(account_home(sandbox, account).join("token.json"), token)
+        .expect("write the fake token");
+}
+
+/// The account with `id`, as listed.
+fn account_by_id(sandbox: &Sandbox, id: &str) -> Value {
+    accounts(sandbox)
+        .into_iter()
+        .find(|account| account["id"] == id)
+        .unwrap_or_else(|| panic!("no account {id}"))
+}
+
+/// Declares a second kind, `other`, with the same declaration as `fake`.
+fn declare_other_kind(sandbox: &Sandbox) {
+    let dir = sandbox.profile_dir("default").join("agents").join("kinds");
+    let fake = fs::read_to_string(dir.join("fake.json")).expect("the fake kind");
+    let mut other: Value = serde_json::from_str(&fake).expect("the fake kind as JSON");
+    other["id"] = json!("other");
+    other["name"] = json!("Other agent");
+    fs::write(dir.join("other.json"), other.to_string()).expect("write the other kind");
+}
+
+/// Signs `label` in with a good login and waits until it is kept as signed in; returns its id.
+fn signed_in_account(sandbox: &Sandbox, label: &str) -> String {
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            label,
+            "--no-attach",
+        ],
+    );
+    eventually("the sign-in to keep the account", || {
+        (account_labelled_or_none(sandbox, label)?["state"] == "signed_in").then_some(())
+    });
+    account_labelled(sandbox, label)["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned()
+}
+
+#[test]
+fn a_re_sign_in_keeps_the_same_account_and_records_its_login() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[]);
+    let id = signed_in_account(&sandbox, "work");
+    write_token(&sandbox, &id, EXPIRED_TOKEN);
+    let checked = sandbox.json_ok("default", &["agent", "accounts", "check", "fake", &id]);
+    assert_eq!(checked["state"], "expired", "{checked}");
+
+    let again = sandbox.json_ok(
+        "default",
+        &["agent", "accounts", "sign-in", "fake", &id, "--no-attach"],
+    );
+    assert_eq!(again["account"]["id"], id.as_str(), "{again}");
+    assert!(again["terminal_id"].as_str().is_some(), "{again}");
+
+    eventually("the re-sign-in to record its check", || {
+        (account_by_id(&sandbox, &id)["state"] == "signed_in").then_some(())
+    });
+    let kept = account_by_id(&sandbox, &id);
+    assert_eq!(kept["identity"], "fake@example.com", "{kept}");
+    assert_eq!(kept["active"], true, "the active account stays active");
+    assert_eq!(
+        accounts(&sandbox).len(),
+        1,
+        "no account is added or deleted"
+    );
+}
+
+#[test]
+fn a_re_sign_in_whose_login_fails_keeps_the_account_with_its_check_state() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    let id = signed_in_account(&sandbox, "work");
+    // The login fails, and the login the account holds is expired: the check after the failure finds it.
+    write_token(&sandbox, &id, EXPIRED_TOKEN);
+    let _service = restart_service(
+        &sandbox,
+        &[
+            ("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker)),
+            ("FAKE_AGENT_LOGIN_FAIL", "1"),
+        ],
+    );
+
+    sandbox.json_ok(
+        "default",
+        &["agent", "accounts", "sign-in", "fake", &id, "--no-attach"],
+    );
+    eventually("the failed re-sign-in to record the expired state", || {
+        (account_by_id(&sandbox, &id)["state"] == "expired").then_some(())
+    });
+    let kept = account_by_id(&sandbox, &id);
+    assert_eq!(kept["label"], "work", "{kept}");
+    assert_eq!(kept["active"], true, "the active account stays active");
+    assert_eq!(
+        accounts(&sandbox).len(),
+        1,
+        "the account is kept, not deleted"
+    );
+    assert!(
+        !marker.exists(),
+        "a re-sign-in never runs the vendor sign-out"
+    );
+}
+
+#[test]
+fn a_re_sign_in_refuses_an_unknown_account_or_an_account_of_another_kind() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    declare_other_kind(&sandbox);
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    let unknown = error_of(
+        &sandbox,
+        &[
+            "agent",
+            "accounts",
+            "sign-in",
+            "fake",
+            "0195c0de-0000-7000-8000-000000000001",
+            "--no-attach",
+        ],
+    );
+    assert_eq!(unknown["code"], "agent.account_not_found", "{unknown}");
+    let other = error_of(
+        &sandbox,
+        &["agent", "accounts", "sign-in", "other", &id, "--no-attach"],
+    );
+    assert_eq!(other["code"], "agent.account_not_found", "{other}");
+    assert_eq!(accounts(&sandbox).len(), 1, "nothing is changed");
+}
+
+#[test]
+fn a_re_sign_in_is_refused_while_the_account_is_signing_in() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[("FAKE_AGENT_LOGIN_HANG", "1")]);
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "pending",
+            "--no-attach",
+        ],
+    );
+    let id = added["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    let error = error_of(
+        &sandbox,
+        &["agent", "accounts", "sign-in", "fake", &id, "--no-attach"],
+    );
+    assert_eq!(error["code"], "agent.busy", "{error}");
+    assert_eq!(accounts(&sandbox).len(), 1, "the pending account is kept");
+}
+
+#[test]
+fn a_re_sign_in_is_refused_while_a_live_run_uses_the_account() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let (_, notes_workspace) = project_with_main(&sandbox, "notes");
+    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let id = import(&sandbox, &source, "work")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            &notes_workspace,
+            "--read-only",
+            "--prompt",
+            "hold",
+        ],
+    );
+    let terminal = started["terminal_id"]
+        .as_str()
+        .expect("a terminal id")
+        .to_owned();
+    wait_for_line(&sandbox, &terminal, "fake-agent: holding");
+
+    let error = error_of(
+        &sandbox,
+        &["agent", "accounts", "sign-in", "fake", &id, "--no-attach"],
+    );
+    assert_eq!(error["code"], "agent.busy", "{error}");
+    assert_eq!(accounts(&sandbox).len(), 1, "the account is kept");
+}
+
+#[test]
+fn a_re_sign_in_left_open_by_a_restart_leaves_the_account_as_it_was() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let _service = spawn_service_with(&sandbox, &[]);
+    let id = signed_in_account(&sandbox, "work");
+    let _service = restart_service(&sandbox, &[("FAKE_AGENT_LOGIN_HANG", "1")]);
+    sandbox.json_ok(
+        "default",
+        &["agent", "accounts", "sign-in", "fake", &id, "--no-attach"],
+    );
+
+    // The restart ends the login that never finished. The account has no pending row in the store, so the start-up sweep
+    // leaves it alone: it is listed as it was, and its next check decides its state.
+    let _service = restart_service(&sandbox, &[]);
+    let kept = account_by_id(&sandbox, &id);
+    assert_eq!(kept["state"], "signed_in", "{kept}");
+    assert_eq!(kept["active"], true, "{kept}");
+    assert_eq!(accounts(&sandbox).len(), 1, "the account is kept");
+}
+
+/// A second import of a login already added (the same identity, compared without case) is refused: the first account
+/// stays, the second gets no account, and its copied files are deleted (ACC-03, as pv96 refuses a duplicate add).
+#[test]
+fn an_import_of_a_login_already_added_is_refused_and_keeps_the_first() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let first_id = import(&sandbox, &first, "first")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let again = source_with(
+        &sandbox,
+        "again",
+        &[("token.json", r#"{"email":"FAKE@example.com"}"#)],
+    );
+
+    let refused = import(&sandbox, &again, "again");
+
+    assert_eq!(refused["result"], "failed", "{refused}");
+    assert!(refused["account"].is_null(), "{refused}");
+    let reason = refused["reason"].as_str().expect("a reason");
+    assert!(reason.contains(&first_id), "{reason}");
+    let listed = accounts(&sandbox);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], first_id.as_str());
+    let homes = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("accounts")
+        .join("fake");
+    let left: Vec<_> = fs::read_dir(&homes)
+        .expect("the kind's homes")
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(left, [std::ffi::OsString::from(&first_id)], "{left:?}");
+}
+
+/// A sign-in whose login turns out to be an account already added is discarded without the vendor sign-out, which
+/// would end the session the first account shares; the first account stays signed in (ACC-03).
+#[test]
+fn a_sign_in_of_a_login_already_added_is_discarded_without_signing_out() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let first_id = import(&sandbox, &first, "first")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "again",
+            "--no-attach",
+        ],
+    );
+    eventually("the duplicate sign-in to be discarded", || {
+        account_labelled_or_none(&sandbox, "again")
+            .is_none()
+            .then_some(())
+    });
+
+    let listed = accounts(&sandbox);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], first_id.as_str());
+    assert_eq!(listed[0]["state"], "signed_in");
+    assert!(!marker.exists(), "a duplicate login is not signed out");
 }

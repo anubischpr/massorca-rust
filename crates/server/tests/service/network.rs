@@ -687,6 +687,10 @@ async fn a_read_only_device_is_refused_every_agent_account_write_and_may_list() 
             serde_json::json!({ "kind": kind, "account": account }),
         ),
         (
+            agents::ACCOUNTS_SIGN_IN,
+            serde_json::json!({ "kind": kind, "account": account }),
+        ),
+        (
             agents::ACCOUNTS_REMOVE,
             serde_json::json!({ "kind": kind, "account": account }),
         ),
@@ -838,6 +842,7 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
                 refresh_base: false,
                 path: None,
                 request_id: None,
+                no_setup: false,
             },
         )
         .await

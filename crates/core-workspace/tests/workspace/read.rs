@@ -1,7 +1,10 @@
 use std::fs;
+use std::path::Path;
 
 use massorca_core_git::{Git, GitVersion};
 use massorca_protocol::codes;
+use massorca_protocol::methods::projects::ProjectKind;
+use massorca_protocol::methods::workspaces::WorkspaceKind;
 
 use crate::fixture::{Fixture, expect_code, project_add, run_git};
 
@@ -143,4 +146,117 @@ fn a_worktree_whose_directory_is_gone_is_prunable_where_git_reports_it() {
     } else {
         assert_eq!(listed[0].prunable, None);
     }
+}
+
+#[test]
+fn a_directory_inside_a_worktree_resolves_to_that_worktree() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    let ws = fx.create(&project.name, "deep");
+    let inside = Path::new(&ws.path).join("src").join("nested");
+    fs::create_dir_all(&inside).expect("create subdirectory");
+
+    let found = fx
+        .workspaces
+        .current_workspace(&inside.to_string_lossy())
+        .expect("the subdirectory is inside the worktree");
+    assert_eq!(found.id, ws.id);
+}
+
+#[test]
+fn a_directory_inside_a_folder_workspace_resolves_to_that_folder() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("notes");
+    let ws = fx.create(&project.name, "main");
+    let inside = fx.path("notes").join("sub");
+    fs::create_dir_all(&inside).expect("create subdirectory");
+
+    let found = fx
+        .workspaces
+        .current_workspace(&inside.to_string_lossy())
+        .expect("the subdirectory is inside the folder");
+    assert_eq!(found.id, ws.id);
+    assert_eq!(found.kind, WorkspaceKind::Folder);
+}
+
+#[test]
+fn the_longest_matching_workspace_path_wins() {
+    let fx = Fixture::new();
+    let outer = fx.folder_project("outer");
+    let outer_ws = fx.create(&outer.name, "outer");
+    let inner_dir = fx.path("outer").join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner folder");
+    let mut inner_params = project_add(&inner_dir);
+    inner_params.kind = Some(ProjectKind::Folder);
+    let inner = fx
+        .workspaces
+        .add_project(inner_params)
+        .expect("add inner folder project");
+    let inner_ws = fx.create(&inner.name, "inner");
+
+    let in_inner = fx
+        .workspaces
+        .current_workspace(&inner_dir.join("file").to_string_lossy())
+        .expect("inside the inner folder");
+    assert_eq!(in_inner.id, inner_ws.id);
+    let in_outer = fx
+        .workspaces
+        .current_workspace(&fx.path("outer").to_string_lossy())
+        .expect("inside the outer folder");
+    assert_eq!(in_outer.id, outer_ws.id);
+}
+
+#[test]
+fn a_sibling_whose_name_only_starts_like_a_workspace_is_not_inside_it() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("notes");
+    fx.create(&project.name, "main");
+    let sibling = fx.path("notes-old");
+    fs::create_dir_all(&sibling).expect("create sibling");
+
+    expect_code(
+        fx.workspaces.current_workspace(&sibling.to_string_lossy()),
+        codes::WORKSPACE_NOT_FOUND,
+    );
+}
+
+#[test]
+fn a_directory_outside_every_workspace_is_not_found() {
+    let fx = Fixture::new();
+    let project = fx.repo_project();
+    fx.create(&project.name, "deep");
+    let outside = fx.path("elsewhere");
+    fs::create_dir_all(&outside).expect("create directory");
+
+    expect_code(
+        fx.workspaces.current_workspace(&outside.to_string_lossy()),
+        codes::WORKSPACE_NOT_FOUND,
+    );
+}
+
+#[test]
+fn a_relative_path_is_refused_because_the_service_cannot_resolve_it() {
+    let fx = Fixture::new();
+    fx.repo_project();
+
+    expect_code(
+        fx.workspaces.current_workspace("relative/dir"),
+        codes::REQUEST_INVALID_PARAMS,
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn a_path_matches_its_workspace_in_any_letter_case() {
+    let fx = Fixture::new();
+    let project = fx.folder_project("Notes");
+    let ws = fx.create(&project.name, "main");
+    let inside = fx.path("Notes").join("sub");
+    fs::create_dir_all(&inside).expect("create subdirectory");
+
+    let found = fx
+        .workspaces
+        .current_workspace(&inside.to_string_lossy().to_uppercase())
+        .expect("the same folder in another case");
+    assert_eq!(found.id, ws.id);
 }

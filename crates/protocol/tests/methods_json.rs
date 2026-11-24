@@ -54,6 +54,7 @@ fn sample_workspace() -> workspaces::Workspace {
         locked: None,
         prunable: None,
         base_refresh: None,
+        setup: None,
     }
 }
 
@@ -100,6 +101,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
+    assert_eq!(workspaces::CURRENT, "workspace.current");
     assert_eq!(workspaces::REMOVE, "workspace.remove");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");
@@ -144,6 +146,7 @@ fn service_info_has_the_documented_shape() {
         profile: "default".to_owned(),
         pid: 4242,
         started_at_ms: 1_767_225_600_000_i64,
+        git: None,
     };
     assert_wire(
         &info,
@@ -156,6 +159,49 @@ fn service_info_has_the_documented_shape() {
             "started_at_ms": 1_767_225_600_000_i64
         }),
     );
+}
+
+#[test]
+fn git_status_has_one_shape_per_state() {
+    let cases = [
+        (
+            service::GitStatus::Present {
+                version: "2.49.0".to_owned(),
+            },
+            json!({ "state": "present", "version": "2.49.0" }),
+        ),
+        (service::GitStatus::Missing, json!({ "state": "missing" })),
+        (
+            service::GitStatus::TooOld {
+                version: "2.24.0".to_owned(),
+                required: "2.25.0".to_owned(),
+            },
+            json!({ "state": "too_old", "version": "2.24.0", "required": "2.25.0" }),
+        ),
+        (
+            service::GitStatus::Unknown {
+                reason: "unrecognised version line".to_owned(),
+            },
+            json!({ "state": "unknown", "reason": "unrecognised version line" }),
+        ),
+    ];
+    for (status, expected) in &cases {
+        assert_wire(status, expected);
+    }
+}
+
+#[test]
+fn service_info_from_an_older_service_has_no_git_status() {
+    let info: service::ServiceInfo = serde_json::from_value(json!({
+        "version": "0.1.0",
+        "protocol": 1,
+        "capabilities": [],
+        "profile": "default",
+        "pid": 1,
+        "started_at_ms": 0
+    }))
+    .expect("an older service's reply decodes");
+    assert_eq!(info.git, None);
 }
 
 #[test]
@@ -301,6 +347,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             refresh_base: false,
             path: None,
             request_id: None,
+            no_setup: false,
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
@@ -325,6 +372,7 @@ fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
             refresh_base: true,
             path: None,
             request_id: None,
+            no_setup: false,
         },
         &json!({
             "project": "app",
@@ -666,4 +714,49 @@ fn unknown_workspace_kind_and_state_in_a_list_decode_as_unknown() {
         workspaces::WorkspaceState::Unknown
     );
     assert_eq!(list.workspaces[1], sample_workspace());
+}
+
+#[test]
+fn workspace_create_params_write_no_setup_only_when_it_is_set() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
+    assert!(!params.no_setup);
+    let skipping = workspaces::WorkspaceCreateParams {
+        no_setup: true,
+        ..params
+    };
+    assert_eq!(
+        serde_json::to_value(&skipping).expect("encodes")["no_setup"],
+        json!(true)
+    );
+}
+
+#[test]
+fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
+    assert!(
+        serde_json::to_value(sample_workspace())
+            .expect("encodes")
+            .get("setup")
+            .is_none()
+    );
+    let started = workspaces::Workspace {
+        setup: Some(workspaces::WorkspaceSetup::Started {
+            terminal: "t-1".to_owned(),
+        }),
+        ..sample_workspace()
+    };
+    assert_eq!(
+        serde_json::to_value(&started).expect("encodes")["setup"],
+        json!({ "outcome": "started", "terminal": "t-1" })
+    );
+    assert_eq!(
+        serde_json::to_value(workspaces::WorkspaceSetup::Failed {
+            reason: "no shell".to_owned()
+        })
+        .expect("encodes"),
+        json!({ "outcome": "failed", "reason": "no shell" })
+    );
+    let newer: workspaces::WorkspaceSetup =
+        serde_json::from_value(json!({ "outcome": "queued" })).expect("decodes");
+    assert_eq!(newer, workspaces::WorkspaceSetup::Unknown);
 }

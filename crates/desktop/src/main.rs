@@ -4,7 +4,8 @@
 //! Flags: `--sample`, `--profile <name>`, `--home <dir>`, `--no-autostart`, `--page <name>` (a debug
 //! page, see `launch_options::DebugPage`). Like the CLI, it reads `MASSORCA_HOME`, `MASSORCA_PROFILE` and
 //! `MASSORCA_NO_AUTOSTART`. `MASSORCA_DESKTOP_BACKGROUND=1` opens the window hidden and unfocused for
-//! automated checks (see `launch_options`).
+//! automated checks (see `launch_options`). A second launch for the same profile raises the running
+//! window and exits (PLAT-07).
 
 use gpui::{
     AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
@@ -12,13 +13,17 @@ use gpui::{
 };
 use massorca_desktop::data::SampleDataSource;
 use massorca_desktop::launch_options::WindowLaunch;
+use massorca_desktop::local_log;
 use massorca_desktop::model::teams::SampleTeamsSource;
-use massorca_desktop::service::LaunchOptions;
+use massorca_desktop::service::{LaunchOptions, close_link_on_quit};
 use massorca_desktop::shell::{self, Shell};
+use massorca_desktop::single_instance::{self, LaunchPlan};
 use massorca_desktop::store::ClientDataSource;
+use massorca_desktop::ui_state;
 use massorca_desktop::window_identity;
+use massorca_profile::claim_desktop;
+use massorca_ui::Assets;
 use massorca_ui::tokens::{LAYOUT_WINDOW_MIN_HEIGHT, LAYOUT_WINDOW_MIN_WIDTH};
-use massorca_ui::{Appearance, Assets};
 use std::io::Write;
 
 fn main() {
@@ -30,13 +35,48 @@ fn main() {
                 std::process::exit(2);
             }
         };
+    // Held until `main` returns, so the local log is flushed when the app quits.
+    let _local_log = match local_log::start_for_launch(&options) {
+        Ok(guard) => guard,
+        Err(message) => {
+            report(&message);
+            None
+        }
+    };
     let launch = WindowLaunch::from_env(|key| std::env::var(key).ok());
+    // An automated launch is never handed off to the user's window, so it claims nothing.
+    let profile = if launch.background {
+        None
+    } else {
+        match options.resolve_profile() {
+            Ok(profile) => Some(profile),
+            Err(message) => {
+                report(&message);
+                std::process::exit(2);
+            }
+        }
+    };
+    // A claim that fails must not stop the person from opening the app, so it only costs single-instance.
+    let (plan, claim_error) = single_instance::plan_launch(profile.as_ref().map(claim_desktop));
+    if let Some(message) = claim_error {
+        report(&message);
+    }
+    let owner = match plan {
+        LaunchPlan::Open(owner) => owner,
+        // The running window was raised for this launch, so there is nothing left to open.
+        LaunchPlan::HandedOff => return,
+    };
+    // Read before the window opens, so the first frame already paints the theme saved last.
+    let saved = profile.as_ref().map(ui_state::load).unwrap_or_default();
     let debug_page = options.page;
     gpui_platform::application()
         .with_assets(Assets)
         .run(move |cx| {
-            if let Err(error) = massorca_ui::init(Appearance::Dark, cx) {
+            if let Err(error) = massorca_ui::init(saved.theme, cx) {
                 report(&error.to_string());
+            }
+            if let Some(profile) = profile {
+                ui_state::install(cx, profile, saved.clone());
             }
             shell::bind_keys(cx);
             // The bridge starts before the window so the first paint already shows "Connecting".
@@ -52,8 +92,12 @@ fn main() {
                     }
                 }
             };
+            if let Some(source) = &client {
+                close_link_on_quit(cx, source.closer());
+            }
             let window_size = size(px(1440.), px(900.));
             let bounds = Bounds::centered(None, window_size, cx);
+            let open_regions = saved.open_regions.clone();
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -83,6 +127,7 @@ fn main() {
                             Some(source) => Shell::with_client(source, window, cx),
                             None => Shell::new(&SampleDataSource, &SampleTeamsSource, window, cx),
                         };
+                        shell.restore_open_regions(open_regions);
                         if let Some(field) = launch.debug_focus {
                             shell.start_debug_input(field, window, cx);
                         }
@@ -93,6 +138,12 @@ fn main() {
                     })
                 },
             );
+            // Only an opened window can be raised, so later launches are answered from here on.
+            if let (Some(owner), Ok(window)) = (owner, opened.as_ref()) {
+                single_instance::raise_on_handoff(owner, *window, cx).unwrap_or_else(|error| {
+                    report(&format!("cannot answer later launches: {error}"))
+                });
+            }
             match opened {
                 // GPUI applies the requested size only when it activates a window; a hidden one never is.
                 Ok(window) if launch.background => {

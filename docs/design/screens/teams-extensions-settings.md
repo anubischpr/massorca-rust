@@ -285,7 +285,7 @@ Each section below lists purpose, rows, states and where its artboard is. Row ty
 
 **D-ST-01 General and account.** Rows: Conversations without a project (folder picker, default `~/MassOrca/Conversations` on each host; where "No project" sessions are saved, owner 2026-11-21); MassOrca account (signed-in state; Sign out in a confirm, D-OT-14); Updates (release channel stable or preview; update status: up to date, available, downloading, failed; Check for updates); Workspace defaults (root folder for new projects; editor defaults); Setup checklist (the same checklist as D-OB-12); Support (opens the feedback dialog, D-WS-23). States: loading; update status with its word.
 
-**D-ST-02 Agents and accounts.** Rows: default agent and launch behaviour; agent availability (one row per agent: detected, missing or signed out, with the word); agent accounts and usage (content of D-AC-01 and D-AC-06); computer use; browser access; keep-awake; session search; delegation depth limit (a number from 1 to 5, default 3; the engine is X-DL-01; the owner asked for a limit as a setting, decision 11). States: per agent detected, missing, signed out.
+**D-ST-02 Agents and accounts.** Rows: default agent and launch behaviour; agent availability (one row per agent: detected, missing or signed out, with the word); agent accounts and usage (content of D-AC-01 and D-AC-06); computer use; browser access; keep-awake; session search; delegation depth limit (a number from 1 to 5, default 1 per pv96 and decision 0070; the engine is X-DL-01; the owner asked for a limit as a setting, decision 11). States: per agent detected, missing, signed out.
 
 **D-ST-03 Appearance and layout.** Artboard 11, light. Rows: Theme (System, Dark, Light; System follows the OS until the user chooses, A8); Import theme (Warp and Ghostty; a theme below the contrast minimum is rejected with the failing pair named; D-CU-03); Layout preset (a Select of saved presets and a Save as preset ghost button; D-CU-01); Accent colour (six presets, Lavender first and default (A15), and a custom colour; swatches 20 px; the contrast check line under the control); Density (Compact, Default, Comfortable); Text size (slider, 90% to 130%); Interface font and Monospace font (Selects); Session summary (Switch; "Shows only the cards that have information"); Status bar items (five checkboxes: Agent status, Memory, Terminals, Ports, Hosts). Applies at once; the frame and canvas follow the tokens (A11).
 
@@ -525,6 +525,8 @@ Footer (top `border.subtle`): Cancel (secondary) and the primary: Save secret, R
 
 **Accessibility.** The card is a group named "Secret request: OPENAI_API_KEY". The state is a live status line. The lock line is part of the group's description.
 
+**Desktop, first slice.** The pending requests sit in a "Waiting for you" block at the top of the Secret vault page (8.1), one card each: "<asker> needs <NAME> in <scope>", the reason, and the answers. Store a value opens the Add dialog with the name locked and the scope set; a team scope cannot take a value yet. Use the secret in <scope> links the name to a scope that already owns it (`secret.link`). Decline sends `secret.decline`. Each answer goes to the service only, and the card leaves when the vault is read again. The transcript card above is not built yet, so a request is answered from Settings for now.
+
 **Security.** Agent-supplied title, name and reason are untrusted: plain text, length-limited, the name validated (A29). The card holds the name, the scope label, the host label and a state enum, never a value.
 
 **Desktop and Android.** Desktop here. Android shows the same card in the session chat (M-CH-01).
@@ -557,7 +559,7 @@ Each decision below was taken without the owner. Ordered by impact.
 | 8 | When the lead bot's host is unreachable, the Conference room keeps the typed message in the box and does not queue it. | Queue messages until the host is back. | A queue needs a delivery state and an ordering rule. |
 | 9 | The team project brief and link screen (D-WS-31) and team memory (D-AG-26) are specified in text, not drawn. | Draw them as artboards. | Two more artboards (the cap is 14). |
 | 10 | Team memory: the Bot and Team tabs, and only the team's bots and the owner can read it. | Another audience. | Audience note only. |
-| 11 | The delegation depth limit is a number from 1 to 5, default 3, in Agents and accounts. | Another default. | Default value only. |
+| 11 | The delegation depth limit is a number from 1 to 5, default 1 (pv96 ships 1; was 3), in Agents and accounts. | Another default. | Default value only. |
 | 12 | The transcription key (D-ST-08) is entered through the Secret modal and stored in the vault, never in a plain field. | A plain field in Notifications and voice. | A credential would be shown in a field and could be logged. |
 | 13 | Superseded (owner, 2026-11-12): the extension manager lives in the Marketplace ("Installed"), reached from the rail. | - | Settings keeps a link row only. |
 | 14 | The in-app application is declarative only; the sandboxed web view (pending-owner-review item 3) is not designed. | Design the web view as a Work panel tab. | One more artboard and a security review. |

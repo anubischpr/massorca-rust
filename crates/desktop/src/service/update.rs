@@ -15,7 +15,7 @@ use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
@@ -54,6 +54,8 @@ pub enum StoreUpdate {
     AgentQueuesResync(Option<Vec<AgentQueueList>>),
     /// One session's prompt queue as the service lists it now.
     AgentQueueChanged(AgentQueueList),
+    /// Whether the service offers seen state (`agent-seen/1`), read on each connect.
+    AgentSeenOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -134,6 +136,8 @@ pub enum SecretsUpdate {
     Status(Result<SecretStatus, Refusal>),
     /// Every name in every scope, owned and linked, or why they could not be read.
     List(Result<Vec<SecretEntry>, Refusal>),
+    /// The requests still pending, or why they could not be read. Names, reasons and times only.
+    Requests(Result<Vec<SecretRequest>, Refusal>),
 }
 
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
@@ -181,6 +185,7 @@ pub struct WorkspaceGit {
 pub struct SecretsState {
     pub status: Option<Result<SecretStatus, Refusal>>,
     pub list: Option<Result<Vec<SecretEntry>, Refusal>>,
+    pub requests: Option<Result<Vec<SecretRequest>, Refusal>>,
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
@@ -228,6 +233,8 @@ pub struct StoreState {
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
     /// while the service offers no queue.
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
+    /// Whether the service offers seen state (`agent-seen/1`); without it no session is unread.
+    pub agent_seen: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -257,6 +264,7 @@ impl Default for StoreState {
             host_listings: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
+            agent_seen: false,
             config: Vec::new(),
         }
     }
@@ -337,6 +345,7 @@ impl StoreState {
                         .collect()
                 });
             }
+            StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -376,6 +385,9 @@ impl StoreState {
             }
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
+            }
+            StoreUpdate::Secrets(SecretsUpdate::Requests(result)) => {
+                self.secrets.requests = Some(result);
             }
             StoreUpdate::Accounts { kind, result } => {
                 self.accounts.insert(kind, result);
@@ -610,6 +622,7 @@ pub(crate) mod fixtures {
             locked: None,
             prunable: None,
             base_refresh: None,
+            setup: None,
         }
     }
 
