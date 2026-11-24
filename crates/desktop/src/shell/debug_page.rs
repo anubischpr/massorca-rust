@@ -272,16 +272,16 @@ impl Shell {
             }
             Target::Session(id) => {
                 self.go_home(Mode::Workspaces);
-                self.model.open_session(&id);
+                self.open_session(&id, cx);
             }
             Target::Delegate(id) => {
                 self.go_home(Mode::Workspaces);
-                self.model.open_session(&id);
+                self.open_session(&id, cx);
                 self.open_delegate(&id, window, cx);
             }
             Target::BringBack(child) => {
                 self.go_home(Mode::Workspaces);
-                self.model.open_session(&child);
+                self.open_session(&child, cx);
                 self.ask_bring_back(&child, cx);
             }
             Target::Settings(section) => self.open_debug_settings(section),

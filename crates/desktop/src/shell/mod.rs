@@ -94,6 +94,8 @@ mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
+mod seen_tests;
+#[cfg(test)]
 mod service_tests;
 #[cfg(test)]
 mod session_view_tests;
@@ -566,9 +568,36 @@ impl Shell {
         self.dismiss_palette(window, cx);
         match action {
             PaletteAction::Command(Command::ToggleTheme) => self.toggle_app_theme(cx),
+            PaletteAction::OpenSession(id) => self.open_session(&id, cx),
             other => self.model.run_palette_action(&other),
         }
         cx.notify();
+    }
+
+    /// Opens a session and tells the service the person has seen what it reported. The store follows the service's
+    /// event; a refusal changes nothing, so the session just stays unread.
+    pub(crate) fn open_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.model.open_session(id);
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let state = self.store.read(cx).state();
+        let Some(session) = state.agents.iter().find(|session| session.id == id) else {
+            return;
+        };
+        if !crate::model::agent_sessions::is_unread(session, state.agent_seen) {
+            return;
+        }
+        // Name the activity shown, so a newer one that arrives meanwhile stays unread.
+        let at_ms = session.activity.as_ref().map(|activity| activity.at_ms);
+        let params = massorca_protocol::methods::agents::AgentMarkSeenParams {
+            session: id.to_owned(),
+            at_ms,
+        };
+        cx.spawn(async move |_, _| {
+            let _ = service.agent_mark_seen(params).await;
+        })
+        .detach();
     }
 
     /// Clears the query field and gives focus back to the control that opened the palette.

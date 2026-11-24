@@ -11,6 +11,7 @@ use massorca_ui::IconName;
 use massorca_ui::components::agent_status::{
     AgentState as GlyphState, AgentStatus, AgentStatusSize,
 };
+use massorca_ui::components::badge::{Badge, BadgeTone};
 use massorca_ui::components::icon_button::IconButton;
 use massorca_ui::components::list_row::TREE_INDENT;
 use massorca_ui::components::sidebar_row::{
@@ -93,6 +94,7 @@ pub(super) fn tree_row(
             place,
             own_worktree,
             can_bring_back,
+            unread,
         } => {
             let row = session_row(
                 id,
@@ -103,6 +105,13 @@ pub(super) fn tree_row(
                 *selected,
                 place.as_deref().map(|place| (place, *own_worktree)),
             );
+            // The design's unread mark is an accent dot; the row has no title-weight option and the ui crate is out of
+            // this change, so the title keeps its weight.
+            let row = if *unread {
+                row.trailing(Badge::dot().tone(BadgeTone::Accent))
+            } else {
+                row
+            };
             if *can_bring_back {
                 row.hover_action(bring_back_action(session_id, shell))
             } else {

@@ -66,6 +66,8 @@ pub enum TreeRow {
         own_worktree: bool,
         /// Whether the row offers to bring this child back.
         can_bring_back: bool,
+        /// An unread session: shown with a dot and never folded (WS-33).
+        unread: bool,
     },
     /// Shows a workspace's folded sessions: `count` of its top sessions are hidden behind it.
     ShowMore {
@@ -169,6 +171,7 @@ fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, act
         place: session.place.clone(),
         own_worktree: session.own_worktree,
         can_bring_back: session.can_bring_back,
+        unread: session.unread,
     });
     for child in &session.children {
         push_session(rows, child, depth + 1, active);
@@ -277,10 +280,10 @@ fn fold_blocks(
     rows
 }
 
-/// Whether a top session and its children stay listed: one is open, waits for the person or failed.
+/// Whether a top session and its children stay listed: one is open, unread, waits for the person or failed.
 fn stays_listed(block: &[TreeRow]) -> bool {
     block.iter().any(|row| {
-        matches!(row, TreeRow::Session { state, selected, .. } if *selected || state.never_folds())
+        matches!(row, TreeRow::Session { state, selected, unread, .. } if *selected || *unread || state.never_folds())
     })
 }
 
@@ -421,6 +424,7 @@ mod tests {
             place: None,
             own_worktree: false,
             can_bring_back: false,
+            unread: false,
             children: Vec::new(),
         }
     }
@@ -533,6 +537,31 @@ mod tests {
         assert_eq!(
             shown(&folded(&tree, &SidebarFolds::default())),
             ["s1", "s2", "s3", "s4", "s5", "s7", "s8", "Show 1 more"]
+        );
+    }
+
+    #[test]
+    fn unread_sessions_never_fold_even_beyond_five() {
+        let mut sessions = idle_sessions("s", 8);
+        sessions[6].unread = true;
+        let tree = snapshot(vec![("w", sessions)], None);
+        assert_eq!(
+            shown(&folded(&tree, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s7", "Show 2 more"]
+        );
+    }
+
+    #[test]
+    fn an_unread_child_keeps_its_top_session_listed() {
+        let mut sessions = idle_sessions("s", 7);
+        sessions[6].children = vec![SessionRow {
+            unread: true,
+            ..session("c", AgentState::Done)
+        }];
+        let tree = snapshot(vec![("w", sessions)], None);
+        assert_eq!(
+            shown(&folded(&tree, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s7", "c", "Show 1 more"]
         );
     }
 

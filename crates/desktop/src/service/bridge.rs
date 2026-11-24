@@ -13,9 +13,9 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentModeSet, AgentPromptParams,
-    AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, BringBackResult,
-    PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentMarkSeenParams, AgentModeSet,
+    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
+    BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -93,6 +93,11 @@ pub(crate) enum Command {
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    /// `agent.mark_seen`, answered on its oneshot; the store follows the service's `agent.changed` event.
+    MarkSeen {
+        params: AgentMarkSeenParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     BringBack {
         params: AgentBringBackParams,
@@ -618,6 +623,9 @@ impl Link {
         let queues = agent_queue::read_all(client, &sessions).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
         self.emit(StoreUpdate::AgentQueuesResync(queues));
+        self.emit(StoreUpdate::AgentSeenOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_SEEN),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -941,6 +949,7 @@ fn spawn_call(
         Command::AgentSetMode { params, reply } => {
             agents::spawn_set_mode(&client, params, reply, updates);
         }
+        Command::MarkSeen { params, reply } => agents::spawn_mark_seen(&client, params, reply),
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -1015,6 +1024,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::MarkSeen { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::AgentSetMode { reply, .. } => {

@@ -54,6 +54,8 @@ pub enum StoreUpdate {
     AgentQueuesResync(Option<Vec<AgentQueueList>>),
     /// One session's prompt queue as the service lists it now.
     AgentQueueChanged(AgentQueueList),
+    /// Whether the service offers seen state (`agent-seen/1`), read on each connect.
+    AgentSeenOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
@@ -224,6 +226,8 @@ pub struct StoreState {
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
     /// while the service offers no queue.
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
+    /// Whether the service offers seen state (`agent-seen/1`); without it no session is unread.
+    pub agent_seen: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -252,6 +256,7 @@ impl Default for StoreState {
             extensions: None,
             accounts: BTreeMap::new(),
             agent_queues: None,
+            agent_seen: false,
             config: Vec::new(),
         }
     }
@@ -332,6 +337,7 @@ impl StoreState {
                         .collect()
                 });
             }
+            StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
