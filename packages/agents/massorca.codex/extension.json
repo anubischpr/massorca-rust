@@ -24,6 +24,11 @@
           { "os": "windows", "command": ["npm", "install", "-g", "@openai/codex"] },
           { "os": "linux", "command": ["npm", "install", "-g", "@openai/codex"] },
           { "os": "macos", "command": ["npm", "install", "-g", "@openai/codex"] }
+        ],
+        "uninstall": [
+          { "os": "windows", "command": ["npm", "uninstall", "-g", "@openai/codex"] },
+          { "os": "linux", "command": ["npm", "uninstall", "-g", "@openai/codex"] },
+          { "os": "macos", "command": ["npm", "uninstall", "-g", "@openai/codex"] }
         ]
       }
     }]
