@@ -3,6 +3,7 @@
 
 mod access;
 mod board;
+mod bot_edit;
 mod card_menu;
 mod live;
 mod new_project;
@@ -15,6 +16,7 @@ mod types;
 
 pub use access::{access_change, access_line, new_team_access_hint};
 pub use board::{BoardView, CardView, ColumnView, Landing, PickStep};
+pub use bot_edit::{BotChange, BotForm};
 pub use card_menu::{CardMenuRow, card_menu_rows};
 pub use live::{agent_of_kind, live_teams};
 pub use new_project::{NewProject, ProjectDraft};

@@ -11,9 +11,9 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, Team, TeamAccess, TeamCreateParams, TeamProject,
-    TeamProjectAddParams, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef,
-    TeamRemoveParams, TeamUpdateParams,
+    Board, BoardParams, Bot, BotAddParams, BotRemoveParams, BotUpdateParams, Team, TeamAccess,
+    TeamCreateParams, TeamProject, TeamProjectAddParams, TeamProjectRemoveParams,
+    TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -167,6 +167,14 @@ pub(crate) enum TeamCommand {
         params: TeamProjectAddParams,
         reply: oneshot::Sender<Result<TeamProject, Refusal>>,
     },
+    UpdateBot {
+        params: BotUpdateParams,
+        reply: oneshot::Sender<Result<Bot, Refusal>>,
+    },
+    RemoveBot {
+        params: BotRemoveParams,
+        reply: oneshot::Sender<Result<Bot, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -264,6 +272,16 @@ pub(super) fn spawn_call(
                 client.team_project_add(&params).await
             });
         }
+        TeamCommand::UpdateBot { params, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_bot_update(&params).await
+            });
+        }
+        TeamCommand::RemoveBot { params, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_bot_remove(&params).await
+            });
+        }
     }
 }
 
@@ -286,6 +304,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::AddProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::UpdateBot { reply, .. } | TeamCommand::RemoveBot { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -379,6 +400,19 @@ impl ServiceHandle {
         params: TeamProjectAddParams,
     ) -> Result<TeamProject, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::AddProject { params, reply }))
+            .await
+    }
+
+    /// `team.bot_update`. The bot shows its change when the read that follows the answer lands.
+    pub async fn update_bot(&self, params: BotUpdateParams) -> Result<Bot, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::UpdateBot { params, reply }))
+            .await
+    }
+
+    /// `team.bot_rm`. A bot that owns open tasks is refused unless `unassign` is set. The bot leaves the teams when
+    /// the read that follows the answer lands.
+    pub async fn remove_bot(&self, params: BotRemoveParams) -> Result<Bot, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::RemoveBot { params, reply }))
             .await
     }
 }
