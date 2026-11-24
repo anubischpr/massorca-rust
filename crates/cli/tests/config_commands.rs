@@ -2,7 +2,9 @@
 
 mod harness;
 
-use harness::{Sandbox, stdout_text};
+use std::path::PathBuf;
+
+use harness::{Sandbox, git_repo, stdout_text};
 use predicates::str::contains;
 
 #[test]
@@ -130,4 +132,64 @@ fn settings_set_reset_and_list_a_choice_setting() {
         .expect("the theme is listed");
     assert_eq!(theme["value"], "system");
     assert_eq!(theme["is_default"], true);
+}
+
+#[test]
+fn workspaces_layout_is_nested_by_default_and_takes_only_nested_or_flat() {
+    let sandbox = Sandbox::new();
+
+    let got = sandbox.json_ok("default", &["config", "get", "workspaces.layout"]);
+    assert_eq!(got["value"], "nested");
+    assert_eq!(got["is_default"], true);
+    assert_eq!(got["choices"], serde_json::json!(["nested", "flat"]));
+
+    sandbox
+        .run(
+            "default",
+            &["config", "set", "workspaces.layout", "sideways"],
+        )
+        .code(1)
+        .stderr(contains("config.invalid_value"));
+
+    sandbox
+        .run("default", &["config", "set", "workspaces.layout", "flat"])
+        .success()
+        .stdout(contains("workspaces.layout = flat"));
+    let flat = sandbox.json_ok("default", &["config", "get", "workspaces.layout"]);
+    assert_eq!(flat["value"], "flat");
+    assert_eq!(flat["is_default"], false);
+}
+
+#[test]
+fn a_flat_layout_puts_a_new_projects_workspace_directly_in_the_default_root() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.home().join("workspaces");
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let root_text = root.to_string_lossy().into_owned();
+    let repo_text = repo.to_string_lossy().into_owned();
+    sandbox
+        .run(
+            "default",
+            &[
+                "config",
+                "set",
+                "workspaces.default_root",
+                root_text.as_str(),
+            ],
+        )
+        .success();
+    sandbox
+        .run("default", &["config", "set", "workspaces.layout", "flat"])
+        .success();
+
+    let added = sandbox.json_ok("default", &["project", "add", repo_text.as_str()]);
+    assert_eq!(added["workspaces_root"], root_text.as_str());
+
+    let created = sandbox.json_ok("default", &["workspace", "create", "repo", "feature"]);
+    let path = PathBuf::from(created["path"].as_str().expect("path"));
+    assert_eq!(
+        std::fs::canonicalize(&path).expect("the workspace exists"),
+        std::fs::canonicalize(root.join("feature")).expect("the workspace exists")
+    );
 }

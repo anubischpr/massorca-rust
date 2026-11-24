@@ -128,6 +128,7 @@ async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             },

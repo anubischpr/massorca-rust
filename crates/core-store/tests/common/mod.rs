@@ -13,6 +13,7 @@ pub fn project_row(name: &str, path_key: &str) -> ProjectRow {
         name: name.to_owned(),
         workspaces_root: format!("/repos/{name}-workspaces"),
         added_at: now_ms(),
+        base_ref: None,
     }
 }
 
