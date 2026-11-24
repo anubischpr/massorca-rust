@@ -112,6 +112,15 @@ pub(super) fn tree_row(
             } else {
                 row
             };
+            // A click opens the session, and tells the service it was seen when it was unread (WS-33).
+            let (open_shell, open_id) = (shell.clone(), session_id.clone());
+            let row = row.on_click(move |_, _, cx| {
+                let id = open_id.clone();
+                let _ = open_shell.update(cx, |shell, cx| {
+                    shell.open_session(&id, cx);
+                    cx.notify();
+                });
+            });
             if *can_bring_back {
                 row.hover_action(bring_back_action(session_id, shell))
             } else {
@@ -140,7 +149,7 @@ pub(super) fn tree_row(
     item.focus_handle(focus.clone()).tab_stop(true)
 }
 
-/// One tree row as an element. A fold row carries a debug selector, so tests can click it.
+/// One tree row as an element. A fold row or a session carries a debug selector, so tests can click it.
 pub(super) fn tree_item(
     row: &TreeRow,
     index: usize,
@@ -148,7 +157,7 @@ pub(super) fn tree_item(
     shell: &WeakEntity<Shell>,
 ) -> AnyElement {
     let item = tree_row(row, index, focus, shell);
-    match fold_selector(row) {
+    match row_selector(row) {
         Some(selector) => div()
             .debug_selector(move || selector)
             .child(item)
@@ -157,11 +166,12 @@ pub(super) fn tree_item(
     }
 }
 
-/// The debug selector of a fold row, named by its workspace.
-fn fold_selector(row: &TreeRow) -> Option<String> {
+/// The debug selector of a row a test clicks: a fold row named by its workspace, a session by its id.
+fn row_selector(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::ShowMore { workspace_id, .. } => Some(format!("sidebar-show-more-{workspace_id}")),
         TreeRow::ShowLess { workspace_id } => Some(format!("sidebar-show-less-{workspace_id}")),
+        TreeRow::Session { id, .. } => Some(format!("sidebar-session-{id}")),
         _ => None,
     }
 }

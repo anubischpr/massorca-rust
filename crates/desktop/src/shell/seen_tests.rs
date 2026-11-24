@@ -3,7 +3,7 @@
 use gpui::{TestAppContext, VisualTestContext};
 use massorca_protocol::methods::agents::{Activity, ActivitySource, ActivityState, Outcome};
 
-use super::service_tests::{Rig, rig};
+use super::service_tests::{Rig, click, rig};
 use crate::service::fixtures::agent;
 use crate::service::{Command, StoreUpdate};
 
@@ -77,4 +77,23 @@ fn without_the_capability_nothing_is_sent_and_the_session_still_opens(cx: &mut T
     rig.shell.read_with(cx, |shell, _| {
         assert_eq!(shell.model.snapshot().active_session.as_deref(), Some("u"));
     });
+}
+
+#[gpui::test]
+fn clicking_an_unread_session_row_opens_it_and_marks_it_seen(cx: &mut TestAppContext) {
+    let (mut rig, cx) = sessions(cx, true);
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.model.snapshot().active_session, None);
+    });
+
+    click(cx, "sidebar-session-u");
+
+    rig.shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.model.snapshot().active_session.as_deref(), Some("u"));
+    });
+    let Some(Command::MarkSeen { params, .. }) = rig.script.next() else {
+        panic!("agent.mark_seen was expected");
+    };
+    assert_eq!(params.session, "u");
+    assert!(rig.script.next().is_none(), "one call only");
 }
