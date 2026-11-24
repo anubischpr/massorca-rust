@@ -302,6 +302,26 @@ pub enum ProjectCommand {
         #[arg(long)]
         clear_icon: bool,
     },
+    /// Shows a project's orca.yaml setup and archive scripts with their hashes and whether each is trusted.
+    Scripts {
+        /// Project id, name or path.
+        project: String,
+        /// Reads the scripts from this workspace's folder, the copy a create of its branch runs.
+        #[arg(long, value_name = "WORKSPACE")]
+        workspace: Option<String>,
+    },
+    /// Shows a project's orca.yaml setup and archive scripts with their hashes; `--hash` trusts the shown script with
+    /// that hash. A script runs only once its exact content is trusted, and a changed script needs trust again.
+    TrustScripts {
+        /// Project id, name or path.
+        project: String,
+        /// Reads the scripts from this workspace's folder, the copy a create of its branch runs.
+        #[arg(long, value_name = "WORKSPACE")]
+        workspace: Option<String>,
+        /// Trusts the shown script with this hash. Repeat it to trust both scripts.
+        #[arg(long = "hash", value_name = "HASH")]
+        hashes: Vec<String>,
+    },
 }
 
 #[derive(Debug, Args)]
