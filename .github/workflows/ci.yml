@@ -63,6 +63,7 @@ jobs:
       ui: ${{ steps.groups.outputs.ui }}
       desktop_deps: ${{ steps.groups.outputs.desktop_deps }}
       release: ${{ steps.groups.outputs.release }}
+      mobile: ${{ steps.groups.outputs.mobile }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -71,27 +72,29 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; echo "release=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; echo "release=true" >> "$GITHUB_OUTPUT"; echo "mobile=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
           echo "$files"
-          all=false; core=false; ui=false; deps=false; scripts=false
+          all=false; core=false; ui=false; deps=false; scripts=false; mobile=false
           while IFS= read -r f; do
             case "$f" in
               Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|.github/workflows/*) all=true ;;
+              mobile/*) mobile=true ;;
               scripts/*) scripts=true ;;
               crates/ui/*|crates/desktop/*) ui=true ;;
               crates/protocol/*|crates/client/*|crates/server/*|crates/core-*/*|crates/profile/*|crates/cli/*) core=true; deps=true ;;
               crates/*) core=true ;;
             esac
           done <<< "$files"
-          if [ "$all" = true ]; then core=true; ui=true; fi
+          if [ "$all" = true ]; then core=true; ui=true; mobile=true; fi
           release=false
           if [ "$core" = true ] || [ "$ui" = true ] || [ "$scripts" = true ]; then release=true; fi
           echo "core=$core" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
           echo "desktop_deps=$deps" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "mobile=$mobile" >> "$GITHUB_OUTPUT"
 
   fmt:
     runs-on: ubuntu-latest
@@ -242,6 +245,62 @@ jobs:
       - name: Build the binding for arm64-v8a and x86_64
         run: cargo ndk -t arm64-v8a -t x86_64 build --locked -p massorca-client-ffi
 
+  # The phone's debug APK (decision 0080, task A7): the Rust library for both ABIs, the generated glue and the Keystore
+  # module. Builds only; the APK is an artifact. Fails when the committed TypeScript bindings are not what the Rust
+  # crate generates now (mobile/README.md). No emulator.
+  android-apk:
+    name: Android debug APK
+    needs: changes
+    if: needs.changes.outputs.core == 'true' || needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: rustup toolchain install
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - name: Use the runner's Android NDK
+        run: |
+          set -euo pipefail
+          test -d "$ANDROID_NDK_LATEST_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - run: cargo install --locked cargo-ndk --version 4.1.2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-apk
+      - run: npm ci
+      - name: Build the Rust library and generate the glue
+        run: npx ubrn build android --config ubrn.config.yaml --and-generate
+      - name: Check the committed TypeScript is what the crate generates
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all -- src)" || {
+            git status --short -- src
+            echo "the generated TypeScript differs from what is committed; regenerate it (mobile/README.md)" >&2
+            exit 1
+          }
+      - name: Build the debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v7
+        with:
+          name: massorca-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
   # Linux programs for the desktop bundle (decisions 0075, 0076): build and check only, no secrets, nothing published.
   # zig pins the glibc version the programs link against, so the floor does not depend on the runner image.
   linux-programs:
@@ -376,3 +435,26 @@ jobs:
           name: massorca-desktop-bundle-${{ runner.os }}
           path: bundle
           if-no-files-found: error
+
+  # The phone app (decision 0080, task A7): TypeScript, lint, the generated tokens and Jest, with no native library.
+  mobile:
+    name: mobile (typecheck, lint, test)
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run tokens:check
+      - run: node scripts/generate-terminal-asset.ts --check
+      - run: npm test
