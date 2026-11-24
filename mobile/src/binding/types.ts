@@ -1,7 +1,6 @@
-// The app's view of crates/client-ffi (decision 0080, section 1), as uniffi-bindgen-react-native will expose it.
-// Records are interfaces, enums are tagged unions (`tag` names the Rust variant), objects are interfaces with
-// methods, `Option<T>` is `T | undefined`, and 64-bit integers are `bigint`. The generated module replaces these
-// declarations in the next task; the screens code against these names.
+// The app's view of crates/client-ffi (decision 0080, section 1). Records are interfaces, enums are tagged unions
+// (`tag` names the Rust variant), objects are interfaces with methods, `Option<T>` is `T | undefined`, and 64-bit
+// integers are `bigint`. native.ts adapts the generated module to these names; the screens code against them only.
 
 /** A host this phone is paired with, as the store lists it. */
 export interface HostSummary {
@@ -144,8 +143,8 @@ export type FfiError =
 export class FfiException extends Error {
   readonly error: FfiError;
 
-  constructor(error: FfiError) {
-    super(error.message);
+  constructor(error: FfiError, options?: ErrorOptions) {
+    super(error.message, options);
     this.name = 'FfiException';
     this.error = error;
   }
