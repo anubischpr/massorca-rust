@@ -12,6 +12,7 @@ use extension_support::Host;
 const CODEX: &str = "catalogue:massorca.codex";
 const ANTIGRAVITY: &str = "catalogue:massorca.antigravity";
 const CLAUDE: &str = "catalogue:massorca.claude";
+const GENTLE_SHELL: &str = "catalogue:massorca.gentle-shell";
 const CLAUDE_ID: &str = "massorca.claude";
 
 fn install_log(host: &Host, id: &str) -> String {
@@ -165,6 +166,41 @@ fn uninstall_cli_leaves_a_cli_the_package_did_not_install() {
         host.has_cli("claude"),
         "the CLI was not the package's to remove"
     );
+}
+
+#[test]
+fn codex_and_gentle_shell_uninstall_only_a_cli_they_installed() {
+    for (source, id, binary) in [
+        (CODEX, "massorca.codex", "codex"),
+        (GENTLE_SHELL, "massorca.gentle-shell", "gentle-shell"),
+    ] {
+        let host = Host::new();
+        host.json(&[
+            "extension",
+            "install",
+            source,
+            "--yes",
+            "--yes-run-installer",
+        ]);
+        assert!(host.has_cli(binary), "{id} installed its CLI");
+
+        let removed = host.json(&["extension", "remove", id, "--uninstall-cli", "--yes"]);
+        assert_eq!(removed["cli"][0]["action"], "ran", "{removed}");
+        assert!(!host.has_cli(binary), "{id} ran its uninstaller");
+        assert!(
+            host.extensions_dir()
+                .join(format!("logs/{id}-uninstall.log"))
+                .exists(),
+            "{id} logged its uninstall"
+        );
+
+        let host = Host::new();
+        host.put_cli(binary);
+        host.json(&["extension", "install", source, "--yes"]);
+        let removed = host.json(&["extension", "remove", id, "--uninstall-cli"]);
+        assert_eq!(removed["cli"][0]["action"], "left_alone", "{removed}");
+        assert!(host.has_cli(binary), "{id} kept a CLI it did not install");
+    }
 }
 
 #[test]

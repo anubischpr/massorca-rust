@@ -314,6 +314,43 @@ async fn a_new_default_root_applies_to_the_next_project_without_restarting() {
 }
 
 #[tokio::test]
+async fn a_flat_layout_puts_the_next_projects_workspaces_in_the_default_root() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let elsewhere: PathBuf = home.path().join("elsewhere");
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    for (key, value) in [
+        (
+            "workspaces.default_root",
+            json!(elsewhere.to_str().expect("utf-8")),
+        ),
+        ("workspaces.layout", json!("flat")),
+    ] {
+        client
+            .call::<_, Value>(
+                config::SET,
+                &ConfigSet {
+                    owner: None,
+                    key: key.to_owned(),
+                    value,
+                },
+            )
+            .await
+            .expect("config.set");
+    }
+
+    let project: Project = client
+        .call(projects::ADD, &add_params(&repo))
+        .await
+        .expect("add");
+
+    assert_eq!(Path::new(&project.workspaces_root), elsewhere.as_path());
+    stop(running).await;
+}
+
+#[tokio::test]
 async fn adding_a_linked_worktree_registers_its_main_repository() {
     let home = temp_home();
     let repo = home.path().join("repo");
@@ -387,6 +424,7 @@ async fn forgetting_a_project_is_refused_while_a_terminal_runs_in_it_and_publish
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             },

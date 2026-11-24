@@ -536,6 +536,7 @@ pub(crate) mod fixtures {
             created_at_ms: created,
             locked: None,
             prunable: None,
+            base_refresh: None,
         }
     }
 

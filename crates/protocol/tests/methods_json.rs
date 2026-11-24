@@ -53,6 +53,7 @@ fn sample_workspace() -> workspaces::Workspace {
         created_at_ms: 1_767_225_600_500_i64,
         locked: None,
         prunable: None,
+        base_refresh: None,
     }
 }
 
@@ -271,6 +272,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         },
@@ -279,10 +281,33 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
 }
 
 #[test]
+fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
+    assert_wire(
+        &workspaces::WorkspaceCreateParams {
+            project: "app".to_owned(),
+            name: "feat-x".to_owned(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+            refresh_base: true,
+            path: None,
+            request_id: None,
+        },
+        &json!({
+            "project": "app",
+            "name": "feat-x",
+            "existing_branch": false,
+            "refresh_base": true
+        }),
+    );
+}
+
+#[test]
 fn workspace_create_params_default_existing_branch_to_false() {
     let params: workspaces::WorkspaceCreateParams =
         serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
     assert!(!params.existing_branch);
+    assert!(!params.refresh_base);
     assert!(params.branch.is_none());
     assert!(params.request_id.is_none());
 }

@@ -108,6 +108,26 @@ fn inspect_of_a_built_in_shows_its_install_verify_and_uninstall_commands() {
 }
 
 #[test]
+fn inspect_of_codex_and_gentle_shell_shows_their_npm_uninstall() {
+    let host = Host::new();
+    for (source, package) in [
+        ("catalogue:massorca.codex", "@openai/codex"),
+        ("catalogue:massorca.gentle-shell", "gentle-pi"),
+    ] {
+        let text = stdout_text(&host.run(&["extension", "inspect", source]).success());
+        let line = text
+            .lines()
+            .find(|line| line.contains("uninstall on this system: "))
+            .unwrap_or_else(|| panic!("{source} shows an uninstall: {text}"));
+        assert!(
+            line.contains("npm uninstall -g") && line.contains(package),
+            "{line}"
+        );
+    }
+    assert!(!host.has_cli("codex") && !host.has_cli("gentle-shell"));
+}
+
+#[test]
 fn inspect_reads_a_relative_dir_source_from_the_callers_folder() {
     let host = Host::new();
     host.write_dir(KIT, &["fail"]);
