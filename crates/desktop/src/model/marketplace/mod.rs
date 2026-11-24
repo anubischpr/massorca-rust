@@ -18,8 +18,8 @@ mod source;
 mod types;
 
 pub use accounts::{
-    AccountActivity, AccountView, TerminalSignIn, account_views, busy_refusal, connection_rows,
-    import_outcome, terminal_sign_in,
+    AccountActivity, AccountView, TerminalSignIn, account_block, account_views, busy_refusal,
+    connection_rows, import_outcome, terminal_sign_in,
 };
 pub use agent_links::{AgentLink, installed_agent_links};
 pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
