@@ -67,7 +67,7 @@ async fn the_list_describes_each_kind() {
     let depth = find("agents.delegation_depth");
     assert_eq!(depth.kind.as_deref(), Some("integer"));
     assert_eq!((depth.min, depth.max), (Some(1), Some(5)));
-    assert_eq!(depth.value, json!(3));
+    assert_eq!(depth.value, json!(1));
 
     assert_eq!(
         find("input.keybindings").kind.as_deref(),

@@ -79,7 +79,7 @@ machine.
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
-| `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
 | `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
 | `agent queue add <SESSION> <TEXT>` | Queues TEXT behind the session's busy agent and prints the queued prompt (`waiting`, with its reason). A kind that reports no activity is refused with `agent.queue_unavailable`; past 100 queued prompts with `agent.queue_full`. |
 | `agent queue list <SESSION>` | Lists the session's queued prompts, head first, with their states and reasons. |
@@ -254,7 +254,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A parent in a folder workspace
   fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
-  cannot delegate: `agent.depth_exceeded`.
+  delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
+  delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
 - `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.

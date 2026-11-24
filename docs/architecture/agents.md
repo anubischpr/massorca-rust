@@ -170,7 +170,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.start` | workspace | `workspace`, `kind`, `prompt?`, `args?`, `env?`, `read_only?`, `title?`, `cols?`, `rows?`, `request_id?`, `permission_mode?` | `AgentSession` |
 | `agent.list` | read | `workspace?` | `{ sessions }`, newest first |
 | `agent.show` | read | `session` | `AgentSession` |
-| `agent.stop` | workspace | `session`, `force?` | `AgentSession` |
+| `agent.stop` | workspace | `session`, `force?` | `AgentSession` (also ends the runs of the sessions delegated from it, 0055) |
 | `agent.forget` | workspace | `session` | `AgentSession` (must be exited) |
 | `agent.prompt` | workspace | `session`, `text`, `force?` | `{ receipt: "handed_to_terminal", bytes }` |
 | `agent.resume` | workspace | `session`, `permission_mode?` | `AgentSession` |
