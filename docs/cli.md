@@ -22,7 +22,7 @@ letters, digits, `-` or `_`.
 `MASSORCA_LOG` sets the service log filter in `tracing` directive syntax. The default is `info`.
 
 `--host` applies to every command that talks to a service. `service run`, `service status`,
-`service stop`, `service restart`, `service unit`, `pair accept` and the `host` commands except
+`service stop`, `service restart`, `service unit`, `open`, `pair accept` and the `host` commands except
 `host memory` and `host ports` work on this computer only: with `--host` they exit 2 with `cli.host_not_supported`.
 `service unit` reads the `--home` flag but never `MASSORCA_HOME`, because its unit is for another
 machine.
@@ -37,12 +37,14 @@ machine.
 | `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities). Starts the service when it is not running. |
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
+| `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
 | `config get <KEY> [--owner OWNER]` | Shows one setting and whether it still has its default value. |
 | `config set <KEY> <VALUE> [--owner OWNER]` | Changes one setting. The value is parsed as JSON when it is valid JSON, otherwise taken as text. |
 | `config list` | Lists every setting. |
-| `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. |
+| `project add <PATH> [--name NAME] [--folder \| --git] [--workspaces-root DIR]` | Registers a git repository (its toplevel) or a folder. Without `--folder` or `--git`, a directory inside a repository is a git project. When neither is given and the directory is not inside a repository, a warning on stderr says it was added as a plain folder (text mode only). |
 | `project list` | Lists every project, ordered by name. |
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
+| `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
 | `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
@@ -101,6 +103,7 @@ machine.
 | `extension show <ID>` | Shows one extension, installed or from the catalogue: the item page data, its risk and, for agents, whether the CLI is detected and what the install ran. |
 | `extension inspect <SOURCE>` | Shows the install review for `catalogue:<id>`, `dir:<path>` or `file:<path>` without changing anything, ending with its `consent` fingerprint. A `dir:` or `file:` source reads a host path, so a paired device needs host administration for it. |
 | `extension install <SOURCE> [--sha256 HEX] [--yes \| --consent FINGERPRINT] [--yes-run-installer]` | Installs a package. Without `--yes` or `--consent` it prints the review and exits 1 with `extension.consent_required`. `--yes` accepts the review this run prints. `--consent` accepts exactly the review an earlier run printed, by its fingerprint, and fails with `extension.consent_mismatch` if the package or what it would run changed since. A package from a folder or archive that declares a vendor command is refused with `extension.vendor_command_refused`; only the built-in catalogue names one. A package whose agent CLI is missing also needs `--yes-run-installer`, which runs the vendor's official command shown in the review; the review says it installs the current release, unpinned. In an agent's run (`MASSORCA_AGENT_SESSION` or `MASSORCA_AGENT_TOKEN` set) `--yes-run-installer` is refused with `extension.needs_person`: a person runs the command. `file:` needs `--sha256`. Never prompts. |
+| `extension update <ID> [--sha256 HEX] [--yes \| --consent FINGERPRINT]` | Brings an installed package up to date in place, from the source it was installed from. The source is read and reviewed again. Without `--yes` or `--consent` it prints the new review and exits 1 with `extension.consent_required`; `--consent` accepts exactly that review and fails with `extension.consent_mismatch` if the package changed since. A package whose files are unchanged is reported as already up to date and nothing is written. The enabled state, CLI registrations and install time are kept; no vendor command runs. `file:` needs `--sha256`. In an agent's run it is refused with `extension.needs_person`. An older service that does not know the method is reported as too old to update. Never prompts. |
 | `extension enable <ID>` / `extension disable <ID>` | Registers or unregisters the package's contributions. Files and data stay. While an install or removal of the package runs, either is refused with `extension.busy`. |
 | `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
 | `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
@@ -341,7 +344,7 @@ A command line mistake with `--json` prints `usage.invalid_arguments` in this en
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The service answered with an error, or local data could not be used. The code is printed. |
+| 1 | The service answered with an error, or local data could not be used. The code is printed. `open` exits 1 with `desktop.not_found` when no desktop app is found. |
 | 2 | The command line is invalid, including an invalid profile name or log filter, an invalid `--listen` (`usage.invalid_listen`), `--host` on a command that works on this computer only (`cli.host_not_supported`), or `terminal attach` without a terminal on stdin and stdout. |
 | 3 | `service run`: another service already owns this profile. |
 | 4 | The service is not running and could not be reached or started. For a host: `host.unreachable`, `host.identity_mismatch`, or a refusal such as `auth.device_revoked`. `host memory` reports a lost service (`service.unavailable`, `service.disconnected`, `host.unreachable`) as `memory.unverifiable` (`host ports`: `ports.unverifiable`), with the original code in `data.cause`; identity mismatches and refusals keep their code. |
@@ -352,6 +355,10 @@ Each profile lives in `<home>/profiles/<name>/`. The service writes daily log fi
 `logs/` as `service.<date>.log`, keeping the last seven days.
 
 ## Desktop app
+
+`massorca open` starts this app on the profile of the command, passing `--profile` and `--home`, and
+returns at once. The app has no single-instance hand-off yet, so an `open` while it runs starts a second
+window. Its stderr is not shown, so a start that fails after launch is silent.
 
 `massorca-desktop` opens the MassOrca window on a profile's service, or on sample data with
 `--sample`. It takes `--profile`, `--home` and `--no-autostart` as the CLI does, and two flags of its

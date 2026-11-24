@@ -30,7 +30,7 @@ fn write_lock(s: &Setup, lock: &Value) {
 
 /// Installs Gentle Shell, then rewrites its entry as an older build left it: another version, hash and folder, and
 /// the state the person gave it. Returns the old folder.
-fn outdated_gentle_shell(s: &Setup, edit: impl FnOnce(&mut Value)) -> PathBuf {
+pub(crate) fn outdated_gentle_shell(s: &Setup, edit: impl FnOnce(&mut Value)) -> PathBuf {
     s.install(
         &Source::Catalogue("massorca.gentle-shell".to_owned()),
         false,

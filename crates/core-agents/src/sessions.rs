@@ -6,7 +6,7 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -1051,6 +1051,16 @@ impl Agents {
         })
     }
 
+    /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
+    /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
+    pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
+        let decl = self.declared_kind(id).ok()?;
+        decl.permission_modes
+            .iter()
+            .find(|mode| mode.bypass && modes::plan(&decl, mode).is_ok())
+            .map(|mode| mode.id.clone())
+    }
+
     /// The declaration of `id`: declared and valid, whether or not its program is installed now.
     fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
@@ -1235,6 +1245,48 @@ impl Agents {
         // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
         self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
+    }
+
+    /// Refuses removing, disabling or updating away package `package_id` while a session of one of its kinds is live
+    /// or resumable (an exited run with a recorded end and a known ref), with `agent.busy` naming those sessions. The
+    /// extensions remove guard calls it (decision 0062); `agent forget` frees a session.
+    pub fn refuse_removing_package(&self, package_id: &str) -> Result<(), AgentError> {
+        let kinds: BTreeSet<String> = self
+            .kind_packages()
+            .kinds()
+            .into_iter()
+            .filter(|kind| kind.package_id == package_id)
+            .map(|kind| kind.kind_id)
+            .collect();
+        if kinds.is_empty() {
+            return Ok(());
+        }
+        let mut sessions = Vec::new();
+        for row in self.store().list_agent_sessions(None)? {
+            if !kinds.contains(&row.kind) {
+                continue;
+            }
+            let resumable = row.exit.is_some() && row.agent_ref.is_some();
+            let id = row.id.clone();
+            let live = self.view(row)?.execution.state != TerminalState::Exited;
+            if live || resumable {
+                sessions.push(id);
+            }
+        }
+        if sessions.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<&str> = kinds.iter().map(String::as_str).collect();
+        let mut error = AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "package {package_id} provides agent kind {}, which sessions {} still use; stop and forget them first",
+                names.join(", "),
+                sessions.join(", ")
+            ),
+        );
+        error.data = Some(json!({ "package": package_id, "kinds": names, "sessions": sessions }));
+        Err(error)
     }
 
     /// Settles the starts the previous service recorded and never settled (docs/architecture/agents.md, "Crash-safe
@@ -1617,17 +1669,23 @@ fn clear_starting(run_dir: &Path) {
     let _ = std::fs::remove_file(run_dir.join(STARTING_MARK));
 }
 
-/// Test-only: names a point where the service exits at once, as a crash there would. Inert unless set, which only the
-/// CLI tests do.
+/// Test-only: names a point where the service exits at once, as a crash there would. Compiled in only with the
+/// `test-hooks` feature, which only test builds enable.
+#[cfg(feature = "test-hooks")]
 const CRASH_AT_ENV: &str = "MASSORCA_TEST_CRASH_AT";
 
-/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would.
+/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would. Without the `test-hooks`
+/// feature it does nothing and reads no variable.
+#[cfg(feature = "test-hooks")]
 fn crash_point(point: &str) {
     if std::env::var_os(CRASH_AT_ENV).is_some_and(|value| value == point) {
         tracing::error!(point, "exiting at a test crash point");
         std::process::exit(70);
     }
 }
+
+#[cfg(not(feature = "test-hooks"))]
+fn crash_point(_point: &str) {}
 
 fn running(state: TerminalState) -> Execution {
     Execution { state, exit: None }
@@ -1673,7 +1731,8 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
-/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state.
+/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state;
+/// a state that cannot be read is reported with the read failure.
 fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
     if entry.enabled() {
         return Ok(());
@@ -1683,13 +1742,20 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let package = entry.package.id.clone().unwrap_or_default();
-    let mut error = AgentError::new(
-        codes::AGENT_KIND_NOT_ENABLED,
+    // A state that cannot be read (an unreadable lockfile) is that failure, which installing or enabling cannot fix.
+    let message = if state == "unknown" && !entry.problems.is_empty() {
+        format!(
+            "agent kind {} comes from package {package}, whose state cannot be read: {}",
+            entry.id,
+            entry.problems.join("; ")
+        )
+    } else {
         format!(
             "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
             entry.id
-        ),
-    );
+        )
+    };
+    let mut error = AgentError::new(codes::AGENT_KIND_NOT_ENABLED, message);
     error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
     Err(error)
 }

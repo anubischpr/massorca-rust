@@ -29,6 +29,11 @@ libc.workspace = true
 massorca-profile.workspace = true
 win32job.workspace = true
 
+[features]
+# Test-only crash points (`MASSORCA_TEST_CRASH_AT`). Only test builds enable it, through the CLI's dev-dependencies; a
+# test fails when a normal or build dependency enables it.
+test-hooks = []
+
 [dev-dependencies]
 massorca-core-git.workspace = true
 tempfile.workspace = true

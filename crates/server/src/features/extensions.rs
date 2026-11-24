@@ -20,7 +20,7 @@ use massorca_protocol::methods::extensions::{
     self, CliPlanState, ExtensionAsset, ExtensionAssetParams, ExtensionEnabled,
     ExtensionInspectParams, ExtensionInstallParams, ExtensionInstalled, ExtensionItem,
     ExtensionList, ExtensionRef, ExtensionRemoveParams, ExtensionRemoved, ExtensionReview,
-    ExtensionSetEnabledParams,
+    ExtensionSetEnabledParams, ExtensionUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 use serde::Serialize;
@@ -63,6 +63,14 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             cap,
             Permission::HostAdmin,
             install,
+        )?,
+        // Same administration as an install: an update changes the code an installed package runs.
+        methods.register(
+            Owner::Core,
+            extensions::UPDATE,
+            cap,
+            Permission::HostAdmin,
+            update,
         )?,
         methods.register(
             Owner::Core,
@@ -166,6 +174,27 @@ async fn install(
     wire(&entry)
 }
 
+/// Brings an installed package up to date in place. It publishes `extension.installed`, so readers reload the package.
+async fn update(
+    ctx: RequestCtx,
+    params: ExtensionUpdateParams,
+) -> Result<ExtensionInstalled, ErrorBody> {
+    refuse_agent_run(
+        params.agent_token.as_deref(),
+        "an agent cannot update an extension; ask the person to run the command",
+    )?;
+    let entry = on_extensions(&ctx, move |extensions| {
+        extensions.update(
+            &params.id,
+            params.consent.as_deref(),
+            params.sha256.as_deref(),
+        )
+    })
+    .await?;
+    publish(&ctx, TOPIC_EXTENSION_INSTALLED, &entry.id);
+    wire(&entry)
+}
+
 async fn set_enabled(
     ctx: RequestCtx,
     params: ExtensionSetEnabledParams,
@@ -250,7 +279,8 @@ where
     F: FnOnce(&Extensions) -> Result<T, Error> + Send + 'static,
 {
     let extensions = Arc::clone(&ctx.state.extensions);
-    match tokio::task::spawn_blocking(move || call(&extensions)).await {
+    // Counted until it returns, so the profile lock outlives an install and the next start's sweep never sees it.
+    match ctx.state.activity.blocking(move || call(&extensions)).await {
         Ok(result) => result.map_err(error_body),
         Err(error) => Err(ErrorBody::new(
             codes::INTERNAL,

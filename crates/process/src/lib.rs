@@ -9,7 +9,11 @@
 //! Nothing else in the workspace calls `Command::new` or `creation_flags` (see `tests/one_spawn_path.rs`).
 
 use std::ffi::OsStr;
-use std::process::Command;
+use std::io;
+use std::process::{Child, Command, Stdio};
+
+#[cfg(windows)]
+mod standard_handles;
 
 /// The console program runs with a console but no window.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -39,4 +43,24 @@ pub fn creation_flags(command: &mut Command, flags: u32) {
         use std::os::windows::process::CommandExt;
         command.creation_flags(flags | CREATE_NO_WINDOW);
     }
+}
+
+/// Starts `command` as a process of its own that outlives this one, with no streams and no console. Returns at once.
+pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        creation_flags(command, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        // Otherwise the child inherits this process's pipes and holds them open for its whole life.
+        standard_handles::stop_inheriting();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn()
 }

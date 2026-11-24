@@ -15,7 +15,7 @@ use tokio::time::timeout;
 use super::common::{SERVER_VERSION, connect, echo, remote_code, start, stop, temp_home};
 
 /// Every method of the Phase 1 surface.
-const PHASE1_METHODS: [&str; 15] = [
+const PHASE1_METHODS: [&str; 16] = [
     service::INFO,
     service::SHUTDOWN,
     events::SUBSCRIBE,
@@ -26,6 +26,7 @@ const PHASE1_METHODS: [&str; 15] = [
     projects::ADD,
     projects::LIST,
     projects::SHOW,
+    projects::INSPECT,
     projects::REMOVE,
     workspaces::CREATE,
     workspaces::LIST,
@@ -103,7 +104,7 @@ const TEAM_METHODS: [&str; 25] = [
 ];
 
 /// The extension methods this build registers (capability `extensions/1`).
-const EXTENSION_METHODS: [(&str, Permission); 8] = [
+const EXTENSION_METHODS: [(&str, Permission); 9] = [
     (extensions::LIST, Permission::Read),
     (extensions::GET, Permission::Read),
     (extensions::CATALOGUE, Permission::Read),
@@ -112,10 +113,11 @@ const EXTENSION_METHODS: [(&str, Permission); 8] = [
     (extensions::INSTALL, Permission::HostAdmin),
     (extensions::SET_ENABLED, Permission::HostAdmin),
     (extensions::REMOVE, Permission::HostAdmin),
+    (extensions::UPDATE, Permission::HostAdmin),
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 27] = [
+const CLI_COMMAND_IDS: [&str; 28] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -127,6 +129,7 @@ const CLI_COMMAND_IDS: [&str; 27] = [
     "project.add",
     "project.list",
     "project.show",
+    "project.inspect",
     "project.rm",
     "project.set-base",
     "workspace.create",

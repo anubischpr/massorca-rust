@@ -8,6 +8,8 @@ pub const PERMISSION_DENIED: &str = "permission.denied";
 pub const REQUEST_INVALID_PARAMS: &str = "request.invalid_params";
 pub const INTERNAL: &str = "internal";
 pub const SERVICE_SHUTTING_DOWN: &str = "service.shutting_down";
+/// `massorca open` found no desktop app beside the CLI, nor at `MASSORCA_DESKTOP_EXECUTABLE`.
+pub const DESKTOP_NOT_FOUND: &str = "desktop.not_found";
 pub const STREAM_NOT_FOUND: &str = "stream.not_found";
 /// A subscriber fell too far behind; its stream ends with this error rather than buffering without limit.
 pub const STREAM_OVERFLOW: &str = "stream.overflow";
@@ -235,7 +237,8 @@ pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
 pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
 /// The bot owns open tasks; it can be removed only with `unassign`.
 pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
-/// `task.start` for a bot whose agent is still working on another task. The task stays where it was.
+/// No longer sent: hosts before decision 0072's 2026-11-23 amendment refused `task.start` for a bot working on another
+/// task. Kept so a client still names that answer from an older host.
 pub const BOT_BUSY: &str = "bot.busy";
 pub const TASK_NOT_FOUND: &str = "task.not_found";
 /// The task's agent session still runs; stop it first.
@@ -291,3 +294,5 @@ pub const EXTENSION_BUSY: &str = "extension.busy";
 pub const EXTENSION_VENDOR_COMMAND_REFUSED: &str = "extension.vendor_command_refused";
 /// A vendor installer or uninstaller needs a person: an agent run may not start one.
 pub const EXTENSION_NEEDS_PERSON: &str = "extension.needs_person";
+/// `extensions.update` found the installed package already in place: nothing changed.
+pub const EXTENSION_UP_TO_DATE: &str = "extension.up_to_date";
