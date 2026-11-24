@@ -15,6 +15,8 @@ use crate::source::sha256_hex;
 pub struct DiscoveryRequest {
     /// The user's home folder, where agent tools keep their skills.
     pub home: PathBuf,
+    /// Registered folders, git repositories or plain folders; each contributes its own skill roots.
+    pub folders: Vec<PathBuf>,
     pub env: SkillRootEnv,
     /// Only skills of these kinds; empty keeps every kind.
     pub source_kinds: Vec<SkillSourceKind>,

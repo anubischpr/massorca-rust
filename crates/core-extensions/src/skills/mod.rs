@@ -1,6 +1,7 @@
 //! Skill discovery (SKL-01): the `SKILL.md` folders agent tools keep in the user's home folder, found on this host.
 //! It only reads; nothing is persisted.
 
+mod claude_plugins;
 mod discover;
 mod frontmatter;
 mod roots;

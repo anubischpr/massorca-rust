@@ -7,6 +7,7 @@ use massorca_core_extensions::skills::{
     DiscoveredSkill, DiscoveryRequest, SkillDiscovery, SkillProvider, SkillRootEnv, SkillSource,
     SkillSourceKind, SkipReason, discover,
 };
+use serde_json::json;
 use tempfile::TempDir;
 
 fn write(path: &Path, contents: &str) {
@@ -193,4 +194,117 @@ fn discovery_changes_no_file_in_the_skill_folders() {
     scan(home);
 
     assert_eq!(snapshot(home), before);
+}
+
+#[test]
+fn a_registered_folder_contributes_its_own_skill_roots() {
+    let temp = TempDir::new().expect("a temporary folder");
+    let folder = temp.path().join("proj");
+    skill_at(&folder, ".agents/skills/x", "x");
+    skill_at(&folder, ".factory/skills/y", "y");
+
+    let report = discover(&DiscoveryRequest {
+        home: temp.path().to_path_buf(),
+        folders: vec![folder],
+        ..Default::default()
+    });
+
+    let x = skill(&report, "x");
+    assert_eq!(x.source_label, "Repo proj .agents");
+    assert_eq!(x.source_kind, SkillSourceKind::Repo);
+    let y = skill(&report, "y");
+    assert_eq!(y.source_label, "Repo proj .factory");
+    assert_eq!(
+        source(&report, "Repo proj .factory").owner.as_deref(),
+        Some("droid")
+    );
+    for suffix in [
+        ".agents",
+        ".claude",
+        ".factory",
+        ".continue",
+        ".trae",
+        ".grok",
+        ".augment",
+    ] {
+        source(&report, &format!("Repo proj {suffix}"));
+    }
+}
+
+#[test]
+fn a_skill_reached_by_two_root_paths_is_listed_once_with_both_paths() {
+    let temp = TempDir::new().expect("a temporary folder");
+    let home = temp.path();
+    skill_at(home, "proj/.agents/skills/dup", "dup");
+    fs::create_dir_all(home.join("x")).expect("a folder to step out of");
+    // Two spellings of one folder: their canonical skill file is the same file.
+    let spelled_twice = home.join("x").join("..").join("proj");
+
+    let report = discover(&DiscoveryRequest {
+        home: home.to_path_buf(),
+        folders: vec![home.join("proj"), spelled_twice],
+        ..Default::default()
+    });
+
+    let dup = skill(&report, "dup");
+    assert_eq!(names(&report), ["dup"]);
+    assert_eq!(dup.root_paths.len(), 2);
+    assert_eq!(dup.root_path, home.join("proj/.agents/skills"));
+}
+
+#[test]
+fn a_claude_plugin_is_read_from_each_install_that_applies_when_enabled() {
+    let temp = TempDir::new().expect("a temporary folder");
+    let home = temp.path();
+    let folder = home.join("proj");
+    let install = |name: &str| {
+        home.join("plugins")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let installed = json!({"plugins": {
+        "tool@market": [
+            {"scope": "user", "installPath": install("tool-user")},
+            {"scope": "project", "projectPath": folder.to_string_lossy(), "installPath": install("tool-project")}
+        ],
+        "elsewhere@market": [
+            {"scope": "project", "projectPath": home.join("elsewhere").to_string_lossy(), "installPath": install("elsewhere")}
+        ],
+        "off@market": [{"scope": "user", "installPath": install("off")}]
+    }});
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &installed.to_string(),
+    );
+    let settings = json!({"enabledPlugins": {"tool@market": true, "elsewhere@market": true, "off@market": false}});
+    write(&home.join(".claude/settings.json"), &settings.to_string());
+    for plugin in ["tool-user", "tool-project", "elsewhere", "off"] {
+        skill_at(
+            home,
+            &format!("plugins/{plugin}/skills"),
+            &format!("{plugin}-skill"),
+        );
+    }
+
+    let report = discover(&DiscoveryRequest {
+        home: home.to_path_buf(),
+        folders: vec![folder],
+        ..Default::default()
+    });
+
+    // The project install applies in the folder, the user install in the home folder, and the rest not at all.
+    assert_eq!(
+        skill(&report, "tool-project-skill").source_label,
+        "Claude plugin tool"
+    );
+    assert_eq!(
+        skill(&report, "tool-user-skill").source_kind,
+        SkillSourceKind::Plugin
+    );
+    assert!(
+        !names(&report)
+            .iter()
+            .any(|name| name.starts_with("elsewhere") || name.starts_with("off"))
+    );
 }

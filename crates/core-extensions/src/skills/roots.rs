@@ -1,10 +1,14 @@
-//! Where agent tools keep skills in the user's home folder: pv96's root table (`skill-discovery-sources.ts`).
+//! Where skills live: pv96's root table (`skill-discovery-sources.ts`) for the agent tools' home folders, the
+//! registered folders' own skill roots, and the Claude plugins that apply to them.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::claude_plugins::claude_plugin_roots;
 use super::discover::DiscoveryRequest;
+use crate::source::sha256_hex;
 use SkillProvider::{AgentSkills, Claude, Codex};
-use SkillSourceKind::{Home, Plugin};
+use SkillSourceKind::{Home, Plugin, Repo};
 
 /// The kind of a skill's root. `Bundled` is a home skill under the `.system` folder an agent tool ships.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,9 +103,40 @@ const HOME_ROOTS: &[RootSpec] = &[
     spec("home-zcode", "ZCode home", ".zcode/skills", Home, &[AgentSkills], Some("zcode")),
 ];
 
-/// Every home root for `request`, with the environment overrides applied.
+/// A skill root inside a registered folder, named after the dotted tool folder it sits in.
+struct FolderSpec {
+    relative: &'static str,
+    providers: &'static [SkillProvider],
+    owner: Option<&'static str>,
+}
+
+const fn folder_spec(
+    relative: &'static str,
+    providers: &'static [SkillProvider],
+    owner: Option<&'static str>,
+) -> FolderSpec {
+    FolderSpec {
+        relative,
+        providers,
+        owner,
+    }
+}
+
+#[rustfmt::skip]
+const FOLDER_ROOTS: &[FolderSpec] = &[
+    folder_spec(".agents/skills", &[AgentSkills], None),
+    folder_spec(".claude/skills", &[Claude], Some("claude")),
+    folder_spec(".factory/skills", &[AgentSkills], Some("droid")),
+    folder_spec(".continue/skills", &[AgentSkills], Some("continue")),
+    folder_spec(".trae/skills", &[AgentSkills], Some("trae")),
+    folder_spec(".grok/skills", &[AgentSkills], Some("grok")),
+    folder_spec(".augment/skills", &[AgentSkills], Some("aug")),
+];
+
+/// Every root a discovery reads for `request`: the home roots, each registered folder's roots, then the Claude
+/// plugins that apply to the home folder and to each folder.
 pub(super) fn discovery_roots(request: &DiscoveryRequest) -> Vec<SkillRoot> {
-    HOME_ROOTS
+    let mut roots: Vec<SkillRoot> = HOME_ROOTS
         .iter()
         .map(|spec| {
             let override_dir = match spec.id {
@@ -119,6 +154,40 @@ pub(super) fn discovery_roots(request: &DiscoveryRequest) -> Vec<SkillRoot> {
                 label: spec.label.to_owned(),
                 path,
                 kind: spec.kind,
+                providers: spec.providers.to_vec(),
+                owner: spec.owner,
+            }
+        })
+        .collect();
+    // Sorted and deduplicated, so a folder given twice is scanned once.
+    let folders: BTreeSet<&Path> = request.folders.iter().map(PathBuf::as_path).collect();
+    for folder in &folders {
+        roots.extend(folder_roots(folder));
+    }
+    let contexts: Vec<PathBuf> = folders
+        .iter()
+        .map(|folder| folder.to_path_buf())
+        .chain(std::iter::once(request.home.clone()))
+        .collect();
+    roots.extend(claude_plugin_roots(&request.home, &contexts));
+    roots
+}
+
+fn folder_roots(folder: &Path) -> Vec<SkillRoot> {
+    let name = folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let key = sha256_hex(folder.to_string_lossy().as_bytes());
+    FOLDER_ROOTS
+        .iter()
+        .map(|spec| {
+            let dotted = spec.relative.split('/').next().unwrap_or_default();
+            SkillRoot {
+                id: format!("repo-{}-{}", dotted.trim_start_matches('.'), &key[..16]),
+                label: format!("Repo {name} {dotted}"),
+                path: join(folder, spec.relative),
+                kind: Repo,
                 providers: spec.providers.to_vec(),
                 owner: spec.owner,
             }
