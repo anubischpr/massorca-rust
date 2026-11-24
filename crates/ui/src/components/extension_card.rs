@@ -1,6 +1,7 @@
 //! Extension card (docs/design/components/ExtensionCard.md): one extension, skill, tool, agent or
 //! service in the Marketplace, with the one action that fits its state. Desktop only.
 
+use crate::components::agent_icon::{AgentIcon, AgentIconSize, AgentKind};
 use crate::components::badge::{Badge, BadgeTone};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
@@ -133,6 +134,7 @@ pub struct ExtensionCard {
     description: SharedString,
     icon: IconName,
     logo: Option<ImageSource>,
+    agent: Option<AgentKind>,
     adds: Vec<(IconName, SharedString)>,
     state: ExtensionState,
     install_host: Option<SharedString>,
@@ -168,6 +170,7 @@ impl ExtensionCard {
             description: SharedString::default(),
             icon: IconName::Puzzle,
             logo: None,
+            agent: None,
             adds: Vec::new(),
             state,
             install_host: None,
@@ -214,6 +217,12 @@ impl ExtensionCard {
     /// The extension's logo, drawn in the plate in place of the icon.
     pub fn logo(mut self, logo: impl Into<ImageSource>) -> Self {
         self.logo = Some(logo.into());
+        self
+    }
+
+    /// The agent's own mark, the one the sidebar and model picker draw; it takes the plate over the icon and logo.
+    pub fn agent(mut self, agent: AgentKind) -> Self {
+        self.agent = Some(agent);
         self
     }
 
@@ -582,13 +591,17 @@ impl RenderOnce for ExtensionCard {
             .justify_center()
             .cursor_pointer()
             .on_click(route_click(&handler, ExtensionAction::Open))
-            .child(match self.logo.clone() {
-                Some(logo) => div()
+            .child(match (self.agent, self.logo.clone()) {
+                (Some(agent), _) => div()
+                    .debug_selector(|| "card-agent".into())
+                    .child(AgentIcon::new(agent).size(AgentIconSize::Large))
+                    .into_any_element(),
+                (None, Some(logo)) => div()
                     .debug_selector(|| "card-logo".into())
                     .size_full()
                     .child(img(logo).size_full())
                     .into_any_element(),
-                None => Icon::new(self.icon)
+                (None, None) => Icon::new(self.icon)
                     .size(IconSize::Large)
                     .color(p.text.secondary)
                     .into_any_element(),
@@ -794,6 +807,29 @@ mod tests {
             div().child(
                 ExtensionCard::new("acme", "Acme Metrics", ExtensionState::Catalog)
                     .category("Agent"),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn an_agent_card_draws_the_agents_own_mark(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| AgentHarness);
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("card-agent").is_some(),
+            "the agent's mark is drawn in the plate"
+        );
+    }
+
+    /// Hosts one catalog card for an agent, as the Marketplace draws the Gentle Shell package.
+    struct AgentHarness;
+
+    impl gpui::Render for AgentHarness {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().child(
+                ExtensionCard::new("gentle-shell", "Gentle Shell", ExtensionState::Catalog)
+                    .agent(AgentKind::GentleShell),
             )
         }
     }

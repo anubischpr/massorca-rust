@@ -5,15 +5,18 @@ use super::MarketplaceFrame;
 use super::host_pick::host_picker_row;
 use super::item::problem_banner;
 use super::item_images;
+use crate::model::agent_sessions::agent_of_kind;
 use crate::model::marketplace::{
     ItemKind, ItemState, MarketplaceItem, count_line, counts, heading, intro, listed,
     no_match_text, problem_alert,
 };
 use crate::model::navigation::MarketplacePage;
+use crate::shell::rail;
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, Window, div,
     prelude::*, px,
 };
+use massorca_ui::components::agent_icon::AgentKind;
 use massorca_ui::components::badge::Badge;
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::extension_card::{ExtensionAction, ExtensionCard, ExtensionState};
@@ -273,6 +276,13 @@ fn card_state(item: &MarketplaceItem) -> ExtensionState {
     }
 }
 
+/// The mark an agent's card draws: the one the sidebar and model picker draw for its kind. None when the desktop
+/// has no mark for the kind, and for an item that is not an agent.
+fn agent_mark(agent_kind: Option<&str>) -> Option<AgentKind> {
+    let mark = rail::agent_kind(agent_of_kind(agent_kind?));
+    (mark != AgentKind::Unknown).then_some(mark)
+}
+
 /// One item as a card. Its Switch changes the sample; every other press opens the item's page,
 /// where its actions live (Review and install is not available yet).
 fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> ExtensionCard {
@@ -290,9 +300,13 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
     .settings(item.has_settings);
-    if let Some(logo) = item_images::logo(frame, item, cx) {
-        card = card.logo(logo);
-    }
+    card = match agent_mark(item.agent_kind.as_deref()) {
+        Some(mark) => card.agent(mark),
+        None => match item_images::logo(frame, item, cx) {
+            Some(logo) => card.logo(logo),
+            None => card,
+        },
+    };
     for add in &item.adds {
         card = card.add(IconName::Plus, add.clone());
     }
@@ -303,4 +317,24 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
             _ => shell.open_marketplace(MarketplacePage::Item(id), cx),
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_agent_with_a_desktop_mark_draws_that_mark() {
+        assert_eq!(
+            agent_mark(Some("gentle-shell")),
+            Some(AgentKind::GentleShell)
+        );
+        assert_eq!(agent_mark(Some("claude")), Some(AgentKind::Claude));
+    }
+
+    #[test]
+    fn a_kind_without_a_desktop_mark_and_a_non_agent_have_none() {
+        assert_eq!(agent_mark(Some("gemini")), None);
+        assert_eq!(agent_mark(None), None);
+    }
 }
