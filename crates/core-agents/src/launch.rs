@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use massorca_core_terminal::EnvValue;
+use massorca_core_terminal::credential_guard::{CREDENTIAL_GUARD_ENV, CREDENTIAL_GUARD_ON};
 use massorca_protocol::methods::agents::MAX_PROMPT_BYTES;
 use serde_json::{Value, json};
 
@@ -308,6 +309,9 @@ fn environment(input: &LaunchInput<'_>) -> (BTreeMap<String, EnvValue>, Vec<Stri
         env.retain(|existing, _| !same_name(existing, name));
         env.insert(name.clone(), value(caller_value));
     }
+    // Last, so neither the caller nor a vault grant can switch the git guard off (TERM-24).
+    env.retain(|existing, _| !same_name(existing, CREDENTIAL_GUARD_ENV));
+    env.insert(CREDENTIAL_GUARD_ENV.to_owned(), value(CREDENTIAL_GUARD_ON));
     (env, remove_env)
 }
 
@@ -579,6 +583,20 @@ mod tests {
         assert_eq!(plan.env[ENV_KIND].as_str(), "fake");
         assert_eq!(plan.env[ENV_BIN].as_str(), "/opt/mass orca/massorca");
         assert!(plan.remove_env.is_empty());
+    }
+
+    #[test]
+    fn every_run_asks_its_terminal_for_the_git_credential_guard() {
+        let plan = Fixture::new(fake(json!({ "mode": "argv" }))).first(None);
+        assert_eq!(plan.env[CREDENTIAL_GUARD_ENV].as_str(), CREDENTIAL_GUARD_ON);
+    }
+
+    #[test]
+    fn a_caller_cannot_switch_the_git_credential_guard_off() {
+        let mut fixture = Fixture::new(built_in("claude"));
+        fixture.caller_env = BTreeMap::from([(CREDENTIAL_GUARD_ENV.to_owned(), "off".to_owned())]);
+        let plan = fixture.first(None);
+        assert_eq!(plan.env[CREDENTIAL_GUARD_ENV].as_str(), CREDENTIAL_GUARD_ON);
     }
 
     #[test]
