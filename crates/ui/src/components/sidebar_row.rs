@@ -153,6 +153,11 @@ impl SidebarRow {
         self.map_row(|r| r.secondary(text))
     }
 
+    /// A 12 px icon before the secondary text, such as the branch a child session runs on (WS-35).
+    pub fn secondary_icon(self, icon: IconName) -> Self {
+        self.map_row(|r| r.secondary_icon(icon))
+    }
+
     /// A count badge at the trailing edge (Prototypes 2). Zero draws nothing.
     pub fn count(self, count: u32) -> Self {
         self.map_row(|r| r.trailing(Badge::count(count)))

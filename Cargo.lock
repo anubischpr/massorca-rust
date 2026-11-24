@@ -3592,6 +3592,7 @@ dependencies = [
  "clap",
  "crossterm",
  "massorca-client",
+ "massorca-core-agents",
  "massorca-core-remote",
  "massorca-core-store",
  "massorca-core-terminal",

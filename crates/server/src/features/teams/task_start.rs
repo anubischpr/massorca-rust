@@ -29,6 +29,7 @@ use crate::registry::RegistrationHandle;
 use super::task::{removed, view_of};
 use super::task_outcome::latch_at_link;
 use super::task_state;
+use super::team::ACCESS_FULL;
 use super::{blocking, selectors, store_error};
 
 /// The folder project that holds every team's folder, under the workspaces default root.
@@ -402,12 +403,28 @@ fn spawn(
             rows: None,
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
             request_id: Some(request.to_owned()),
-            // A bot runs in its kind's own default mode (decision 0083).
-            permission_mode: None,
+            permission_mode: team_mode(agents, team, bot),
         },
         grant,
     )?;
     Ok(session.id)
+}
+
+/// The mode a team's bot runs in (decision 0072, amendment "team access"; decision 0083): a full-access team names the
+/// first bypass mode its kind declares that a start can apply; a team with default access, or a kind with no such mode,
+/// passes none, so the vendor CLI starts in its own default.
+fn team_mode(agents: &Agents, team: &TeamRow, bot: &BotRow) -> Option<String> {
+    if team.access != ACCESS_FULL {
+        return None;
+    }
+    let mode = agents.startable_bypass_mode(&bot.kind);
+    if mode.is_none() {
+        tracing::info!(
+            kind = %bot.kind,
+            "a full-access team's bot runs in its agent's default mode: the kind has no bypass mode a start can apply"
+        );
+    }
+    mode
 }
 
 /// Links the spawned session to the task. When that fails, the session is abandoned so no unlinked process survives.

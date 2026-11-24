@@ -9,7 +9,7 @@ use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::teams::{
-    BoardParams, BotAddParams, BotRemoveParams, TeamCharacter, TeamCreateParams,
+    BoardParams, BotAddParams, BotRemoveParams, TeamAccess, TeamCharacter, TeamCreateParams,
     TeamProjectAddParams, TeamRef, TeamRemoveParams,
 };
 
@@ -82,6 +82,27 @@ pub struct CreateArgs {
     /// The team's shape. Defaults to the triangle.
     #[arg(long, value_enum, value_name = "SHAPE")]
     pub character: Option<CharacterArg>,
+    /// How the team's bots run: full (without asking for permission, the default) or default (the agent's own mode).
+    #[arg(long, value_enum, value_name = "ACCESS")]
+    pub access: Option<AccessArg>,
+}
+
+/// How a team's bots run (decision 0072, amendment "team access").
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AccessArg {
+    /// Bots run in their agent's bypass mode, without asking for permission.
+    Full,
+    /// Bots run in their agent's own default mode, which may ask for permission.
+    Default,
+}
+
+impl From<AccessArg> for TeamAccess {
+    fn from(access: AccessArg) -> Self {
+        match access {
+            AccessArg::Full => Self::Full,
+            AccessArg::Default => Self::Default,
+        }
+    }
 }
 
 /// The shapes a team can take.
@@ -233,6 +254,9 @@ pub struct TeamUpdateArgs {
     /// Whether the team has a folder for Workspaces: true or false.
     #[arg(long, value_name = "BOOL", value_parser = clap::value_parser!(bool))]
     pub workspaces: Option<bool>,
+    /// How the team's bots run: full (without asking for permission) or default (the agent's own mode).
+    #[arg(long, value_enum, value_name = "ACCESS")]
+    pub access: Option<AccessArg>,
 }
 
 #[derive(Debug, Args)]
@@ -292,7 +316,9 @@ pub async fn execute(
     match command {
         TeamCommand::Create(args) => {
             let team = client.team_create(&create_params(args)).await?;
-            output.success(&team, &[text::team_line(&team, "created")]);
+            let mut lines = vec![text::team_line(&team, "created")];
+            lines.extend(text::access_notice(&team));
+            output.success(&team, &lines);
         }
         TeamCommand::List => {
             let list = client.team_list().await?;
@@ -320,11 +346,13 @@ pub async fn execute(
                     name: args.name,
                     purpose: args.purpose,
                     character: args.character.map(TeamCharacter::from),
-                    access: None,
+                    access: args.access.map(TeamAccess::from),
                     workspaces: args.workspaces,
                 })
                 .await?;
-            output.success(&team, &[text::team_line(&team, "updated")]);
+            let mut lines = vec![text::team_line(&team, "updated")];
+            lines.extend(text::access_notice(&team));
+            output.success(&team, &lines);
         }
         TeamCommand::Bot { command } => run_bot(&client, command, output).await?,
         TeamCommand::Project { command } => run_project(&client, command, output).await?,
@@ -489,7 +517,7 @@ fn create_params(args: CreateArgs) -> TeamCreateParams {
         name: args.name,
         purpose: args.purpose,
         character: args.character.map(TeamCharacter::from),
-        access: None,
+        access: args.access.map(TeamAccess::from),
         workspaces: None,
     }
 }
