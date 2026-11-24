@@ -504,8 +504,9 @@ has two values, as in pv96, and there is no per-bot mode.
 - `team.create` without `access` still makes a `full` team, so an older client
   that sends none gets the new default without the sentence. `default` is a new
   wire value: an older client reads it as unknown.
-- Not in this change: the desktop New team dialog and the team card, which will
-  name the access and offer the change in a follow-up.
+- The desktop's New team dialog names the access, and the team card and the Board
+  header show it with a one-step change. Not in this change: the Routines, Memory,
+  Project and Files headers, which do not show it yet.
 
 Decision 0083 is unchanged: a mode is still passed only when someone chose it.
 Here the owner chooses it once for the team.

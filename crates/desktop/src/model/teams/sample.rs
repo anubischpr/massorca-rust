@@ -9,7 +9,7 @@ use super::types::{
     WebAddress, Weekday,
 };
 use crate::model::shell::{Agent, HostReach};
-use massorca_protocol::methods::teams::TeamCharacter;
+use massorca_protocol::methods::teams::{TeamAccess, TeamCharacter};
 
 /// The host the sample team runs on, named as the shell names it.
 const VPS: &str = "VPS";
@@ -160,6 +160,7 @@ fn desarrollo() -> Team {
         id: TeamId(1),
         name: "Desarrollo".into(),
         character: TeamCharacter::Triangle,
+        access: TeamAccess::Full,
         purpose: "Sign-in and copy for oppm.".into(),
         host: VPS.into(),
         reach: VPS_REACH,

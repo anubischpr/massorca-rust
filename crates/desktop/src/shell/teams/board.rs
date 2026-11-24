@@ -4,6 +4,7 @@
 
 use super::super::Shell;
 use super::super::sidebar::row_focus;
+use super::access::access_control;
 use super::team_pill;
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::model::shell::HostReach;
@@ -68,6 +69,15 @@ pub(in crate::shell) fn board_page(
                 .child("Board"),
         )
         .child(team_pill(team_name, character, &theme))
+        .children(team_data.map(|team| {
+            access_control(
+                team,
+                state.access_notice(team.id),
+                shell,
+                state.is_connected(),
+                &theme,
+            )
+        }))
         .child(
             div()
                 .text_style(TYPE_CAPTION)

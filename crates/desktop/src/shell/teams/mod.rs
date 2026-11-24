@@ -1,5 +1,6 @@
 //! The Bot Teams pages (screens 4): the team list, each team's pages and their Sidebar.
 
+mod access;
 mod board;
 mod dialogs;
 mod files;

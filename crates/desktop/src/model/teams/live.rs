@@ -53,6 +53,7 @@ fn live_team(ids: &TeamIds, host: &str, record: &TeamRecord, kinds: &[AgentKind]
         reach: HostReach::Connected,
         bots,
         lead,
+        access: record.team.access,
         workspaces: record.team.workspaces,
         tasks: live_tasks(ids, &record.board),
         projects: record
@@ -202,6 +203,14 @@ mod tests {
             ids.register(record);
         }
         ids
+    }
+
+    #[test]
+    fn a_team_carries_the_access_its_wire_record_names() {
+        let mut records = [record("t1", Vec::new())];
+        records[0].team.access = TeamAccess::Default;
+        let view = live_teams(&numbered(&records), "This PC", &records, &[]);
+        assert_eq!(view.teams()[0].access, TeamAccess::Default);
     }
 
     #[test]

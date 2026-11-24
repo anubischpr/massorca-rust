@@ -10,6 +10,7 @@ use crate::model::marketplace::MarketplaceItemId;
 use crate::model::navigation::MarketplacePage;
 use crate::model::teams::{
     HostChoice, MemoryId, NewBot, NewTeam, ProjectId, TeamError, TeamId, TeamPage, check_name,
+    new_team_access_hint,
 };
 use crate::service::ServiceHandle;
 use gpui::{
@@ -373,6 +374,7 @@ impl Shell {
             name,
             purpose: Self::non_empty(&purpose),
             character: None,
+            // The service picks: full for a host-admin caller, default for a standard device, which may not ask for full.
             access: None,
             workspaces: Some(workspaces),
         };
@@ -555,7 +557,7 @@ impl Shell {
     }
 
     /// The service's id for a team of this shell, as the store numbered it.
-    fn team_key(&self, team: TeamId, cx: &App) -> Option<String> {
+    pub(super) fn team_key(&self, team: TeamId, cx: &App) -> Option<String> {
         self.service_key(team.0, cx)
     }
 
@@ -708,6 +710,12 @@ fn new_team_view(form: &NewTeamDialog, shell: &WeakEntity<Shell>, cx: &App) -> D
                 .gap(px(SPACE_1))
                 .child(workspaces)
                 .child(helper),
+        )
+        .child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(theme.palette.text.secondary)
+                .child(new_team_access_hint()),
         );
     let can_submit = !form.name.read(cx).text().trim().is_empty();
     let (on_action, on_dismiss) = (shell.clone(), shell.clone());
