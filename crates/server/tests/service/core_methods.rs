@@ -105,7 +105,7 @@ const TEAM_METHODS: [&str; 26] = [
 ];
 
 /// The extension methods this build registers (capability `extensions/1`).
-const EXTENSION_METHODS: [(&str, Permission); 8] = [
+const EXTENSION_METHODS: [(&str, Permission); 9] = [
     (extensions::LIST, Permission::Read),
     (extensions::GET, Permission::Read),
     (extensions::CATALOGUE, Permission::Read),
@@ -114,10 +114,11 @@ const EXTENSION_METHODS: [(&str, Permission); 8] = [
     (extensions::INSTALL, Permission::HostAdmin),
     (extensions::SET_ENABLED, Permission::HostAdmin),
     (extensions::REMOVE, Permission::HostAdmin),
+    (extensions::UPDATE, Permission::HostAdmin),
 ];
 
 /// The CLI command paths the command table must offer (every subcommand except `service run` and `ext`).
-const CLI_COMMAND_IDS: [&str; 28] = [
+const CLI_COMMAND_IDS: [&str; 29] = [
     "service.info",
     "service.status",
     "service.stop",
@@ -146,6 +147,7 @@ const CLI_COMMAND_IDS: [&str; 28] = [
     "secret.requests",
     "secret.decline",
     "secret.reset-key",
+    "agent-context",
 ];
 
 #[tokio::test]

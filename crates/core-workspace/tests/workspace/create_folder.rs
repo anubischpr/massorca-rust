@@ -112,13 +112,23 @@ fn branch_base_and_existing_branch_do_not_apply_to_a_folder() {
 }
 
 #[test]
-fn a_folder_workspace_name_follows_the_same_rules() {
+fn a_folder_workspace_name_is_cleaned_like_a_worktree_name_and_a_device_name_is_refused() {
     let fx = Fixture::new();
     let project = fx.folder_project("notes");
+    let other = fx.path("other");
+    fs::create_dir_all(&other).expect("create other");
+    let mut params = create_params(&project.name, "bad name");
+    params.path = Some(text(&other));
+
+    let ws = fx
+        .workspaces
+        .create_workspace(params)
+        .expect("create a folder workspace");
+    assert_eq!(ws.name, "bad-name");
 
     expect_code(
         fx.workspaces
-            .create_workspace(create_params(&project.name, "bad name")),
+            .create_workspace(create_params(&project.name, "CON")),
         codes::WORKSPACE_NAME_INVALID,
     );
 }

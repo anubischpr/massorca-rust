@@ -1,6 +1,9 @@
 //! The Sidebar's rows in each mode: the Workspaces navigation and project tree. The Bot Teams
 //! rows come from the teams sidebar (D-WS-29); here Bot Teams is only the marker (A9, A10, A83).
 
+use std::collections::BTreeSet;
+use std::iter::Peekable;
+
 use super::navigation::{Mode, Page};
 use super::shell::{Agent, AgentState, HostReach, ProjectGroup, SessionRow, ShellSnapshot};
 
@@ -63,6 +66,15 @@ pub enum TreeRow {
         own_worktree: bool,
         /// Whether the row offers to bring this child back.
         can_bring_back: bool,
+    },
+    /// Shows a workspace's folded sessions: `count` of its top sessions are hidden behind it.
+    ShowMore {
+        workspace_id: String,
+        count: usize,
+    },
+    /// Folds a workspace's sessions back behind "Show N more", once they are all listed.
+    ShowLess {
+        workspace_id: String,
     },
 }
 
@@ -161,10 +173,108 @@ fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, act
     }
 }
 
+/// How many top-level sessions a workspace lists before the rest fold (WS-33).
+pub const SESSIONS_SHOWN: usize = 5;
+
+/// The workspaces whose folded sessions the user has unfolded, by workspace id. Kept for the app run only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SidebarFolds {
+    unfolded: BTreeSet<String>,
+}
+
+impl SidebarFolds {
+    pub fn unfold(&mut self, workspace_id: &str) {
+        self.unfolded.insert(workspace_id.to_owned());
+    }
+
+    pub fn fold(&mut self, workspace_id: &str) {
+        self.unfolded.remove(workspace_id);
+    }
+
+    pub fn is_unfolded(&self, workspace_id: &str) -> bool {
+        self.unfolded.contains(workspace_id)
+    }
+}
+
+/// Folds each workspace's top sessions past the fifth. The fold row comes after the listed sessions.
+pub fn fold_sessions(tree: Vec<TreeRow>, folds: &SidebarFolds) -> Vec<TreeRow> {
+    let mut out = Vec::with_capacity(tree.len());
+    let mut rows = tree.into_iter().peekable();
+    while let Some(row) = rows.next() {
+        let workspace = match &row {
+            TreeRow::Workspace { id, .. } => Some(id.clone()),
+            _ => None,
+        };
+        out.push(row);
+        let Some(workspace_id) = workspace else {
+            continue;
+        };
+        let blocks = session_blocks(&mut rows);
+        out.extend(fold_blocks(&workspace_id, blocks, folds));
+    }
+    out
+}
+
+/// The top sessions after a workspace row, each with the child sessions below it, in order.
+fn session_blocks(rows: &mut Peekable<impl Iterator<Item = TreeRow>>) -> Vec<Vec<TreeRow>> {
+    let mut blocks: Vec<Vec<TreeRow>> = Vec::new();
+    while let Some(row) = rows.next_if(|row| matches!(row, TreeRow::Session { .. })) {
+        let top = matches!(row, TreeRow::Session { depth: 0, .. });
+        match blocks.last_mut() {
+            Some(block) if !top => block.push(row),
+            _ => blocks.push(vec![row]),
+        }
+    }
+    blocks
+}
+
+/// One workspace's session rows: all of them when unfolded, else the listed ones and a fold row.
+fn fold_blocks(
+    workspace_id: &str,
+    blocks: Vec<Vec<TreeRow>>,
+    folds: &SidebarFolds,
+) -> Vec<TreeRow> {
+    let hidden: Vec<bool> = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| index >= SESSIONS_SHOWN && !stays_listed(block))
+        .collect();
+    let folded = hidden.iter().filter(|&&hidden| hidden).count();
+    if folded == 0 {
+        return blocks.into_iter().flatten().collect();
+    }
+    if folds.is_unfolded(workspace_id) {
+        let mut rows: Vec<TreeRow> = blocks.into_iter().flatten().collect();
+        rows.push(TreeRow::ShowLess {
+            workspace_id: workspace_id.to_owned(),
+        });
+        return rows;
+    }
+    let mut rows: Vec<TreeRow> = blocks
+        .into_iter()
+        .zip(hidden)
+        .filter(|(_, hidden)| !hidden)
+        .flat_map(|(block, _)| block)
+        .collect();
+    rows.push(TreeRow::ShowMore {
+        workspace_id: workspace_id.to_owned(),
+        count: folded,
+    });
+    rows
+}
+
+/// Whether a top session and its children stay listed: one is open, waits for the person or failed.
+fn stays_listed(block: &[TreeRow]) -> bool {
+    block.iter().any(|row| {
+        matches!(row, TreeRow::Session { state, selected, .. } if *selected || state.never_folds())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{DataSource, SampleDataSource};
+    use crate::model::shell::{HostGroup, StatusBarModel, WorkspaceRow};
 
     fn sample() -> ShellSnapshot {
         SampleDataSource.snapshot()
@@ -277,5 +387,220 @@ mod tests {
             sidebar_content(&sample(), Mode::BotTeams),
             SidebarContent::BotTeams
         );
+    }
+
+    fn session(id: &str, state: AgentState) -> SessionRow {
+        SessionRow {
+            id: id.into(),
+            title: id.into(),
+            agent: Agent::Claude,
+            state,
+            place: None,
+            own_worktree: false,
+            can_bring_back: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// Top sessions `prefix1` to `prefixN`, all idle.
+    fn idle_sessions(prefix: &str, count: usize) -> Vec<SessionRow> {
+        (1..=count)
+            .map(|n| session(&format!("{prefix}{n}"), AgentState::Idle))
+            .collect()
+    }
+
+    /// One project and host holding these workspaces, each as its id and its sessions.
+    fn snapshot(workspaces: Vec<(&str, Vec<SessionRow>)>, open: Option<&str>) -> ShellSnapshot {
+        let workspaces = workspaces
+            .into_iter()
+            .map(|(id, sessions)| WorkspaceRow {
+                id: id.into(),
+                name: id.into(),
+                branch: None,
+                usage_slot: 1,
+                sessions,
+            })
+            .collect();
+        ShellSnapshot {
+            projects: vec![ProjectGroup {
+                name: "massorca".into(),
+                hosts: vec![HostGroup {
+                    name: "This PC".into(),
+                    reach: HostReach::Connected,
+                    workspaces,
+                }],
+            }],
+            usage: Vec::new(),
+            status: StatusBarModel {
+                waiting: 0,
+                running: 0,
+                memory: None,
+                terminals: 0,
+                ports: None,
+                hosts_total: 1,
+                hosts_unreachable: 0,
+            },
+            session_title: None,
+            active_session: open.map(str::to_owned),
+            prototypes: 0,
+            service_status: None,
+            service_notice: None,
+        }
+    }
+
+    /// The tree a snapshot draws, folded the way the Sidebar folds it.
+    fn folded(snapshot: &ShellSnapshot, folds: &SidebarFolds) -> Vec<TreeRow> {
+        let SidebarContent::Workspaces { tree, .. } = sidebar_content(snapshot, Mode::Workspaces)
+        else {
+            panic!("workspaces content expected");
+        };
+        fold_sessions(tree, folds)
+    }
+
+    /// The text of a tree's sessions and fold rows, in order.
+    fn shown(tree: &[TreeRow]) -> Vec<String> {
+        tree.iter()
+            .filter_map(|row| match row {
+                TreeRow::Session { title, .. } => Some(title.clone()),
+                TreeRow::ShowMore { count, .. } => Some(format!("Show {count} more")),
+                TreeRow::ShowLess { .. } => Some("Show less".to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_workspace_of_five_sessions_or_fewer_has_no_fold_row() {
+        let folds = SidebarFolds::default();
+        let five = snapshot(vec![("w", idle_sessions("s", 5))], None);
+        assert_eq!(
+            shown(&folded(&five, &folds)),
+            ["s1", "s2", "s3", "s4", "s5"]
+        );
+        let none = snapshot(vec![("w", Vec::new())], None);
+        assert!(shown(&folded(&none, &folds)).is_empty());
+    }
+
+    #[test]
+    fn the_sixth_session_folds_behind_show_one_more() {
+        let six = snapshot(vec![("w", idle_sessions("s", 6))], None);
+        assert_eq!(
+            shown(&folded(&six, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "Show 1 more"]
+        );
+    }
+
+    #[test]
+    fn show_n_more_counts_folded_top_sessions_and_not_their_children() {
+        let mut sessions = idle_sessions("s", 9);
+        sessions[5].children = vec![session("c6", AgentState::Idle)];
+        let nine = snapshot(vec![("w", sessions)], None);
+        assert_eq!(
+            shown(&folded(&nine, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "Show 4 more"]
+        );
+    }
+
+    #[test]
+    fn waiting_and_failed_sessions_never_fold_even_beyond_five() {
+        let mut sessions = idle_sessions("s", 8);
+        sessions[6].state = AgentState::Waiting;
+        sessions[7].state = AgentState::Error;
+        let tree = snapshot(vec![("w", sessions)], None);
+        assert_eq!(
+            shown(&folded(&tree, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s7", "s8", "Show 1 more"]
+        );
+    }
+
+    #[test]
+    fn a_child_that_waits_or_failed_keeps_its_top_session_listed() {
+        let mut sessions = idle_sessions("s", 7);
+        sessions[5].children = vec![session("c6", AgentState::Error)];
+        let tree = snapshot(vec![("w", sessions)], None);
+        assert_eq!(
+            shown(&folded(&tree, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s6", "c6", "Show 1 more"]
+        );
+    }
+
+    #[test]
+    fn the_open_session_and_its_top_session_never_fold() {
+        let open_top = snapshot(vec![("w", idle_sessions("s", 7))], Some("s7"));
+        assert_eq!(
+            shown(&folded(&open_top, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s7", "Show 1 more"]
+        );
+        let mut sessions = idle_sessions("s", 7);
+        sessions[5].children = vec![session("c6", AgentState::Idle)];
+        let open_child = snapshot(vec![("w", sessions)], Some("c6"));
+        assert_eq!(
+            shown(&folded(&open_child, &SidebarFolds::default())),
+            ["s1", "s2", "s3", "s4", "s5", "s6", "c6", "Show 1 more"]
+        );
+    }
+
+    #[test]
+    fn unfolding_lists_every_session_and_show_less_folds_them_again() {
+        let tree = snapshot(vec![("w", idle_sessions("s", 7))], None);
+        let mut folds = SidebarFolds::default();
+        folds.unfold("w");
+        assert_eq!(
+            shown(&folded(&tree, &folds)),
+            ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "Show less"]
+        );
+        folds.fold("w");
+        assert_eq!(
+            shown(&folded(&tree, &folds)),
+            ["s1", "s2", "s3", "s4", "s5", "Show 2 more"]
+        );
+    }
+
+    #[test]
+    fn unfolding_one_workspace_leaves_the_others_folded() {
+        let tree = snapshot(
+            vec![("a", idle_sessions("a", 6)), ("b", idle_sessions("b", 6))],
+            None,
+        );
+        let mut folds = SidebarFolds::default();
+        folds.unfold("a");
+        assert!(folds.is_unfolded("a") && !folds.is_unfolded("b"));
+        assert_eq!(
+            shown(&folded(&tree, &folds)),
+            [
+                "a1",
+                "a2",
+                "a3",
+                "a4",
+                "a5",
+                "a6",
+                "Show less",
+                "b1",
+                "b2",
+                "b3",
+                "b4",
+                "b5",
+                "Show 1 more",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unfolded_workspace_with_nothing_folded_has_no_show_less_row() {
+        let tree = snapshot(vec![("w", idle_sessions("s", 5))], None);
+        let mut folds = SidebarFolds::default();
+        folds.unfold("w");
+        assert_eq!(
+            shown(&folded(&tree, &folds)),
+            ["s1", "s2", "s3", "s4", "s5"]
+        );
+    }
+
+    #[test]
+    fn only_waiting_failed_and_working_sessions_never_fold() {
+        let pinned = [AgentState::Waiting, AgentState::Error, AgentState::Running];
+        let folding = [AgentState::Idle, AgentState::Unreachable, AgentState::Done];
+        assert!(pinned.iter().all(|state| state.never_folds()));
+        assert!(folding.iter().all(|state| !state.never_folds()));
     }
 }

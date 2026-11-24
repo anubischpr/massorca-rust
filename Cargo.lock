@@ -3795,6 +3795,7 @@ name = "massorca-core-workspace"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "icu_normalizer",
  "massorca-core-git",
  "massorca-core-store",
  "massorca-process",

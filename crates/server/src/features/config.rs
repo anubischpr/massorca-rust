@@ -20,6 +20,10 @@ use crate::store_blocking;
 
 /// Where new workspaces go when a project does not set a root of its own.
 pub(crate) const WORKSPACES_DEFAULT_ROOT: &str = "workspaces.default_root";
+/// Where the branch prefix of a new workspace comes from: `none`, `git-username` or `custom`.
+pub(crate) const WORKSPACES_BRANCH_PREFIX: &str = "workspaces.branch_prefix";
+/// The text of the branch prefix when `workspaces.branch_prefix` is `custom`.
+pub(crate) const WORKSPACES_BRANCH_PREFIX_CUSTOM: &str = "workspaces.branch_prefix_custom";
 /// Where a new project's workspaces go under the default root: `nested` or `flat` (ADR 0008).
 pub(crate) const WORKSPACES_LAYOUT: &str = "workspaces.layout";
 const LAYOUT_NESTED: &str = "nested";
@@ -40,6 +44,24 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             kind: SettingKind::Path,
             default: Value::String(default_workspace_root()?),
             description: "Folder for new workspaces when a project does not set its own root."
+                .to_owned(),
+            aliases: Vec::new(),
+        })?,
+        registries.settings.register(SettingDecl {
+            owner: Owner::Core,
+            key: WORKSPACES_BRANCH_PREFIX.to_owned(),
+            kind: SettingKind::Choice(&["none", "git-username", "custom"]),
+            default: Value::String("none".to_owned()),
+            description: "Branch prefix of new workspaces: none, git-username or custom."
+                .to_owned(),
+            aliases: Vec::new(),
+        })?,
+        registries.settings.register(SettingDecl {
+            owner: Owner::Core,
+            key: WORKSPACES_BRANCH_PREFIX_CUSTOM.to_owned(),
+            kind: SettingKind::String,
+            default: Value::String(String::new()),
+            description: "Branch prefix text, used when workspaces.branch_prefix is custom."
                 .to_owned(),
             aliases: Vec::new(),
         })?,

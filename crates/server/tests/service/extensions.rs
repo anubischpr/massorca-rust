@@ -14,7 +14,7 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionAssetParams, ExtensionInstallParams, ExtensionRemoveParams,
-    ExtensionSetEnabledParams, ExtensionState, RiskLevel,
+    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams, RiskLevel,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -501,5 +501,35 @@ async fn a_request_carrying_an_agent_run_token_cannot_run_a_vendor_installer_or_
             .is_empty(),
         "nothing was installed"
     );
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn update_refuses_an_agent_run_and_names_a_package_that_is_not_installed() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+
+    let refused = client
+        .extension_update(&ExtensionUpdateParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            sha256: None,
+            agent_token: Some("a-run-token".to_owned()),
+        })
+        .await
+        .expect_err("an agent run may not update a package");
+    assert_eq!(remote_code(&refused), codes::EXTENSION_NEEDS_PERSON);
+
+    let missing = client
+        .extension_update(&ExtensionUpdateParams {
+            id: "acme.kit".to_owned(),
+            consent: None,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect_err("nothing is installed");
+    assert_eq!(remote_code(&missing), codes::EXTENSION_NOT_INSTALLED);
     stop(running).await;
 }
