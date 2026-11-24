@@ -490,7 +490,14 @@ impl Extensions {
             }
             fs::rename(&staging, dir).map_err(Error::io("cannot move into place", dir))?;
             let root = self.layout.package_root(id);
-            sync_dir(&root).map_err(Error::io("cannot sync", &root))
+            // `pkgs/<id>` may be new, so its own entry in `pkgs/` is synced too.
+            let synced = [root.as_path(), root.parent().unwrap_or(&root)]
+                .into_iter()
+                .try_for_each(|folder| sync_dir(folder).map_err(Error::io("cannot sync", folder)));
+            if synced.is_err() {
+                let _ = fs::remove_dir_all(dir);
+            }
+            synced
         })();
         if written.is_err() {
             let _ = fs::remove_dir_all(&staging);
