@@ -5,6 +5,7 @@ mod error;
 mod frames;
 mod identity;
 mod log_guard;
+mod log_redaction;
 mod pin;
 mod tls;
 mod transport;
@@ -16,6 +17,7 @@ pub use frames::{
 };
 pub use identity::TlsIdentity;
 pub use log_guard::{FRAME_DUMPING_TARGETS, frame_dump_guard};
+pub use log_redaction::{REDACTED, RedactedFormat, redact_secret_values};
 pub use pin::Pin;
 pub use tls::{client_tls_config, server_tls_config};
 pub use transport::{Accepted, ClientWs, ServerWs, accept, connect};
