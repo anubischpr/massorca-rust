@@ -9,6 +9,7 @@ export type RootStackParamList = {
   Workspaces: { readonly host: string };
   /** `workspace` is the workspace the terminal belongs to, for its agent state. */
   Terminal: { readonly host: string; readonly terminal: string; readonly workspace?: string };
-  Changes: undefined;
+  /** The workspace's source control, read only. `noGit` is a plain folder, which has no status. */
+  Changes: { readonly host: string; readonly workspace: string; readonly noGit: boolean };
   ConnectionLog: { readonly host: string };
 };

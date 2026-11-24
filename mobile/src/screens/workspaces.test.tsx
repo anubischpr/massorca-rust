@@ -137,4 +137,17 @@ describe('workspaces of a host', () => {
 
     expect(await screen.findByLabelText('ws-1')).toBeTruthy();
   });
+
+  it('opens the source control of a workspace when its row is tapped', async () => {
+    const fake = new FakeMassOrca({
+      hosts: [hostSummary()],
+      workspaces: [workspace({ id: 'ws-1', projectId: PROJECT_A })],
+    });
+    fake.setGitStatus({ branch: 'main', ahead: undefined, behind: undefined, operation: undefined, files: [], truncated: false });
+    await openProjects(fake, 'Connected');
+
+    await fireEvent.press(await screen.findByRole('button', { name: 'ws-1' }));
+
+    expect(await screen.findByText('No changes')).toBeTruthy();
+  });
 });

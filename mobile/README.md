@@ -61,7 +61,8 @@ runs in CI and in the Jest test `src/terminal/terminal-asset.test.ts`.
 - `src/navigation/`: the compact navigation stack (M-SH-01).
 - `src/terminal/`: the terminal's state (`terminal-session.ts`), its WebView bridge (`terminal-bridge.ts`) and the Ctrl
   key (`control-key.ts`).
-- `src/screens/`: screens. Most are placeholders that show their title until their task lands.
+- `src/screens/`: one file per screen, with the model it shows (`*-model.ts`) and its tests beside it. Copy lives in
+  `src/copy/`.
 - `android/`: the Android project. `app/src/main/java/dev/massorca/app/keystore/` holds the Keystore module.
 
 ## Native binding
@@ -107,4 +108,9 @@ synchronous callback.
   has only been checked by the TypeScript side. The `android-apk` job is the first real build.
 - **Device name:** every phone calls itself "Android phone" to its hosts (`src/binding/index.ts`). A per-device name
   needs a choice from the owner.
+- **Terminal entry point:** the binding has no terminal list yet (`terminal.list` exists in the client crate but
+  `client-ffi` does not export it, and the agent sessions carry no terminal id). The terminal screen takes its terminal
+  id from its route, so nothing opens it until the binding exposes that id.
+- **Not checked on a device:** the terminal page runs in the WebView only under Jest (a double). Key sequences, the
+  Ctrl key, resizing and the WebView's file URL need a run on a phone or an emulator.
 - Emulator flows (A11) and the phone validation (A12) are not started.

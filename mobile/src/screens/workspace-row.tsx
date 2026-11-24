@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AgentStatusGlyph } from '../components/agent-status-glyph';
 import { GLYPH_SIZE, TOUCH_TARGET } from '../components/dimensions';
@@ -8,14 +8,17 @@ import { usePalette } from '../theme/palette';
 import { spacingTokens, typeTokens } from '../theme/tokens.generated';
 import type { WorkspaceRow } from './workspace-sections';
 
-/** One workspace row (M-WS-01): glyph, name, No Git, then the state word. Without contact the word is the last known state. */
-export function WorkspaceRowView({ row }: { readonly row: WorkspaceRow }) {
+/**
+ * One workspace row (M-WS-01): glyph, name, No Git, then the state word. Without contact the word is the last known state.
+ * Tapping it opens the workspace's source control.
+ */
+export function WorkspaceRowView({ row, onOpen }: { readonly row: WorkspaceRow; readonly onOpen: () => void }) {
   const palette = usePalette();
   const dimmed = row.agent?.dimmed === true;
   const label = [row.name, row.agent?.word, row.noGit ? NO_GIT_BADGE : undefined].filter(Boolean).join(', ');
 
   return (
-    <View accessible accessibilityLabel={label} style={styles.row}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onOpen} style={styles.row}>
       <View style={styles.slot}>
         {row.agent !== undefined && (
           <AgentStatusGlyph state={row.agent.glyph} word={row.agent.word} size={GLYPH_SIZE.large} />
@@ -30,7 +33,7 @@ export function WorkspaceRowView({ row }: { readonly row: WorkspaceRow }) {
           {row.agent.word}
         </Text>
       )}
-    </View>
+    </Pressable>
   );
 }
 

@@ -114,7 +114,12 @@ export function WorkspacesScreen({ navigation, route }: Props) {
         sections={workspaceSections(list.workspaces, agents?.sessions ?? [], linkLost, age)}
         keyExtractor={(row: WorkspaceRow) => row.id}
         renderSectionHeader={({ section }) => <Overline>{section.title}</Overline>}
-        renderItem={({ item }) => <WorkspaceRowView row={item} />}
+        renderItem={({ item }) => (
+          <WorkspaceRowView
+            row={item}
+            onOpen={() => navigation.navigate('Changes', { host, workspace: item.id, noGit: item.noGit })}
+          />
+        )}
         ListHeaderComponent={<Text style={[styles.caption, { color: palette['text.secondary'] }]}>{ON_HOST(host)}</Text>}
         refreshControl={<RefreshControl refreshing={false} onRefresh={reload} />}
         contentContainerStyle={styles.list}
