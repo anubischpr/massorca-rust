@@ -27,6 +27,7 @@ use crate::profile_secure;
 use crate::project;
 use crate::server_status;
 use crate::service::{control, foreground, unit};
+use crate::skills;
 use crate::target::{Target, reject_host};
 use crate::terminal;
 use crate::workspace;
@@ -193,6 +194,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Extension { command } => {
             let target = globals.target()?;
             block_on(extension::execute(&target, autostart, command, output))
+        }
+        Commands::Skills { command } => {
+            let target = globals.target()?;
+            block_on(skills::execute(&target, autostart, command, output))
         }
     }
 }

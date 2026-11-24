@@ -380,6 +380,13 @@ CSP. Nothing above changes.
   - `extensions.logs` (a stream);
   - `extensions.dev.reload`;
   - `marketplace.search`, `marketplace.sources.*`.
+- **Capability `skills/1` (SKL-01).** `skills.discover(refresh?, source_kinds?)`
+  lists the skills in the agent tools' home folders, the shared `.agents` folder,
+  the plugin caches and each registered project. Each skill is listed once; each
+  root reports whether it was read and, if not, why. A scan is shared for ten
+  seconds. Read only, nothing is persisted, and host paths reach host
+  administrators only. `massorca skills installed` lists the skills and
+  `massorca skills list` the roots.
 - **Per extension.** Each enabled extension adds the capability
   `ext/<id>@<major>` and the methods `ext.<id>.*`, such as `view-data`,
   `view-action` and `command`.
