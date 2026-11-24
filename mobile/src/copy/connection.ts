@@ -19,7 +19,7 @@ export const BANNER = {
 } as const;
 
 /** X-DG-01 status line words. */
-export const STATUS_WORDS = { ok: 'Ok', warning: 'Warning', failed: 'Failed' } as const;
+export const STATUS_WORDS = { ok: 'Ok', warning: 'Warning', failed: 'Failed', connecting: 'Connecting' } as const;
 
 export const LOG_HEADING = 'Log';
 export const LOG_EMPTY = 'Nothing has been logged yet.';

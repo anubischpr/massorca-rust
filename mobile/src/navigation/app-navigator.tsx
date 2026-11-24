@@ -1,9 +1,11 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
-import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
+import { CONNECTION_LOG_TITLE } from '../copy/connection';
 import { PROJECTS_TITLE } from '../copy/workspaces';
+import { CONFIRM_TITLE, PAIR_TITLE } from '../copy/pairing';
 import { ConfirmPairingScreen } from '../screens/confirm-pairing-screen';
+import { ConnectionLogScreen } from '../screens/connection-log-screen';
 import { HomeScreen } from '../screens/home-screen';
 import { PairScreen } from '../screens/pair-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
@@ -29,9 +31,7 @@ export function AppNavigator() {
         <Stack.Screen name="Changes" options={{ title: 'Changes' }}>
           {() => <PlaceholderScreen title="Changes" />}
         </Stack.Screen>
-        <Stack.Screen name="ConnectionLog" options={{ title: 'Connection log' }}>
-          {() => <PlaceholderScreen title="Connection log" />}
-        </Stack.Screen>
+        <Stack.Screen name="ConnectionLog" component={ConnectionLogScreen} options={{ title: CONNECTION_LOG_TITLE }} />
       </Stack.Navigator>
     </NavigationContainer>
   );
