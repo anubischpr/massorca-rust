@@ -879,6 +879,7 @@ mod tests {
             state: WorkspaceState::Ready,
             request_id: None,
             created_at: 1,
+            comment: None,
         };
         store.insert_workspace(&workspace).expect("workspace");
         let session = AgentSessionRow {

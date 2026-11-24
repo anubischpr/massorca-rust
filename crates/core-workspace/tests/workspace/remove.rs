@@ -129,6 +129,7 @@ fn the_main_worktree_is_never_removed() {
         state: StoreWorkspaceState::Ready,
         request_id: None,
         created_at: now_ms(),
+        comment: None,
     };
     fx.store.insert_workspace(&row).expect("insert main row");
 
