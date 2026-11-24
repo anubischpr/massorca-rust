@@ -14,6 +14,7 @@ mod projects;
 mod remove;
 mod selectors;
 pub mod setup;
+pub mod setup_runner;
 mod unregistered;
 mod views;
 mod workspaces;
