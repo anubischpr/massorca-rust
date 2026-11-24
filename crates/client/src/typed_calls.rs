@@ -24,8 +24,8 @@ use massorca_protocol::methods::terminals::{
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
 };
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams, WorkspaceRemoved,
+    self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams,
+    WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved, WorkspaceUpdateParams,
 };
 
 use crate::client::Client;
@@ -131,6 +131,22 @@ impl Client {
         params: &WorkspaceRemoveParams,
     ) -> Result<WorkspaceRemoved, ClientError> {
         self.call(workspaces::REMOVE, params).await
+    }
+
+    /// `workspace.update`: renames a workspace or sets its comment.
+    pub async fn workspace_update(
+        &self,
+        params: &WorkspaceUpdateParams,
+    ) -> Result<Workspace, ClientError> {
+        self.call(workspaces::UPDATE, params).await
+    }
+
+    /// `workspace.check`: whether a workspace's folder is there and, for a worktree, still registered.
+    pub async fn workspace_check(
+        &self,
+        params: &WorkspaceRef,
+    ) -> Result<WorkspaceCheck, ClientError> {
+        self.call(workspaces::CHECK, params).await
     }
 
     /// `terminal.create`: starts a terminal in a workspace.

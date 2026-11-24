@@ -6,6 +6,7 @@
 //! [`Workspaces::begin_remove`] and [`Workspaces::finish_remove`].
 
 mod branch_prefix;
+mod check;
 mod create;
 mod error;
 mod generated_names;
@@ -16,6 +17,7 @@ mod projects;
 mod remove;
 mod selectors;
 mod unregistered;
+mod update;
 mod views;
 mod workspaces;
 mod worktree_state;

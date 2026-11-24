@@ -10,6 +10,10 @@ pub const LIST: &str = "workspace.list";
 pub const SHOW: &str = "workspace.show";
 /// Params: [`WorkspaceRemoveParams`]. Result: [`WorkspaceRemoved`].
 pub const REMOVE: &str = "workspace.remove";
+/// Params: [`WorkspaceUpdateParams`]. Result: [`Workspace`].
+pub const UPDATE: &str = "workspace.update";
+/// Params: [`WorkspaceRef`]. Result: [`WorkspaceCheck`].
+pub const CHECK: &str = "workspace.check";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,6 +123,36 @@ pub struct WorkspaceRemoved {
     pub directory_kept: bool,
 }
 
+/// Params of `workspace.update`. A field left out keeps its value; an empty `comment` clears it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceUpdateParams {
+    /// Id, name or path.
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// Result of `workspace.check`. `ok` holds only when every check passes; `reason` names the first that did not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCheck {
+    pub id: String,
+    pub name: String,
+    pub kind: WorkspaceKind,
+    pub path: String,
+    /// Whether the folder is there.
+    pub exists: bool,
+    /// Whether the folder can be listed.
+    pub readable: bool,
+    /// Whether git lists the worktree. Absent for a folder, and when git could not answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered: Option<bool>,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// A workspace of a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workspace {
@@ -146,6 +180,9 @@ pub struct Workspace {
     /// Only in the reply of a create that asked for `refresh_base`: what the refresh did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_refresh: Option<BaseRefresh>,
+    /// The owner's comment, set by `workspace.update`; absent when none is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 /// What a create's `refresh_base` did. A failed fetch never fails the create: it starts from the local copy.

@@ -3,6 +3,10 @@
 pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
 pub const WORKSPACES: &str = "workspaces/1";
+/// Renaming a workspace and setting its comment (`workspace.update`).
+pub const WORKSPACE_UPDATE: &str = "workspace-update/1";
+/// Checking a workspace's folder and its git registration (`workspace.check`).
+pub const WORKSPACE_CHECK: &str = "workspace-check/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).
