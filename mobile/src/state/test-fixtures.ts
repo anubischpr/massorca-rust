@@ -106,8 +106,8 @@ class StalledHost implements Host {
     return this.inner.watchGit(workspaceId);
   }
 
-  watchAgents(workspace?: string): Watch<AgentEvent> {
-    return this.inner.watchAgents(workspace);
+  watchAgents(workspaceId?: string): Watch<AgentEvent> {
+    return this.inner.watchAgents(workspaceId);
   }
 }
 
