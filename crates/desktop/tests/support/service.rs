@@ -155,6 +155,7 @@ pub async fn add_project_and_workspace(
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         })

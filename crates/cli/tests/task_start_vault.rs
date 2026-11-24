@@ -178,3 +178,55 @@ fn a_task_started_by_a_workspace_device_runs_without_vault_variables() {
         "fake-agent: env TEAM_TOKEN set",
     );
 }
+
+/// A server with team `alpha` and a client paired with it as a standard device.
+fn standard_device() -> (Sandbox, Sandbox, ChildGuard) {
+    let server = Sandbox::new();
+    let client = Sandbox::new();
+    let service = start_server(&server);
+    prepare(&server);
+    pair(&server, &client);
+    (server, client, service)
+}
+
+/// Runs `args` on the device, which must refuse them with `permission.denied`.
+fn device_refused(client: &Sandbox, args: &[&str]) {
+    let mut full = vec!["--json", "--host", "srv"];
+    full.extend_from_slice(args);
+    let outcome = client.run("client", &full).failure();
+    let document = single_document(&outcome);
+    assert_eq!(document["error"]["code"], "permission.denied", "{document}");
+}
+
+#[test]
+fn a_team_a_workspace_device_makes_without_access_gets_default_access() {
+    let (_server, client, _service) = standard_device();
+
+    let made = device_ok(&client, &["team", "create", "beta"]);
+
+    assert_eq!(made["access"], "default", "{made}");
+}
+
+#[test]
+fn a_workspace_device_asking_to_create_a_full_access_team_is_refused() {
+    let (server, client, _service) = standard_device();
+
+    device_refused(&client, &["team", "create", "gamma", "--access", "full"]);
+
+    let teams = server.json_ok(SERVER, &["team", "list"]);
+    assert!(
+        !teams.to_string().contains("gamma"),
+        "a refused create made no team: {teams}"
+    );
+}
+
+#[test]
+fn a_workspace_device_cannot_turn_full_access_on() {
+    let (server, client, _service) = standard_device();
+    server.json_ok(SERVER, &["team", "create", "beta", "--access", "default"]);
+
+    device_refused(&client, &["team", "update", "beta", "--access", "full"]);
+
+    let shown = server.json_ok(SERVER, &["team", "show", "beta"]);
+    assert_eq!(shown["access"], "default", "{shown}");
+}

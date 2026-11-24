@@ -24,6 +24,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             name: "sample".into(),
             workspaces_root: "/repos/sample-worktrees".into(),
             added_at_ms: 1,
+            base_ref: None,
         }],
         workspaces: vec![Workspace {
             id: SAMPLE_WORKSPACE.into(),
@@ -39,6 +40,7 @@ fn sample_start_records() -> Vec<StoreUpdate> {
             created_at_ms: 1,
             locked: None,
             prunable: None,
+            base_refresh: None,
         }],
     }]
 }

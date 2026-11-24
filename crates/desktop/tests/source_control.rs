@@ -140,6 +140,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         })

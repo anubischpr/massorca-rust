@@ -42,6 +42,9 @@ pub struct WorkspaceCreateParams {
     pub base: Option<String>,
     #[serde(default)]
     pub existing_branch: bool,
+    /// Fetches the base's branch first; a failed fetch creates from the local copy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_base: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,4 +142,22 @@ pub struct Workspace {
     /// Git before 2.31. `missing` is still answered by the directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prunable: Option<String>,
+    /// Only in the reply of a create that asked for `refresh_base`: what the refresh did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_refresh: Option<BaseRefresh>,
+}
+
+/// What a create's `refresh_base` did. A failed fetch never fails the create: it starts from the local copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum BaseRefresh {
+    /// The base's remote-tracking branch was fetched; `moved` says whether it changed.
+    Fetched { moved: bool },
+    /// The base is a local branch, a tag or a commit: there was nothing to fetch.
+    NotRemote,
+    /// The fetch failed; the workspace starts from the local copy of the base.
+    Failed { reason: String },
+    /// An outcome from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
 }
