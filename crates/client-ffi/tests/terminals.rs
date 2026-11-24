@@ -17,7 +17,7 @@ use massorca_client::{AttachUpdate, Client};
 use massorca_client_ffi::{FfiError, Host, LinkState, MassOrca, TerminalEvent, TerminalView};
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::terminals::{
-    AttachMode, TerminalAttachParams, TerminalCreateParams,
+    AttachMode, TerminalAttachParams, TerminalCreateParams, TerminalState,
 };
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
 use massorca_protocol::pairing::Offer;
@@ -532,5 +532,96 @@ fn a_gap_the_host_no_longer_holds_arrives_as_a_snapshot() {
 
     within(&test, view.input(typed(&joined_echo("ma", "rker2")))).expect("the marker is typed");
     seen.until_output(&test, &view, "marker2");
+    test.block_on(stop(rig.running));
+}
+
+#[test]
+fn input_reaches_the_terminal_and_a_resize_reaches_the_host() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().expect("a runtime");
+    let rig = Rig::new(&test, &home);
+    let view = rig.attach(&test);
+    let mut seen = Seen::default();
+    seen.until(&test, &view, is_snapshot);
+
+    within(&test, view.input(typed(&joined_echo("ma", "rker")))).expect("the input is written");
+    seen.until_output(&test, &view, "marker");
+
+    within(&test, view.resize(100, 30)).expect("the resize is accepted");
+    let resized = seen.until(&test, &view, |event| {
+        matches!(event, TerminalEvent::Resized { .. })
+    });
+    assert_eq!(
+        resized,
+        TerminalEvent::Resized {
+            cols: 100,
+            rows: 30
+        }
+    );
+    let client = test.block_on(owner(&home));
+    let shown = test
+        .block_on(client.terminal_show(&rig.terminal))
+        .expect("the terminal is shown");
+    assert_eq!((shown.cols, shown.rows), (100, 30));
+    test.block_on(stop(rig.running));
+}
+
+#[test]
+fn close_detaches_and_leaves_the_terminal_running() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().expect("a runtime");
+    let rig = Rig::new(&test, &home);
+    let view = rig.attach(&test);
+
+    view.close();
+    assert_eq!(within(&test, view.next()).expect("no error"), None);
+    let refused =
+        within(&test, view.input(b"x".to_vec())).expect_err("a closed view takes no input");
+    assert!(matches!(refused, FfiError::Internal { .. }), "{refused:?}");
+
+    let client = test.block_on(owner(&home));
+    let shown = test
+        .block_on(client.terminal_show(&rig.terminal))
+        .expect("the terminal is shown");
+    assert_eq!(shown.state, TerminalState::Live);
+    test.block_on(stop(rig.running));
+}
+
+#[test]
+fn a_killed_terminal_reports_how_it_ended_and_the_view_ends() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().expect("a runtime");
+    let rig = Rig::new(&test, &home);
+    let view = rig.attach(&test);
+    let mut seen = Seen::default();
+    seen.until(&test, &view, is_snapshot);
+
+    let client = test.block_on(owner(&home));
+    test.block_on(client.terminal_kill(&rig.terminal, true))
+        .expect("the terminal is killed");
+    let exited = seen.until(&test, &view, |event| {
+        matches!(event, TerminalEvent::Exited { .. })
+    });
+    assert!(
+        matches!(&exited, TerminalEvent::Exited { reason, .. } if reason == "killed"),
+        "{exited:?}"
+    );
+    assert_eq!(within(&test, view.next()).expect("no error"), None);
+    test.block_on(stop(rig.running));
+}
+
+#[test]
+fn an_attach_to_a_missing_terminal_is_refused_by_the_host() {
+    let (_temp, home) = temp_home();
+    let test = Runtime::new().expect("a runtime");
+    let rig = Rig::new(&test, &home);
+
+    let refused = within(
+        &test,
+        rig.host
+            .attach_terminal("no-such-terminal".to_owned(), 80, 24),
+    )
+    .expect_err("the host refuses the attach");
+    assert!(matches!(refused, FfiError::Remote { .. }), "{refused:?}");
     test.block_on(stop(rig.running));
 }
