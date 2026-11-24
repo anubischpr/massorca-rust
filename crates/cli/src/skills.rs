@@ -1,4 +1,4 @@
-//! `massorca skills installed` and `massorca skills list` (SKL-01): the skills the agent tools and the registered projects
+//! `massorca skills installed` and `massorca skills roots` (SKL-01): the skills the agent tools and the registered projects
 //! keep on this host, and the roots they were read from. Read only; the service does the scan.
 
 use clap::Subcommand;
@@ -17,7 +17,7 @@ pub enum SkillCommand {
     /// Lists the skills the agent tools and the registered projects keep on this host.
     Installed,
     /// Lists the skill roots this host reads, and the roots it skipped and why.
-    List,
+    Roots,
 }
 
 /// The `skills installed` result.
@@ -26,7 +26,7 @@ struct Installed<'a> {
     skills: &'a [DiscoveredSkill],
 }
 
-/// The `skills list` result.
+/// The `skills roots` result.
 #[derive(Serialize)]
 struct Roots<'a> {
     sources: &'a [SkillSource],
@@ -50,7 +50,7 @@ pub async fn execute(
             },
             &skill_lines(&discovery.skills),
         ),
-        SkillCommand::List => output.success(
+        SkillCommand::Roots => output.success(
             &Roots {
                 sources: &discovery.sources,
             },

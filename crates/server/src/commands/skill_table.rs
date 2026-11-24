@@ -1,4 +1,4 @@
-//! The skill commands (SKL-01): `skills installed` lists the skills found, `skills list` the roots they were read from.
+//! The skill commands (SKL-01): `skills installed` lists the skills found, `skills roots` the roots they were read from.
 
 use serde_json::{Value, json};
 
@@ -13,7 +13,7 @@ pub(super) fn skill_commands() -> Vec<CommandDescriptor> {
             discover_args(),
         ),
         command(
-            "skills.list",
+            "skills.roots",
             "List the skill roots this host reads, and why one was skipped",
             "skills.discover",
             discover_args(),

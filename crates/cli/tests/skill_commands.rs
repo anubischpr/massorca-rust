@@ -1,4 +1,4 @@
-//! `massorca skills installed` and `massorca skills list`, through the CLI and a service that reads a fake home folder.
+//! `massorca skills installed` and `massorca skills roots`, through the CLI and a service that reads a fake home folder.
 
 mod harness;
 
@@ -41,10 +41,10 @@ fn skills_installed_lists_the_skills_found_in_the_home_folder_as_json() {
 }
 
 #[test]
-fn skills_list_reports_each_root_with_whether_it_was_read() {
+fn skills_roots_reports_each_root_with_whether_it_was_read() {
     let sandbox = sandbox_with_alpha();
 
-    let listed = sandbox.json_ok("default", &["skills", "list"]);
+    let listed = sandbox.json_ok("default", &["skills", "roots"]);
 
     let sources = listed["sources"].as_array().expect("a sources array");
     let codex = sources

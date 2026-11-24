@@ -386,7 +386,7 @@ CSP. Nothing above changes.
   root reports whether it was read and, if not, why. A scan is shared for ten
   seconds. Read only, nothing is persisted, and host paths reach host
   administrators only. `massorca skills installed` lists the skills and
-  `massorca skills list` the roots.
+  `massorca skills roots` lists the roots.
 - **Per extension.** Each enabled extension adds the capability
   `ext/<id>@<major>` and the methods `ext.<id>.*`, such as `view-data`,
   `view-action` and `command`.
