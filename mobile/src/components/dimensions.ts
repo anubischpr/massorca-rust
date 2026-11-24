@@ -3,6 +3,8 @@
 /** The hit target of every control; the visual height of a control is CONTROL_HEIGHT. */
 export const TOUCH_TARGET = 48;
 export const CONTROL_HEIGHT = 44;
+/** The status pill of a session (screen spec 1.1, 40 dp). */
+export const PILL_HEIGHT = 40;
 /** The multi-line pairing code field (screen M-PA-02). */
 export const MULTILINE_FIELD_HEIGHT = 112;
 
