@@ -301,9 +301,11 @@ pub enum WorkspaceCommand {
 pub struct WorkspaceCreateArgs {
     /// Project id, name or path.
     pub project: String,
-    /// Name of the workspace; also its branch and directory name unless set otherwise.
-    pub name: String,
-    /// Branch to create or check out. Defaults to the workspace name.
+    /// Name of the workspace, cleaned for its folder and branch (accents folded, other characters
+    /// become `-`). Omit it to generate one.
+    pub name: Option<String>,
+    /// Branch to create or check out. Defaults to the workspace name, after the branch prefix
+    /// (`workspaces.branch_prefix`) when one is set.
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
     /// Commit or ref the new branch starts from. `origin/x` means the remote-tracking branch. Defaults to the

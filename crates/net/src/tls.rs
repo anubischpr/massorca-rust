@@ -103,6 +103,18 @@ impl ClientCertVerifier for AnyClientCert {
     }
 }
 
+/// The pin of a server certificate that did not match, carried out of the TLS handshake inside its error.
+#[derive(Debug)]
+pub(crate) struct PresentedPin(pub(crate) Pin);
+
+impl std::fmt::Display for PresentedPin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the server presented {}", self.0)
+    }
+}
+
+impl std::error::Error for PresentedPin {}
+
 /// Accepts the server only when its certificate's key hashes to the pin; names and dates are ignored.
 #[derive(Debug)]
 struct PinnedServer {
@@ -121,7 +133,11 @@ impl ServerCertVerifier for PinnedServer {
     ) -> Result<ServerCertVerified, rustls::Error> {
         match Pin::of_certificate(end_entity) {
             Ok(pin) if pin == self.pin => Ok(ServerCertVerified::assertion()),
-            _ => Err(rustls::Error::InvalidCertificate(
+            // The pin it did present travels with the refusal, so the error can name both keys.
+            Ok(pin) => Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::Other(rustls::OtherError(Arc::new(PresentedPin(pin)))),
+            )),
+            Err(_) => Err(rustls::Error::InvalidCertificate(
                 rustls::CertificateError::ApplicationVerificationFailure,
             )),
         }

@@ -141,7 +141,7 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             "workspace.create",
             json!({
                 "type": "object",
-                "required": ["project", "name"],
+                "required": ["project"],
                 "properties": {
                     "project": { "type": "string" },
                     "name": { "type": "string" },
@@ -468,6 +468,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "force": { "type": "boolean" }
                 }
             }),
+        ),
+        command(
+            "agent.seen",
+            "Mark an agent session's waiting or done state as seen",
+            "agent.mark_seen",
+            selector("session"),
         ),
         command(
             "agent.forget",

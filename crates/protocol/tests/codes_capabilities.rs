@@ -142,6 +142,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::BOT_HAS_TASKS, "bot.has_tasks"),
     (codes::TASK_NOT_FOUND, "task.not_found"),
     (codes::TASK_RUNNING, "task.running"),
+    (codes::EXTENSION_UP_TO_DATE, "extension.up_to_date"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 
@@ -170,6 +171,7 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
     assert_eq!(capabilities::AGENTS, "agents/1");
     assert_eq!(capabilities::AGENT_MODES, "agent-modes/1");
+    assert_eq!(capabilities::AGENT_SEEN, "agent-seen/1");
     assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

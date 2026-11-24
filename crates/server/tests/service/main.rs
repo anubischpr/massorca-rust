@@ -3,6 +3,7 @@
 
 mod agent_packages;
 mod agents_redaction;
+mod agents_seen;
 mod capabilities;
 mod common;
 mod concurrency;

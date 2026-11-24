@@ -57,6 +57,21 @@ version.
 
 **Gating.** A kind whose package is not `enabled` is refused with `agent.kind_not_enabled`, data
 `{ kind, package, state }`, and a message that says to install or enable it in the Marketplace.
+A package whose state cannot be read (state `unknown`, as when the extensions lockfile cannot be
+read) is refused with the same code, and its message names that read failure instead, since
+installing or enabling cannot fix it. A package whose files change under the read because it is
+being updated is read again from the new lockfile; one whose lockfile keeps changing is listed with
+the problem that it is being updated (`extension.busy`), not that its files were tampered with.
+The service reuses its last read of the packages while the lockfile's bytes are unchanged, since a
+read hashes every installed package's files; any lockfile write reads them again, and a read that
+found an unusable package is not kept. Files changed without a lockfile write are seen at the next
+lockfile change or service start.
+
+**Removal guard.** The service registers the agents' remove guard on the extensions at start
+(decision 0062): disabling, removing, or updating a package to a version that drops one of its
+kinds is refused with `agent.busy` while a session of one of the package's kinds is live or
+resumable (an exited run with a recorded end and a known ref). The message and its data
+`{ package, kinds, sessions }` name those sessions; `agent.forget` frees one.
 The check runs right after the kind is found and before its declaration's problems and its
 program are checked, on `agent.start`, `agent.delegate` (and every other start through
 `Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.
@@ -320,8 +335,10 @@ run. With a row, the start or resume was recorded and only the mark is removed; 
 stale like any other run of the previous service.
 
 The CLI tests reach both points through `MASSORCA_TEST_CRASH_AT` (`agent-start-spawned`,
-`agent-resume-spawned`), which makes the service exit there at once, as a crash would. It is inert
-unless set.
+`agent-resume-spawned`), which makes the service exit there at once, as a crash would. The crash
+points exist only with core-agents' `test-hooks` feature, which only the CLI's dev-dependencies
+enable, so a release build carries neither the points nor the variable;
+`crates/core-agents/tests/test_hooks_gate.rs` fails when any normal or build dependency enables it.
 
 ## Prompt queue (decision 0084)
 

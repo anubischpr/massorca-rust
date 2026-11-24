@@ -71,6 +71,8 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "ring"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+# Pinned to the release uniffi-bindgen-react-native generates for (decision 0080).
+uniffi = { version = "~0.31.2", default-features = false }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

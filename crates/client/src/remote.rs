@@ -13,6 +13,7 @@ use crate::client::Client;
 use crate::error::ClientError;
 use crate::handshake;
 use crate::host_storage::{HostRecord, HostStorage};
+use crate::identity_mismatch::{IdentityMismatch, TrustedFrom};
 use crate::transport::FrameIo;
 
 /// How long one address may take to accept a TCP connection.
@@ -34,6 +35,7 @@ impl Client {
             &identity,
             client,
             AuthRequest::Device {},
+            (name, TrustedFrom::Pairing),
         )
         .await
     }
@@ -60,7 +62,15 @@ impl Client {
             secret: Secret::new(offer.secret.expose()),
             name: device_name.to_owned(),
         };
-        let connected = open(&offer.addresses, pin, &identity, client, auth).await?;
+        let connected = open(
+            &offer.addresses,
+            pin,
+            &identity,
+            client,
+            auth,
+            (name, TrustedFrom::Offer),
+        )
+        .await?;
         let me = connected.device_whoami().await?;
         let device = me.device.ok_or_else(|| {
             ClientError::Protocol("the server did not report the paired device".to_owned())
@@ -86,10 +96,11 @@ async fn open(
     identity: &TlsIdentity,
     client: &PeerInfo,
     auth: AuthRequest,
+    (host, trusted_from): (&str, TrustedFrom),
 ) -> Result<Client, ClientError> {
     let (ws, _address) = massorca_net::connect(addresses, pin, identity, CONNECT_TIMEOUT)
         .await
-        .map_err(network_error)?;
+        .map_err(|error| network_error(error, host, trusted_from, pin))?;
     let mut io = FrameIo::spawn_with(MAX_FRAME_LEN_NETWORK, |queues| {
         massorca_net::spawn_frame_tasks(
             ws,
@@ -112,9 +123,16 @@ fn parse_pin(text: &str) -> Result<Pin, ClientError> {
     Pin::from_str(text).map_err(|error| ClientError::Protocol(format!("bad server pin: {error}")))
 }
 
-fn network_error(error: NetError) -> ClientError {
+fn network_error(error: NetError, host: &str, trusted_from: TrustedFrom, pin: Pin) -> ClientError {
     match error {
-        NetError::ServerPinMismatch => ClientError::ServerIdentityMismatch,
+        NetError::ServerPinMismatch { actual } => {
+            ClientError::ServerIdentityMismatch(Box::new(IdentityMismatch {
+                host: host.to_owned(),
+                trusted_from,
+                expected: pin.to_string(),
+                actual: actual.map(|pin| pin.to_string()),
+            }))
+        }
         other => ClientError::HostUnreachable(other.to_string()),
     }
 }

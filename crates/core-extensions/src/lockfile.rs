@@ -222,7 +222,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// Makes the rename durable: on Unix the folder entry is synced too. Windows has no folder handle to sync.
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     fs::File::open(dir)?.sync_all()?;
     #[cfg(not(unix))]
