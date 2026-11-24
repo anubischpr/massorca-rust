@@ -1,5 +1,5 @@
 //! The shared core of the watches (decision 0080, section 1): one resilient stream of a paired host, read by a task on
-//! the binding's runtime. The task hands over one event at a time, so the host is read only as fast as `next` asks.
+//! the binding's runtime. It holds at most one event ahead of `next`, so the host is read at most one event ahead.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
