@@ -293,7 +293,11 @@ fn the_kept_account_step_keeps_the_history_recorded_before_it() {
 fn a_team_made_before_access_ran_bypass_modes_becomes_default_access() {
     let dir = tempfile::tempdir().unwrap();
     let path = store_path(&dir);
-    let before = MIGRATIONS.len() - 1;
+    // Found by content: later steps are appended after it.
+    let before = MIGRATIONS
+        .iter()
+        .position(|step| step.sql.contains("UPDATE teams SET access = 'default'"))
+        .expect("the team access step");
     {
         let connection = Connection::open(&path).unwrap();
         for step in &MIGRATIONS[..before] {
