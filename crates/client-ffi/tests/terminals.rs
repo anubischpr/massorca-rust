@@ -187,6 +187,8 @@ struct Seen {
     output: Vec<u8>,
     /// Cursor answers the link refused while it was down; written once it is back.
     unanswered: usize,
+    /// The view reported the link lost and not yet back; a write now could wait on the reconnect.
+    link_down: bool,
 }
 
 impl Seen {
@@ -199,6 +201,11 @@ impl Seen {
             self.unanswered += count(bytes, CURSOR_QUERY);
             self.output.extend_from_slice(bytes);
         }
+        if is_lost(&event) {
+            self.link_down = true;
+        } else if is_back(&event) {
+            self.link_down = false;
+        }
         self.answer_cursor_queries(test, view);
         self.events.push(event.clone());
         event
@@ -206,12 +213,15 @@ impl Seen {
 
     /// Answers the cursor queries read so far; a refused answer waits for the link to return.
     fn answer_cursor_queries(&mut self, test: &Runtime, view: &TerminalView) {
-        while self.unanswered > 0 {
+        while self.unanswered > 0 && !self.link_down {
             match within(test, view.input(CURSOR_ANSWER.to_vec())) {
                 Ok(()) => {}
                 // A query that comes after the process ended has no one left to answer it.
                 Err(FfiError::Remote { code, .. }) if code == "terminal.exited" => {}
-                Err(FfiError::Unreachable { .. }) => return,
+                Err(FfiError::Unreachable { .. }) => {
+                    self.link_down = true;
+                    return;
+                }
                 Err(error) => panic!("the answer is written: {error:?}"),
             }
             self.unanswered -= 1;
