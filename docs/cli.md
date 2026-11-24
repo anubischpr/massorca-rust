@@ -34,7 +34,7 @@ machine.
 | `service run [--log-stderr] [--listen <ADDR>]... [--allow-all-interfaces]` | Runs the service of the profile in this process until it is stopped. `--listen` adds a network listener (also `MASSORCA_LISTEN`, comma separated). `--log-stderr` also writes log lines to stderr. |
 | `service unit [--listen <ADDR>]... [--exe <PATH>]` | Prints the systemd user unit that runs `service run` on a Linux server (decision 0045). The unit's `MASSORCA_HOME` is the global `--home`. Defaults: `tailscale`, `%h/.massorca/bin/massorca`, `%h/.massorca/home`. |
 | `service status` | Shows whether the service runs. Never starts it. |
-| `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities). Starts the service when it is not running. |
+| `service info` | Shows the service's identity (profile, pid, version, protocol, capabilities) and its host's git: `present <version>`, `missing`, `too_old <version> (requires 2.25.0)` or `unknown (<reason>)`. Starts the service when it is not running. A service older than the git field shows `not reported`; update that service. With `--json`, the same state is `git` (`state`, `version`, `required` or `reason`). |
 | `service stop` | Stops the service. Succeeds when it is not running. |
 | `service restart` | Stops the service, then starts it again. |
 | `open` | Starts the MassOrca desktop app on the profile and returns at once, without waiting for its window. The app is `massorca-desktop` beside `massorca`, or the executable `MASSORCA_DESKTOP_EXECUTABLE` names. It gets the profile, and `--no-autostart` when the CLI has it. With `--json`, prints the app's `pid`, `executable` and `profile`. Refused with `--host`. |
