@@ -342,6 +342,7 @@ async fn terminal_in_folder(home: &Path) -> String {
                 base: None,
                 existing_branch: false,
                 refresh_base: false,
+                no_setup: false,
                 path: None,
                 request_id: None,
             },
