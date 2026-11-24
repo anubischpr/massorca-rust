@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use massorca_core_agents::SearchEnv;
-use massorca_core_agents::resolve::resolve;
+use massorca_core_agents::resolve::{resolve, vendor_search_env};
 use massorca_core_extensions::host::{CommandRunner, Exit, MAX_LOG_BYTES, ProgramResolver};
 
 /// How often a running child is checked against its deadline.
@@ -78,7 +78,7 @@ impl HostPrograms {
     /// The search path without relative entries (empty, `.`, `bin`), which would resolve against the service's
     /// working folder. Only this host side filters them; core-agents keeps its own rule.
     fn search_env(&self) -> SearchEnv {
-        let mut env = self.env.clone().unwrap_or_else(SearchEnv::current);
+        let mut env = self.env.clone().unwrap_or_else(|| vendor_search_env().0);
         env.path = env.path.as_deref().map(absolute_entries);
         env
     }
@@ -90,6 +90,11 @@ impl HostPrograms {
             .filter_map(|name| {
                 let value = match &self.service_env {
                     Some(env) => env.get(*name).cloned(),
+                    // The command gets the search path its program was resolved on, so a shim finds what it calls.
+                    None if *name == "PATH" => self
+                        .env
+                        .as_ref()
+                        .map_or_else(|| vendor_search_env().0.path, |env| env.path.clone()),
                     None => std::env::var_os(name),
                 };
                 value.map(|value| (*name, value))
@@ -931,5 +936,40 @@ mod tests {
 
         assert!(passed.success(), "{passed:?}");
         assert_eq!(refused.code, Some(2), "{refused:?}");
+    }
+
+    /// A vendor command runs with the search path its program was resolved on, so a shim finds what it calls.
+    #[test]
+    fn a_vendor_command_runs_with_the_path_its_program_was_resolved_on() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        #[cfg(windows)]
+        fs::write(
+            dir.path().join("printpath.cmd"),
+            "@echo off\r\necho PATH=%PATH%\r\n",
+        )
+        .expect("a program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.path().join("printpath");
+            fs::write(&script, "#!/bin/sh\necho \"PATH=$PATH\"\n").expect("a program");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let exit = host
+            .run(&strings(&["printpath"]), &log, LONG)
+            .expect("the program runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(
+            text.contains(&dir.path().to_string_lossy().into_owned()),
+            "the command got the resolved search path: {text}"
+        );
     }
 }

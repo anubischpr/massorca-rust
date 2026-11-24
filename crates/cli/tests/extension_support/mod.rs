@@ -146,7 +146,11 @@ impl Host {
     /// that `PATH` and no other.
     pub fn run(&self, args: &[&str]) -> Assert {
         let mut command = self.sandbox.command("default");
-        command.env("PATH", self.bin.path()).args(args);
+        // The host's registry PATH stays out: only the fake bin folder is searched (decision 0092).
+        command
+            .env("PATH", self.bin.path())
+            .env("MASSORCA_VENDOR_PATH", "process")
+            .args(args);
         self.sandbox.run_prepared("default", args, &mut command)
     }
 
@@ -163,6 +167,7 @@ impl Host {
         let args = with_json(args);
         command
             .env("PATH", self.bin.path())
+            .env("MASSORCA_VENDOR_PATH", "process")
             .envs(env.iter().copied())
             .args(&args);
         let document = single_document(
