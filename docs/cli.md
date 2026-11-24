@@ -64,7 +64,7 @@ machine.
 | `git patch <PATH> -w WORKSPACE [--staged \| --head \| --from REV [--to REV]] [--original-path PATH] [--max-bytes N]` | Shows one file's patch for the chosen comparison; by default the unstaged changes. For a submodule it shows the pointer instead of a text patch: the commits the parent records on each side as `Subproject commit OLD..NEW`, and whether the submodule's working tree is dirty when that is known (not for `--staged` or a range). |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
-| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. |
+| `terminal show <TERMINAL>` | Shows one terminal: id, state, shell, cwd, size and, once exited, how it ended. An agent run's terminal also shows `git credential guard: on`: git inside it never waits for a credential prompt. |
 | `terminal send <TERMINAL> <TEXT>... [--no-enter]` | Types the words joined by spaces, then Enter unless `--no-enter`. |
 | `terminal screen <TERMINAL> [--scrollback]` | Prints the visible screen as text. `--scrollback` prints the history above it first. |
 | `terminal attach <TERMINAL>` | Interactive: shows the terminal and types into it. `Ctrl+]` detaches. |

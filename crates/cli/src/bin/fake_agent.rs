@@ -26,6 +26,8 @@ const CREDENTIAL_HOME_ENV: &str = "FAKE_AGENT_HOME";
 const CREDENTIAL_FILE: &str = "token.json";
 /// Comma-separated variable names whose state (`set`, `empty` or `unset`) is printed at start, never their values.
 const PROBE_ENV: &str = "FAKE_AGENT_PROBE_ENV";
+/// Names whose values the agent prints. Tests list non-secret variables only.
+const SHOW_ENV: &str = "FAKE_AGENT_SHOW_ENV";
 /// The content of each file that `write:<name>` creates before committing it.
 const WRITTEN_CONTENT: &str = "written by fake agent\n";
 /// The exit code of the `crash` command.
@@ -191,8 +193,11 @@ impl Agent {
         if env::var_os(PRINT_HOME_ENV).is_some_and(|value| value == "1") {
             say(&format!("home {}", home_name()));
         }
-        for name in probed_env() {
+        for name in listed_env(PROBE_ENV) {
             say(&format!("env {name} {}", env_state(&name)));
+        }
+        for name in listed_env(SHOW_ENV) {
+            say(&format!("value {name} {}", env_value(&name)));
         }
         self.hook("start", None);
     }
@@ -419,9 +424,9 @@ fn email_of(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The names listed in `FAKE_AGENT_PROBE_ENV`.
-fn probed_env() -> Vec<String> {
-    env::var(PROBE_ENV)
+/// The names listed in the variable `variable`, separated by commas.
+fn listed_env(variable: &str) -> Vec<String> {
+    env::var(variable)
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
@@ -436,6 +441,14 @@ fn env_state(name: &str) -> &'static str {
         None => "unset",
         Some(value) if value.is_empty() => "empty",
         Some(_) => "set",
+    }
+}
+
+/// A variable's value in brackets, so an empty value shows; `unset` when it is not set.
+fn env_value(name: &str) -> String {
+    match env::var_os(name) {
+        None => "unset".to_owned(),
+        Some(value) => format!("[{}]", value.to_string_lossy()),
     }
 }
 
