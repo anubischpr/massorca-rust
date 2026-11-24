@@ -1,5 +1,5 @@
-//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`).
-//! Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`), and
+//! `workspace.current` (capability `workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 
 use std::sync::Arc;
 
@@ -8,8 +8,8 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams, WorkspaceRemoved,
+    self, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
+    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -54,6 +54,16 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::WORKSPACES,
             Permission::Workspace,
             remove,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_CURRENT, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::CURRENT,
+            capabilities::WORKSPACE_CURRENT,
+            Permission::Read,
+            current,
         )?,
     ])
 }
@@ -143,6 +153,11 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_workspace_with_git_state(&params.workspace)).await
+}
+
+async fn current(ctx: RequestCtx, params: WorkspaceCurrentParams) -> Result<Workspace, ErrorBody> {
+    let domain = shared(&ctx);
+    blocking(move || domain.current_workspace(&params.path)).await
 }
 
 async fn remove(

@@ -3,6 +3,8 @@
 pub const SERVICE: &str = "service/1";
 pub const PROJECTS: &str = "projects/1";
 pub const WORKSPACES: &str = "workspaces/1";
+/// The containing-workspace lookup (`workspace.current`), offered apart so a client knows the service answers it.
+pub const WORKSPACE_CURRENT: &str = "workspace-current/1";
 pub const EVENTS: &str = "events/1";
 pub const CONFIG: &str = "config/1";
 /// Paired devices and pairing offers (decision 0041).

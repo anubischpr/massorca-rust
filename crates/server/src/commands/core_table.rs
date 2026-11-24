@@ -205,6 +205,16 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("workspace"),
         ),
         command(
+            "workspace.current",
+            "Show the workspace that contains a directory",
+            "workspace.current",
+            json!({
+                "type": "object",
+                "required": ["path"],
+                "properties": { "path": { "type": "string" } }
+            }),
+        ),
+        command(
             "workspace.rm",
             "Remove a workspace",
             "workspace.remove",

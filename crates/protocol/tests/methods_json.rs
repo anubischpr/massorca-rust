@@ -100,6 +100,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
+    assert_eq!(workspaces::CURRENT, "workspace.current");
     assert_eq!(workspaces::REMOVE, "workspace.remove");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");

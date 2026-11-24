@@ -8,6 +8,8 @@ pub const CREATE: &str = "workspace.create";
 pub const LIST: &str = "workspace.list";
 /// Params: [`WorkspaceRef`]. Result: [`Workspace`].
 pub const SHOW: &str = "workspace.show";
+/// Params: [`WorkspaceCurrentParams`]. Result: [`Workspace`].
+pub const CURRENT: &str = "workspace.current";
 /// Params: [`WorkspaceRemoveParams`]. Result: [`WorkspaceRemoved`].
 pub const REMOVE: &str = "workspace.remove";
 
@@ -88,6 +90,12 @@ pub struct UnregisteredWorktree {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRef {
     pub workspace: String,
+}
+
+/// Params of `workspace.current`: the workspace whose path holds `path`, which must be absolute on the service's host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCurrentParams {
+    pub path: String,
 }
 
 /// Params of `workspace.remove`.
