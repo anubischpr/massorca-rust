@@ -23,8 +23,8 @@ use massorca_protocol::methods::terminals::{
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
 };
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams, WorkspaceRemoved,
+    self, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
+    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
 };
 
 use crate::client::Client;
@@ -117,6 +117,14 @@ impl Client {
     /// `workspace.show`: one workspace, selected by id, name or path.
     pub async fn workspace_show(&self, params: &WorkspaceRef) -> Result<Workspace, ClientError> {
         self.call(workspaces::SHOW, params).await
+    }
+
+    /// `workspace.current`: the workspace that contains `params.path`, an absolute path on the service's host.
+    pub async fn workspace_current(
+        &self,
+        params: &WorkspaceCurrentParams,
+    ) -> Result<Workspace, ClientError> {
+        self.call(workspaces::CURRENT, params).await
     }
 
     /// `workspace.remove`: removes a workspace; `force` discards uncommitted changes.

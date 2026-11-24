@@ -115,6 +115,10 @@ lineage) comes later; the model must not block it.
   the records would orphan those runs. Ended agent sessions of the workspaces are
   deleted with their rows (`ON DELETE CASCADE`), as `workspace.remove` already
   does; their run folders and exited terminal records stay in the profile.
+- **Current.** `workspace.current` (capability `workspace-current/1`) takes an absolute `path` and
+  answers the workspace with the longest path key that is that path or one of its ancestors, compared
+  by component and case-insensitively where the filesystem ignores case. It is a containment lookup,
+  so it is a separate method, not a `workspace.show` selector. No match is `workspace.not_found`.
 - **Selectors.** An id or an exact name selects a workspace or project. A selector
   that is a path must be absolute; a relative one is refused with
   `request.invalid_params`, because it would resolve against the service's own
