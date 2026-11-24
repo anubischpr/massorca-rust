@@ -90,3 +90,20 @@ async fn adoption_runs_once_so_a_disabled_built_in_stays_disabled_after_a_restar
     drop(client);
     stop(running).await;
 }
+
+#[tokio::test]
+async fn a_staging_folder_left_by_a_crash_is_gone_after_the_service_starts() {
+    let home = temp_home();
+    let staging = profile(home.path(), "default")
+        .extensions_dir()
+        .join("pkgs")
+        .join("massorca.claude")
+        .join(".staging-1-0");
+    std::fs::create_dir_all(&staging).expect("a staging folder");
+    std::fs::write(staging.join("extension.json"), "{}").expect("a staged file");
+
+    let running = start(home.path(), "default").await;
+    assert!(!staging.exists());
+
+    stop(running).await;
+}

@@ -256,3 +256,89 @@ fn forget_workspaces_drops_the_workspace_records_and_touches_no_file() {
         .success()
         .stdout(contains("no projects"));
 }
+
+#[test]
+fn inspect_reports_a_repository_and_a_plain_folder_in_text_and_json() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let nested = repo.join("src");
+    std::fs::create_dir_all(&nested).expect("create nested dir");
+    let notes = sandbox.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("create folder");
+    let nested_text = nested.to_string_lossy().into_owned();
+    let notes_text = notes.to_string_lossy().into_owned();
+
+    sandbox
+        .run("default", &["project", "inspect", nested_text.as_str()])
+        .success()
+        .stdout(contains(": git repository"));
+    let git = sandbox.json_ok("default", &["project", "inspect", nested_text.as_str()]);
+    assert_eq!(git["kind"], "git");
+    assert!(
+        git["path"].as_str().expect("path").ends_with("repo"),
+        "the repository's top level: {git}"
+    );
+    assert!(git.get("registered").is_none(), "nothing registered: {git}");
+
+    sandbox
+        .run("default", &["project", "inspect", notes_text.as_str()])
+        .success()
+        .stdout(contains(
+            ": not a git repository; it would be added as a plain folder",
+        ));
+
+    let added = sandbox.json_ok("default", &["project", "add", notes_text.as_str()]);
+    let folder = sandbox.json_ok("default", &["project", "inspect", notes_text.as_str()]);
+    assert_eq!(folder["kind"], "folder");
+    assert_eq!(folder["path"], added["path"]);
+    assert_eq!(folder["registered"], added["id"]);
+    let id = added["id"].as_str().expect("id");
+    sandbox
+        .run("default", &["project", "inspect", notes_text.as_str()])
+        .success()
+        .stdout(contains(format!("already registered as {id}")));
+}
+
+#[test]
+fn adding_a_plain_folder_without_a_kind_warns_on_stderr_in_text_mode_only() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.home().join("notes");
+    let other = sandbox.home().join("other");
+    let flagged = sandbox.home().join("flagged");
+    for dir in [&notes, &other, &flagged] {
+        std::fs::create_dir_all(dir).expect("create folder");
+    }
+    let warning = "is not a git repository; it was added as a plain folder";
+
+    sandbox
+        .run(
+            "default",
+            &["project", "add", notes.to_string_lossy().as_ref()],
+        )
+        .success()
+        .stdout(contains("added project notes (folder)"))
+        .stderr(contains(warning));
+
+    let outcome = sandbox
+        .run(
+            "default",
+            &["--json", "project", "add", other.to_string_lossy().as_ref()],
+        )
+        .success();
+    assert!(!String::from_utf8_lossy(&outcome.get_output().stderr).contains(warning));
+    assert_eq!(single_document(&outcome)["result"]["kind"], "folder");
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "project",
+                "add",
+                flagged.to_string_lossy().as_ref(),
+                "--folder",
+            ],
+        )
+        .success()
+        .stderr(contains(warning).not());
+}

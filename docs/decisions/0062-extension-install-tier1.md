@@ -48,6 +48,34 @@ step here that executes anything. Code (tier 2, Wasmtime) is out of scope.
 
 Unknown fields are kept on read and write, so a newer service can add fields.
 
+#### Leftovers after a crash
+
+An install writes `pkgs/<id>/.staging-<pid>-<n>/`, renames it to its version
+folder and commits `lock.json` last. A crash or a kill in between leaves a
+staging folder, or a version folder no lockfile entry names. A removal or a
+refresh that could not delete an old folder, for example while Windows held a
+file open, leaves one too.
+
+At start, before requests are served and so with no install in flight, the
+service removes them (`Extensions::sweep_leftovers`):
+
+- It reads `lock.json` first. If the lockfile cannot be read or parsed, it
+  removes nothing. If there is no `lock.json`, it removes only staging folders,
+  so a profile copied without its lockfile keeps its packages.
+- It keeps every folder any entry's `path` names, disabled entries and
+  entries sharing an id included.
+- Under `pkgs/<id>/` it removes only `.staging-*` folders and
+  `<version>-<hash8>` folders no entry names, then `pkgs/<id>/` itself when
+  it is empty. Files, other names, and anything outside `pkgs/` stay.
+- It never follows a link or a junction: neither is treated as a folder, and
+  removal deletes a link inside a leftover without entering it.
+- Every extensions call counts as service activity until it returns, so a
+  restarting service keeps the profile lock until a running install ends, and
+  the next start's sweep never sees that install's folder.
+- A failed removal does not stop the others. The first failure is returned
+  after the rest and logged as a warning; the start goes on, and the next
+  start tries again.
+
 ### Sources
 
 Tier 1 installs from three sources:

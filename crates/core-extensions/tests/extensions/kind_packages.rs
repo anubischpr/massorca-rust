@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use massorca_core_extensions::item::ItemState;
 use massorca_core_extensions::source::Source;
 use massorca_core_extensions::{
-    Extensions, PackageAgentKind, catalogue_agent_kinds, codes, package_agent_kinds,
+    Extensions, PackageAgentKind, PackageKindsCache, catalogue_agent_kinds, codes,
+    package_agent_kinds,
 };
 use serde_json::json;
 
@@ -351,4 +352,85 @@ fn adoption_replaces_a_first_party_entry_the_catalogue_does_not_vouch_for() {
     assert_eq!(packages.len(), 1, "{lock}");
     assert_eq!(packages[0]["source"]["kind"], "catalogue");
     assert_eq!(state_of(&s, "claude"), ItemState::Enabled);
+}
+
+/// The cache reuses a read while the lockfile is unchanged, so files changed behind the lockfile's back are only seen
+/// at the next lockfile change; any lockfile write (here a disable) reads every package again.
+#[test]
+fn the_kinds_cache_reads_packages_again_only_when_the_lockfile_changes() {
+    let s = setup(detected_gentle_shell());
+    s.install(
+        &Source::Catalogue("massorca.gentle-shell".to_owned()),
+        false,
+    )
+    .expect("installs");
+    let cache = PackageKindsCache::default();
+    let first = cache.read(&s.profile).expect("the kinds are listed");
+    let gentle = |kinds: &[PackageAgentKind]| {
+        kinds
+            .iter()
+            .find(|kind| kind.kind_id == "gentle-shell")
+            .cloned()
+            .expect("listed")
+    };
+    assert_eq!(gentle(&first).decl, Ok(declaration("gentle-shell")));
+
+    fs::write(
+        installed_folder(&s).join("agents/gentle-shell.json"),
+        br#"{"id":"changed"}"#,
+    )
+    .expect("the file is changed");
+    assert_eq!(
+        cache.read(&s.profile).expect("listed"),
+        first,
+        "an unchanged lockfile reuses the last read"
+    );
+    assert!(
+        listed_kind(&s, "gentle-shell").decl.is_err(),
+        "an uncached read sees the change"
+    );
+
+    s.service
+        .set_enabled("massorca.gentle-shell", false)
+        .expect("disables");
+    let after = gentle(&cache.read(&s.profile).expect("listed"));
+    assert_eq!(after.state, ItemState::Disabled);
+    let problem = after.decl.expect_err("the changed files are read again");
+    assert!(problem.contains(codes::TAMPERED), "{problem}");
+}
+
+/// A read that found a package unusable is not kept, so its next read checks the files again.
+#[test]
+fn the_kinds_cache_does_not_keep_a_read_with_an_unusable_package() {
+    let s = setup(detected_gentle_shell());
+    s.install(
+        &Source::Catalogue("massorca.gentle-shell".to_owned()),
+        false,
+    )
+    .expect("installs");
+    let folder = installed_folder(&s);
+    let original = fs::read(folder.join("agents/gentle-shell.json")).expect("the declaration");
+    fs::write(
+        folder.join("agents/gentle-shell.json"),
+        br#"{"id":"changed"}"#,
+    )
+    .expect("the file is changed");
+    let cache = PackageKindsCache::default();
+    let broken = cache.read(&s.profile).expect("listed");
+    assert!(
+        broken
+            .iter()
+            .any(|kind| kind.kind_id == "gentle-shell" && kind.decl.is_err())
+    );
+
+    fs::write(folder.join("agents/gentle-shell.json"), original).expect("the file is restored");
+    let repaired = cache.read(&s.profile).expect("listed");
+    assert_eq!(
+        repaired
+            .iter()
+            .find(|kind| kind.kind_id == "gentle-shell")
+            .expect("listed")
+            .decl,
+        Ok(declaration("gentle-shell"))
+    );
 }

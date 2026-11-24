@@ -99,6 +99,13 @@ pub fn session_details(session: &AgentSession) -> Vec<String> {
         format!("execution: {}", execution_text(&session.execution)),
         format!("activity: {}", activity_text(session.activity.as_ref())),
     ];
+    if session
+        .activity
+        .as_ref()
+        .is_some_and(|activity| activity.seen_at_ms.is_some())
+    {
+        lines.push("seen: yes".to_owned());
+    }
     if let Some(title) = &session.title {
         lines.push(format!("title: {title}"));
     }
