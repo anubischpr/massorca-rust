@@ -6,9 +6,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use massorca_client::{Client, ClientError};
+use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
-    ExtensionEnabled, ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList,
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionSetEnabledParams,
+    ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
+    ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRemoveParams, ExtensionRemoved,
+    ExtensionReview, ExtensionSetEnabledParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -33,6 +35,11 @@ pub(crate) enum ExtensionCommand {
     Inspect {
         source: String,
         reply: oneshot::Sender<Result<ExtensionReview, Refusal>>,
+    },
+    /// `extensions.asset`: one listed image of a package. Changes nothing, so no read follows it.
+    Asset {
+        params: ExtensionAssetParams,
+        reply: oneshot::Sender<Result<ExtensionAsset, Refusal>>,
     },
     Install {
         params: ExtensionInstallParams,
@@ -106,6 +113,15 @@ impl ServiceHandle {
         self.ask(|reply| Command::Extension(ExtensionCommand::Remove { params, reply }))
             .await
     }
+
+    /// `extensions.asset`: a listed image of a package, base64. Nothing changes on the service.
+    pub async fn extension_asset(
+        &self,
+        params: ExtensionAssetParams,
+    ) -> Result<ExtensionAsset, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::Asset { params, reply }))
+            .await
+    }
 }
 
 /// Runs one Marketplace call on its own task, so a slow installer never holds up events.
@@ -126,6 +142,16 @@ pub(super) fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        ExtensionCommand::Asset { params, reply } => {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .extension_asset(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
         ExtensionCommand::Install { params, reply } => {
             write(client, updates, reads, reply, move |client| async move {
                 client.extension_install(&params).await
@@ -138,7 +164,11 @@ pub(super) fn spawn_call(
         }
         ExtensionCommand::Remove { params, reply } => {
             write(client, updates, reads, reply, move |client| async move {
-                client.extension_remove(&params).await
+                let call = &client;
+                remove_with_uninstall_consent(params, |params| async move {
+                    call.extension_remove(&params).await
+                })
+                .await
             });
         }
     }
@@ -178,6 +208,9 @@ pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
         ExtensionCommand::Inspect { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        ExtensionCommand::Asset { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         ExtensionCommand::Install { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
@@ -187,5 +220,140 @@ pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
         ExtensionCommand::Remove { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+    }
+}
+
+/// Runs `extensions.remove`. When the person ticked the CLI's removal, the service first names the uninstall commands it
+/// needs accepted, with their fingerprint, and the removal is sent again with that fingerprint. The tick is the
+/// acceptance, as `--yes` is on the CLI. A refusal without a fingerprint is returned as it came.
+async fn remove_with_uninstall_consent<F, Fut>(
+    params: ExtensionRemoveParams,
+    mut remove: F,
+) -> Result<ExtensionRemoved, ClientError>
+where
+    F: FnMut(ExtensionRemoveParams) -> Fut,
+    Fut: Future<Output = Result<ExtensionRemoved, ClientError>>,
+{
+    let asks_cli = params.uninstall_cli && params.uninstall_consent.is_none();
+    match remove(params.clone()).await {
+        Err(error) if asks_cli => match uninstall_fingerprint(&error) {
+            Some(fingerprint) => {
+                remove(ExtensionRemoveParams {
+                    uninstall_consent: Some(fingerprint),
+                    ..params
+                })
+                .await
+            }
+            None => Err(error),
+        },
+        result => result,
+    }
+}
+
+/// The fingerprint a refusal names for the uninstall commands it needs accepted; none for any other refusal.
+fn uninstall_fingerprint(error: &ClientError) -> Option<String> {
+    match error {
+        ClientError::Remote(body) if body.code == codes::EXTENSION_CONSENT_REQUIRED => body
+            .data
+            .as_ref()?
+            .get("fingerprint")?
+            .as_str()
+            .map(str::to_owned),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use massorca_client::ClientError;
+    use massorca_protocol::ErrorBody;
+    use massorca_protocol::codes;
+    use massorca_protocol::methods::extensions::{ExtensionRemoveParams, ExtensionRemoved};
+
+    use super::{remove_with_uninstall_consent, uninstall_fingerprint};
+
+    /// The refusal the service gives when a removal needs its uninstall commands accepted first.
+    fn consent_refusal(fingerprint: &str) -> ClientError {
+        let mut body = ErrorBody::new(
+            codes::EXTENSION_CONSENT_REQUIRED,
+            "removing runs a vendor uninstall command",
+        );
+        body.data = Some([("fingerprint", fingerprint)].into_iter().collect());
+        ClientError::Remote(body)
+    }
+
+    fn removed() -> ExtensionRemoved {
+        ExtensionRemoved {
+            id: "massorca.codex".to_owned(),
+            version: "1.0.0".to_owned(),
+            failures: Vec::new(),
+            cli: Vec::new(),
+        }
+    }
+
+    fn params(uninstall_cli: bool) -> ExtensionRemoveParams {
+        ExtensionRemoveParams {
+            id: "massorca.codex".to_owned(),
+            uninstall_cli,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_fingerprint_is_read_only_from_a_consent_refusal() {
+        assert_eq!(
+            uninstall_fingerprint(&consent_refusal("fp-1")),
+            Some("fp-1".to_owned())
+        );
+        let busy = ClientError::Remote(ErrorBody::new("extension.busy", "busy"));
+        assert_eq!(uninstall_fingerprint(&busy), None);
+    }
+
+    #[tokio::test]
+    async fn a_removal_with_the_cli_is_sent_again_with_the_fingerprint_the_service_names() {
+        let sent = RefCell::new(Vec::new());
+        let answers = RefCell::new(vec![Err(consent_refusal("fp-1")), Ok(removed())]);
+        let result = remove_with_uninstall_consent(params(true), |params| {
+            sent.borrow_mut().push(params);
+            let answer = answers.borrow_mut().remove(0);
+            std::future::ready(answer)
+        })
+        .await;
+        assert!(result.is_ok(), "the second call removes the package");
+        let sent = sent.into_inner();
+        assert_eq!(sent.len(), 2, "the refusal is answered with one more call");
+        assert_eq!(sent[0].uninstall_consent, None);
+        assert_eq!(sent[1].uninstall_consent.as_deref(), Some("fp-1"));
+        assert!(sent.iter().all(|params| params.uninstall_cli));
+    }
+
+    #[tokio::test]
+    async fn a_removal_that_keeps_the_cli_is_sent_once_without_consent() {
+        let sent = RefCell::new(Vec::new());
+        let result = remove_with_uninstall_consent(params(false), |params| {
+            sent.borrow_mut().push(params);
+            std::future::ready(Ok::<ExtensionRemoved, ClientError>(removed()))
+        })
+        .await;
+        assert!(result.is_ok());
+        let sent = sent.into_inner();
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0].uninstall_cli);
+        assert_eq!(sent[0].uninstall_consent, None);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_names_no_fingerprint_is_returned_without_another_call() {
+        let calls = RefCell::new(0_usize);
+        let result = remove_with_uninstall_consent(params(true), |_| {
+            *calls.borrow_mut() += 1;
+            let refusal = ClientError::Remote(ErrorBody::new("extension.busy", "busy"));
+            std::future::ready(Err::<ExtensionRemoved, ClientError>(refusal))
+        })
+        .await;
+        assert_eq!(calls.into_inner(), 1);
+        assert!(matches!(result, Err(ClientError::Remote(body)) if body.code == "extension.busy"));
     }
 }

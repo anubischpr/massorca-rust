@@ -20,7 +20,9 @@ use crate::error::Error;
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
-use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile};
+use crate::lockfile::{
+    InstallerRun, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
+};
 use crate::review::{self, CliPlan, PlanState, Review};
 use crate::source::{self, Files, LoadedPackage, Source};
 
@@ -208,6 +210,130 @@ impl Extensions {
                 Err(error)
             }
         }
+    }
+
+    /// Updates an installed package to what its source holds now, in place (decision 0062, Updates). Its enabled state,
+    /// CLI registrations, install time, adoption mark and unknown fields are kept, and no vendor command runs. `consent`
+    /// is the fingerprint of the new review, as for an install; a built-in needs none. `sha256` pins an archive.
+    /// Returns `extension.up_to_date` when the source holds the installed package already.
+    pub fn update(
+        &self,
+        id: &str,
+        consent: Option<&str>,
+        sha256: Option<&str>,
+    ) -> Result<LockEntry, Error> {
+        let (old, staged) = self.stage_update(id, consent, sha256)?;
+        self.commit_update(&old, staged)
+    }
+
+    /// Checks the new package and unpacks it, under the change lock. The returned mark keeps the package busy until the
+    /// update is committed or abandoned.
+    fn stage_update(
+        &self,
+        id: &str,
+        consent: Option<&str>,
+        sha256: Option<&str>,
+    ) -> Result<(LockEntry, Staged), Error> {
+        let _changes = self.lock_changes();
+        let lockfile = self.read_lockfile()?;
+        let old = lockfile
+            .get(id)
+            .cloned()
+            .ok_or_else(|| Error::NotInstalled(id.to_owned()))?;
+        self.refuse_if_busy(id)?;
+        let source = installed_source(&old);
+        if matches!(source, Source::File(_)) && sha256.is_none() {
+            return Err(Error::HashRequired);
+        }
+        let package = source::load(&source, sha256)?;
+        if package.manifest.id != id {
+            // The new entry takes its id from the manifest, so another id would replace or orphan the wrong entry.
+            return Err(Error::SourceIdChanged {
+                id: id.to_owned(),
+                found: package.manifest.id.clone(),
+            });
+        }
+        if package.sha256.eq_ignore_ascii_case(&old.sha256) {
+            return Err(Error::UpToDate(id.to_owned()));
+        }
+        let builtin = matches!(source, Source::Catalogue(_));
+        let mut others = lockfile.clone();
+        others.packages.retain(|entry| entry.id != id);
+        self.check_kind_conflicts(&others, &package.manifest, builtin)?;
+        let kinds = agent_kind_ids(&package.manifest);
+        self.check_installing_kinds(id, &kinds)?;
+
+        // The built-in is vouched for by the build, as in refresh and adoption; any other package needs the new review.
+        let accepted = if builtin {
+            old.consent.clone()
+        } else {
+            let plan = review::plan(&package.manifest, &*self.resolver, self.os);
+            let expected = review::fingerprint(&package.manifest, &package.sha256, &plan, self.os);
+            match consent {
+                None => return Err(Error::ConsentRequired),
+                Some(consent) if consent != expected => return Err(Error::ConsentMismatch),
+                Some(_) => expected,
+            }
+        };
+        // Dropping an agent kind asks the remove guards, as removing its package would.
+        if self
+            .recorded_kinds(&old)
+            .iter()
+            .any(|kind| !kinds.contains(kind))
+        {
+            self.run_guards(id)?;
+        }
+
+        let busy = self.mark_busy(id, kinds)?;
+        let staged = self.unpack_staged(package, busy, Vec::new(), accepted, builtin)?;
+        Ok((old, staged))
+    }
+
+    /// Records the update under the change lock, after the new folder is in place. Whatever fails here removes that
+    /// folder, so the installed package stays as it was.
+    fn commit_update(&self, old: &LockEntry, staged: Staged) -> Result<LockEntry, Error> {
+        let _changes = self.lock_changes();
+        match self.write_update(old, &staged) {
+            Ok(entry) => {
+                if old.path != entry.path {
+                    // The replaced entry left the lockfile with this update, so its folder is only litter now.
+                    let _ = fs::remove_dir_all(self.layout.resolve(&old.path));
+                }
+                Ok(entry)
+            }
+            Err(error) => {
+                self.remove_unpacked(&staged.manifest.id, &staged.dir);
+                Err(error)
+            }
+        }
+    }
+
+    /// Replaces the entry of `old` with the staged one, keeping what an update keeps, and writes the lockfile last.
+    fn write_update(&self, old: &LockEntry, staged: &Staged) -> Result<LockEntry, Error> {
+        let mut lockfile = self.read_lockfile()?;
+        let current = lockfile
+            .get(&old.id)
+            .ok_or_else(|| Error::NotInstalled(old.id.clone()))?;
+        if current.path != old.path {
+            // A built-in refresh moved the entry while this update was staged; nothing is overwritten blindly.
+            return Err(Error::Busy(old.id.clone()));
+        }
+        let fresh = LockEntry {
+            enabled: current.enabled,
+            source: current.source.clone(),
+            installed_at_ms: current.installed_at_ms,
+            extra: current.extra.clone(),
+            ..staged.entry(current.cli.clone(), current.adopted)
+        };
+        if let Some(slot) = lockfile
+            .packages
+            .iter_mut()
+            .find(|entry| entry.id == fresh.id)
+        {
+            *slot = fresh.clone();
+        }
+        lockfile.write(&self.layout.lock_path())?;
+        Ok(fresh)
     }
 
     /// Adopts the built-in agent packages that declare one of `used_kinds`, once per profile (decision 0063). Each is
@@ -416,6 +542,16 @@ impl Extensions {
         installed_manifest(&self.layout, entry)
     }
 
+    /// The agent kinds an installed package records. An entry from before kinds were recorded is read from its folder,
+    /// best-effort: an update replaces a tampered folder anyway.
+    fn recorded_kinds(&self, entry: &LockEntry) -> Vec<String> {
+        if !entry.agent_kinds.is_empty() {
+            return entry.agent_kinds.clone();
+        }
+        self.installed_manifest(entry)
+            .map_or_else(|_| Vec::new(), |manifest| agent_kind_ids(&manifest))
+    }
+
     fn check_kind_conflicts(
         &self,
         lockfile: &Lockfile,
@@ -458,26 +594,46 @@ impl Extensions {
             STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let written = (|| {
+            let mut folders = BTreeSet::from([staging.clone()]);
             for (path, bytes) in files {
                 let target = path
                     .split('/')
                     .fold(staging.clone(), |target, segment| target.join(segment));
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(Error::io("cannot create", parent))?;
+                    folders.extend(
+                        parent
+                            .ancestors()
+                            .take_while(|folder| folder.starts_with(&staging))
+                            .map(Path::to_path_buf),
+                    );
                 }
                 // A name that collides with one already written (an alias) fails the install.
                 fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&target)
-                    .and_then(|mut file| file.write_all(bytes))
+                    .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
                     .map_err(Error::io("cannot write", &target))?;
+            }
+            // The lockfile is committed after this, so the files it names must be on disk before it, not after a crash.
+            for folder in &folders {
+                sync_dir(folder).map_err(Error::io("cannot sync", folder))?;
             }
             if dir.exists() {
                 // A leftover from an install that never reached the lockfile.
                 fs::remove_dir_all(dir).map_err(Error::io("cannot replace", dir))?;
             }
-            fs::rename(&staging, dir).map_err(Error::io("cannot move into place", dir))
+            fs::rename(&staging, dir).map_err(Error::io("cannot move into place", dir))?;
+            let root = self.layout.package_root(id);
+            // `pkgs/<id>` may be new, so its own entry in `pkgs/` is synced too.
+            let synced = [root.as_path(), root.parent().unwrap_or(&root)]
+                .into_iter()
+                .try_for_each(|folder| sync_dir(folder).map_err(Error::io("cannot sync", folder)));
+            if synced.is_err() {
+                let _ = fs::remove_dir_all(dir);
+            }
+            synced
         })();
         if written.is_err() {
             let _ = fs::remove_dir_all(&staging);
@@ -627,6 +783,16 @@ fn agent_kind_ids(manifest: &Manifest) -> Vec<String> {
         .iter()
         .map(|adapter| adapter.id.clone())
         .collect()
+}
+
+/// The source an installed package was read from, as its lock entry names it.
+fn installed_source(entry: &LockEntry) -> Source {
+    let reference = entry.source.reference.clone();
+    match entry.source.kind {
+        SourceKind::Catalogue => Source::Catalogue(reference),
+        SourceKind::Dir => Source::Dir(PathBuf::from(reference)),
+        SourceKind::File => Source::File(PathBuf::from(reference)),
+    }
 }
 
 /// The built-in packages an adoption registers: those declaring a used kind and not installed as built-ins, in catalogue

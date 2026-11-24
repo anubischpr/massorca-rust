@@ -128,6 +128,8 @@ pub enum Planned {
 pub enum RowBody {
     /// `workspaces.default_root`, read and written through the service.
     WorkspaceFolder,
+    /// `appearance.theme`: the three choices, read and written through the service.
+    AppTheme,
     /// The folder for conversations without a project. No service setting yet.
     ConversationsFolder,
     /// This PC and the state of its service.
@@ -232,7 +234,7 @@ const APPEARANCE: &[RowSpec] = &[
     RowSpec {
         label: "Theme",
         helper: "Dark, light, or the same as the system.",
-        body: RowBody::Planned(Planned::Choice(&["System", "Dark", "Light"])),
+        body: RowBody::AppTheme,
     },
     RowSpec {
         label: "Import theme",

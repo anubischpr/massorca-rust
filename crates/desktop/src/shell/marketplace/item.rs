@@ -3,6 +3,7 @@
 
 use super::MarketplaceFrame;
 use super::catalogue::kind_icon;
+use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
     Part, ProblemAlert, ProblemTone, advanced_rows, connection_rows, information, parts,
@@ -11,8 +12,8 @@ use crate::model::marketplace::{
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
 use gpui::{
-    AnyElement, App, ClipboardItem, Context, ElementId, IntoElement, ParentElement, Role,
-    SharedString, Styled, WeakEntity, div, prelude::*, px,
+    AnyElement, App, ClipboardItem, Context, ElementId, ImageSource, IntoElement, ObjectFit,
+    ParentElement, Role, SharedString, Styled, StyledImage, WeakEntity, div, img, prelude::*, px,
 };
 use massorca_ui::components::account_connection_list::{
     AccountConnectionList, AccountRow, AccountStatus,
@@ -31,6 +32,9 @@ use massorca_ui::tokens::{
 };
 use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled};
 
+/// The height of an item's banner image; its width is the page's.
+const BANNER_IMAGE_HEIGHT: f32 = 180.0;
+
 /// The page of one item, or a note when the catalogue has no item with that id.
 pub(super) fn item_page(
     frame: &MarketplaceFrame,
@@ -47,8 +51,11 @@ pub(super) fn item_page(
         .flex_col()
         .gap(px(SPACE_6))
         .max_w(px(880.0))
-        .min_w_0()
-        .child(header(frame, item, cx));
+        .min_w_0();
+    if let Some(picture) = item_images::banner(frame, item, cx) {
+        page = page.child(banner_image(picture));
+    }
+    page = page.child(header(frame, item, cx));
     if let Some(alert) = problem_alert(item) {
         page = page.child(problem_banner(item.id, &alert));
     }
@@ -130,8 +137,8 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
         .into_any_element()
 }
 
-/// Review and install of a catalogue package opens its review. Sample items and agent kinds, which the service
-/// installs another way, show the action unavailable.
+/// Review and install of a catalogue package opens its review. Sample items and agent kinds with no package show the
+/// action unavailable; an agent that carries its package installs like any other package.
 fn install_action(frame: &MarketplaceFrame, item: &MarketplaceItem) -> Button {
     if item.extension.is_none() {
         return Button::new("marketplace-install", "Review and install")
@@ -182,6 +189,18 @@ fn host_selector(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> 
                 .size(IconSize::Small)
                 .color(p.text.tertiary),
         )
+        .into_any_element()
+}
+
+/// The package's banner image, drawn above the header once the service has sent it.
+fn banner_image(picture: ImageSource) -> AnyElement {
+    div()
+        .debug_selector(|| "marketplace-banner-image".to_owned())
+        .w_full()
+        .h(px(BANNER_IMAGE_HEIGHT))
+        .rounded(px(RADIUS_LG))
+        .overflow_hidden()
+        .child(img(picture).size_full().object_fit(ObjectFit::Cover))
         .into_any_element()
 }
 

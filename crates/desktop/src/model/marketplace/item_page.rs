@@ -148,8 +148,13 @@ pub fn advanced_rows(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
 /// The body of the uninstall confirm. An agent's accounts stay on this computer until the person
 /// removes them (decision 0059). A package names what its removal deletes, and what it leaves in place.
 pub fn uninstall_body(item: &MarketplaceItem) -> String {
+    uninstall_body_for(item, false)
+}
+
+/// The body of the uninstall confirm when `remove_cli` says the CLI the package installed is removed too (ticked).
+pub fn uninstall_body_for(item: &MarketplaceItem, remove_cli: bool) -> String {
     if let Some(extension) = item.extension.as_deref() {
-        return package_uninstall_body(&item.name, extension);
+        return package_uninstall_body(&item.name, extension, remove_cli);
     }
     if item.agent_kind.is_some() {
         format!(
@@ -164,8 +169,20 @@ pub fn uninstall_body(item: &MarketplaceItem) -> String {
     }
 }
 
+/// The sentence the uninstall confirm shows under its CLI removal, when the package installed the CLI.
+pub const CLI_REMOVAL_SENTENCE: &str =
+    "This removes the CLI from this computer, so it stops working outside MassOrca too.";
+
+/// Whether the uninstall confirm offers to remove a CLI the package installed: its install record names one.
+pub fn offers_cli_removal(item: &MarketplaceItem) -> bool {
+    item.extension
+        .as_deref()
+        .and_then(|extension| extension.installed.as_ref())
+        .is_some_and(|installed| installed.cli.iter().any(|cli| cli.installed_by_package))
+}
+
 /// What removing an extension package deletes, and what it leaves on this computer, in the service's own terms.
-fn package_uninstall_body(name: &str, extension: &ExtensionItem) -> String {
+fn package_uninstall_body(name: &str, extension: &ExtensionItem, remove_cli: bool) -> String {
     let effects = &extension.uninstall;
     let mut sentences = vec![format!("{name} is removed from this computer.")];
     if effects.package_files {
@@ -185,10 +202,12 @@ fn package_uninstall_body(name: &str, extension: &ExtensionItem) -> String {
     if !effects.connections.is_empty() {
         sentences.push("Its connections are removed.".to_owned());
     }
-    for binary in &effects.cli_binaries {
-        sentences.push(format!(
-            "The {binary} CLI it installed stays on this computer."
-        ));
+    if !remove_cli {
+        for binary in &effects.cli_binaries {
+            sentences.push(format!(
+                "The {binary} CLI it installed stays on this computer."
+            ));
+        }
     }
     sentences.join(" ")
 }

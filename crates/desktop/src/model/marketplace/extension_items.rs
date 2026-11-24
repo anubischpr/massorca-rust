@@ -37,7 +37,7 @@ impl ExtensionIds {
 
 /// The items of the extension packages: every catalogue entry, each installed package in its installed state in
 /// place of its entry, and each installed package the catalogue does not list. An agent package whose agent kind the
-/// service already lists is left to the agent item, so it is not listed twice.
+/// service already lists is carried by that agent's item instead, so it is not listed twice.
 pub fn extension_items(
     installed: &[ExtensionItem],
     catalogue: &[ExtensionItem],
@@ -68,6 +68,11 @@ fn is_listed_agent(entry: &ExtensionItem, agent_kind_ids: &[String]) -> bool {
             .agents
             .iter()
             .any(|agent| agent_kind_ids.contains(&agent.id))
+}
+
+/// Whether a package is an agent package that provides this agent kind.
+pub(super) fn provides_agent(entry: &ExtensionItem, kind: &str) -> bool {
+    entry.listing.category == "agents" && entry.agents.iter().any(|agent| agent.id == kind)
 }
 
 fn item(id: MarketplaceItemId, entry: &ExtensionItem) -> MarketplaceItem {
@@ -112,7 +117,7 @@ fn kind_of(category: &str) -> ItemKind {
 
 /// An installed package is on or off; an available one is not installed. A state from a newer service is not
 /// installed, because this build cannot tell what it is.
-fn state_of(state: ExtensionState) -> ItemState {
+pub(super) fn state_of(state: ExtensionState) -> ItemState {
     match state {
         ExtensionState::Enabled => ItemState::Installed {
             enabled: true,
@@ -532,5 +537,141 @@ mod tests {
 
         source.follow_extensions(std::slice::from_ref(&notes), &[]);
         assert_eq!(source.snapshot().items[2].id, notes_id);
+    }
+
+    /// The catalogue package of a built-in agent, which names the agent kind it provides.
+    fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
+        let mut entry = package(&format!("massorca.{kind}"), "agents", state);
+        entry.publisher = FIRST_PARTY.to_owned();
+        entry.agents = vec![massorca_protocol::methods::extensions::AgentItem {
+            id: kind.to_owned(),
+            detected: false,
+            program_path: None,
+            cli_installed_by_package: false,
+            cli: None,
+        }];
+        entry
+    }
+
+    #[test]
+    fn each_built_in_agent_is_one_card_and_carries_its_package() {
+        use massorca_protocol::methods::agents::{AgentKind, PackageState};
+
+        use crate::model::marketplace::{MarketplaceSource, ServiceMarketplace};
+        use crate::service::fixtures::agent_kind;
+
+        let agents = [
+            ("claude", "Claude Code"),
+            ("codex", "Codex"),
+            ("antigravity", "Antigravity"),
+            ("gentle-shell", "Gentle Shell"),
+        ];
+        let kinds: Vec<AgentKind> = agents
+            .iter()
+            .map(|(id, name)| agent_kind(id, name, PackageState::Available))
+            .collect();
+        let catalogue: Vec<ExtensionItem> = agents
+            .iter()
+            .map(|(id, _)| agent_package(id, ExtensionState::Available))
+            .collect();
+        let mut source = ServiceMarketplace::default();
+        source.follow_agent_kinds(&kinds);
+        source.follow_extensions(&[], &catalogue);
+
+        let snapshot = source.snapshot();
+        let names: Vec<&str> = snapshot
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Claude Code", "Codex", "Antigravity", "Gentle Shell"]
+        );
+        for (item, (id, _)) in snapshot.items.iter().zip(agents) {
+            let package = item
+                .extension
+                .as_deref()
+                .expect("the agent carries its package");
+            assert_eq!(package.id, format!("massorca.{id}"));
+            assert_eq!(item.state, ItemState::NotInstalled);
+        }
+
+        let installed = [agent_package("codex", ExtensionState::Disabled)];
+        source.follow_extensions(&installed, &catalogue);
+        let codex = source
+            .snapshot()
+            .items
+            .into_iter()
+            .find(|item| item.name == "Codex")
+            .expect("the agent is listed");
+        assert_eq!(
+            codex.state,
+            ItemState::Installed {
+                enabled: false,
+                update: None
+            }
+        );
+        assert_eq!(
+            codex.extension.as_deref().map(|entry| entry.state),
+            Some(ExtensionState::Disabled)
+        );
+    }
+
+    #[test]
+    fn the_uninstall_offers_the_cli_only_when_the_package_installed_it() {
+        use massorca_protocol::methods::extensions::{
+            CliRecord, InstalledInfo, SourceKind, SourceRef,
+        };
+
+        use crate::model::marketplace::{
+            CLI_REMOVAL_SENTENCE, offers_cli_removal, uninstall_body_for,
+        };
+
+        let record = |installed_by_package: bool| CliRecord {
+            agent: "claude".to_owned(),
+            binary: "claude".to_owned(),
+            detected_before_install: false,
+            installer: None,
+            installed_by_package,
+        };
+        let installed = |cli: Vec<CliRecord>| {
+            let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
+            entry.uninstall.cli_binaries = vec!["claude".to_owned()];
+            entry.installed = Some(InstalledInfo {
+                version: "1.0.0".to_owned(),
+                source: SourceRef {
+                    kind: SourceKind::Catalogue,
+                    reference: "acme.notes".to_owned(),
+                },
+                sha256: "abc123".to_owned(),
+                installed_at_ms: 0,
+                cli,
+            });
+            entry
+        };
+
+        let plain = items(&[], &[installed(Vec::new())], &[]);
+        assert!(!offers_cli_removal(&plain[0]));
+        let kept = items(&[], &[installed(vec![record(false)])], &[]);
+        assert!(
+            !offers_cli_removal(&kept[0]),
+            "a CLI the package found stays out"
+        );
+        let offered = items(&[], &[installed(vec![record(true)])], &[]);
+        assert!(offers_cli_removal(&offered[0]));
+
+        assert!(
+            uninstall_body_for(&offered[0], false).contains("The claude CLI it installed stays"),
+            "unticked, the body says the CLI stays"
+        );
+        assert!(
+            !uninstall_body_for(&offered[0], true).contains("stays on this computer"),
+            "ticked, the body no longer says the CLI stays"
+        );
+        assert_eq!(
+            CLI_REMOVAL_SENTENCE,
+            "This removes the CLI from this computer, so it stops working outside MassOrca too."
+        );
     }
 }

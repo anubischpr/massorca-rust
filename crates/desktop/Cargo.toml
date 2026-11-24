@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow = "1"
+base64.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

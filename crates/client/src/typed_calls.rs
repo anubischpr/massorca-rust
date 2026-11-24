@@ -11,6 +11,7 @@ use massorca_protocol::methods::agents::{
     AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
     CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
 };
+use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
 use massorca_protocol::methods::host::{self, HostMemory, HostPorts};
@@ -41,6 +42,11 @@ impl Client {
     /// `service.shutdown`: asks the service to stop. The request is answered before the service winds down.
     pub async fn shutdown(&self) -> Result<(), ClientError> {
         self.call(service::SHUTDOWN, &()).await
+    }
+
+    /// `commands.describe`: every command the service runs, with its method, capability, permission and parameters.
+    pub async fn commands_describe(&self) -> Result<CommandTable, ClientError> {
+        self.call(commands::DESCRIBE, &()).await
     }
 
     /// `host.memory`: the memory of the service and of each live terminal's processes, read now on the service's host.
