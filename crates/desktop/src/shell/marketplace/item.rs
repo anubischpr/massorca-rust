@@ -109,9 +109,9 @@ pub(super) fn problem_banner(id: MarketplaceItemId, alert: &ProblemAlert) -> Any
         .into_any_element()
 }
 
-/// Parts 1 to 3: the plate and name with the state chip and Copy link, the meta line, the host
-/// and the install action, which is not available yet.
-fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElement {
+/// Parts 1 to 3: the plate with the listed logo or the kind icon, the name with the state chip and
+/// Copy link, the meta line, the host and the install action, which is not available yet.
+fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> AnyElement {
     let url = item.source_url.clone();
     let copy = Button::new("marketplace-copy-link", "Copy link")
         .variant(ButtonVariant::Ghost)
@@ -128,6 +128,9 @@ fn header(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &App) -> AnyElem
     ))
     .copy_link(copy)
     .host(host_selector(frame, item, cx));
+    if let Some(logo) = item_images::logo(frame, item, cx) {
+        header = header.logo(logo);
+    }
     if !item.state.is_installed() {
         header = header.action(install_action(frame, item));
     }
