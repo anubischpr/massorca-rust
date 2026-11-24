@@ -87,9 +87,11 @@ pub struct WorkspaceRow {
     pub state: WorkspaceState,
     pub request_id: Option<String>,
     pub created_at: i64,
+    /// The owner's short comment, set by `workspace.update`; `None` until one is set.
+    pub comment: Option<String>,
 }
 
-const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at FROM workspaces";
+const SELECT_WORKSPACES: &str = "SELECT id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment FROM workspaces";
 
 fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
     Ok(WorkspaceRow {
@@ -105,6 +107,7 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<WorkspaceRow> {
         state: row.get("state")?,
         request_id: row.get("request_id")?,
         created_at: row.get("created_at")?,
+        comment: row.get("comment")?,
     })
 }
 
@@ -112,7 +115,7 @@ impl Store {
     /// Inserts a workspace. Conflicts on id, path key, request id or (project, name) are `StoreError::Conflict`.
     pub fn insert_workspace(&self, row: &WorkspaceRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO workspaces (id, project_id, kind, name, path, path_key, branch, base_ref, created_branch, state, request_id, created_at, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 row.id,
                 row.project_id,
@@ -125,7 +128,8 @@ impl Store {
                 row.created_branch,
                 row.state,
                 row.request_id,
-                row.created_at
+                row.created_at,
+                row.comment
             ],
         )?;
         Ok(())
@@ -192,6 +196,21 @@ impl Store {
         let changed = self.lock().execute(
             "UPDATE workspaces SET state = ?2 WHERE id = ?1",
             params![id, state],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Sets a workspace's name and comment in one write; a `None` comment clears it. Returns whether a row changed.
+    /// A name another workspace of the project holds is `StoreError::Conflict`.
+    pub fn update_workspace(
+        &self,
+        id: &str,
+        name: &str,
+        comment: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE workspaces SET name = ?2, comment = ?3 WHERE id = ?1",
+            params![id, name, comment],
         )?;
         Ok(changed > 0)
     }
