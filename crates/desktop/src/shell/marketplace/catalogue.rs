@@ -285,6 +285,7 @@ fn card(frame: &MarketplaceFrame, item: &MarketplaceItem, cx: &mut App) -> Exten
     )
     .publisher(item.publisher.clone())
     .source("Marketplace")
+    .category(item.category.clone())
     .version(item.version.clone())
     .description(item.description.clone())
     .icon(kind_icon(item.kind))
