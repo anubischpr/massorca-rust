@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 const CONSENT: &str = "fingerprint-of-the-review";
 
-fn catalogue_package() -> ExtensionItem {
+pub(super) fn catalogue_package() -> ExtensionItem {
     ExtensionItem {
         id: "acme.notes".to_owned(),
         name: "Notes".to_owned(),

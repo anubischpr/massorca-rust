@@ -7,6 +7,7 @@ mod catalogue;
 mod extension_items;
 mod extension_refusals;
 mod install_review;
+mod item_images;
 mod item_page;
 mod package_problem;
 mod sample;
@@ -24,6 +25,7 @@ pub use catalogue::{count_line, counts, heading, intro, listed, no_match_text};
 pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use install_review::review_lines;
+pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, Part, advanced_rows, information, offers_cli_removal, parts,
     settings_rows, state_chip, uninstall_body, uninstall_body_for,

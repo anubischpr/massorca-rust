@@ -208,6 +208,11 @@ Linux only. No automated run opens a visible window.
   `extensions.*` like any package. An agent kind with no package stays read-only.
 - An uninstall confirm for a package that installed its CLI offers a tick to remove that CLI too. The tick is the
   person's acceptance: `service/extensions.rs` sends the consent fingerprint the service names with the removal.
+- A card's logo and an item page's banner image come from `extensions.asset`. The first draw that asks for one
+  starts the call; the image is decoded off the UI thread and kept per package, version and path
+  (`model/marketplace/item_images.rs`, `shell/marketplace/item_images.rs`). A new version fetches again. A failed
+  call or an image that does not decode leaves the card's icon, and it is not asked for again. The item page's
+  header still draws the kind icon: its plate takes an icon only.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

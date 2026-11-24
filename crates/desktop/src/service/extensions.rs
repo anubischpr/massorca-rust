@@ -8,8 +8,9 @@ use std::sync::Arc;
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
-    ExtensionEnabled, ExtensionInstallParams, ExtensionInstalled, ExtensionItem, ExtensionList,
-    ExtensionRemoveParams, ExtensionRemoved, ExtensionReview, ExtensionSetEnabledParams,
+    ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
+    ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRemoveParams, ExtensionRemoved,
+    ExtensionReview, ExtensionSetEnabledParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -34,6 +35,11 @@ pub(crate) enum ExtensionCommand {
     Inspect {
         source: String,
         reply: oneshot::Sender<Result<ExtensionReview, Refusal>>,
+    },
+    /// `extensions.asset`: one listed image of a package. Changes nothing, so no read follows it.
+    Asset {
+        params: ExtensionAssetParams,
+        reply: oneshot::Sender<Result<ExtensionAsset, Refusal>>,
     },
     Install {
         params: ExtensionInstallParams,
@@ -107,6 +113,15 @@ impl ServiceHandle {
         self.ask(|reply| Command::Extension(ExtensionCommand::Remove { params, reply }))
             .await
     }
+
+    /// `extensions.asset`: a listed image of a package, base64. Nothing changes on the service.
+    pub async fn extension_asset(
+        &self,
+        params: ExtensionAssetParams,
+    ) -> Result<ExtensionAsset, Refusal> {
+        self.ask(|reply| Command::Extension(ExtensionCommand::Asset { params, reply }))
+            .await
+    }
 }
 
 /// Runs one Marketplace call on its own task, so a slow installer never holds up events.
@@ -122,6 +137,16 @@ pub(super) fn spawn_call(
             tokio::spawn(async move {
                 let result = client
                     .extension_inspect(&source)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        ExtensionCommand::Asset { params, reply } => {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .extension_asset(&params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -181,6 +206,9 @@ async fn refresh(client: &Client, updates: &mpsc::UnboundedSender<StoreUpdate>, 
 pub(super) fn refuse_while_down(command: ExtensionCommand, refusal: Refusal) {
     match command {
         ExtensionCommand::Inspect { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        ExtensionCommand::Asset { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         ExtensionCommand::Install { reply, .. } => {

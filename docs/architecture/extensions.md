@@ -369,6 +369,8 @@ CSP. Nothing above changes.
 
 - **Capability `extensions/1`.** The host offers it from M6. Its methods:
   - `extensions.list`, `extensions.get`;
+  - `extensions.asset(id, path)`: a logo or banner image the listing names, base64,
+    at most 1 MiB;
   - `extensions.inspect(source)`: verify and return the review data, install
     nothing;
   - `extensions.install(source, consent-fingerprint, scope)`;
