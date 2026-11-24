@@ -74,16 +74,13 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
     })
 }
 
-/// A git project on `main` with one commit, and a worktree workspace on a new branch.
+/// A git project with one empty commit, and a worktree workspace on a new branch. Each git call is slow to start on
+/// some hosts, so the fixture makes as few as it can.
 fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
     let repo = home.join("repo");
     std::fs::create_dir_all(&repo).expect("a repository folder");
     git(&repo, &["init", "-q"]);
-    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
-    git(&repo, &["config", "core.autocrlf", "false"]);
-    std::fs::write(repo.join("README.md"), "hello\n").expect("a readme");
-    git(&repo, &["add", "README.md"]);
-    git(&repo, &["commit", "-q", "-m", "initial"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "initial"]);
     test.block_on(async {
         let client = owner(home).await;
         let project: Project = client
