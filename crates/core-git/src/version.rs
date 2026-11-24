@@ -9,6 +9,13 @@ pub struct GitVersion {
 }
 
 impl GitVersion {
+    /// The oldest git the service supports (ADR 0014).
+    pub const BASELINE: Self = Self {
+        major: 2,
+        minor: 25,
+        patch: 0,
+    };
+
     /// Parses the line printed by `git --version`; a missing patch number counts as 0.
     pub(crate) fn parse_version_output(text: &str) -> Option<Self> {
         let rest = text.trim().strip_prefix("git version ")?;
