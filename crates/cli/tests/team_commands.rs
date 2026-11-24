@@ -737,3 +737,72 @@ fn a_team_project_takes_a_workspaces_source_on_add_and_update_and_names_it_in_th
         .code(1);
     assert!(stderr_text(&refused_update).contains("project.not_found"));
 }
+
+#[test]
+fn a_team_project_records_its_code_source_only_when_the_team_has_workspaces() {
+    let sandbox = Sandbox::new();
+    sandbox.json_ok("default", &["team", "create", "alpha"]);
+
+    let refused = sandbox
+        .run(
+            "default",
+            &with_json(&[
+                "team",
+                "project",
+                "add",
+                "alpha",
+                "parser",
+                "--code-source",
+                "new-folder-with-git",
+            ]),
+        )
+        .failure()
+        .code(1);
+    let document = single_document(&refused);
+    assert_eq!(
+        document["error"]["code"], "request.invalid_params",
+        "{document}"
+    );
+
+    sandbox.json_ok(
+        "default",
+        &["team", "update", "alpha", "--workspaces", "true"],
+    );
+    let added = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "project",
+            "add",
+            "alpha",
+            "parser",
+            "--code-source",
+            "new-folder-with-git",
+        ],
+    );
+    assert_eq!(added["code_source"], "new_folder_with_git", "{added}");
+    let listed = stdout_text(
+        &sandbox
+            .run("default", &["team", "project", "list", "alpha"])
+            .success(),
+    );
+    assert!(listed.contains("\tNew folder with git\t-"), "{listed}");
+
+    let updated = sandbox.json_ok(
+        "default",
+        &[
+            "team",
+            "project",
+            "update",
+            "alpha",
+            "parser",
+            "--code-source",
+            "existing-repository",
+        ],
+    );
+    assert_eq!(updated["code_source"], "existing_repository", "{updated}");
+    // Recorded only: no Workspaces project is made or linked.
+    assert!(updated["source_project"].is_null(), "{updated}");
+    let projects = sandbox.json_ok("default", &["project", "list"]);
+    assert_eq!(projects["projects"], serde_json::json!([]), "{projects}");
+}

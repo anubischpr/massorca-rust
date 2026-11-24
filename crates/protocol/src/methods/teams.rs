@@ -235,6 +235,33 @@ pub struct TeamProject {
     /// Whether the linked project is a git repository or a folder. Unset like `source_project_name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<ProjectKind>,
+    /// Where the owner said the code is (pv96): recorded only, nothing is cloned or created. Absent from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_source: Option<CodeSource>,
+}
+
+/// Where a team project's code is, as the owner recorded it (pv96). Recording it clones or creates nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeSource {
+    /// An existing repository.
+    ExistingRepository,
+    /// A new folder with git.
+    NewFolderWithGit,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
+impl CodeSource {
+    /// The words pv96 shows for it.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ExistingRepository => "Existing repository",
+            Self::NewFolderWithGit => "New folder with git",
+            Self::Unknown => "Unknown",
+        }
+    }
 }
 
 /// Params of `team.project_add`.
@@ -249,6 +276,9 @@ pub struct TeamProjectAddParams {
     /// A Workspaces project (id, exact name or path) the code comes from. Unset or blank links none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
+    /// Where the code is, recorded only; the team must have Workspaces on. Unset records none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_source: Option<CodeSource>,
 }
 
 /// Params of `team.project_update`. Only the fields given change.
@@ -265,6 +295,9 @@ pub struct TeamProjectUpdateParams {
     /// The Workspaces project (id, exact name or path) the code comes from. An empty value clears the link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_project: Option<String>,
+    /// Where the code is, recorded only; the team must have Workspaces on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_source: Option<CodeSource>,
 }
 
 /// Params of `team.project_rm`. The project's tasks stay on the team's Board without a project.
