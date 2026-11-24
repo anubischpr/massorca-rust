@@ -170,6 +170,7 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
+| `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
 | `agent.accounts.import` | workspace | `kind`, `from`, `label?` | `{ result: imported \| failed \| not_found, account?, reason? }` |
 | `agent.accounts.activate` | workspace | `kind`, `account`, `project?` | the account's summary |
 | `agent.accounts.remove` | workspace | `kind`, `account` | `{ kind, account, removed }` |
@@ -456,6 +457,7 @@ massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
 massorca agent accounts list <kind>
 massorca agent accounts add <kind> [--label <l>] [--no-attach]
+massorca agent accounts sign-in <kind> <account> [--no-attach]
 massorca agent accounts import <kind> --from <dir> [--label <l>]
 massorca agent accounts activate <kind> <account> [--project <p>]
 massorca agent accounts remove <kind> <account>
@@ -530,6 +532,22 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   an undecided account (its store mark is set) decides it the same way, as a sign-in's end does. An
   undecided account is not the kind's history until a decision keeps it (decision 0059). A row that
   is already gone is left alone, with no event.
+- **Sign-in again** (`sign_in.rs`, `Agents::accounts_sign_in`, `agent.accounts.sign_in`): signs an
+  existing account in once more, in its own home, with the same login and environment as a new
+  sign-in (both go through `create_login_terminal`). The account is kept whatever the login ends
+  with, and never deleted nor signed out: it existed before the sign-in, so its end runs
+  `decide_signed_in_again`, not `decide_marked`. That decision stores the state the account's
+  check found, with the check's identity: `signed_in` with the identity, else `expired`,
+  `needs_sign_in`, `conflict`, or `unknown` when the check cannot tell (a kind without a check, or
+  one that cannot run, is `unknown`). Its active status and its project choices do not change, and
+  the decision announces the account once. It is refused before anything starts, with the codes of a sign-in:
+  an unknown account, or one of another kind, is `agent.account_not_found`; one being removed,
+  signing in, decided, or in use by a live run is `agent.busy`; one whose sign-in is undecided in
+  the store is `agent.busy`; one without a usable home is `agent.credentials_invalid`.
+  **Crash safety**: the account is marked pending in memory only (`account_busy().pending`), never
+  in the store (`sign_in_pending`). The startup sweep decides only the store's undecided sign-ins,
+  so a restart during the login leaves the row as it was, and the account's next check decides
+  its state. The mark is the terminal's id until the terminal ends, then the decision's empty mark.
 - **Pending and removing accounts**: an account whose sign-in is open in this service, or whose
   sign-in or import is being decided, refuses removal, activation and checks with `agent.busy`. An
   account whose store mark (`sign_in_pending`) is still set, which a startup sweep or an interrupted

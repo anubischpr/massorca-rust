@@ -346,11 +346,7 @@ impl Agents {
             if let Some(mark) = busy_set.pending.get(account) {
                 return Err(pending_busy(account, mark));
             }
-            if self
-                .live_runs()
-                .values()
-                .any(|run| run.account.as_deref() == Some(account))
-            {
+            if self.used_by_live_run(account) {
                 return Err(busy(account, "in use by a live session"));
             }
             busy_set.removing.insert(account.to_owned());
@@ -359,6 +355,55 @@ impl Agents {
             agents: self.clone(),
             account: account.to_owned(),
         })
+    }
+
+    /// Whether a live run that has not exited uses `account`. A removal and a sign-in again both refuse it: a login rewrites
+    /// the files the running agent reads (decision 0059).
+    fn used_by_live_run(&self, account: &str) -> bool {
+        self.live_runs()
+            .values()
+            .any(|run| run.account.as_deref() == Some(account))
+    }
+
+    /// Marks an existing account as signing in again (decision 0059), and returns its summary and its home for the login.
+    /// Under the homes gate, with the account busy set held across the checks and the mark, so no other call takes the
+    /// account in between. Refused with `agent.busy` while it is being removed, signing in, or used by a live run, and with
+    /// `agent.busy` while its sign-in or import is undecided in the store. A home that is gone is refused, since the login
+    /// has nowhere to write. The mark is in memory only, so the store's row is not touched (see
+    /// [`Agents::accounts_sign_in`]).
+    pub(crate) fn begin_sign_in_again(
+        &self,
+        kind: &str,
+        account: &str,
+    ) -> Result<(AccountSummary, PathBuf), AgentError> {
+        let _gate = credentials::lock_homes();
+        let row = self.account_of(kind, account)?;
+        let mut busy_set = self.account_busy();
+        if busy_set.removing.contains(account) {
+            return Err(busy(account, "being removed"));
+        }
+        if let Some(mark) = busy_set.pending.get(account) {
+            return Err(pending_busy(account, mark));
+        }
+        if self.used_by_live_run(account) {
+            return Err(busy(account, "in use by a live session"));
+        }
+        if self.store_pending(account)? {
+            return Err(undecided(account));
+        }
+        let home = credentials::usable_account_home(self.profile_dir(), kind, account)?
+            .ok_or_else(|| {
+                AgentError::new(
+                    codes::AGENT_CREDENTIALS_INVALID,
+                    format!(
+                        "account {account} of agent kind {kind} has no credential home; remove it and add the account again"
+                    ),
+                )
+            })?;
+        let active = self.store().get_active_agent_account(kind)?;
+        let summary = self.summary(&row, active.as_deref())?;
+        busy_set.pending.insert(account.to_owned(), String::new());
+        Ok((summary, home))
     }
 
     /// Runs the kind's check on an account now, or on the active one when `account` is absent (decision 0059). An account
@@ -405,7 +450,7 @@ impl Agents {
 
     /// The verdict of an account's check as a check command reports it: `unknown` when the kind declares no check, and
     /// `needs_sign_in` when the check cannot run on the account's home.
-    fn check_verdict(
+    pub(crate) fn check_verdict(
         &self,
         decl: &KindDecl,
         program: &Path,
@@ -1027,10 +1072,7 @@ impl Agents {
         let busy_set = self.account_busy();
         busy_set.removing.contains(account)
             || busy_set.pending.contains_key(account)
-            || self
-                .live_runs()
-                .values()
-                .any(|run| run.account.as_deref() == Some(account))
+            || self.used_by_live_run(account)
     }
 
     pub(crate) fn make_active_if_none(&self, kind: &str, account: &str) {

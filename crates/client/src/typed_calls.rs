@@ -3,13 +3,13 @@
 use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
-    AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentModeSet, AgentPromptParams,
-    AgentQueueEditParams, AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams,
-    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
-    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
-    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
-    QueuedPrompt,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentBringBackParams,
+    AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds, AgentListParams,
+    AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
+    AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef,
+    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchParams,
+    BringBackResult, CredentialsImportParams, CredentialsImported, CredentialsKindRef,
+    CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
 };
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::events;
@@ -386,6 +386,14 @@ impl Client {
         params: &AccountsAddParams,
     ) -> Result<AccountsAdded, ClientError> {
         self.call(agents::ACCOUNTS_ADD, params).await
+    }
+
+    /// `agent.accounts.sign_in`: signs an existing account in again, and returns it and the terminal that runs the login.
+    pub async fn agent_accounts_sign_in(
+        &self,
+        params: &AccountsSignInParams,
+    ) -> Result<AccountsAdded, ClientError> {
+        self.call(agents::ACCOUNTS_SIGN_IN, params).await
     }
 
     /// `agent.accounts.import`: imports the kind's declared files into a new account.

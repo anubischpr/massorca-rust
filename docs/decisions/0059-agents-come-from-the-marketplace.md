@@ -339,3 +339,31 @@ Account commands (check, sign-in, sign-out) judge the account's home only: for t
   accounts, account history and bots name, and the kind directories under
   `<profile>/agents/accounts/` and `<profile>/agents/homes/`. A store or a kind directory that cannot be read is an
   error, never an empty answer.
+
+## Amendment 2026-11-23 (re-sign-in)
+
+- **What it is.** `agent.accounts.sign_in { kind, account }` (permission `workspace`, the same
+  caller rules as `agent.accounts.add`) signs an existing account in again. It runs the kind's
+  `accounts.login` in a service-owned terminal with the account's own home, the environment a
+  sign-in gets, and returns `{ account, terminal_id }`, as `add` does. The CLI is
+  `agent accounts sign-in <KIND> <ACCOUNT> [--no-attach]`.
+- **Keep, never delete.** The account existed before the sign-in, so when the terminal ends (or
+  is closed at its time limit) it is kept whatever the login ended with. Its check's state and
+  identity are stored as found: `signed_in` with the identity, or `expired`, `needs_sign_in`,
+  `conflict`, or `unknown`. The vendor sign-out never runs, the home is never deleted, and the
+  active status and the project choices do not change. A new account's sign-in keeps its own
+  rules, which delete a refused account; the two decisions are told apart by a purpose set when the
+  terminal starts (`SignInPurpose`), not by the account's origin.
+- **Refusals, before anything starts.** An account whose kind is not startable or has no sign-in
+  is refused as `add` is. An unknown account, or one of another kind, is `agent.account_not_found`.
+  An account that is signing in, being removed or decided, in use by a live run, or undecided in
+  the store, is `agent.busy`. An account without a usable home is `agent.credentials_invalid`:
+  the login has nowhere to write, and the account is not recreated.
+- **In memory only.** The account is marked pending in memory (`account_busy().pending`), never in
+  the store. The startup sweep decides only the store's undecided sign-ins, so a restart during a
+  re-sign-in leaves the row as it was, and the account's next check decides its state. Removal,
+  activation and checks of the account are refused meanwhile with `agent.busy`, as for any open
+  sign-in.
+- **Open.** A run that starts on the account while its re-sign-in login runs is not refused by
+  this amendment. Refusing run starts on such an account needs its own mark, since the in-memory
+  pending mark also covers a new account's sign-in and a decision, which must not refuse runs.

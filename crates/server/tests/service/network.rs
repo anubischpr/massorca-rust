@@ -641,6 +641,10 @@ async fn a_read_only_device_is_refused_every_agent_account_write_and_may_list() 
             serde_json::json!({ "kind": kind, "account": account }),
         ),
         (
+            agents::ACCOUNTS_SIGN_IN,
+            serde_json::json!({ "kind": kind, "account": account }),
+        ),
+        (
             agents::ACCOUNTS_REMOVE,
             serde_json::json!({ "kind": kind, "account": account }),
         ),
