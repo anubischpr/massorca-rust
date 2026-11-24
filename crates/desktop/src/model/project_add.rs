@@ -30,6 +30,7 @@ impl AddProjectForm {
     /// The `project.add` params for the typed path. The name and the kind are left to the service.
     pub fn params(&self) -> Option<ProjectAddParams> {
         self.can_submit().then(|| ProjectAddParams {
+            icon: None,
             path: self.path.trim().to_owned(),
             name: None,
             kind: None,

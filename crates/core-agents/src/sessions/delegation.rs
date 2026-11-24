@@ -1003,6 +1003,7 @@ then report"
         let workspaces = &agents.inner.config.workspaces;
         let project = workspaces
             .add_project(ProjectAddParams {
+                icon: None,
                 path: repo.to_string_lossy().into_owned(),
                 name: Some("repo".to_owned()),
                 kind: None,

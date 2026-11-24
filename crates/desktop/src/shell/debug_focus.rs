@@ -18,6 +18,7 @@ const SAMPLE_WORKSPACE: &str = "sample-workspace";
 fn sample_start_records() -> Vec<StoreUpdate> {
     vec![StoreUpdate::Resync {
         projects: vec![Project {
+            icon: None,
             id: SAMPLE_PROJECT.into(),
             kind: ProjectKind::Git,
             path: "/repos/sample".into(),

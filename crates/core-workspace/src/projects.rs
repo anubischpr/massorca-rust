@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use massorca_core_store::{ProjectKind as StoreKind, ProjectRow, StoreError, new_id, now_ms};
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{
-    Project, ProjectAddParams, ProjectInspection, ProjectKind, ProjectSetBaseParams,
+    Project, ProjectAddParams, ProjectIcon, ProjectInspection, ProjectKind, ProjectSetBaseParams,
 };
 
 use crate::error::DomainError;
@@ -42,6 +42,10 @@ impl Workspaces {
                 })?,
         };
         names::project_name(&name)?;
+        let icon = params
+            .icon
+            .map(|icon| icon.normalized().map_err(invalid_icon))
+            .transpose()?;
         let path_key = paths::path_key(&root);
         if self.registered_at(&root)?.is_some() {
             return Err(DomainError::new(
@@ -83,7 +87,11 @@ impl Workspaces {
             workspaces_root,
             added_at: now_ms(),
             base_ref: None,
-            icon: None,
+            icon: icon
+                .as_ref()
+                .map(ProjectIcon::to_stored)
+                .transpose()
+                .map_err(|error| DomainError::new(codes::INTERNAL, error.to_string()))?,
         };
         self.store
             .insert_project(&row)
@@ -248,6 +256,13 @@ impl Workspaces {
             )),
         }
     }
+}
+
+fn invalid_icon(reason: String) -> DomainError {
+    DomainError::new(
+        codes::REQUEST_INVALID_PARAMS,
+        format!("invalid icon: {reason}"),
+    )
 }
 
 fn not_git(dir: &Path) -> DomainError {

@@ -56,6 +56,7 @@ fn run_git(dir: &Path, args: &[&str]) {
 
 fn add_params(path: &Path) -> ProjectAddParams {
     ProjectAddParams {
+        icon: None,
         path: path.to_str().expect("utf-8 path").to_owned(),
         name: None,
         kind: None,

@@ -48,6 +48,7 @@ fn folder_workspace(test: &Runtime, home: &Path, name: &str) -> Workspace {
             .call(
                 projects::ADD,
                 &ProjectAddParams {
+                    icon: None,
                     path: utf8(&folder),
                     name: Some(name.to_owned()),
                     kind: Some(ProjectKind::Folder),
@@ -88,6 +89,7 @@ fn git_workspace(test: &Runtime, home: &Path) -> Workspace {
             .call(
                 projects::ADD,
                 &ProjectAddParams {
+                    icon: None,
                     path: utf8(&repo),
                     name: Some("repo".to_owned()),
                     kind: None,

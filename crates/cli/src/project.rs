@@ -108,6 +108,7 @@ fn add_params(args: ProjectAddArgs, paths: PathRules) -> Result<ProjectAddParams
         .map(|path| paths.path(path))
         .transpose()?;
     Ok(ProjectAddParams {
+        icon: None,
         path: paths.path(&args.path)?,
         name: args.name,
         kind,

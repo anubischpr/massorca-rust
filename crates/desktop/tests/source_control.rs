@@ -119,6 +119,7 @@ async fn project_and_workspace(home: &Path, repo_dir: &Path) -> (String, Workspa
     .expect("a client connects");
     let project = client
         .project_add(&ProjectAddParams {
+            icon: None,
             path: repo_dir.display().to_string(),
             name: Some("demo".to_owned()),
             kind: None,

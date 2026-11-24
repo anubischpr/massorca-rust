@@ -593,6 +593,7 @@ fn team_folder(
         Some(project) => project,
         None => {
             let project = workspaces.add_project(ProjectAddParams {
+                icon: None,
                 path: path_text(&root)?,
                 name: Some(TEAMS_PROJECT_NAME.to_owned()),
                 kind: Some(ProjectKind::Folder),

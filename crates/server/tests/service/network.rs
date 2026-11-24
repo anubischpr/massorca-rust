@@ -818,6 +818,7 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
         .call(
             projects::ADD,
             &ProjectAddParams {
+                icon: None,
                 path: repo.to_string_lossy().into_owned(),
                 name: Some("repo".to_owned()),
                 kind: Some(ProjectKind::Git),

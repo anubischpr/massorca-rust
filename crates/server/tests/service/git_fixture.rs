@@ -38,6 +38,7 @@ impl GitService {
             .call(
                 projects::ADD,
                 &ProjectAddParams {
+                    icon: None,
                     path: utf8(&repo),
                     name: Some("repo".to_owned()),
                     kind: None,
@@ -83,6 +84,7 @@ impl GitService {
             .call(
                 projects::ADD,
                 &ProjectAddParams {
+                    icon: None,
                     path: utf8(&folder),
                     name: Some("plain".to_owned()),
                     kind: Some(ProjectKind::Folder),

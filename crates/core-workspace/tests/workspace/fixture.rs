@@ -158,6 +158,7 @@ pub fn project_add(path: &Path) -> ProjectAddParams {
         name: None,
         kind: None,
         workspaces_root: None,
+        icon: None,
     }
 }
 

@@ -14,6 +14,7 @@ mod layout;
 mod names;
 mod names_and_paths;
 mod project_base;
+mod project_icon;
 mod projects;
 mod read;
 mod removal_edges;

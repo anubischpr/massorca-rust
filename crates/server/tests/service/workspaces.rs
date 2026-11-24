@@ -85,6 +85,7 @@ async fn add_repo_project(client: &massorca_client::Client, home: &Path, repo: &
         .call(
             projects::ADD,
             &ProjectAddParams {
+                icon: None,
                 path: repo.to_str().expect("utf-8").to_owned(),
                 name: None,
                 kind: None,
@@ -302,6 +303,7 @@ async fn a_folder_workspace_is_forgotten_on_removal_and_its_directory_stays() {
         .call(
             projects::ADD,
             &ProjectAddParams {
+                icon: None,
                 path: folder.to_str().expect("utf-8").to_owned(),
                 name: None,
                 kind: Some(ProjectKind::Folder),

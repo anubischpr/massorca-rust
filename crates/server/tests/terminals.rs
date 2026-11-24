@@ -120,6 +120,7 @@ async fn workspace(client: &Client, home: &Path) -> Workspace {
     git(&repo, &["commit", "-q", "-m", "initial"]);
     let project = client
         .project_add(&ProjectAddParams {
+            icon: None,
             path: repo.to_str().expect("utf-8").to_owned(),
             name: None,
             kind: None,
