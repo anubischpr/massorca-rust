@@ -1,5 +1,6 @@
 //! Starting and stopping the service of one profile (ADR 0003): take the lock, open the store, bind the endpoint, serve.
 
+use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use massorca_core_agents::{
     Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
     ProviderError,
 };
+use massorca_core_extensions::skills::SkillRootEnv;
 use massorca_core_extensions::{Extensions, HookError};
 use massorca_core_git::Git;
 use massorca_core_store::{Store, now_ms};
@@ -74,6 +76,46 @@ impl VaultOptions {
     }
 }
 
+/// Where skill discovery looks on this host (SKL-01): the user's home folder and the folder overrides agent tools read
+/// from the environment. Tests point `home` at a temporary folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveryOptions {
+    /// The user's home folder. `None` leaves nothing to scan, so `skills.discover` fails.
+    pub home: Option<PathBuf>,
+    /// `CLAUDE_CONFIG_DIR`, `GROK_HOME` and `HERMES_HOME`, as the agent tools read them.
+    pub env: SkillRootEnv,
+}
+
+/// Overrides the user's home folder that skill discovery reads; tests set it so no scan reaches the real home.
+pub const SKILL_HOME_ENV: &str = "MASSORCA_SKILL_HOME";
+
+impl DiscoveryOptions {
+    /// `SKILL_HOME_ENV` or else the platform's home folder, and each folder override the environment sets to an absolute
+    /// path.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::from_lookup(|name| std::env::var_os(name))
+    }
+
+    /// `from_env` over any lookup. A relative path is ignored everywhere, so only absolute overrides take effect.
+    fn from_lookup(lookup: impl Fn(&str) -> Option<OsString>) -> Self {
+        let absolute = |name: &str| {
+            lookup(name)
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+        };
+        Self {
+            home: absolute(SKILL_HOME_ENV)
+                .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())),
+            env: SkillRootEnv {
+                claude_config_dir: absolute("CLAUDE_CONFIG_DIR"),
+                grok_home: absolute("GROK_HOME"),
+                hermes_home: absolute("HERMES_HOME"),
+            },
+        }
+    }
+}
+
 /// Starts services.
 #[derive(Debug)]
 pub struct Service;
@@ -89,7 +131,33 @@ impl Service {
         config: ServiceConfig,
         vault_options: VaultOptions,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, NetworkConfig::default(), vault_options, None).await
+        let discovery = DiscoveryOptions::from_env();
+        Self::start_inner(
+            config,
+            NetworkConfig::default(),
+            vault_options,
+            discovery,
+            None,
+        )
+        .await
+    }
+
+    /// [`Service::start`] with explicit skill discovery options instead of the environment's.
+    pub async fn start_with_discovery(
+        config: ServiceConfig,
+        discovery: DiscoveryOptions,
+    ) -> Result<RunningService, ServiceError> {
+        Self::start_with_network_and_discovery(config, NetworkConfig::default(), discovery).await
+    }
+
+    /// As `start_with_network`, with explicit skill discovery options instead of the environment's.
+    pub async fn start_with_network_and_discovery(
+        config: ServiceConfig,
+        network: NetworkConfig,
+        discovery: DiscoveryOptions,
+    ) -> Result<RunningService, ServiceError> {
+        let vault = VaultOptions::from_env();
+        Self::start_inner(config, network, vault, discovery, None).await
     }
 
     /// As `start`, and also listens on the network as `network` says (decision 0045).
@@ -97,7 +165,8 @@ impl Service {
         config: ServiceConfig,
         network: NetworkConfig,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, VaultOptions::from_env(), None).await
+        let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
+        Self::start_inner(config, network, vault, discovery, None).await
     }
 
     /// As `start_with_network`, for a caller that has just checked the profile root itself with `secure_root` and got
@@ -108,13 +177,15 @@ impl Service {
         network: NetworkConfig,
         checked: RootAccess,
     ) -> Result<RunningService, ServiceError> {
-        Self::start_inner(config, network, VaultOptions::from_env(), Some(checked)).await
+        let (vault, discovery) = (VaultOptions::from_env(), DiscoveryOptions::from_env());
+        Self::start_inner(config, network, vault, discovery, Some(checked)).await
     }
 
     async fn start_inner(
         config: ServiceConfig,
         network: NetworkConfig,
         vault_options: VaultOptions,
+        discovery_options: DiscoveryOptions,
         checked: Option<RootAccess>,
     ) -> Result<RunningService, ServiceError> {
         let mut timings = StartTimings::new();
@@ -221,6 +292,7 @@ impl Service {
             terminals: terminals.clone(),
             agents,
             extensions,
+            skills: features::skills::SkillScans::new(discovery_options),
             _kind_guard: kind_guard,
             network: network_state,
             server: PeerInfo {
@@ -463,5 +535,47 @@ mod agent_queue_event_tests {
                 "no watcher receives a queue change"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod discovery_option_tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use super::{DiscoveryOptions, SKILL_HOME_ENV};
+
+    fn options(vars: &[(&str, &str)]) -> DiscoveryOptions {
+        DiscoveryOptions::from_lookup(|name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        })
+    }
+
+    #[test]
+    fn a_relative_override_is_ignored() {
+        let options = options(&[
+            ("CLAUDE_CONFIG_DIR", "relative/config"),
+            (SKILL_HOME_ENV, "relative/home"),
+        ]);
+
+        assert_eq!(options.env.claude_config_dir, None);
+        assert_ne!(options.home.as_deref(), Some(Path::new("relative/home")));
+        assert!(options.home.as_deref().is_none_or(Path::is_absolute));
+    }
+
+    #[test]
+    fn an_absolute_override_is_used() {
+        let config = std::env::temp_dir().join("config");
+        let home = std::env::temp_dir().join("home");
+
+        let options = options(&[
+            ("CLAUDE_CONFIG_DIR", config.to_str().expect("utf-8")),
+            (SKILL_HOME_ENV, home.to_str().expect("utf-8")),
+        ]);
+
+        assert_eq!(options.env.claude_config_dir, Some(config));
+        assert_eq!(options.home, Some(home));
     }
 }

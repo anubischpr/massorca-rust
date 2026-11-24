@@ -14,6 +14,7 @@ pub mod lockfile;
 pub mod removal;
 pub mod review;
 pub mod service;
+pub mod skills;
 pub mod source;
 mod sweep;
 pub mod views;

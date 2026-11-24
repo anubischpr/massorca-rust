@@ -20,6 +20,7 @@ mod pump;
 mod reconnect;
 mod remote;
 mod secret_calls;
+mod skill_calls;
 #[cfg(feature = "local")]
 mod spawn;
 mod subscription;

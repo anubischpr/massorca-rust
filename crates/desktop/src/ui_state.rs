@@ -10,6 +10,7 @@ use massorca_profile::{Profile, UI_STATE_FILE, open_desktop_state_dir};
 use massorca_ui::{ActiveTheme as _, Appearance, Theme};
 use serde::{Deserialize, Serialize};
 
+use crate::model::marketplace::HostTarget;
 use crate::model::regions::{Region, RegionState};
 
 /// The format version this build reads and writes; any other version gives the defaults.
@@ -22,6 +23,8 @@ const MAX_BYTES: u64 = 64 * 1024;
 pub struct UiState {
     pub theme: Appearance,
     pub open_regions: Vec<Region>,
+    /// The Marketplace host last picked; None until a pick, so the Marketplace opens on This computer.
+    pub marketplace_host: Option<HostTarget>,
 }
 
 impl Default for UiState {
@@ -29,6 +32,7 @@ impl Default for UiState {
         Self {
             theme: Appearance::Dark,
             open_regions: RegionState::default().open().to_vec(),
+            marketplace_host: None,
         }
     }
 }
@@ -78,6 +82,13 @@ pub fn load(profile: &Profile) -> UiState {
         .unwrap_or_default()
 }
 
+/// The Marketplace host the profile's state last saved, read at start so the pick survives a restart.
+pub fn saved_marketplace_host(cx: &App) -> Option<HostTarget> {
+    cx.has_global::<UiStateStore>()
+        .then(|| cx.global::<UiStateStore>().saved.marketplace_host.clone())
+        .flatten()
+}
+
 fn save(profile: &Profile, state: &UiState) -> io::Result<()> {
     let folder = open_desktop_state_dir(profile).map_err(io::Error::other)?;
     folder.write_file(UI_STATE_FILE, encode(state).as_bytes())
@@ -101,6 +112,13 @@ struct Stored {
     theme: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     open_regions: Option<Vec<serde_json::Value>>,
+    /// The host's stable key, such as `runtime:vps`; absent until a pick is saved.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    marketplace_host: Option<String>,
 }
 
 /// A member of the wrong type reads as missing, so the others still apply.
@@ -124,6 +142,7 @@ fn encode(state: &UiState) -> String {
                 .map(|region| serde_json::Value::from(region_key(*region)))
                 .collect(),
         ),
+        marketplace_host: state.marketplace_host.as_ref().map(HostTarget::key),
     };
     let mut text = serde_json::to_string_pretty(&stored).unwrap_or_default();
     text.push('\n');
@@ -158,9 +177,15 @@ fn decode(text: &str) -> Option<UiState> {
         }
         None => defaults.open_regions,
     };
+    // An unknown or damaged key is no saved host, so This computer shows.
+    let marketplace_host = stored
+        .marketplace_host
+        .as_deref()
+        .and_then(HostTarget::from_key);
     Some(UiState {
         theme,
         open_regions,
+        marketplace_host,
     })
 }
 
@@ -218,6 +243,7 @@ mod tests {
         let state = UiState {
             theme: Appearance::Light,
             open_regions: vec![Region::WorkPanel, Region::Sidebar],
+            marketplace_host: None,
         };
 
         save(&profile, &state).expect("saved");
@@ -259,6 +285,7 @@ mod tests {
             UiState {
                 theme: Appearance::Light,
                 open_regions: UiState::default().open_regions,
+                marketplace_host: None,
             }
         );
 
@@ -310,5 +337,68 @@ mod tests {
         cx.update(|cx| remember(cx, |state| state.open_regions = vec![Region::WorkPanel]));
 
         assert_eq!(load(&profile).open_regions, vec![Region::WorkPanel]);
+    }
+
+    #[test]
+    fn a_picked_marketplace_host_is_saved_by_its_stable_key() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        let state = UiState {
+            marketplace_host: Some(HostTarget::Paired("vps".to_owned())),
+            ..UiState::default()
+        };
+
+        save(&profile, &state).expect("saved");
+
+        assert_eq!(load(&profile), state);
+        let text = fs::read_to_string(profile.ui_state_path()).expect("the file");
+        assert!(text.contains("\"runtime:vps\""), "{text}");
+    }
+
+    #[test]
+    fn a_missing_or_unknown_marketplace_host_key_saves_no_host_and_the_theme_still_applies() {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        assert_eq!(load(&profile).marketplace_host, None, "missing");
+
+        write_raw(
+            &profile,
+            r#"{"version": 1, "theme": "light", "marketplace_host": "ssh:box"}"#,
+        );
+        assert_eq!(
+            load(&profile),
+            UiState {
+                theme: Appearance::Light,
+                ..UiState::default()
+            }
+        );
+
+        write_raw(&profile, r#"{"version": 1, "marketplace_host": 7}"#);
+        assert_eq!(load(&profile).marketplace_host, None, "wrong type");
+    }
+
+    #[gpui::test]
+    fn a_picked_marketplace_host_is_saved_and_read_back_at_start(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().expect("a temporary folder");
+        let profile = profile(temp.path());
+        cx.update(|cx| {
+            Theme::set(Appearance::Dark, cx);
+            install(cx, profile.clone(), UiState::default());
+            assert_eq!(saved_marketplace_host(cx), None, "nothing picked yet");
+            remember(cx, |state| {
+                state.marketplace_host = Some(HostTarget::Paired("vps".to_owned()));
+            });
+        });
+
+        assert_eq!(
+            load(&profile).marketplace_host,
+            Some(HostTarget::Paired("vps".to_owned()))
+        );
+        cx.update(|cx| {
+            assert_eq!(
+                saved_marketplace_host(cx),
+                Some(HostTarget::Paired("vps".to_owned()))
+            );
+        });
     }
 }

@@ -7,6 +7,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::agent::AgentCommand;
 use crate::extension::ExtensionCommand;
+use crate::skills::SkillCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
@@ -146,6 +147,11 @@ pub enum Commands {
     Extension {
         #[command(subcommand)]
         command: ExtensionCommand,
+    },
+    /// Lists the skills agent tools and registered projects keep on this host, and the roots they were read from.
+    Skills {
+        #[command(subcommand)]
+        command: SkillCommand,
     },
 }
 

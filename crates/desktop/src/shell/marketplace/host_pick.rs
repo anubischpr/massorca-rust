@@ -17,6 +17,7 @@ use crate::model::marketplace::{
 use crate::model::navigation::{MarketplacePage, Page};
 use crate::service::{HostListing, HostLists, HostMarketplaceRead, StoreState};
 use crate::shell::Shell;
+use crate::ui_state;
 
 /// The width of the host picker's select.
 const HOST_PICKER_WIDTH: f32 = 240.0;
@@ -30,6 +31,14 @@ pub(in crate::shell) struct HostPick {
 }
 
 impl HostPick {
+    /// The pick a start begins with: the host saved last, or This computer when none was saved.
+    pub(in crate::shell) fn restored(target: HostTarget) -> Self {
+        Self {
+            target,
+            ..Self::default()
+        }
+    }
+
     pub(in crate::shell) fn target(&self) -> &HostTarget {
         &self.target
     }
@@ -257,6 +266,9 @@ impl Shell {
         target: HostTarget,
         cx: &mut Context<Self>,
     ) {
+        // Why: only a pick is saved; an offer change never overwrites the saved host, so a host that is gone returns.
+        let saved = target.clone();
+        ui_state::remember(cx, |state| state.marketplace_host = Some(saved));
         self.read_picked_host(target);
         if matches!(
             self.model.navigation().page,
@@ -319,6 +331,21 @@ mod tests {
         let refresh = pick.request();
         assert!(!pick.awaits(&answer("vps", read)));
         assert!(pick.awaits(&answer("vps", refresh)));
+    }
+
+    #[test]
+    fn a_saved_host_is_the_pick_at_start_and_shows_this_computer_until_offered() {
+        let pick = HostPick::restored(paired("vps"));
+        assert_eq!(pick.target(), &paired("vps"));
+        assert_eq!(
+            effective_target(pick.target(), &[HostTarget::Local]),
+            HostTarget::Local,
+            "a saved host that is not connected is not overwritten"
+        );
+        assert_eq!(
+            effective_target(pick.target(), &[HostTarget::Local, paired("vps")]),
+            paired("vps")
+        );
     }
 
     #[test]

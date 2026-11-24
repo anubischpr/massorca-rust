@@ -507,7 +507,9 @@ impl Shell {
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
-            marketplace_pick: marketplace::HostPick::default(),
+            marketplace_pick: marketplace::HostPick::restored(
+                ui_state::saved_marketplace_host(cx).unwrap_or_default(),
+            ),
             marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
             marketplace_host_select,
             _marketplace_host_changes: marketplace_host_changes,
