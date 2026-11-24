@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use massorca_client::{Client, ClientError};
 use massorca_profile::Profile;
-use massorca_protocol::methods::service::ServiceInfo;
+use massorca_protocol::methods::service::{GitStatus, ServiceInfo};
 use serde::Serialize;
 
 use crate::connect::{connect, connect_local, connect_running};
@@ -139,5 +139,19 @@ fn info_lines(info: &ServiceInfo) -> Vec<String> {
         format!("protocol: {}", info.protocol),
         format!("capabilities: {}", info.capabilities.join(", ")),
         format!("started_at_ms: {}", info.started_at_ms),
+        format!("git: {}", git_line(info.git.as_ref())),
     ]
+}
+
+/// The host's git in one phrase. A service that predates the field is named, so a reply without it is not read as "no git".
+fn git_line(git: Option<&GitStatus>) -> String {
+    match git {
+        Some(GitStatus::Present { version }) => format!("present {version}"),
+        Some(GitStatus::Missing) => "missing".to_owned(),
+        Some(GitStatus::TooOld { version, required }) => {
+            format!("too_old {version} (requires {required})")
+        }
+        Some(GitStatus::Unknown { reason }) => format!("unknown ({reason})"),
+        None => "not reported (this service predates git status; update the service)".to_owned(),
+    }
 }

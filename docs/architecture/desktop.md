@@ -194,12 +194,19 @@ Linux only. No automated run opens a visible window.
 - **The Marketplace** (`Page::Marketplace`) is a full page with a left
   navigation: Discover, Installed, Updates and the five categories. Its lists
   are in `model/marketplace/catalogue.rs`; an item page shows its nine parts in
-  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2).
+  the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2). A part that does not
+  apply to the item says why in its place. The Information part links the package's website, privacy policy and
+  terms of service when it names them.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled
-  with "Not available yet": installing, the host choice, the default agent and
-  item settings.
+  with "Not available yet": installing, the default agent and item settings.
+- The host picker (`shell/marketplace/host_pick.rs`) aims the Marketplace at This computer or a connected paired host.
+  Items carry a stable host key (`local`, `runtime:<name>`, `model/marketplace/host_target.rs`). A paired host's lists
+  are read on its own connection, and each request carries its number: only the newest answer for the picked host is
+  shown, so a late answer never replaces a newer pick. A pick whose host is not connected shows This computer and
+  returns when the host connects. The pick lives for the session only; no preference store holds it yet. Accounts
+  and update checks stay on This computer.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.
@@ -208,11 +215,15 @@ Linux only. No automated run opens a visible window.
   `extensions.*` like any package. An agent kind with no package stays read-only.
 - An uninstall confirm for a package that installed its CLI offers a tick to remove that CLI too. The tick is the
   person's acceptance: `service/extensions.rs` sends the consent fingerprint the service names with the removal.
-- A card's logo and an item page's banner image come from `extensions.asset`. The first draw that asks for one
-  starts the call; the image is decoded off the UI thread and kept per package, version and path
+- A card's logo, an item page's header logo and its banner image come from `extensions.asset`. The first draw
+  that asks for one starts the call; the image is decoded off the UI thread and kept per package, version and path
   (`model/marketplace/item_images.rs`, `shell/marketplace/item_images.rs`). A new version fetches again. A failed
-  call or an image that does not decode leaves the card's icon, and it is not asked for again. The item page's
-  header still draws the kind icon: its plate takes an icon only.
+  call or an image that does not decode leaves the icon, and it is not asked for again.
+- Update checks (`shell/marketplace/extension_updates.rs`): each installed folder or archive package is inspected once
+  per read of the lists, never per draw. A review whose sha256 differs from the installed one lists the package on
+  Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the
+  sha256 for an archive. A refused inspect leaves the package off Updates until the next read. Built-in packages are
+  not inspected: the service refreshes them at start. A refused update opens the item page, which shows the refusal.
 - The element tests (`shell/marketplace/tests.rs`) find a button as
   `button:<id>`, which every `Button` publishes under test.
 

@@ -221,7 +221,7 @@ impl Service {
         // A missing git is reported per call as git.unavailable, so the start does not run git to find out.
         let git = Git::from_env();
         let default_root = PathBuf::from(features::default_workspace_root()?);
-        let workspaces = Arc::new(Workspaces::new(store.clone(), git, default_root));
+        let workspaces = Arc::new(Workspaces::new(store.clone(), git.clone(), default_root));
         let mut terminal_config =
             ManagerConfig::new(EnvSnapshot::current(), server_version.clone());
         terminal_config.massorca_home = profile.home().to_str().map(str::to_owned);
@@ -287,6 +287,7 @@ impl Service {
             shutdown: shutdown.clone(),
             registries,
             workspaces,
+            git,
             vault,
             terminals: terminals.clone(),
             agents,

@@ -59,15 +59,27 @@ impl Shell {
         };
         self.marketplace_item_error = None;
         cx.notify();
+        let host = self.paired_host_of(item);
+        let request = self.marketplace_pick.request();
+        let picked = self.marketplace_pick.target().clone();
         cx.spawn(async move |this, cx| {
-            let result = service
-                .set_extension_enabled(ExtensionSetEnabledParams {
-                    id: package,
-                    enabled,
-                })
-                .await;
+            let params = ExtensionSetEnabledParams {
+                id: package,
+                enabled,
+            };
+            let result = match host {
+                Some(name) => {
+                    service
+                        .set_host_extension_enabled(name, request, params)
+                        .await
+                }
+                None => service.set_extension_enabled(params).await,
+            };
             let _ = this.update(cx, |shell, cx| {
-                shell.finish_package_change(item, result.map(|_| ()), cx);
+                // An answer for a host no longer picked is dropped.
+                if shell.marketplace_pick.target() == &picked {
+                    shell.finish_package_change(item, result.map(|_| ()), cx);
+                }
             });
         })
         .detach();
@@ -90,18 +102,26 @@ impl Shell {
             confirm.error = None;
         }
         cx.notify();
+        let host = self.paired_host_of(item);
+        let request = self.marketplace_pick.request();
+        let picked = self.marketplace_pick.target().clone();
         cx.spawn(async move |this, cx| {
-            let result = service
-                .remove_extension(ExtensionRemoveParams {
-                    id: package,
-                    delete_agent_homes: false,
-                    uninstall_cli,
-                    agent_token: None,
-                    uninstall_consent: None,
-                })
-                .await;
+            let params = ExtensionRemoveParams {
+                id: package,
+                delete_agent_homes: false,
+                uninstall_cli,
+                agent_token: None,
+                uninstall_consent: None,
+            };
+            let result = match host {
+                Some(name) => service.remove_host_extension(name, request, params).await,
+                None => service.remove_extension(params).await,
+            };
             let _ = this.update(cx, |shell, cx| {
-                shell.finish_package_removal(item, result, uninstall_cli, cx)
+                // An answer for a host no longer picked is dropped.
+                if shell.marketplace_pick.target() == &picked {
+                    shell.finish_package_removal(item, result, uninstall_cli, cx);
+                }
             });
         })
         .detach();
@@ -156,7 +176,7 @@ impl Shell {
     }
 
     /// A refused change shows its sentence under the item; a change that worked needs no words here.
-    fn finish_package_change(
+    pub(super) fn finish_package_change(
         &mut self,
         item: MarketplaceItemId,
         result: Result<(), Refusal>,

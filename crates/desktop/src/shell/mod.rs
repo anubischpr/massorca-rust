@@ -5,6 +5,7 @@ mod add_host;
 mod app_theme;
 mod bring_back;
 mod canvas;
+mod close_confirm;
 mod debug_focus;
 mod debug_page;
 mod delegate;
@@ -15,6 +16,7 @@ mod palette;
 mod project_sidebar;
 mod rail;
 mod resize_edges;
+mod secret_requests;
 mod service_banner;
 mod session_view;
 mod settings;
@@ -38,6 +40,7 @@ mod zones;
 use crate::data::DataSource;
 use crate::launch_options::{DebugFocus, DebugPage};
 use crate::model::canvas::Canvas;
+use crate::model::close_confirm::CloseRisk;
 use crate::model::devices::RevokeFlow;
 use crate::model::marketplace::{
     AccountId, MarketplaceSource, SampleMarketplaceSource, ServiceMarketplace,
@@ -53,6 +56,7 @@ use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
+use crate::ui_state;
 use actions::{
     CloseOverlay, CycleRegionBackward, CycleRegionForward, OpenQuickOpen, OpenSettings,
     ToggleCommandPalette,
@@ -63,6 +67,7 @@ use gpui::{
 };
 use massorca_ui::components::menu::{MenuOrigin, menu_overlay};
 use massorca_ui::components::search_field::{SearchField, SearchFieldEvent};
+use massorca_ui::components::select::SelectView;
 use massorca_ui::components::text_field::{TextField, TextFieldEvent};
 use massorca_ui::{ActiveTheme, IconName, TextStyled};
 use rail::RailState;
@@ -79,6 +84,8 @@ mod app_theme_tests;
 #[cfg(test)]
 mod bring_back_tests;
 #[cfg(test)]
+mod close_confirm_tests;
+#[cfg(test)]
 mod debug_focus_tests;
 #[cfg(test)]
 mod debug_page_tests;
@@ -88,6 +95,8 @@ mod delegate_tests;
 mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
+#[cfg(test)]
+mod seen_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -190,6 +199,8 @@ pub struct Shell {
     vault_dialog: Option<settings_secret_dialog::VaultDialog>,
     /// The delete confirm for an owned secret on screen, if any (D-VT-02, decision 0071).
     vault_remove: Option<settings_remove_dialog::RemoveDialog>,
+    /// The last refused answer to a secret request, with the request it concerns (decision 0071).
+    request_notice: Option<(String, String)>,
     /// The Marketplace data source: the sample, or none while no service answers (decision 0059).
     marketplace: Box<dyn MarketplaceSource>,
     /// The catalogue's search field; its settled text becomes the Marketplace query.
@@ -205,8 +216,17 @@ pub struct Shell {
     marketplace_review: Option<marketplace::InstallReview>,
     /// The last refused change to an installed package, with the item it concerns.
     marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
+    /// The update checks of the installed packages, and the review each checked package returned (decision 0062).
+    marketplace_updates: marketplace::UpdateChecks,
     /// What the Connection part knows beyond the service's account lists.
     marketplace_accounts: marketplace::AccountsUi,
+    /// The host the Marketplace is aimed at, and the answer it waits for.
+    marketplace_pick: marketplace::HostPick,
+    /// The hosts the Marketplace's picker offers, in its order.
+    marketplace_offers: Vec<crate::model::marketplace::HostTarget>,
+    /// The Marketplace's host picker, and the subscription that picks the host chosen in it.
+    marketplace_host_select: Entity<SelectView>,
+    _marketplace_host_changes: Subscription,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -215,6 +235,8 @@ pub struct Shell {
     terminal_notice: Option<(String, String)>,
     /// The bring-back confirm on screen, if any (decision 0055).
     bring_back: Option<bring_back::BringBackConfirm>,
+    /// The confirm before the window closes, with the sessions it names, if one is on screen (PLAT-10).
+    close_confirm: Option<CloseRisk>,
     /// The delegate form under the open session, if any (X-CH-06).
     delegate: Option<delegate::DelegateForm>,
     /// The last refused theme write, as the service's sentence, above the Canvas until dismissed.
@@ -259,6 +281,11 @@ impl Shell {
         )
     }
 
+    /// Opens the regions the last run left open (SET-02); called before the first frame.
+    pub fn restore_open_regions(&mut self, open: Vec<Region>) {
+        self.model.restore_open_regions(open);
+    }
+
     fn with_store(
         store: Entity<ServiceStore>,
         service: Option<ServiceHandle>,
@@ -271,11 +298,11 @@ impl Shell {
         let width = f32::from(window.viewport_size().width);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        // A closing window clears a secret the dialog still holds, before the window goes.
+        // A close the OS asks for waits on the confirm while a session runs or waits for the person (PLAT-10).
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            let _ = weak.update(cx, |shell, cx| shell.close_secret_dialog(window, cx));
-            true
+            weak.update(cx, |shell, cx| shell.window_may_close(window, cx))
+                .unwrap_or(true)
         });
         let snapshot = store.read(cx).snapshot(Instant::now());
         let appearance_changes =
@@ -300,10 +327,14 @@ impl Shell {
                 crate::model::hosts::host_rows(&store.read(cx).state().hosts, Instant::now());
             shell.model.set_remote_hosts(hosts);
             if shell.service.is_some() {
-                let hosts =
-                    crate::model::hosts::marketplace_hosts(store.read(cx).state(), Instant::now());
+                let hosts = crate::model::hosts::marketplace_hosts(store.read(cx).state());
                 shell.model.set_marketplace_hosts(hosts);
             }
+            let offers = match shell.service {
+                Some(_) => crate::model::hosts::offered_targets(store.read(cx).state()),
+                None => vec![crate::model::marketplace::HostTarget::Local],
+            };
+            shell.follow_host_offers(offers, cx);
             if let Some(teams) = store.read(cx).teams() {
                 shell.model.refresh_teams(teams);
             }
@@ -312,11 +343,30 @@ impl Shell {
                 shell.marketplace.follow_agent_kinds(&state.agent_kinds);
                 let (installed, catalogue) = state.extension_lists();
                 shell.marketplace.follow_extensions(installed, catalogue);
+                let checks = state
+                    .extensions
+                    .as_ref()
+                    .map(|read| read.number)
+                    .and_then(|read| {
+                        shell
+                            .marketplace_updates
+                            .begin(read, installed)
+                            .map(|checks| (read, checks))
+                    });
                 shell.follow_service_accounts(state);
-                shell.model.set_marketplace(shell.marketplace.snapshot());
+                shell.show_marketplace(cx);
+                if let Some((read, checks)) = checks {
+                    shell.start_update_checks(read, checks, cx);
+                }
             }
             cx.notify();
         });
+        // Every change of the shell is checked for a new set of open regions, so the next start opens the same ones.
+        cx.observe_self(|shell, cx| {
+            let open = shell.model.regions().open().to_vec();
+            ui_state::remember(cx, |state| state.open_regions = open);
+        })
+        .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
         let zones = ZoneFocus::new(cx);
         let search = cx.new(|cx| SearchField::new("Search", cx));
@@ -330,7 +380,6 @@ impl Shell {
         if service.is_some() {
             model.set_marketplace_hosts(crate::model::hosts::marketplace_hosts(
                 store.read(cx).state(),
-                Instant::now(),
             ));
         }
         let marketplace_search = cx.new(|cx| SearchField::new("Search the catalogue", cx));
@@ -341,6 +390,11 @@ impl Shell {
                     shell.set_marketplace_query(query.as_ref(), cx);
                 }
             },
+        );
+        let (marketplace_host_select, marketplace_host_changes) = marketplace::host_picker_for(
+            &[crate::model::marketplace::HostTarget::Local],
+            &crate::model::marketplace::HostTarget::Local,
+            cx,
         );
         let marketplace_code = cx.new(|cx| {
             TextField::new(cx)
@@ -442,6 +496,7 @@ impl Shell {
             team_confirm: None,
             vault_dialog: None,
             vault_remove: None,
+            request_notice: None,
             marketplace,
             marketplace_search,
             _marketplace_search_changes: marketplace_search_changes,
@@ -450,11 +505,17 @@ impl Shell {
             marketplace_uninstall: None,
             marketplace_review: None,
             marketplace_item_error: None,
+            marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
+            marketplace_pick: marketplace::HostPick::default(),
+            marketplace_offers: vec![crate::model::marketplace::HostTarget::Local],
+            marketplace_host_select,
+            _marketplace_host_changes: marketplace_host_changes,
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,
             bring_back: None,
+            close_confirm: None,
             delegate: None,
             theme_notice: None,
             _appearance_changes: appearance_changes,
@@ -547,9 +608,36 @@ impl Shell {
         self.dismiss_palette(window, cx);
         match action {
             PaletteAction::Command(Command::ToggleTheme) => self.toggle_app_theme(cx),
+            PaletteAction::OpenSession(id) => self.open_session(&id, cx),
             other => self.model.run_palette_action(&other),
         }
         cx.notify();
+    }
+
+    /// Opens a session and tells the service the person has seen what it reported. The store follows the service's
+    /// event; a refusal changes nothing, so the session just stays unread.
+    pub(crate) fn open_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.model.open_session(id);
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let state = self.store.read(cx).state();
+        let Some(session) = state.agents.iter().find(|session| session.id == id) else {
+            return;
+        };
+        if !crate::model::agent_sessions::is_unread(session, state.agent_seen) {
+            return;
+        }
+        // Name the activity shown, so a newer one that arrives meanwhile stays unread.
+        let at_ms = session.activity.as_ref().map(|activity| activity.at_ms);
+        let params = massorca_protocol::methods::agents::AgentMarkSeenParams {
+            session: id.to_owned(),
+            at_ms,
+        };
+        cx.spawn(async move |_, _| {
+            let _ = service.agent_mark_seen(params).await;
+        })
+        .detach();
     }
 
     /// Clears the query field and gives focus back to the control that opened the palette.
@@ -665,6 +753,11 @@ impl Render for Shell {
                 let state = self.store.read(cx).state();
                 crate::model::secret_vault::VaultPage::from_state(&state.secrets, &state.projects)
             },
+            requests: {
+                let state = self.store.read(cx).state();
+                crate::model::secret_requests::request_rows(&state.secrets, &state.projects)
+            },
+            request_notice: self.request_notice.clone(),
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),
@@ -849,6 +942,7 @@ impl Render for Shell {
         let marketplace_dialog = marketplace::dialog(self, &shell, cx);
         let bring_back_dialog = bring_back::dialog(self, &shell, cx);
         let delegate_dialog = delegate::dialog(self, &shell, cx);
+        let close_dialog = close_confirm::dialog(self, &shell, cx);
         let stop_terminal = self
             .stop_prompt
             .is_some()
@@ -923,5 +1017,6 @@ impl Render for Shell {
             .when_some(bring_back_dialog, |el, dialog| el.child(dialog))
             .when_some(delegate_dialog, |el, dialog| el.child(dialog))
             .when_some(stop_terminal, |el, dialog| el.child(dialog))
+            .when_some(close_dialog, |el, dialog| el.child(dialog))
     }
 }

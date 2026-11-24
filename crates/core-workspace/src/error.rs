@@ -58,6 +58,7 @@ impl From<GitError> for DomainError {
     fn from(error: GitError) -> Self {
         let code = match error {
             GitError::NotFound | GitError::Spawn(_) => codes::GIT_UNAVAILABLE,
+            GitError::TooOld { .. } => codes::GIT_TOO_OLD,
             GitError::Timeout { .. }
             | GitError::Failed { .. }
             | GitError::InvalidOutput { .. }

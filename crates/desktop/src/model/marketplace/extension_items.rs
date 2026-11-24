@@ -3,10 +3,10 @@
 //! from a folder or archive, which the catalogue does not list, is an item of its own.
 
 use massorca_protocol::methods::extensions::{
-    ExtensionItem, ExtensionState, Permission, RiskLevel, SourceKind,
+    ExtensionItem, ExtensionReview, ExtensionState, Permission, RiskLevel, SourceKind,
 };
 
-use super::service_source::SERVICE_HOST;
+use super::HostTarget;
 use super::types::{ItemKind, ItemState, MarketplaceItem, MarketplaceItemId};
 
 /// The first id an extension item takes. Agent kinds take the ids below it, one each.
@@ -38,11 +38,14 @@ impl ExtensionIds {
 /// The items of the extension packages: every catalogue entry, each installed package in its installed state in
 /// place of its entry, and each installed package the catalogue does not list. An agent package whose agent kind the
 /// service already lists is carried by that agent's item instead, so it is not listed twice.
+/// `reviews` are the update checks: an installed package whose review differs from its installed sha256 offers that
+/// review's version.
 pub fn extension_items(
     installed: &[ExtensionItem],
     catalogue: &[ExtensionItem],
     agent_kind_ids: &[String],
     ids: &mut ExtensionIds,
+    reviews: &[ExtensionReview],
 ) -> Vec<MarketplaceItem> {
     let in_catalogue = |id: &str| catalogue.iter().any(|entry| entry.id == id);
     let listed = catalogue.iter().map(|entry| {
@@ -57,7 +60,7 @@ pub fn extension_items(
     listed
         .chain(installed_only)
         .filter(|entry| !is_listed_agent(entry, agent_kind_ids))
-        .map(|entry| item(ids.id_of(&entry.id), entry))
+        .map(|entry| item(ids.id_of(&entry.id), entry, reviews))
         .collect()
 }
 
@@ -75,7 +78,11 @@ pub(super) fn provides_agent(entry: &ExtensionItem, kind: &str) -> bool {
     entry.listing.category == "agents" && entry.agents.iter().any(|agent| agent.id == kind)
 }
 
-fn item(id: MarketplaceItemId, entry: &ExtensionItem) -> MarketplaceItem {
+fn item(
+    id: MarketplaceItemId,
+    entry: &ExtensionItem,
+    reviews: &[ExtensionReview],
+) -> MarketplaceItem {
     let developer = entry.listing.developer.as_ref().map_or_else(
         || entry.publisher.clone(),
         |developer| developer.name.clone(),
@@ -90,8 +97,8 @@ fn item(id: MarketplaceItemId, entry: &ExtensionItem) -> MarketplaceItem {
         version: entry.version.clone(),
         description: entry.description.clone(),
         adds: Vec::new(),
-        state: state_of(entry.state),
-        host: SERVICE_HOST,
+        state: state_of(entry.state, update_version(entry, reviews)),
+        host: HostTarget::Local.id(),
         developer,
         category: kind.singular().to_owned(),
         permissions: permissions_text(&entry.permissions),
@@ -117,18 +124,28 @@ fn kind_of(category: &str) -> ItemKind {
 
 /// An installed package is on or off; an available one is not installed. A state from a newer service is not
 /// installed, because this build cannot tell what it is.
-pub(super) fn state_of(state: ExtensionState) -> ItemState {
+pub(super) fn state_of(state: ExtensionState, update: Option<String>) -> ItemState {
     match state {
         ExtensionState::Enabled => ItemState::Installed {
             enabled: true,
-            update: None,
+            update,
         },
         ExtensionState::Disabled => ItemState::Installed {
             enabled: false,
-            update: None,
+            update,
         },
         ExtensionState::Available | ExtensionState::Unknown => ItemState::NotInstalled,
     }
+}
+
+/// The version a review offers an installed package: a review of the same package whose sha256 differs from the
+/// installed one. An equal review is the installed package itself, so it offers nothing (decision 0062).
+pub(super) fn update_version(entry: &ExtensionItem, reviews: &[ExtensionReview]) -> Option<String> {
+    let installed = entry.installed.as_ref()?;
+    reviews
+        .iter()
+        .find(|review| review.id == entry.id && review.sha256 != installed.sha256)
+        .map(|review| review.version.clone())
 }
 
 /// The permissions as words, one per permission, or None when the package asks for none.
@@ -243,6 +260,9 @@ mod tests {
                 mention: None,
                 banner: None,
                 connections: Vec::new(),
+                website: None,
+                privacy: None,
+                terms: None,
             },
             permissions: Vec::new(),
             risk: Risk {
@@ -273,7 +293,13 @@ mod tests {
         kinds: &[&str],
     ) -> Vec<MarketplaceItem> {
         let kinds: Vec<String> = kinds.iter().map(|kind| (*kind).to_owned()).collect();
-        extension_items(installed, catalogue, &kinds, &mut ExtensionIds::default())
+        extension_items(
+            installed,
+            catalogue,
+            &kinds,
+            &mut ExtensionIds::default(),
+            &[],
+        )
     }
 
     #[test]
@@ -499,6 +525,21 @@ mod tests {
         let found = items(&[], &[entry], &[]);
         let rows = crate::model::marketplace::information(&found[0]);
         assert!(rows.contains(&("Risk", "High".to_owned())), "{rows:?}");
+    }
+
+    #[test]
+    fn a_packages_links_reach_its_item_information() {
+        let mut entry = package("acme.notes", "extensions", ExtensionState::Available);
+        entry.listing.website = Some("https://acme.example".to_owned());
+        entry.listing.terms = Some("https://acme.example/terms".to_owned());
+        let found = items(&[], &[entry], &[]);
+        assert_eq!(
+            crate::model::marketplace::information_links(&found[0]),
+            vec![
+                ("Website", "https://acme.example".to_owned()),
+                ("Terms of service", "https://acme.example/terms".to_owned()),
+            ]
+        );
     }
 
     #[test]

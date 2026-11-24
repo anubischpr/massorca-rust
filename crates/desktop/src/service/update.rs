@@ -15,12 +15,12 @@ use massorca_protocol::methods::extensions::ExtensionItem;
 use massorca_protocol::methods::git::log::GitLog;
 use massorca_protocol::methods::git::status::GitStatus;
 use massorca_protocol::methods::projects::Project;
-use massorca_protocol::methods::secrets::{SecretEntry, SecretStatus};
+use massorca_protocol::methods::secrets::{SecretEntry, SecretRequest, SecretStatus};
 use massorca_protocol::methods::terminals::Terminal;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use super::connection::ConnectionState;
-use super::extensions::ExtensionsRead;
+use super::extensions::{ExtensionsRead, HostMarketplaceRead};
 use super::refusal::Refusal;
 use super::teams::{TeamIds, TeamRecord, TeamsRead};
 
@@ -54,12 +54,16 @@ pub enum StoreUpdate {
     AgentQueuesResync(Option<Vec<AgentQueueList>>),
     /// One session's prompt queue as the service lists it now.
     AgentQueueChanged(AgentQueueList),
+    /// Whether the service offers seen state (`agent-seen/1`), read on each connect.
+    AgentSeenOffered(bool),
     /// What the git watch and the git calls learned about one workspace.
     Git(GitUpdate),
     /// What a Bot Teams read answered: every team with its Board, or why none could be listed.
     Teams(TeamsRead),
     /// What the extension reads learned: the installed packages and the catalogue, each replaced as a whole.
     Extensions(ExtensionsRead),
+    /// What a paired host's Marketplace reads answered; the newest answer per host is kept.
+    HostMarketplace(HostMarketplaceRead),
     /// Every setting the service declares with its value, after a connect. Replaces what was held.
     ConfigResync(Vec<ConfigValue>),
     /// One setting the service changed or stored, read again by its owner and key.
@@ -132,6 +136,8 @@ pub enum SecretsUpdate {
     Status(Result<SecretStatus, Refusal>),
     /// Every name in every scope, owned and linked, or why they could not be read.
     List(Result<Vec<SecretEntry>, Refusal>),
+    /// The requests still pending, or why they could not be read. Names, reasons and times only.
+    Requests(Result<Vec<SecretRequest>, Refusal>),
 }
 
 /// One answer about a workspace's git state (decisions 0010 and 0012). Each update replaces the part
@@ -179,6 +185,7 @@ pub struct WorkspaceGit {
 pub struct SecretsState {
     pub status: Option<Result<SecretStatus, Refusal>>,
     pub list: Option<Result<Vec<SecretEntry>, Refusal>>,
+    pub requests: Option<Result<Vec<SecretRequest>, Refusal>>,
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
@@ -219,11 +226,15 @@ pub struct StoreState {
     pub extension_read: u64,
     /// The installed packages and the catalogue, once read; `None` while the service cannot be asked.
     pub extensions: Option<ExtensionsRead>,
+    /// The newest Marketplace answer of each paired host, by host name.
+    pub host_listings: BTreeMap<String, HostMarketplaceRead>,
     /// Each kind's accounts as last listed, by kind id (decision 0059). Ids, labels and states only.
     pub accounts: BTreeMap<String, Result<Vec<AccountSummary>, Refusal>>,
     /// Each session's prompt queue, head first, by session id (decision 0084); a session with none is absent. `None`
     /// while the service offers no queue.
     pub agent_queues: Option<BTreeMap<String, Vec<QueuedPrompt>>>,
+    /// Whether the service offers seen state (`agent-seen/1`); without it no session is unread.
+    pub agent_seen: bool,
     /// The settings the service declares with their values, as the last read or change left them.
     pub config: Vec<ConfigValue>,
 }
@@ -250,8 +261,10 @@ impl Default for StoreState {
             secrets: SecretsState::default(),
             extension_read: 0,
             extensions: None,
+            host_listings: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_queues: None,
+            agent_seen: false,
             config: Vec::new(),
         }
     }
@@ -332,6 +345,7 @@ impl StoreState {
                         .collect()
                 });
             }
+            StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentQueueChanged(list) => {
                 if let Some(queues) = &mut self.agent_queues {
                     if list.items.is_empty() {
@@ -344,6 +358,7 @@ impl StoreState {
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
+            StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),
             StoreUpdate::ConfigResync(values) => self.config = values,
             StoreUpdate::ConfigChanged(value) => {
                 replace_by(&mut self.config, value, |held| {
@@ -370,6 +385,9 @@ impl StoreState {
             }
             StoreUpdate::Secrets(SecretsUpdate::List(result)) => {
                 self.secrets.list = Some(result);
+            }
+            StoreUpdate::Secrets(SecretsUpdate::Requests(result)) => {
+                self.secrets.requests = Some(result);
             }
             StoreUpdate::Accounts { kind, result } => {
                 self.accounts.insert(kind, result);
@@ -413,6 +431,18 @@ impl StoreState {
         }
         self.extension_read = read.number;
         self.extensions = Some(read);
+    }
+
+    /// Keeps the newest answer of each host, so an answer to an older request never replaces a newer one.
+    fn apply_host_marketplace(&mut self, read: HostMarketplaceRead) {
+        if self
+            .host_listings
+            .get(&read.host)
+            .is_some_and(|held| held.request > read.request)
+        {
+            return;
+        }
+        self.host_listings.insert(read.host.clone(), read);
     }
 
     /// Replaces the host records, keeping what each host's last check found. A host no longer listed is dropped.
@@ -640,6 +670,7 @@ mod tests {
 
     use super::fixtures::{agent, agent_kind, project, queued, team, workspace};
     use super::*;
+    use crate::service::extensions::HostListing;
 
     fn resynced() -> StoreState {
         let mut state = StoreState::default();
@@ -1122,5 +1153,24 @@ mod tests {
         state.apply(StoreUpdate::AgentQueueChanged(queue("s1", Vec::new())), now);
         state.apply(StoreUpdate::AgentGone("s2".into()), now);
         assert_eq!(held(&state), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_paired_host_keeps_the_newest_answer_not_the_last_one_to_arrive() {
+        let now = Instant::now();
+        let mut state = StoreState::default();
+        let newest = HostMarketplaceRead {
+            host: "vps".into(),
+            request: 2,
+            listing: HostListing::UpdateNeeded,
+        };
+        let older = HostMarketplaceRead {
+            host: "vps".into(),
+            request: 1,
+            listing: HostListing::UpdateNeeded,
+        };
+        state.apply(StoreUpdate::HostMarketplace(newest.clone()), now);
+        state.apply(StoreUpdate::HostMarketplace(older), now);
+        assert_eq!(state.host_listings.get("vps"), Some(&newest));
     }
 }

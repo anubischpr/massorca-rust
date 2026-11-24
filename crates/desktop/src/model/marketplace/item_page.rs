@@ -1,5 +1,5 @@
 //! The nine parts of a Marketplace item page in the owner's order (teams-extensions-settings.md 7.2,
-//! decision 0059): which parts an item has, and the rows each part shows.
+//! decision 0059): the parts in order, why a part does not apply to an item, and the rows each part shows.
 
 use massorca_protocol::methods::extensions::ExtensionItem;
 
@@ -37,23 +37,33 @@ impl Part {
     }
 }
 
-/// The parts an item shows, in order. Banner needs examples, Connection needs an agent and
-/// Advanced Options needs an installed item; the other parts always show.
-pub fn parts(item: &MarketplaceItem) -> Vec<Part> {
-    let mut parts = vec![Part::Logo, Part::Name, Part::Host];
-    if !item.examples.is_empty() {
-        parts.push(Part::Banner);
+/// Every part of the page, in order. A part that does not apply to an item stays in its place and says why.
+pub const PARTS: [Part; 9] = [
+    Part::Logo,
+    Part::Name,
+    Part::Host,
+    Part::Banner,
+    Part::Connection,
+    Part::Information,
+    Part::Settings,
+    Part::AdvancedOptions,
+    Part::DangerZone,
+];
+
+/// Why a part does not apply to the item, in one sentence; None when it applies.
+pub fn absent_reason(item: &MarketplaceItem, part: Part) -> Option<&'static str> {
+    match part {
+        Part::Banner if item.examples.is_empty() => {
+            Some("This item lists no example prompts, so there is nothing to invoke.")
+        }
+        Part::Connection if item.agent_kind.is_none() => {
+            Some("Only agents connect to accounts, so this item has no connection.")
+        }
+        Part::AdvancedOptions if !item.state.is_installed() => {
+            Some("Advanced options appear once the item is installed on this computer.")
+        }
+        _ => None,
     }
-    if item.agent_kind.is_some() {
-        parts.push(Part::Connection);
-    }
-    parts.push(Part::Information);
-    parts.push(Part::Settings);
-    if item.state.is_installed() {
-        parts.push(Part::AdvancedOptions);
-    }
-    parts.push(Part::DangerZone);
-    parts
 }
 
 /// The state chip beside the name. An installed agent shows its active account, and "Connected"
@@ -100,6 +110,21 @@ pub fn information(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
         rows.push(("Found on this PC", found.clone()));
     }
     rows
+}
+
+/// The links of the Information part: the website, privacy policy and terms the package names, each only when present.
+pub fn information_links(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
+    let Some(extension) = item.extension.as_deref() else {
+        return Vec::new();
+    };
+    [
+        ("Website", extension.listing.website.clone()),
+        ("Privacy policy", extension.listing.privacy.clone()),
+        ("Terms of service", extension.listing.terms.clone()),
+    ]
+    .into_iter()
+    .filter_map(|(label, url)| url.map(|url| (label, url)))
+    .collect()
 }
 
 /// The rows of the Settings part. They exist only once the item is installed; an agent's default
@@ -231,10 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn an_installed_agent_page_shows_the_nine_parts_in_the_owners_order() {
-        let claude = find(&sample(), 1);
+    fn the_page_has_the_nine_parts_in_the_owners_order() {
         assert_eq!(
-            parts(&claude),
+            PARTS,
             [
                 Part::Logo,
                 Part::Name,
@@ -250,32 +274,40 @@ mod tests {
     }
 
     #[test]
-    fn parts_follow_what_the_item_has() {
-        let snapshot = sample();
-        assert_eq!(
-            parts(&find(&snapshot, 3)),
-            [
-                Part::Logo,
-                Part::Name,
-                Part::Host,
-                Part::Banner,
-                Part::Information,
-                Part::Settings,
-                Part::DangerZone,
-            ],
-            "a plugin that is not installed has examples but no connection or advanced options"
+    fn the_banner_says_why_an_item_with_no_examples_has_none() {
+        let mut item = find(&sample(), 8);
+        assert!(
+            item.examples.is_empty(),
+            "the sample item lists no examples"
         );
         assert_eq!(
-            parts(&find(&snapshot, 8)),
-            [
-                Part::Logo,
-                Part::Name,
-                Part::Host,
-                Part::Information,
-                Part::Settings,
-                Part::AdvancedOptions,
-                Part::DangerZone,
-            ]
+            absent_reason(&item, Part::Banner),
+            Some("This item lists no example prompts, so there is nothing to invoke.")
+        );
+        item.examples = vec!["@Notes".to_owned()];
+        assert_eq!(absent_reason(&item, Part::Banner), None);
+    }
+
+    #[test]
+    fn the_connection_says_why_only_an_agent_has_one() {
+        let snapshot = sample();
+        assert_eq!(absent_reason(&find(&snapshot, 1), Part::Connection), None);
+        assert_eq!(
+            absent_reason(&find(&snapshot, 3), Part::Connection),
+            Some("Only agents connect to accounts, so this item has no connection.")
+        );
+    }
+
+    #[test]
+    fn advanced_options_say_why_an_item_not_installed_has_none() {
+        let snapshot = sample();
+        assert_eq!(
+            absent_reason(&find(&snapshot, 5), Part::AdvancedOptions),
+            None
+        );
+        assert_eq!(
+            absent_reason(&find(&snapshot, 3), Part::AdvancedOptions),
+            Some("Advanced options appear once the item is installed on this computer.")
         );
     }
 

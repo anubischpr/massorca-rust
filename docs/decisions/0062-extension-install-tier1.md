@@ -256,7 +256,8 @@ nine-part item page. There is no item-specific code:
 4. `listing.banner`
 5. `listing.connections`
 6. information: description, developer, category, version, publisher,
-   permissions with risk reasons, CLI source link
+   permissions with risk reasons, CLI source link, and the listing's website, privacy policy and terms of
+   service as links when present
 7. Settings `basic`
 8. Advanced Options
 9. Danger Zone: the uninstall effects

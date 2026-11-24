@@ -525,6 +525,8 @@ Footer (top `border.subtle`): Cancel (secondary) and the primary: Save secret, R
 
 **Accessibility.** The card is a group named "Secret request: OPENAI_API_KEY". The state is a live status line. The lock line is part of the group's description.
 
+**Desktop, first slice.** The pending requests sit in a "Waiting for you" block at the top of the Secret vault page (8.1), one card each: "<asker> needs <NAME> in <scope>", the reason, and the answers. Store a value opens the Add dialog with the name locked and the scope set; a team scope cannot take a value yet. Use the secret in <scope> links the name to a scope that already owns it (`secret.link`). Decline sends `secret.decline`. Each answer goes to the service only, and the card leaves when the vault is read again. The transcript card above is not built yet, so a request is answered from Settings for now.
+
 **Security.** Agent-supplied title, name and reason are untrusted: plain text, length-limited, the name validated (A29). The card holds the name, the scope label, the host label and a state enum, never a value.
 
 **Desktop and Android.** Desktop here. Android shows the same card in the session chat (M-CH-01).

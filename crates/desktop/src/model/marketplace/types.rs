@@ -7,9 +7,9 @@ use massorca_protocol::methods::extensions::ExtensionItem;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MarketplaceItemId(pub u32);
 
-/// A host an item runs on, such as This computer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct HostId(pub u32);
+/// A host an item runs on, by its stable key (see `HostTarget`): `local` for This computer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HostId(pub String);
 
 /// An agent account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -228,8 +228,8 @@ impl MarketplaceSnapshot {
         self.items.iter().find(|item| item.id == id)
     }
 
-    pub fn host(&self, id: HostId) -> Option<&Host> {
-        self.hosts.iter().find(|host| host.id == id)
+    pub fn host(&self, id: &HostId) -> Option<&Host> {
+        self.hosts.iter().find(|host| &host.id == id)
     }
 
     /// The accounts of one agent, in the order the source lists them.
