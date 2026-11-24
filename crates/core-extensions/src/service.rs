@@ -20,7 +20,9 @@ use crate::error::Error;
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
-use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir};
+use crate::lockfile::{
+    InstallerRun, LockCli, LockEntry, LockSource, Lockfile, SourceKind, sync_dir,
+};
 use crate::review::{self, CliPlan, PlanState, Review};
 use crate::source::{self, Files, LoadedPackage, Source};
 
