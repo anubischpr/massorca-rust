@@ -122,13 +122,8 @@ fn live_tasks(ids: &TeamIds, board: &Board) -> Vec<Task> {
 
 /// The agent a bot's kind names, when this build knows it.
 pub fn agent_of_kind(kind: &str) -> Option<Agent> {
-    match kind {
-        "claude" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
-        "antigravity" => Some(Agent::Antigravity),
-        "gentle-shell" => Some(Agent::GentleShell),
-        _ => None,
-    }
+    let agent = crate::model::agent_sessions::agent_of_kind(kind);
+    (agent != Agent::Unknown).then_some(agent)
 }
 
 /// The page's column for a protocol column.
@@ -154,6 +149,24 @@ mod tests {
     use crate::model::agent_kinds::{NOT_AVAILABLE_ON_HOST, TURNED_OFF};
     use crate::model::teams::BoardOwner;
     use crate::service::ProjectRecord;
+
+    #[test]
+    fn a_bot_kind_names_the_same_agent_as_a_session_kind() {
+        for kind in [
+            "claude",
+            "codex",
+            "antigravity",
+            "gentle-shell",
+            "gemini",
+            "opencode",
+            "cursor",
+            "my-own-kind",
+        ] {
+            let session = crate::model::agent_sessions::agent_of_kind(kind);
+            let expected = (session != Agent::Unknown).then_some(session);
+            assert_eq!(agent_of_kind(kind), expected, "{kind}");
+        }
+    }
     use crate::service::fixtures::agent_kind;
     use massorca_protocol::methods::agents::PackageState;
 

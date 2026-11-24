@@ -344,11 +344,14 @@ mod tests {
             Some(AgentKind::GentleShell)
         );
         assert_eq!(agent_mark(Some("claude")), Some(AgentKind::Claude));
+        assert_eq!(agent_mark(Some("gemini")), Some(AgentKind::Gemini));
+        assert_eq!(agent_mark(Some("opencode")), Some(AgentKind::OpenCode));
+        assert_eq!(agent_mark(Some("cursor")), Some(AgentKind::Cursor));
     }
 
     #[test]
-    fn a_kind_without_a_desktop_mark_and_a_non_agent_have_none() {
-        assert_eq!(agent_mark(Some("gemini")), None);
+    fn a_kind_without_a_mark_and_a_non_agent_have_none() {
+        assert_eq!(agent_mark(Some("my-own-kind")), None);
         assert_eq!(agent_mark(None), None);
     }
 }

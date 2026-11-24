@@ -96,6 +96,8 @@ mod marketplace_accounts_tests;
 #[cfg(test)]
 mod pairing_tests;
 #[cfg(test)]
+mod rail_tests;
+#[cfg(test)]
 mod seen_tests;
 #[cfg(test)]
 mod service_tests;
