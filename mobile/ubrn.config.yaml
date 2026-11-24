@@ -1,0 +1,30 @@
+# uniffi-bindgen-react-native configuration (decision 0080, task A7). Paths are relative to mobile/.
+# `npx ubrn build android --config ubrn.config.yaml --and-generate` builds the Rust library and writes the bindings;
+# see README.md for what is committed and what the build regenerates.
+rust:
+  directory: ..
+  manifestPath: crates/client-ffi/Cargo.toml
+
+bindings:
+  ts: src/generated
+  cpp: cpp/generated
+
+android:
+  directory: ./android
+  targets:
+    - arm64-v8a
+    - x86_64
+  cargoExtras:
+    - --locked
+  apiLevel: 24
+  jniLibs: app/src/main/jniLibs
+  packageName: dev.massorca.app.binding
+
+# The app's own root build.gradle is kept: the generated one is a library build for another project.
+noOverwrite:
+  - android/build.gradle
+
+turboModule:
+  cpp: cpp
+  ts: src
+  entrypoint: src/index.tsx
