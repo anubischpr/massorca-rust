@@ -11,6 +11,7 @@ use crate::error::GitError;
 use crate::git::Git;
 use crate::worktree_locks::fill_lock_reasons;
 use crate::worktree_porcelain::parse_worktree_list;
+use crate::worktree_prune::fill_prune_reasons;
 
 /// One worktree from `git worktree list --porcelain`. The first entry is the main worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,9 +26,9 @@ pub struct WorktreeEntry {
     /// Lock reason; `Some("")` when the worktree is locked without a reason. Git before
     /// 2.31 prints no `locked` line, so the reason comes from git's `locked` admin file.
     pub locked: Option<String>,
-    /// Why git could prune this worktree; `Some("")` when no reason is given. Do not use it
-    /// to find a missing workspace: check that its directory exists. Git before 2.31 never
-    /// reports it.
+    /// Why git could prune this worktree; `Some("")` when no reason is given. Git before 2.31 never
+    /// prints it, so the folder's absence fills it in (`worktree_prune`). Do not use it to find a
+    /// missing workspace: check that its directory exists.
     pub prunable: Option<String>,
 }
 
@@ -91,6 +92,7 @@ impl Git {
         let mut entries =
             parse_worktree_list(text).map_err(|reason| captured.invalid_output(reason))?;
         fill_lock_reasons(&mut entries);
+        fill_prune_reasons(&mut entries);
         Ok(entries)
     }
 
