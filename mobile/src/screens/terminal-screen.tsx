@@ -131,7 +131,8 @@ export function TerminalScreen({ host, terminal, workspace, onOpenDetails }: Ter
     };
   }, [connected, page, terminal, attempt]);
 
-  // The page takes no keystrokes while the host is out of contact or the process has ended, and it keeps the theme.
+  // The page takes no keystrokes while the host is out of contact or the process has ended (xterm also drops its cursor
+  // replies then; the host answers the queries it holds when the view comes back).
   useEffect(() => {
     if (pageReady) webRef.current?.injectJavaScript(readOnlyScript(readOnly));
   }, [pageReady, readOnly]);

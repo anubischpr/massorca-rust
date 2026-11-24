@@ -1,13 +1,11 @@
 // Terminal screen copy (screen spec 9.1). Host names are the names the phone gave the host.
 
 export const TERMINAL_TITLE = 'Terminal';
-export const STARTING_SHELL = 'Starting shell';
 export const LOADING_TERMINAL = (host: string): string => `Loading terminal. Starting the shell on ${host}.`;
 export const ENGINE_FAILED_TITLE = 'The terminal could not start';
 export const ENGINE_FAILED_LINE = (host: string): string =>
   `The terminal view failed to load on this phone. The agent keeps running on ${host}.`;
 export const ATTACH_FAILED_TITLE = 'Could not open the terminal';
-export const READ_ONLY_LINE = 'Input is paused until the host is reachable again.';
 export const TYPE_COMMAND = 'Type a command';
 export const SEND_TO_TERMINAL = 'Send to terminal';
 
