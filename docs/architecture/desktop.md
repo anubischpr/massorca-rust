@@ -205,8 +205,9 @@ Linux only. No automated run opens a visible window.
   Items carry a stable host key (`local`, `runtime:<name>`, `model/marketplace/host_target.rs`). A paired host's lists
   are read on its own connection, and each request carries its number: only the newest answer for the picked host is
   shown, so a late answer never replaces a newer pick. A pick whose host is not connected shows This computer and
-  returns when the host connects. The pick lives for the session only; no preference store holds it yet. Accounts
-  and update checks stay on This computer.
+  returns when the host connects. A pick is saved by its stable key in the UI state store (SET-02, `ui_state.rs`) and
+  restored at start; a saved host that is gone shows This computer without being overwritten. Accounts and update
+  checks stay on This computer.
 - Settings lists the installed agents from the same snapshot, each linking to its
   item page. Settings never installs anything. The Extensions row opens
   Marketplace > Installed.
