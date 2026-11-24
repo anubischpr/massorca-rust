@@ -67,6 +67,12 @@ fn bin_with_npm() -> tempfile::TempDir {
     bin
 }
 
+/// The body of a `.cmd` shim that runs the fake vendor with the arguments it is given.
+#[cfg(windows)]
+fn fake_cmd_body() -> String {
+    format!("@echo off\r\n\"{}\" %*\r\n", fake_vendor())
+}
+
 /// The package `acme.kit`, whose agent is `kitagent` and whose CLI is `acmecli`.
 pub const KIT: Package = Package::new("acme.kit", "kitagent", "acmecli");
 
@@ -190,6 +196,44 @@ impl Host {
 
     pub fn has_cli(&self, binary: &str) -> bool {
         self.cli_path(binary).exists()
+    }
+
+    /// A host whose `PATH` folder holds no vendor copies, so a test writes the `.cmd` shims it needs (Windows only).
+    #[cfg(windows)]
+    pub fn cmd_shims_only() -> Self {
+        Self {
+            sandbox: Sandbox::new(),
+            bin: tempfile::tempdir().expect("a bin folder"),
+            packages: tempfile::tempdir().expect("a packages folder"),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn cmd_path(&self, binary: &str) -> PathBuf {
+        self.bin.path().join(format!("{binary}.cmd"))
+    }
+
+    /// Writes `<bin>/<binary>.cmd`: a batch shim that runs the fake vendor, as npm's shim runs the CLI it installed.
+    #[cfg(windows)]
+    pub fn put_cmd_cli(&self, binary: &str) {
+        fs::write(self.cmd_path(binary), fake_cmd_body()).expect("the CLI shim is written");
+    }
+
+    #[cfg(windows)]
+    pub fn has_cmd_cli(&self, binary: &str) -> bool {
+        self.cmd_path(binary).exists()
+    }
+
+    /// Writes `<bin>/npm.cmd`: echoes its arguments, then leaves the `.cmd` shim of `cli` in its own folder, as npm does.
+    #[cfg(windows)]
+    pub fn put_npm_cmd(&self, cli: &str) {
+        let shim = self.packages.path().join(format!("{cli}.cmd.template"));
+        fs::write(&shim, fake_cmd_body()).expect("the shim npm writes is kept");
+        let script = format!(
+            "@echo off\r\necho fake-npm %*\r\ncopy /Y \"{}\" \"%~dp0{cli}.cmd\" >NUL\r\n",
+            shim.display()
+        );
+        fs::write(self.bin.path().join("npm.cmd"), script).expect("the npm shim is written");
     }
 
     /// A file the fake vendor appends to when a command runs, and where it would be.

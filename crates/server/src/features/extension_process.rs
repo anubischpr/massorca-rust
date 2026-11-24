@@ -846,4 +846,90 @@ mod tests {
             "{resolved:?}"
         );
     }
+
+    /// Windows' PATHEXT is upper case, so a `.cmd` shim is resolved and run under that spelling.
+    #[cfg(windows)]
+    fn windows_pathext() -> Option<String> {
+        Some(".COM;.EXE;.BAT;.CMD".to_owned())
+    }
+
+    /// The `.cmd` shim npm writes for a global install is found on a search path with Windows' upper-case PATHEXT.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_is_detected_under_windows_pathext() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        fs::write(dir.path().join("codex.cmd"), "@echo off\r\n").expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let resolved = host.resolve("codex").expect("the shim resolves");
+
+        assert!(
+            resolved
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&dir.path().join("codex.cmd").to_string_lossy()),
+            "{resolved:?}"
+        );
+    }
+
+    /// `npm install` through `npm.cmd`: the shim gets its arguments and its exit status is the installer's.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_runs_as_a_vendor_command_with_its_arguments() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        fs::write(
+            dir.path().join("npm.cmd"),
+            "@echo off\r\necho npm got [%1] [%2] [%3]\r\n",
+        )
+        .expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let exit = host
+            .run(
+                &strings(&["npm", "install", "-g", "@openai/codex"]),
+                &log,
+                LONG,
+            )
+            .expect("the shim runs");
+
+        assert!(exit.success(), "{exit:?}");
+        let text = fs::read_to_string(&log).expect("the log");
+        assert!(
+            text.contains("npm got [install] [-g] [@openai/codex]"),
+            "{text}"
+        );
+    }
+
+    /// A verify command that is a `.cmd` shim runs, and the exit status it returns decides the verify.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_shim_verify_reports_its_own_exit_status() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let log = dir.path().join("log");
+        fs::write(
+            dir.path().join("gentle-shell.cmd"),
+            "@echo off\r\nif \"%1\"==\"--version\" exit /b 0\r\nexit /b 2\r\n",
+        )
+        .expect("a shim");
+        let host = HostPrograms::searching(SearchEnv {
+            path: Some(dir.path().as_os_str().to_owned()),
+            pathext: windows_pathext(),
+        });
+
+        let passed = host
+            .run(&strings(&["gentle-shell", "--version"]), &log, LONG)
+            .expect("the shim runs");
+        let refused = host
+            .run(&strings(&["gentle-shell", "--check"]), &log, LONG)
+            .expect("the shim runs");
+
+        assert!(passed.success(), "{passed:?}");
+        assert_eq!(refused.code, Some(2), "{refused:?}");
+    }
 }
