@@ -5,6 +5,7 @@ pub mod agent_delegate;
 pub mod agent_kinds;
 pub mod agent_queue;
 pub mod agent_sessions;
+pub mod app_theme;
 pub mod canvas;
 pub mod devices;
 pub mod hosts;
