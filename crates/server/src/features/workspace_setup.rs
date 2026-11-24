@@ -1,5 +1,6 @@
 //! Runs a new worktree's setup script in a service terminal (decision 0086): every client can list and attach to it, so
-//! the script never runs unseen. Only `workspace.create`, which needs the `workspace` permission, calls this.
+//! the script never runs unseen. Only `workspace.create`, which needs the `workspace` permission, calls this, and only a
+//! script whose exact content the owner trusted runs (decision 0092).
 
 use std::path::{Path, PathBuf};
 
@@ -10,10 +11,12 @@ use massorca_core_workspace::setup::read_setup_script;
 use massorca_core_workspace::setup_runner::{
     Interpreters, RUNNER_DIR, RunnerHost, check_cmd_values, plan_runner, setup_env, write_runner,
 };
+use massorca_protocol::methods::projects::ScriptKind;
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceSetup};
 
 use crate::context::RequestCtx;
+use crate::features::script_trust;
 
 /// The setup terminal's title.
 const TITLE: &str = "Setup";
@@ -30,6 +33,7 @@ pub(crate) async fn start(
     }
     let domain = std::sync::Arc::clone(&ctx.state.workspaces);
     let terminals = ctx.state.terminals.clone();
+    let store = ctx.state.store.clone();
     let workspace = workspace.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let script = match read_setup_script(Path::new(&workspace.path)) {
@@ -40,10 +44,22 @@ pub(crate) async fn start(
         if no_setup {
             return Some(WorkspaceSetup::Skipped);
         }
-        let root = match domain.show_project(&workspace.project_id) {
-            Ok(project) => project.path,
+        let project = match domain.show_project(&workspace.project_id) {
+            Ok(project) => project,
             Err(error) => return Some(failed(&workspace, error.to_string())),
         };
+        match script_trust::untrusted(
+            &store,
+            &project,
+            ScriptKind::Setup,
+            &script,
+            Some(&workspace.name),
+        ) {
+            Ok(None) => {}
+            Ok(Some((reason, hash))) => return Some(WorkspaceSetup::Untrusted { reason, hash }),
+            Err(error) => return Some(failed(&workspace, error.message)),
+        }
+        let root = project.path;
         let runner_dir = match domain.git().repository_dirs(Path::new(&workspace.path)) {
             Ok((git_dir, _)) => git_dir.join(RUNNER_DIR),
             Err(error) => return Some(failed(&workspace, error.to_string())),
@@ -113,7 +129,7 @@ fn failed(workspace: &Workspace, reason: String) -> WorkspaceSetup {
 }
 
 /// The absolute interpreters a runner may use. Never a bare name: Windows would look in the workspace folder first.
-fn interpreters(env: &EnvSnapshot) -> Interpreters {
+pub(crate) fn interpreters(env: &EnvSnapshot) -> Interpreters {
     if cfg!(windows) {
         Interpreters {
             cmd: windows_cmd(env),

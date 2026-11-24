@@ -12,6 +12,7 @@ mod extensions;
 mod git;
 mod host;
 mod projects;
+mod script_trust;
 mod secret_params;
 mod secret_refusals;
 mod secrets;
@@ -55,6 +56,7 @@ pub(crate) fn register_core(
     handles.extend(host::register(registries)?);
     handles.extend(config::register(registries)?);
     handles.extend(projects::register(registries)?);
+    handles.extend(script_trust::register(registries)?);
     handles.extend(devices::register(registries)?);
     handles.extend(workspaces::register(registries)?);
     handles.extend(terminals::register(registries)?);
