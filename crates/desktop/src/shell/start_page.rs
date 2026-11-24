@@ -531,6 +531,7 @@ impl Shell {
                     Composer::new(picker, Vec::new(), cx)
                         .leading_control(switch)
                         .voice_unavailable(VOICE_LATER)
+                        .sends_empty()
                 });
                 let events = cx.subscribe(
                     &entity,
