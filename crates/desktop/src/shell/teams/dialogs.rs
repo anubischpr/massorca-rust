@@ -3,6 +3,7 @@
 //! with the reason, and nothing changes until the state accepts the change.
 
 use super::super::Shell;
+use super::new_project::{NewProjectDialog, new_project_view};
 use crate::model::agent_kinds::{
     KindChoice, bot_kind_choices, choice_at, first_available, sample_bot_kind_choices,
 };
@@ -127,6 +128,8 @@ pub(in crate::shell) enum TeamDialog {
     Team(TeamFormDialog),
     AddBot(AddBotDialog),
     EditBrief(EditBriefDialog),
+    /// The New project form of a team.
+    NewProject(NewProjectDialog),
 }
 
 /// A confirm before a Bot Teams item is deleted (X-DLG-01, destructive where it loses data).
@@ -151,7 +154,7 @@ pub(in crate::shell) enum TeamConfirm {
 }
 
 /// A field whose changes redraw the dialog, so its buttons follow what is typed. Enter submits.
-fn watched_field(
+pub(super) fn watched_field(
     label: &'static str,
     placeholder: &'static str,
     window: &mut Window,
@@ -369,6 +372,9 @@ impl Shell {
             (TeamDialog::EditBrief(dialog), Some(service)) => {
                 return self.send_edit_brief(service, dialog, cx);
             }
+            (TeamDialog::NewProject(dialog), Some(service)) => {
+                return self.send_new_project(service, dialog, cx);
+            }
             (dialog, _) => dialog,
         };
         self.team_dialog = match dialog {
@@ -393,6 +399,13 @@ impl Shell {
                     }
                 }
             }
+            TeamDialog::NewProject(mut dialog) => match self.save_project_locally(&dialog, cx) {
+                Ok(()) => None,
+                Err(error) => {
+                    dialog.error = Some(error.message().into());
+                    Some(TeamDialog::NewProject(dialog))
+                }
+            },
             TeamDialog::AddBot(mut dialog) => {
                 let result = self.model.teams_mut().add_bot(
                     dialog.team,
@@ -704,7 +717,7 @@ impl Shell {
 
     /// Closes a form the service accepted (`message` is `None`). Otherwise the form comes back with the message,
     /// unless another form has been opened meanwhile.
-    fn finish_team_dialog(
+    pub(super) fn finish_team_dialog(
         &mut self,
         mut form: TeamDialog,
         message: Option<SharedString>,
@@ -720,6 +733,7 @@ impl Shell {
             TeamDialog::Team(dialog) => dialog.error = Some(message),
             TeamDialog::AddBot(dialog) => dialog.error = Some(message),
             TeamDialog::EditBrief(dialog) => dialog.error = Some(message),
+            TeamDialog::NewProject(dialog) => dialog.error = Some(message),
         }
         self.team_dialog = Some(form);
         cx.notify();
@@ -905,6 +919,7 @@ pub(in crate::shell) fn team_dialog_view(
         TeamDialog::Team(form) => team_form_view(form, shell, cx),
         TeamDialog::AddBot(form) => add_bot_view(form, shell, cx),
         TeamDialog::EditBrief(form) => edit_brief_view(form, shell, cx),
+        TeamDialog::NewProject(form) => new_project_view(form, shell, cx),
     }
 }
 

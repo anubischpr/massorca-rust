@@ -15,7 +15,8 @@ use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
 use massorca_protocol::methods::teams::{
-    BotAddParams, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef, TeamUpdateParams,
+    BotAddParams, CodeSource, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef,
+    TeamUpdateParams,
 };
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
@@ -1017,5 +1018,90 @@ async fn a_team_removed_through_the_bridge_leaves_the_read_and_a_second_removal_
         matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
         "{refusal:?}"
     );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_project_added_through_the_bridge_is_stored_and_a_refused_one_is_not() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(&mut updates, &mut state, "the first read", |state| {
+        state.teams.is_some()
+    })
+    .await;
+    handle
+        .create_team(TeamCreateParams {
+            name: "Ops".to_owned(),
+            purpose: None,
+            character: None,
+            access: None,
+            workspaces: Some(false),
+        })
+        .await
+        .expect("the team is created");
+    until(&mut updates, &mut state, "the team to be read", |state| {
+        teams_view(state)
+            .teams()
+            .iter()
+            .any(|team| team.name == "Ops")
+    })
+    .await;
+    let team = team_key_named(&state, "Ops");
+
+    // A code source needs Workspaces in the team, so the service refuses this project and stores nothing.
+    let refusal = handle
+        .add_team_project(TeamProjectAddParams {
+            team: team.clone(),
+            name: "Checkout".to_owned(),
+            goal: None,
+            brief: None,
+            source_project: None,
+            code_source: Some(CodeSource::ExistingRepository),
+        })
+        .await
+        .expect_err("a code source needs Workspaces");
+    assert!(
+        matches!(&refusal, Refusal::Failed { message, .. } if message.contains("Workspaces")),
+        "{refusal:?}"
+    );
+
+    let project = handle
+        .add_team_project(TeamProjectAddParams {
+            team: team.clone(),
+            name: "Checkout".to_owned(),
+            goal: Some("Ship the cart".to_owned()),
+            brief: None,
+            source_project: None,
+            code_source: None,
+        })
+        .await
+        .expect("the project is added");
+    assert_eq!(project.name, "Checkout");
+    until(
+        &mut updates,
+        &mut state,
+        "the project to be read",
+        |state| {
+            teams_view(state).teams().iter().any(|team| {
+                team.projects
+                    .iter()
+                    .any(|project| project.name == "Checkout")
+            })
+        },
+    )
+    .await;
+    let listed = client_of(home.path())
+        .await
+        .team_project_list(&TeamRef { team })
+        .await
+        .expect("the projects are listed");
+    assert_eq!(
+        listed.projects.len(),
+        1,
+        "the refused project is not stored"
+    );
+    assert_eq!(listed.projects[0].goal, "Ship the cart");
     stop_service(service).await;
 }

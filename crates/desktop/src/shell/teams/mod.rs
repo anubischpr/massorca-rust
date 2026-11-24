@@ -7,6 +7,7 @@ mod dialogs;
 mod files;
 mod home;
 mod memory;
+mod new_project;
 mod project;
 mod routines;
 mod sidebar;

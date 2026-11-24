@@ -12,7 +12,8 @@ use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
     Board, BoardParams, Bot, BotAddParams, Team, TeamAccess, TeamCreateParams, TeamProject,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
+    TeamProjectAddParams, TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef,
+    TeamRemoveParams, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -162,6 +163,10 @@ pub(crate) enum TeamCommand {
         team: String,
         reply: oneshot::Sender<Result<Team, Refusal>>,
     },
+    AddProject {
+        params: TeamProjectAddParams,
+        reply: oneshot::Sender<Result<TeamProject, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -254,6 +259,11 @@ pub(super) fn spawn_call(
                 client.team_bot_add(&params).await
             });
         }
+        TeamCommand::AddProject { params, reply } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client.team_project_add(&params).await
+            });
+        }
     }
 }
 
@@ -273,6 +283,9 @@ pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::SaveBrief { reply, .. } | TeamCommand::DeleteProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        TeamCommand::AddProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }
@@ -357,6 +370,15 @@ impl ServiceHandle {
     /// the teams when the read that follows the answer lands.
     pub async fn remove_team(&self, team: String) -> Result<Team, Refusal> {
         self.ask(|reply| Command::Team(TeamCommand::RemoveTeam { team, reply }))
+            .await
+    }
+
+    /// `team.project_add`. The project shows when the read that follows the answer lands.
+    pub async fn add_team_project(
+        &self,
+        params: TeamProjectAddParams,
+    ) -> Result<TeamProject, Refusal> {
+        self.ask(|reply| Command::Team(TeamCommand::AddProject { params, reply }))
             .await
     }
 }
