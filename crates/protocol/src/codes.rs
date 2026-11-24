@@ -204,6 +204,14 @@ pub const AGENT_SECRETS_UNAVAILABLE: &str = "agent.secrets_unavailable";
 pub const AGENT_MODE_UNKNOWN: &str = "agent.mode_unknown";
 /// The mode has no launch arguments and its live switch cannot be sent at start, because the kind reports no idle state.
 pub const AGENT_MODE_UNAVAILABLE: &str = "agent.mode_unavailable";
+/// The session's kind has no status mechanism, so it has no prompt queue (decision 0084).
+pub const AGENT_QUEUE_UNAVAILABLE: &str = "agent.queue_unavailable";
+/// The session's queue already holds the most prompts it may (decision 0084).
+pub const AGENT_QUEUE_FULL: &str = "agent.queue_full";
+/// No queued prompt has the id (decision 0084).
+pub const AGENT_QUEUE_NOT_FOUND: &str = "agent.queue_not_found";
+/// The request id belongs to a prompt the session already delivered, so it is not typed again (decision 0084).
+pub const AGENT_QUEUE_ALREADY_DELIVERED: &str = "agent.queue_already_delivered";
 
 /// A team, bot or team project is named by a selector that matches none, or none of its own team.
 pub const TEAM_NOT_FOUND: &str = "team.not_found";
@@ -227,7 +235,8 @@ pub const BOT_NAME_IN_USE: &str = "bot.name_in_use";
 pub const BOT_LEAD_TAKEN: &str = "bot.lead_taken";
 /// The bot owns open tasks; it can be removed only with `unassign`.
 pub const BOT_HAS_TASKS: &str = "bot.has_tasks";
-/// `task.start` for a bot whose agent is still working on another task. The task stays where it was.
+/// No longer sent: hosts before decision 0072's 2026-11-23 amendment refused `task.start` for a bot working on another
+/// task. Kept so a client still names that answer from an older host.
 pub const BOT_BUSY: &str = "bot.busy";
 pub const TASK_NOT_FOUND: &str = "task.not_found";
 /// The task's agent session still runs; stop it first.

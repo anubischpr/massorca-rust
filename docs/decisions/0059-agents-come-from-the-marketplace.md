@@ -325,8 +325,11 @@ Account commands (check, sign-in, sign-out) judge the account's home only: for t
   `KindPackages` trait in `AgentsConfig`, and the extension runtime implements it, so
   `core-agents` takes no dependency on `core-extensions`. Each kind comes with its package id,
   version and state (`available`, `enabled` or `disabled`) and the declaration's JSON text, or an
-  error that names the package and the cause, never a path. Until the runtime lands, the default
-  `BuiltInPackages` provides the four compiled-in kinds as enabled packages `massorca.<kind>`.
+  error that names the package and the cause, never a path. The service reads them from the
+  profile's lockfile, so a built-in kind is `available` until its package is installed or adopted.
+  An unreadable lockfile lists the four built-ins in an `unknown` state with a declaration error, so
+  none of them runs. The default `BuiltInPackages`, which provides the four compiled-in kinds as
+  enabled packages `massorca.<kind>`, remains for `core-agents`'s own tests.
 - **Not enabled is its own error.** A kind whose package is available or disabled is refused with
   `agent.kind_not_enabled` (data `{ kind, package, state }`), not `agent.not_installed`, on a
   start, a delegation, a resume, and accounts add, import and activate. An account's check, its

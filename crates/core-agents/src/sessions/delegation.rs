@@ -194,6 +194,11 @@ impl Agents {
                 ),
             ));
         };
+        // Drained however this call ends: a merge that failed or a refused mark may have held the parent's queue (0084, D3).
+        let _drain = DrainParentQueue {
+            agents: self,
+            parent: parent_id.clone(),
+        };
         if let Some(token) = &params.token {
             self.check_run_token(&parent_id, token)?;
         }
@@ -252,7 +257,7 @@ impl Agents {
             )
         } else {
             let text = bring_back_prompt(&child, &child_workspace.name, merge_commit.as_deref());
-            match self.prompt(&parent.id, &text, false) {
+            match self.send_prompt(&parent.id, &text, false, false) {
                 Ok(_) => (true, None),
                 Err(error) => (
                     false,
@@ -463,6 +468,7 @@ impl Agents {
                 branch: None,
                 base: Some(base.clone()),
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: request_key.clone(),
             })
@@ -578,6 +584,18 @@ fn already_brought_back(session: &str) -> AgentError {
         codes::AGENT_ALREADY_BROUGHT_BACK,
         format!("session {session} was already brought back"),
     )
+}
+
+/// Drains a session's queue when it goes out of scope, so a bring-back drains the parent however it ends.
+struct DrainParentQueue<'a> {
+    agents: &'a Agents,
+    parent: String,
+}
+
+impl Drop for DrainParentQueue<'_> {
+    fn drop(&mut self) {
+        self.agents.drain_queue(&self.parent);
+    }
 }
 
 /// The prompt a parent run receives on a bring-back: the child, its workspace, the merge commit and the child's result.
@@ -751,6 +769,7 @@ then report"
                 account: None,
                 typed_since_report: false,
                 switching: false,
+                delivering: false,
             },
         );
     }
@@ -997,6 +1016,7 @@ then report"
                 branch: None,
                 base: None,
                 existing_branch: false,
+                refresh_base: false,
                 path: None,
                 request_id: None,
             })

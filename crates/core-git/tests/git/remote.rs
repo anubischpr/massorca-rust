@@ -393,3 +393,112 @@ fn a_closed_port_is_unreachable() {
         "{error}"
     );
 }
+
+/// Whether the ref `reference` exists in `repo`.
+fn has_ref(repo: &Path, reference: &str) -> bool {
+    massorca_process::command("git")
+        .args(["show-ref", "--verify", "--quiet", reference])
+        .current_dir(repo)
+        .status()
+        .expect("spawn git")
+        .success()
+}
+
+#[test]
+fn fetch_tracking_base_fetches_only_the_named_branch_and_prunes_nothing() {
+    let remotes = Remotes::new();
+    let repo = remotes.repo();
+    remotes.advance_remote("a.txt", "a\n");
+    run_git(&remotes.other, &["push", "-q", "origin", "main:topic"]);
+    // Tracks a branch the remote does not have: a prune would delete this ref.
+    let head = rev(&repo, "HEAD");
+    run_git(&repo, &["update-ref", "refs/remotes/origin/gone", &head]);
+
+    let fetched = git()
+        .fetch_tracking_base(&repo, "refs/remotes/origin/main", TIMEOUT)
+        .expect("fetch the base")
+        .expect("a remote-tracking base is fetched");
+
+    let names: Vec<_> = fetched
+        .updated
+        .iter()
+        .map(|change| change.name.as_str())
+        .collect();
+    assert_eq!(names, ["origin/main"]);
+    assert_eq!(
+        rev(&repo, "refs/remotes/origin/main"),
+        rev(&remotes.remote, "refs/heads/main")
+    );
+    assert!(
+        !has_ref(&repo, "refs/remotes/origin/topic"),
+        "topic was fetched"
+    );
+    assert!(has_ref(&repo, "refs/remotes/origin/gone"), "a prune ran");
+}
+
+#[test]
+fn fetch_tracking_base_ignores_every_base_that_is_not_a_configured_remote_branch() {
+    let remotes = Remotes::new();
+    let repo = remotes.repo();
+    // Every fetch would fail on this path, so a base that runs no fetch is `None`, never an error.
+    let gone = remotes.fixture.sibling("gone.git");
+    run_git(&repo, &["remote", "set-url", "origin", text(&gone)]);
+    let head = rev(&repo, "HEAD");
+    for base in [
+        "refs/heads/main",
+        head.as_str(),
+        "refs/remotes/nope/main",
+        "refs/remotes/origin/HEAD",
+        "origin/main",
+        "HEAD",
+    ] {
+        assert!(
+            git()
+                .fetch_tracking_base(&repo, base, TIMEOUT)
+                .expect("a base that is not fetched is not an error")
+                .is_none(),
+            "{base} was fetched"
+        );
+    }
+}
+
+#[test]
+fn fetch_tracking_base_matches_a_remote_whose_name_has_a_slash() {
+    let remotes = Remotes::new();
+    let repo = remotes.repo();
+    run_git(&repo, &["remote", "add", "a/b", text(&remotes.remote)]);
+    remotes.advance_remote("a.txt", "a\n");
+
+    let fetched = git()
+        .fetch_tracking_base(&repo, "refs/remotes/a/b/main", TIMEOUT)
+        .expect("fetch the base")
+        .expect("a configured remote's branch is fetched");
+    assert_eq!(fetched.updated.len(), 1);
+    assert_eq!(fetched.updated[0].name, "a/b/main");
+    assert_eq!(
+        rev(&repo, "refs/remotes/a/b/main"),
+        rev(&remotes.remote, "refs/heads/main")
+    );
+}
+
+#[test]
+fn a_failed_base_fetch_is_an_error_and_keeps_the_local_copy() {
+    let remotes = Remotes::new();
+    let repo = remotes.repo();
+    remotes.advance_remote("a.txt", "a\n");
+    let local = rev(&repo, "refs/remotes/origin/main");
+    let gone = remotes.fixture.sibling("gone.git");
+    run_git(&repo, &["remote", "set-url", "origin", text(&gone)]);
+
+    let error = git_failure(
+        git()
+            .fetch_tracking_base(&repo, "refs/remotes/origin/main", TIMEOUT)
+            .expect_err("the remote is gone"),
+    );
+    assert_eq!(
+        failure_code(&error),
+        Some(codes::GIT_REMOTE_NOT_FOUND),
+        "{error}"
+    );
+    assert_eq!(rev(&repo, "refs/remotes/origin/main"), local);
+}

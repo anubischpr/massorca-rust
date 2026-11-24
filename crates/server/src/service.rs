@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use interprocess::local_socket::{ListenerOptions, tokio::Listener};
 use massorca_core_agents::{
-    Agents, AgentsConfig, BuiltInPackages, Change, EnvProvider, Listener as ChangeListener,
-    ProvidedEnv, ProviderError,
+    Agents, AgentsConfig, Change, EnvProvider, Listener as ChangeListener, ProvidedEnv,
+    ProviderError,
 };
 use massorca_core_extensions::Extensions;
 use massorca_core_git::Git;
@@ -24,7 +24,7 @@ use massorca_profile::restrict_socket;
 use massorca_profile::{Profile, RootAccess, ensure_dir, local_socket_name, secure_root};
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
 };
 use massorca_protocol::methods::service::ServiceInfo;
 use tokio::sync::broadcast;
@@ -40,6 +40,7 @@ use crate::event_bus::EventBus;
 use crate::features;
 use crate::features::extension_process::HostPrograms;
 use crate::instance_lock;
+use crate::kind_packages::{ExtensionKindPackages, prepare_builtin_agents};
 use crate::network::{self, NetworkConfig};
 use crate::service_json;
 use crate::shutdown::{self, ShutdownHandle};
@@ -160,6 +161,12 @@ impl Service {
             profile.dir().join("vault"),
             vault_options.force_file,
         ));
+        let host_programs = Arc::new(HostPrograms::default());
+        let extensions = Arc::new(Extensions::new(
+            &profile,
+            host_programs.clone(),
+            host_programs,
+        ));
         let agents = Agents::new(AgentsConfig {
             store: store.clone(),
             terminals: terminals.clone(),
@@ -167,7 +174,7 @@ impl Service {
             profile_dir: profile.dir().to_path_buf(),
             massorca_bin: std::env::current_exe()?,
             env_provider: Some(vault_env_provider(Arc::clone(&vault))),
-            kind_packages: Arc::new(BuiltInPackages),
+            kind_packages: Arc::new(ExtensionKindPackages::new(profile.clone())),
         });
         // No run survives the previous service (0051); nothing has started one yet in this service.
         let marker = agents.clone();
@@ -182,15 +189,18 @@ impl Service {
             .await
             .map_err(io::Error::other)?;
         timings.mark("agent homes");
+        // After the sweep, so the kinds its accounts name count as used (decision 0063).
+        let (adopter, adopter_store, adopter_profile) =
+            (Arc::clone(&extensions), store.clone(), profile.clone());
+        tokio::task::spawn_blocking(move || {
+            prepare_builtin_agents(&adopter, &adopter_store, &adopter_profile);
+        })
+        .await
+        .map_err(io::Error::other)?;
+        timings.mark("built-in agents");
         let events = EventBus::new();
         let (agent_changes, _) = broadcast::channel(AGENT_CHANGES_CAPACITY);
         agents.set_listener(agent_listener(events.clone(), agent_changes.clone()));
-        let host_programs = Arc::new(HostPrograms::default());
-        let extensions = Arc::new(Extensions::new(
-            &profile,
-            host_programs.clone(),
-            host_programs,
-        ));
         let state = Arc::new(AppState {
             profile: profile.clone(),
             store,
@@ -270,6 +280,14 @@ fn agent_listener(events: EventBus, changes: broadcast::Sender<Change>) -> Chang
                 events.publish(ChangeEvent {
                     topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
                     id: account.kind.clone(),
+                });
+                return;
+            }
+            // A queue change is announced under its session; no session record changed, so no watcher gets it (0084).
+            Change::Queue(session) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_AGENT_QUEUE_CHANGED.to_owned(),
+                    id: session.clone(),
                 });
                 return;
             }
@@ -391,4 +409,50 @@ fn vault_env_provider(vault: Arc<Vault>) -> EnvProvider {
                 .collect(),
         ))
     })
+}
+
+#[cfg(test)]
+mod agent_queue_event_tests {
+    use std::time::Duration;
+
+    use massorca_core_agents::Change;
+    use massorca_protocol::methods::events::{ChangeEvent, TOPIC_AGENT_QUEUE_CHANGED};
+    use tokio::sync::broadcast;
+
+    use super::agent_listener;
+    use crate::event_bus::EventBus;
+
+    /// A queue change reaches the event bus as `agent.queue_changed` under its session id, and no `agent.watch` stream
+    /// gets it (decision 0084).
+    #[test]
+    fn a_queue_change_reaches_the_event_bus_under_its_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        runtime.block_on(async {
+            let events = EventBus::new();
+            let (changes, mut watcher) = broadcast::channel(8);
+            let mut subscription = events.subscribe();
+            let listener = agent_listener(events.clone(), changes);
+
+            listener(Change::Queue("session-1".to_owned()));
+
+            let event = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+                .await
+                .expect("the event arrives")
+                .expect("the bus is open");
+            assert_eq!(
+                event,
+                ChangeEvent {
+                    topic: TOPIC_AGENT_QUEUE_CHANGED.to_owned(),
+                    id: "session-1".to_owned(),
+                }
+            );
+            assert!(
+                watcher.try_recv().is_err(),
+                "no watcher receives a queue change"
+            );
+        });
+    }
 }

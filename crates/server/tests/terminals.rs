@@ -134,6 +134,7 @@ async fn workspace(client: &Client, home: &Path) -> Workspace {
             branch: None,
             base: None,
             existing_branch: false,
+            refresh_base: false,
             path: None,
             request_id: None,
         })

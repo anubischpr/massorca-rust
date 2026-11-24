@@ -10,8 +10,12 @@ pub const TOPIC_WORKSPACE_REMOVING: &str = "workspace.removing";
 pub const TOPIC_WORKSPACE_REMOVED: &str = "workspace.removed";
 pub const TOPIC_PROJECT_ADDED: &str = "project.added";
 pub const TOPIC_PROJECT_REMOVED: &str = "project.removed";
+/// A project's base was set or cleared; the id is the project id.
+pub const TOPIC_PROJECT_CHANGED: &str = "project.changed";
 /// An agent session was started, changed, stopped or forgotten; the id is the session id.
 pub const TOPIC_AGENT_CHANGED: &str = "agent.changed";
+/// A session's prompt queue changed; the id is the session id (decision 0084). Not sent to `agent.watch` streams.
+pub const TOPIC_AGENT_QUEUE_CHANGED: &str = "agent.queue_changed";
 /// A setting's value changed. The id is `<owner>/<key>`; the event carries no value.
 pub const TOPIC_CONFIG_CHANGED: &str = "config.changed";
 /// A team, bot or team project changed; the id is the team id.

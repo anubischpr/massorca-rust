@@ -30,7 +30,7 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
   kinds/*.json            declared kinds (owner `user`)
   homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
   accounts/<kind>/<id>/   credential home per account (0059)
-  runs/<session>/         generated hook settings for a run (0053)
+  runs/<session>/         generated hook settings for a run (0053); `starting` while a start is unsettled
 ```
 
 ## Kind packages (decision 0059)
@@ -42,7 +42,10 @@ The catalog (`catalog.rs`) is read again on every call from two sources, in this
    `state` is the protocol's `PackageState` (`available`, `enabled`, `disabled`), and `decl` is the
    declaration's JSON text, or an error that names the package and the cause, never a path. The
    default, `BuiltInPackages`, returns the four compiled-in declarations as `enabled` packages
-   `massorca.<kind>` at the crate version; the extension runtime replaces it. A kind from a
+   `massorca.<kind>` at the crate version, for `core-agents`'s own tests. The service uses
+   `ExtensionKindPackages` (`crates/server/src/kind_packages.rs`), which reads the profile's
+   lockfile through `package_agent_kinds` on every load; an unreadable lockfile lists the built-ins
+   as `unknown` with a declaration error. A kind from a
    `massorca.*` package has owner `core`; any other package's kind has owner `ext:<package id>`.
    A declaration error, a declaration that does not parse, or one whose id is not the package's
    `kind_id` is listed in `problems`, so the kind is listed and never started.
@@ -301,6 +304,57 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+### Crash-safe start
+
+A start or resume is recorded before its program starts and settled after: the service writes an
+empty `starting` file in the run's directory, starts the terminal, records the run in the session
+row (a new row for `agent.start`, the new terminal for `agent.resume`), and only then removes the
+file. A service that dies in between leaves the file. Its program does not outlive it (0051: a job
+object per terminal on Windows, the session on Unix).
+
+The next service start settles every marked directory before it serves. With no session row, the
+start never reached its row: the directory, which may hold the run's hook token and launch files, is
+deleted, so a retry with the same `request_id` starts afresh instead of finding a session with no
+run. With a row, the start or resume was recorded and only the mark is removed; the row is marked
+stale like any other run of the previous service.
+
+The CLI tests reach both points through `MASSORCA_TEST_CRASH_AT` (`agent-start-spawned`,
+`agent-resume-spawned`), which makes the service exit there at once, as a crash would. It is inert
+unless set.
+
+## Prompt queue (decision 0084)
+
+A session's queue holds the prompts a person queued while its agent was busy, in position order, in the
+`agent_prompt_queue` table. The service keeps it, so it survives a client restart and serves every client.
+
+- `agent.queue {session, text, request_id?}` queues a prompt and returns it. A `request_id` the session already queued
+  returns the prompt it queued then.
+- `agent.queue.list {session}` returns `{session, items}`, head first.
+- `agent.queue.edit {id, text}` and `agent.queue.remove {id}` change or remove a waiting or failed prompt and return it.
+  A prompt being sent is refused with `agent.busy`.
+
+A `QueuedPrompt` has `id`, `session`, `position` (from 1), `text`, `state` (`waiting`, `sending`, `failed`), `reason`
+and `created_at_ms` / `updated_at_ms`. The reason of a waiting prompt is `busy`, `asking`, `paused_stopped`,
+`paused_restarted` or `behind_failed`; the reason of a failed prompt is why its delivery failed. Constants:
+`QUEUE_REASON_*` in `massorca_protocol::methods::agents`.
+
+Refusals: `agent.queue_already_delivered` for a request id the session delivered recently (the last 100, decision 0084,
+D11); `agent.queue_unavailable` for a kind that declares no status mechanism (or is not declared), so it has no
+queue; `agent.queue_full` past 100 prompts; `agent.queue_not_found` for an unknown prompt id; `agent.prompt_invalid` for
+a text `agent.prompt` would refuse. Capability `agent-queue/1`. Every change publishes `agent.queue_changed` with the
+session id; `agent.watch` streams do not carry queue items.
+
+Delivery: the head of a queue is typed when its agent turns `idle` or `done`, through the prompt guards (merging,
+switching, readiness, typed since the last report). One prompt goes per step, so the next waits for the next report. A
+queue holds while the agent asks the person something (reason `asking`), and `agent.queue.send_now` is refused then. A
+prompt that cannot be typed becomes `failed` with its reason and holds everything behind it; nothing retries, and
+`remove` or `send_now` clears it. A stop by the person pauses the waiting prompts (`paused_stopped`); a service restart
+pauses them (`paused_restarted`) and fails a prompt being sent. An accepted `agent.prompt`, `agent.queue.send_now` or
+`agent.queue.resume` lifts the pauses; a resumed run does not deliver paused prompts by itself.
+`agent.queue.send_now` types one prompt at once with force, ahead of the queue, and refuses while the run is switching a
+mode or a merge holds its workspace. Calls: `agent.queue.send_now {id}` returns the prompt as it was, and
+`agent.queue.resume {session}` returns the queue as it is after the lift.
 
 ## Delegation
 

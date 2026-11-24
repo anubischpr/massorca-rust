@@ -14,6 +14,7 @@ mod event_bus;
 mod features;
 mod handshake;
 mod instance_lock;
+mod kind_packages;
 mod method;
 mod names;
 mod network;

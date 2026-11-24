@@ -119,6 +119,13 @@ const ERROR_CODES: &[(&str, &str)] = &[
     ),
     (codes::AGENT_MODE_UNKNOWN, "agent.mode_unknown"),
     (codes::AGENT_MODE_UNAVAILABLE, "agent.mode_unavailable"),
+    (codes::AGENT_QUEUE_UNAVAILABLE, "agent.queue_unavailable"),
+    (codes::AGENT_QUEUE_FULL, "agent.queue_full"),
+    (codes::AGENT_QUEUE_NOT_FOUND, "agent.queue_not_found"),
+    (
+        codes::AGENT_QUEUE_ALREADY_DELIVERED,
+        "agent.queue_already_delivered",
+    ),
     (codes::TEAM_NOT_FOUND, "team.not_found"),
     (codes::TEAM_NAME_IN_USE, "team.name_in_use"),
     (codes::TEAM_PROJECT_NOT_FOUND, "team.project_not_found"),
@@ -163,5 +170,6 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::BINARY_FRAMES, "binary-frames/1");
     assert_eq!(capabilities::AGENTS, "agents/1");
     assert_eq!(capabilities::AGENT_MODES, "agent-modes/1");
+    assert_eq!(capabilities::AGENT_QUEUE, "agent-queue/1");
     assert_eq!(capabilities::TEAMS, "teams/1");
 }

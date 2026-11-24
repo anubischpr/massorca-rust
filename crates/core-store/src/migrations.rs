@@ -394,6 +394,47 @@ ALTER TABLE agent_sessions ADD COLUMN pending_permission_mode TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // Queued prompts (decision 0084): the prompts a person queued for a session while its agent was busy, delivered in
+    // position order. A session's queue is removed with the session.
+    Migration {
+        sql: r#"
+CREATE TABLE agent_prompt_queue (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK(position >= 1),
+    text TEXT NOT NULL,
+    request_id TEXT,
+    state TEXT NOT NULL CHECK(state IN ('waiting','sending','failed')),
+    reason TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, position),
+    UNIQUE(session_id, request_id)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // Who queued a prompt (decision 0084, D7): whether its caller held host-admin scope, checked again before it is typed.
+    // The request ids of the prompts a session delivered are kept, so a retry after a lost answer is not typed twice (0084).
+    Migration {
+        sql: r#"
+ALTER TABLE agent_prompt_queue ADD COLUMN host_admin INTEGER NOT NULL DEFAULT 0 CHECK(host_admin IN (0,1));
+CREATE TABLE agent_prompt_delivered (
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL,
+    delivered_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(session_id, request_id)
+);
+"#,
+        foreign_keys_off: false,
+    },
+    // A project's base branch, which a new workspace starts from when it names none (WS-04).
+    Migration {
+        sql: r#"
+ALTER TABLE projects ADD COLUMN base_ref TEXT;
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;
