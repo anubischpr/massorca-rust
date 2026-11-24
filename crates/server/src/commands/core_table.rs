@@ -470,6 +470,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "agent.seen",
+            "Mark an agent session's waiting or done state as seen",
+            "agent.mark_seen",
+            selector("session"),
+        ),
+        command(
             "agent.forget",
             "Forget an agent session whose run has ended",
             "agent.forget",

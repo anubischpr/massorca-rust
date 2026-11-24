@@ -191,6 +191,7 @@ mod tests {
                 outcome,
                 source: ActivitySource::Hook,
                 at_ms: 2,
+                seen_at_ms: None,
             }),
             result: None,
             holds_secrets: false,

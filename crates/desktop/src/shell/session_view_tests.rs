@@ -125,6 +125,7 @@ fn s1(ended: bool, state: Option<ActivityState>) -> AgentSession {
         outcome: None,
         source: ActivitySource::Hook,
         at_ms: 1,
+        seen_at_ms: None,
     });
     session
 }
