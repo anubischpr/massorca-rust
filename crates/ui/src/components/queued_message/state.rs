@@ -11,6 +11,21 @@ pub enum WaitReason {
     AgentBusy,
     /// The host has not confirmed the session state; it sends when the host reconnects.
     HostUnconfirmed,
+    /// The agent is asking the person something; nothing is typed into a question.
+    AgentAsking,
+    /// The person stopped the agent; the queue holds until it is resumed.
+    PausedByStop,
+    /// The service restarted; the queue holds until it is resumed.
+    PausedByRestart,
+    /// A message ahead of it was not sent; it holds until that one is sent or removed.
+    BehindFailed,
+}
+
+impl WaitReason {
+    /// A pause that only the person's resume, prompt or send now lifts.
+    pub fn is_paused(self) -> bool {
+        matches!(self, Self::PausedByStop | Self::PausedByRestart)
+    }
 }
 
 /// Where a queued message is.
@@ -109,8 +124,37 @@ pub fn caption(status: &QueueStatus) -> SharedString {
         QueueStatus::Waiting(WaitReason::HostUnconfirmed) => {
             "Waits for VPS to confirm. Sends when it reconnects.".into()
         }
+        QueueStatus::Waiting(WaitReason::AgentAsking) => {
+            "Waits while the agent asks you something".into()
+        }
+        QueueStatus::Waiting(WaitReason::PausedByStop) => {
+            "Paused because the agent was stopped".into()
+        }
+        QueueStatus::Waiting(WaitReason::PausedByRestart) => {
+            "Paused because the service restarted".into()
+        }
+        QueueStatus::Waiting(WaitReason::BehindFailed) => {
+            "Waits behind a message that was not sent".into()
+        }
         QueueStatus::Sending => "Sending".into(),
         QueueStatus::Failed(reason) => format!("Not sent: {reason}").into(),
+    }
+}
+
+/// Whether any queued message is paused, so the dock offers Resume.
+pub fn queue_paused(items: &[QueuedItem]) -> bool {
+    items
+        .iter()
+        .any(|item| matches!(item.status, QueueStatus::Waiting(reason) if reason.is_paused()))
+}
+
+/// Why Send now is off for a message in `status`, or `None` when it may be sent at once.
+pub fn send_now_blocked(status: &QueueStatus) -> Option<&'static str> {
+    match status {
+        QueueStatus::Waiting(WaitReason::HostUnconfirmed) => Some("Waits for VPS to confirm"),
+        QueueStatus::Waiting(WaitReason::AgentAsking) => Some("Answer the agent's question first"),
+        QueueStatus::Sending => Some("Already sending"),
+        QueueStatus::Waiting(_) | QueueStatus::Failed(_) => None,
     }
 }
 
@@ -135,6 +179,8 @@ pub enum QueuedMessagesEvent {
     Removed(u64),
     /// The user asked to send a failed message again.
     Retry(u64),
+    /// The user asked to lift the queue's pause.
+    Resume,
 }
 
 #[cfg(test)]
@@ -170,6 +216,29 @@ mod tests {
         assert_eq!(
             caption(&QueueStatus::Failed("timeout".into())).as_ref(),
             "Not sent: timeout"
+        );
+    }
+
+    #[test]
+    fn a_paused_queue_offers_resume_and_send_now_waits_for_a_question() {
+        let waiting = |reason| QueuedItem {
+            id: 1,
+            text: "m".into(),
+            status: QueueStatus::Waiting(reason),
+        };
+        assert!(!queue_paused(&[waiting(WaitReason::AgentBusy)]));
+        assert!(queue_paused(&[
+            waiting(WaitReason::AgentBusy),
+            waiting(WaitReason::PausedByRestart)
+        ]));
+        assert!(queue_paused(&[waiting(WaitReason::PausedByStop)]));
+        assert_eq!(
+            send_now_blocked(&QueueStatus::Waiting(WaitReason::PausedByStop)),
+            None
+        );
+        assert_eq!(
+            send_now_blocked(&QueueStatus::Waiting(WaitReason::AgentAsking)),
+            Some("Answer the agent's question first")
         );
     }
 
