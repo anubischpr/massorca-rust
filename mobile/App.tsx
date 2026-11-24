@@ -4,6 +4,7 @@ import { getBinding } from './src/binding';
 import { BindingProvider } from './src/binding/binding-context';
 import type { MassOrcaBinding } from './src/binding/types';
 import { AppNavigator } from './src/navigation/app-navigator';
+import { HostStoreProvider } from './src/state/host-store-context';
 
 export interface AppProps {
   /** Tests pass a FakeMassOrca; the app uses the native binding behind the seam in src/binding. */
@@ -15,7 +16,9 @@ export default function App({ binding }: AppProps) {
   return (
     <SafeAreaProvider>
       <BindingProvider binding={resolved}>
-        <AppNavigator />
+        <HostStoreProvider binding={resolved}>
+          <AppNavigator />
+        </HostStoreProvider>
       </BindingProvider>
     </SafeAreaProvider>
   );
