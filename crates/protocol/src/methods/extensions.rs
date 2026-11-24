@@ -20,6 +20,10 @@ pub const INSTALL: &str = "extensions.install";
 pub const SET_ENABLED: &str = "extensions.set_enabled";
 /// Params: [`ExtensionRemoveParams`]. Result: [`ExtensionRemoved`]. Can run a vendor program on the host.
 pub const REMOVE: &str = "extensions.remove";
+/// Params: [`ExtensionUpdateParams`]. Result: [`ExtensionInstalled`], the package as updated. Runs no vendor command.
+/// An installed package already in place is refused with `extension.up_to_date`. Added after `extensions/1`: an older
+/// host answers `method.not_found`.
+pub const UPDATE: &str = "extensions.update";
 
 /// Selector for `extensions.get`: a package id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +71,23 @@ pub struct ExtensionInstallParams {
     pub sha256: Option<String>,
     /// The run token of the agent that sent this request, when an agent sent it. The CLI sets it from its environment.
     /// A request carrying one may not run a vendor installer (`extension.needs_person`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+}
+
+/// Params of `extensions.update`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionUpdateParams {
+    pub id: String,
+    /// The `consent` fingerprint of the package's new review. A built-in needs none; any other changed package is refused
+    /// without it (`extension.consent_required`, or `extension.consent_mismatch` for a stale one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<String>,
+    /// Pins the new archive. Required when the package came from a `file:` source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// The run token of the agent that sent this request, when an agent sent it. A request carrying one may not update
+    /// (`extension.needs_person`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_token: Option<String>,
 }

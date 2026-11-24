@@ -142,6 +142,7 @@ const ERROR_CODES: &[(&str, &str)] = &[
     (codes::BOT_HAS_TASKS, "bot.has_tasks"),
     (codes::TASK_NOT_FOUND, "task.not_found"),
     (codes::TASK_RUNNING, "task.running"),
+    (codes::EXTENSION_UP_TO_DATE, "extension.up_to_date"),
     (codes::EXTENSION_PREFIX, "extension."),
 ];
 

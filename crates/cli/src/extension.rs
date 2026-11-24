@@ -2,7 +2,7 @@
 //!
 //! The CLI never prompts. `install` without `--yes` prints the review and fails with `extension.consent_required`;
 //! `--yes` accepts the review it just printed, `--consent <FINGERPRINT>` accepts exactly the review an earlier run
-//! printed, and `--yes-run-installer` also accepts running the vendor command.
+//! printed, and `--yes-run-installer` also accepts running the vendor command. `update` takes the same consent.
 
 use std::path::Path;
 
@@ -11,14 +11,16 @@ use massorca_client::Client;
 use massorca_protocol::codes;
 use massorca_protocol::methods::extensions::{
     CliPlanState, ExtensionInstallParams, ExtensionRemoveParams, ExtensionReview,
-    ExtensionSetEnabledParams, ExtensionState,
+    ExtensionSetEnabledParams, ExtensionState, ExtensionUpdateParams, SourceKind, SourceRef,
 };
+use serde_json::json;
 
 use crate::agent_hook::{ENV_SESSION, ENV_TOKEN};
 use crate::connect::connect;
 use crate::error::{CliError, exit};
 use crate::extension_text::{
-    command_text, installed_lines, item_lines, item_rows, removed_lines, review_lines, state_text,
+    UNINSTALL_CLI_WARNING, command_text, installed_lines, item_lines, item_rows, removed_lines,
+    review_lines, state_text,
 };
 use crate::output::Output;
 use crate::target::Target;
@@ -41,6 +43,9 @@ pub enum ExtensionCommand {
     },
     /// Installs a package. Without --yes it prints the review and fails with extension.consent_required.
     Install(InstallArgs),
+    /// Updates an installed package to its source's current version, in place. Without --yes it prints the new review
+    /// and fails with extension.consent_required. Runs no vendor command; an unchanged package is already up to date.
+    Update(UpdateArgs),
     /// Enables an installed extension.
     Enable {
         /// Package id.
@@ -92,6 +97,22 @@ pub struct RemoveArgs {
     pub yes: bool,
 }
 
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("accept").args(["yes", "consent"])))]
+pub struct UpdateArgs {
+    /// Package id, such as massorca.claude.
+    pub id: String,
+    /// Required for a file: package: the archive's SHA-256, as published.
+    #[arg(long, value_name = "HEX")]
+    pub sha256: Option<String>,
+    /// Accepts the review this command prints: the risk and the permissions of the new version.
+    #[arg(long)]
+    pub yes: bool,
+    /// Accepts the review an earlier run printed, by its consent fingerprint. The update fails if anything changed.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub consent: Option<String>,
+}
+
 /// Runs one `extension` subcommand against the service `target` names.
 pub async fn execute(
     target: &Target,
@@ -129,6 +150,7 @@ pub async fn execute(
             output.success(&review, &review_lines(&review));
         }
         ExtensionCommand::Install(args) => install(&client, target, args, output).await?,
+        ExtensionCommand::Update(args) => update(&client, args, output).await?,
         ExtensionCommand::Enable { id } => set_enabled(&client, id, true, output).await?,
         ExtensionCommand::Disable { id } => set_enabled(&client, id, false, output).await?,
         ExtensionCommand::Remove(args) => remove(&client, args, output).await?,
@@ -296,6 +318,9 @@ fn agent_refusal(command: &ExtensionCommand) -> Option<CliError> {
         ExtensionCommand::Install(args) if args.yes_run_installer => {
             "an agent cannot run a vendor installer; ask the person to run the command"
         }
+        ExtensionCommand::Update(_) => {
+            "an agent cannot update an extension; ask the person to run the command"
+        }
         ExtensionCommand::Remove(args) if args.uninstall_cli => {
             "an agent cannot run a vendor uninstaller; ask the person to run the command"
         }
@@ -348,7 +373,159 @@ async fn remove(client: &Client, args: RemoveArgs, output: Output) -> Result<(),
         }
         None => None,
     };
-    let removed = client.extension_remove(&params(confirmation)).await?;
+    let removed = client
+        .extension_remove(&params(confirmation))
+        .await
+        .map_err(|error| uninstall_confirmation(CliError::from(error), args.uninstall_cli))?;
     output.success(&removed, &removed_lines(&removed));
     Ok(())
+}
+
+/// The refusal that asks for an uninstall's confirmation says what the uninstall does to the CLI, as the offer does.
+fn uninstall_confirmation(error: CliError, uninstall_cli: bool) -> CliError {
+    if uninstall_cli && error.code == codes::EXTENSION_CONSENT_REQUIRED {
+        return CliError {
+            message: format!("{} {UNINSTALL_CLI_WARNING}", error.message),
+            ..error
+        };
+    }
+    error
+}
+
+/// Updates an installed package in place, from the source it came from. The new review is accepted as an install's is:
+/// `--yes` accepts what this run prints, `--consent` accepts an earlier run's review. An unchanged package is up to date.
+async fn update(client: &Client, args: UpdateArgs, output: Output) -> Result<(), CliError> {
+    if let Some(consent) = args.consent {
+        // The service checks the consent against the package as it is now, so a stale fingerprint is refused.
+        return send_update(client, &args.id, Some(consent), args.sha256, output).await;
+    }
+    let item = client.extension_get(&args.id).await?;
+    let Some(installed) = item.installed else {
+        return Err(CliError::new(
+            codes::EXTENSION_NOT_INSTALLED,
+            format!("extension {} is not installed", args.id),
+            exit::ERROR,
+        ));
+    };
+    let review = client
+        .extension_inspect(&source_text(&installed.source)?)
+        .await?;
+    if review.sha256.eq_ignore_ascii_case(&installed.sha256) {
+        return report_up_to_date(&args.id, output);
+    }
+    if let Some(pinned) = &args.sha256
+        && !pinned.eq_ignore_ascii_case(&review.sha256)
+    {
+        return Err(CliError::new(
+            codes::EXTENSION_HASH_MISMATCH,
+            format!("the package hashes to {}, not {pinned}", review.sha256),
+            exit::ERROR,
+        ));
+    }
+    if !args.yes {
+        return Err(refusal(
+            codes::EXTENSION_CONSENT_REQUIRED,
+            format!(
+                "the update review was not accepted; review it above, then re-run with --consent {} (or --yes) to accept exactly this review",
+                review.consent
+            ),
+            &review,
+            output,
+        ));
+    }
+    for line in review_lines(&review) {
+        output.progress(&line);
+    }
+    send_update(client, &args.id, Some(review.consent), args.sha256, output).await
+}
+
+/// Sends the update. A package already in place is reported as up to date, whichever side noticed it first.
+async fn send_update(
+    client: &Client,
+    id: &str,
+    consent: Option<String>,
+    sha256: Option<String>,
+    output: Output,
+) -> Result<(), CliError> {
+    let params = ExtensionUpdateParams {
+        id: id.to_owned(),
+        consent,
+        sha256,
+        agent_token: agent_token(),
+    };
+    match client.extension_update(&params).await {
+        Ok(updated) => {
+            output.success(&updated, &installed_lines(&updated));
+            Ok(())
+        }
+        Err(error) => {
+            let error = too_old_to_update(CliError::from(error));
+            if error.code == codes::EXTENSION_UP_TO_DATE {
+                return report_up_to_date(id, output);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn report_up_to_date(id: &str, output: Output) -> Result<(), CliError> {
+    output.success(
+        &json!({ "id": id, "up_to_date": true }),
+        &[format!("{id} is already up to date")],
+    );
+    Ok(())
+}
+
+/// `extensions.update` came after `extensions/1`, so an older host answers it as an unknown method.
+fn too_old_to_update(error: CliError) -> CliError {
+    if error.code == codes::METHOD_NOT_FOUND {
+        return CliError {
+            message: "this host is too old to update extensions; update it".to_owned(),
+            ..error
+        };
+    }
+    error
+}
+
+/// The source an installed package came from, written the way `extension inspect` takes it.
+fn source_text(source: &SourceRef) -> Result<String, CliError> {
+    let kind = match source.kind {
+        SourceKind::Catalogue => "catalogue",
+        SourceKind::Dir => "dir",
+        SourceKind::File => "file",
+        SourceKind::Unknown => {
+            return Err(CliError::new(
+                codes::EXTENSION_INVALID_SOURCE,
+                "this package was installed from a source this CLI does not know; update the CLI",
+                exit::ERROR,
+            ));
+        }
+    };
+    Ok(format!("{kind}:{}", source.reference))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_update_method_says_the_host_is_too_old() {
+        let old = too_old_to_update(CliError::new(
+            codes::METHOD_NOT_FOUND,
+            "unknown method extensions.update",
+            exit::ERROR,
+        ));
+        assert_eq!(old.code, codes::METHOD_NOT_FOUND);
+        assert_eq!(
+            old.message,
+            "this host is too old to update extensions; update it"
+        );
+
+        let other = too_old_to_update(CliError::new(
+            codes::EXTENSION_BUSY,
+            "extension acme.kit is busy",
+            exit::ERROR,
+        ));
+        assert_eq!(other.message, "extension acme.kit is busy");
+    }
 }

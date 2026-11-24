@@ -129,6 +129,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "extension.list",
             "extension.remove",
             "extension.show",
+            "extension.update",
             "git.abort",
             "git.commit",
             "git.branch-create",
