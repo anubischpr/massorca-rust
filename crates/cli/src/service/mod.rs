@@ -2,5 +2,6 @@
 
 pub mod control;
 pub mod foreground;
+pub mod log_path;
 pub mod parent_watch;
 pub mod unit;

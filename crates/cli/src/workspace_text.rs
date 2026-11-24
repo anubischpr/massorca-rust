@@ -2,7 +2,8 @@
 
 use massorca_protocol::methods::projects::{Project, ProjectInspection, ProjectKind};
 use massorca_protocol::methods::workspaces::{
-    UnregisteredWorktree, Workspace, WorkspaceKind, WorkspaceRemoved, WorkspaceState,
+    UnregisteredWorktree, Workspace, WorkspaceCheck, WorkspaceKind, WorkspaceRemoved,
+    WorkspaceState,
 };
 
 pub fn project_kind(kind: ProjectKind) -> &'static str {
@@ -144,7 +145,13 @@ pub fn workspace_line(workspace: &Workspace, verb: &str) -> String {
     )
 }
 
-/// The fields of one workspace, one per line; branch, base, lock and prune appear only when set.
+/// One line for a check: `name: ok` or `name: the first failure`, then the path.
+pub fn check_line(check: &WorkspaceCheck) -> String {
+    let status = check.reason.as_deref().unwrap_or("ok");
+    format!("{}: {status} ({})", check.name, check.path)
+}
+
+/// The fields of one workspace, one per line; branch, base, comment, lock and prune appear only when set.
 pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
     let mut lines = vec![
         format!("id: {}", workspace.id),
@@ -160,6 +167,9 @@ pub fn workspace_details(workspace: &Workspace) -> Vec<String> {
     }
     lines.push(format!("path: {}", workspace.path));
     lines.push(format!("state: {}", state_word(workspace)));
+    if let Some(comment) = &workspace.comment {
+        lines.push(format!("comment: {comment}"));
+    }
     if let Some(reason) = &workspace.locked {
         lines.push(reason_text("locked", reason));
     }

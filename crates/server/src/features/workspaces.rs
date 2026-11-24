@@ -1,16 +1,19 @@
-//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`), and
-//! `workspace.current` (capability `workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`),
+//! `workspace.update` (`workspace-update/1`), `workspace.check` (`workspace-check/1`, decision 0089) and
+//! `workspace.current` (`workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 //! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;
 
 use massorca_protocol::methods::events::{
     TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_WORKSPACE_UPDATED,
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
+    self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
+    WorkspaceUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -56,6 +59,26 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             capabilities::WORKSPACES,
             Permission::Workspace,
             remove,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_UPDATE, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::UPDATE,
+            capabilities::WORKSPACE_UPDATE,
+            Permission::Workspace,
+            update,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_CHECK, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::CHECK,
+            capabilities::WORKSPACE_CHECK,
+            Permission::Read,
+            check,
         )?,
         registries
             .capabilities
@@ -190,4 +213,16 @@ async fn remove(
     let removed = blocking(move || domain.finish_remove(&id, waivers)).await?;
     publish(&ctx, TOPIC_WORKSPACE_REMOVED, &removed.workspace.id);
     Ok(removed)
+}
+
+async fn update(ctx: RequestCtx, params: WorkspaceUpdateParams) -> Result<Workspace, ErrorBody> {
+    let domain = shared(&ctx);
+    let workspace = blocking(move || domain.update_workspace(params)).await?;
+    publish(&ctx, TOPIC_WORKSPACE_UPDATED, &workspace.id);
+    Ok(workspace)
+}
+
+async fn check(ctx: RequestCtx, params: WorkspaceRef) -> Result<WorkspaceCheck, ErrorBody> {
+    let domain = shared(&ctx);
+    blocking(move || domain.check_workspace(&params.workspace)).await
 }
