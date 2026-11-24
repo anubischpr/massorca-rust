@@ -39,7 +39,12 @@
     "developer": { "name": "MassOrca" },
     "mention": "gentle-shell",
     "banner": {
-      "examples": [{ "kind": "mention", "text": "@gentle-shell", "caption": "Ask Gentle Shell to explain this module" }]
+      "colors": ["#FF2E8A", "#FF8CC2"],
+      "examples": [
+        { "kind": "mention", "text": "@gentle-shell", "caption": "@gentle-shell explain this module" },
+        { "kind": "mention", "text": "@gentle-shell", "caption": "@gentle-shell find where this setting is read" },
+        { "kind": "mention", "text": "@gentle-shell", "caption": "@gentle-shell summarize the recent commits" }
+      ]
     },
     "connections": [{ "id": "account", "kind": "agent-login", "title": "Gentle Shell account", "multiple": true }]
   }

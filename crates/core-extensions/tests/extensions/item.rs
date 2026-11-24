@@ -57,6 +57,43 @@ fn an_installed_item_shows_its_danger_zone_and_serializes() {
 }
 
 #[test]
+fn each_built_in_agent_lists_three_prompts_under_its_mention_and_its_colours() {
+    let s = setup(FakeHost::new());
+    let built_in: Vec<_> = s
+        .service
+        .catalogue()
+        .expect("catalogue")
+        .into_iter()
+        .filter(|item| item.id.starts_with("massorca."))
+        .collect();
+    assert_eq!(built_in.len(), 4);
+    for item in built_in {
+        let mention = item.listing.mention.clone().expect("a mention");
+        let banner = item.listing.banner.as_ref().expect("a banner");
+        assert_eq!(banner.examples.len(), 3, "{}", item.id);
+        for example in &banner.examples {
+            assert_eq!(example.kind, "mention", "{}", item.id);
+            assert_eq!(
+                example.text.as_deref(),
+                Some(format!("@{mention}").as_str())
+            );
+            assert!(
+                example.caption.starts_with(&format!("@{mention} ")),
+                "{}: {}",
+                item.id,
+                example.caption
+            );
+        }
+        assert!(
+            (1..=2).contains(&banner.colors.len()),
+            "{}: {:?}",
+            item.id,
+            banner.colors
+        );
+    }
+}
+
+#[test]
 fn an_asset_is_served_only_when_the_listing_names_it() {
     let s = setup(FakeHost::new().with_program("kit"));
     let source = s.package_dir("kit", &agent_package("acme", "kit", "kit"));

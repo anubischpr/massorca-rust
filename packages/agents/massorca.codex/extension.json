@@ -38,7 +38,12 @@
     "developer": { "name": "MassOrca" },
     "mention": "codex",
     "banner": {
-      "examples": [{ "kind": "mention", "text": "@codex", "caption": "Ask Codex to fix the failing test" }]
+      "colors": ["#4B5563", "#9CA3AF"],
+      "examples": [
+        { "kind": "mention", "text": "@codex", "caption": "@codex fix the failing test" },
+        { "kind": "mention", "text": "@codex", "caption": "@codex explain this error and suggest a fix" },
+        { "kind": "mention", "text": "@codex", "caption": "@codex refactor this function without changing its behaviour" }
+      ]
     },
     "connections": [{ "id": "account", "kind": "agent-login", "title": "Codex account", "multiple": true }]
   }

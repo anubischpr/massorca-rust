@@ -33,7 +33,12 @@
     "developer": { "name": "MassOrca" },
     "mention": "antigravity",
     "banner": {
-      "examples": [{ "kind": "mention", "text": "@antigravity", "caption": "Ask Antigravity to plan the next change" }]
+      "colors": ["#4285F4", "#34A853"],
+      "examples": [
+        { "kind": "mention", "text": "@antigravity", "caption": "@antigravity plan the next change" },
+        { "kind": "mention", "text": "@antigravity", "caption": "@antigravity review the open tasks in this workspace" },
+        { "kind": "mention", "text": "@antigravity", "caption": "@antigravity summarize what changed on this branch" }
+      ]
     }
   }
 }

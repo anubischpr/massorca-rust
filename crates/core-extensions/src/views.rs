@@ -102,6 +102,8 @@ pub struct DeveloperView {
 pub struct BannerView {
     pub image: Option<String>,
     pub examples: Vec<ExampleView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -156,6 +158,7 @@ impl ListingView {
                         caption: example.caption.clone(),
                     })
                     .collect(),
+                colors: banner.colors.clone(),
             }),
             connections: listing
                 .connections

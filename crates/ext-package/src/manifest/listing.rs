@@ -54,16 +54,20 @@ pub struct Developer {
     pub url: Option<String>,
 }
 
-/// The banner: an optional image and one to six examples of how to invoke the item.
+/// The banner: an optional image, one to six examples of how to invoke the item, and optionally one or two colours
+/// (`#RRGGBB`) the item page tints the banner with, such as the colours of the agent's logo.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Banner {
     pub image: Option<String>,
     pub examples: Vec<Example>,
+    #[serde(default)]
+    pub colors: Vec<String>,
 }
 
-/// One invocation example. A `mention` example repeats `@` plus the listing's mention, a `command` example names a
-/// declared command, and a `usage` example is only a caption.
+/// One invocation example. A `mention` example's text repeats `@` plus the listing's mention, and its caption is the
+/// prompt the banner shows, starting with that tag. A `command` example names a declared command, and a `usage`
+/// example is only a caption.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Example {
@@ -245,6 +249,29 @@ fn validate_banner(
             ExampleKind::Usage => {}
         }
     }
+    validate_colors(&banner.colors, problems);
+}
+
+/// A banner takes one or two colours, each written `#RRGGBB`; a listing with none has no tint.
+fn validate_colors(colors: &[String], problems: &mut Problems) {
+    if !colors.is_empty() && !(1..=2).contains(&colors.len()) {
+        problems.add("/listing/banner/colors", "needs 1 or 2 colours");
+    }
+    for (index, colour) in colors.iter().enumerate() {
+        if !is_hex_colour(colour) {
+            problems.add(
+                at("/listing/banner/colors", index),
+                "must be a #RRGGBB colour",
+            );
+        }
+    }
+}
+
+/// A `#` and six hexadecimal digits.
+fn is_hex_colour(text: &str) -> bool {
+    text.strip_prefix('#').is_some_and(|digits| {
+        digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
 }
 
 fn validate_mention_example(
