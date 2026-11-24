@@ -97,6 +97,8 @@ At least one artboard per area is light: the shell (`sh-host-unreachable`), firs
 
 **D-SH-14 Theme toggle (rail).** Rail item, `sun` in dark and `moon` in light. Switches the theme instantly (no animation, so no surface flashes). Tooltip "Switch to light theme" or "Switch to dark theme". The full choice is in D-ST-03.
 
+**Built (desktop, SET-02).** The theme last applied is saved on each change, and the first frame of the next start paints it, so no default theme flashes first. The regions left open (Session summary, Project sidebar, Sidebar, Work panel) are saved and reopened too; an overlay is not. The state is `<profile>/desktop/state/ui-state.json` (`<home>/profiles/<name>/`), a version 1 JSON file written through a temporary file. A missing or damaged file gives the defaults. Automated launches neither read nor write it. Not yet: the service's `appearance.theme` is not read by the desktop, and the selected workspace, window size and position are not saved.
+
 **D-SH-15 Usage rings and detail popover (rail).** Designed in the rail bottom group.
 - Each ring is 32 px with a 2 px track (`usage.ring.track`) and an arc from 12 o'clock in `usage.ring.1` to `usage.ring.6` by provider slot; `usage.ring.warn` from 80 percent, `usage.ring.limit` from 95 percent. The agent icon (never a letter, A16) sits in the centre at 14 px. Every artboard in this file shows the same three rings (Claude 62 percent, Codex 35 percent, OpenCode 10 percent).
 - Hover or click opens a popover (surface.overlay, e2, 280 px): title "Usage", rows "Resets in 2 days" and "Plan".

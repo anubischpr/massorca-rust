@@ -9,3 +9,8 @@ pub fn open_desktop_dir(profile: &Profile) -> Result<PrivateDir, RootAccessError
     ensure_dir(profile)?;
     open_private_dir(&profile.desktop_dir())
 }
+
+/// Opens `<profile>/desktop/state`, which holds the desktop's remembered UI state (SET-02).
+pub fn open_desktop_state_dir(profile: &Profile) -> Result<PrivateDir, RootAccessError> {
+    open_desktop_dir(profile)?.child("state")
+}

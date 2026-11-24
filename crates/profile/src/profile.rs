@@ -6,6 +6,8 @@ use crate::endpoint::fnv1a_64;
 use crate::error::ProfileError;
 use crate::root_access::create_root;
 
+/// The desktop's remembered UI state file, inside the state folder of the profile's desktop folder.
+pub const UI_STATE_FILE: &str = "ui-state.json";
 const DEFAULT_PROFILE: &str = "default";
 const PROFILE_ENV: &str = "MASSORCA_PROFILE";
 const HOME_ENV: &str = "MASSORCA_HOME";
@@ -99,6 +101,16 @@ impl Profile {
     /// The desktop's endpoint on Unix; Windows uses `desktop_pipe_name`.
     pub fn desktop_socket_path(&self) -> PathBuf {
         self.desktop_dir().join("instance.sock")
+    }
+
+    /// The folder of the desktop's remembered UI state (SET-02).
+    pub fn desktop_state_dir(&self) -> PathBuf {
+        self.desktop_dir().join("state")
+    }
+
+    /// The desktop's remembered UI state: the theme last applied and the regions left open (SET-02).
+    pub fn ui_state_path(&self) -> PathBuf {
+        self.desktop_state_dir().join(UI_STATE_FILE)
     }
 
     /// Windows pipe name. FNV-1a keeps it identical across builds, which std's hashers do not. It hashes `pipe_key`,
