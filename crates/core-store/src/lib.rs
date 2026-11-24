@@ -25,7 +25,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use agent_accounts::AgentAccountRow;
 pub use agent_prompt_queue::{NewQueuedPrompt, QueuedPromptRow, QueuedState};
-pub use agent_sessions::{AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity};
+pub use agent_sessions::{
+    AgentSessionArchive, AgentSessionRow, RunExit, RunExitReason, RunMode, StoredActivity,
+};
 pub use bots::BotRow;
 pub use devices::DeviceRow;
 pub use error::StoreError;

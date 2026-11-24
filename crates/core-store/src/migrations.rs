@@ -472,6 +472,22 @@ ALTER TABLE workspaces ADD COLUMN comment TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // Release and retain (agent release, decision 0090). A retained session keeps its exited terminal from eviction; a
+    // release writes the archived tail of the run's output, frees the terminal and marks the row released. A session's
+    // archive goes with the session, and a new run of it drops the archive of the run before.
+    Migration {
+        sql: r#"
+ALTER TABLE agent_sessions ADD COLUMN retained INTEGER NOT NULL DEFAULT 0 CHECK(retained IN (0,1));
+ALTER TABLE agent_sessions ADD COLUMN released_at INTEGER;
+CREATE TABLE agent_session_archives (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    truncated INTEGER NOT NULL CHECK(truncated IN (0,1)),
+    released_at INTEGER NOT NULL
+);
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

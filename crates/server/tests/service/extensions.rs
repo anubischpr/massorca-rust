@@ -309,6 +309,8 @@ fn resumable_session(store: &Store, kind: &str) -> String {
         holds_secrets: false,
         mode: RunMode::default(),
         pending_permission_mode: None,
+        retained: false,
+        released_at: None,
     };
     store.insert_agent_session(&session).expect("session");
     session.id

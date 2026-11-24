@@ -40,6 +40,8 @@ fn session_row(workspace_id: &str) -> AgentSessionRow {
         holds_secrets: false,
         mode: RunMode::default(),
         pending_permission_mode: None,
+        retained: false,
+        released_at: None,
     }
 }
 

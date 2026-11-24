@@ -256,6 +256,8 @@ mod tests {
             holds_secrets: false,
             mode: RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         };
         agents.store().insert_agent_session(&row).unwrap();
         row

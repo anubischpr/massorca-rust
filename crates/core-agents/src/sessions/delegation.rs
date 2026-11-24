@@ -854,6 +854,8 @@ then report"
             holds_secrets: false,
             mode: massorca_core_store::RunMode::default(),
             pending_permission_mode: None,
+            retained: false,
+            released_at: None,
         }
     }
 
