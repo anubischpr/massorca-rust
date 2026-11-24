@@ -195,7 +195,8 @@ Linux only. No automated run opens a visible window.
   navigation: Discover, Installed, Updates and the five categories. Its lists
   are in `model/marketplace/catalogue.rs`; an item page shows its nine parts in
   the owner's order (`model/marketplace/item_page.rs`, teams-extensions-settings.md 7.2). A part that does not
-  apply to the item says why in its place.
+  apply to the item says why in its place. The Information part links the package's website, privacy policy and
+  terms of service when it names them.
 - Its data comes from `MarketplaceSource`. The sample implements it in memory and
   changes only itself. Without a service, `UnavailableMarketplace` lists nothing
   and refuses every change. Actions the sample does not model are drawn disabled

@@ -243,6 +243,9 @@ mod tests {
                 mention: None,
                 banner: None,
                 connections: Vec::new(),
+                website: None,
+                privacy: None,
+                terms: None,
             },
             permissions: Vec::new(),
             risk: Risk {
@@ -499,6 +502,21 @@ mod tests {
         let found = items(&[], &[entry], &[]);
         let rows = crate::model::marketplace::information(&found[0]);
         assert!(rows.contains(&("Risk", "High".to_owned())), "{rows:?}");
+    }
+
+    #[test]
+    fn a_packages_links_reach_its_item_information() {
+        let mut entry = package("acme.notes", "extensions", ExtensionState::Available);
+        entry.listing.website = Some("https://acme.example".to_owned());
+        entry.listing.terms = Some("https://acme.example/terms".to_owned());
+        let found = items(&[], &[entry], &[]);
+        assert_eq!(
+            crate::model::marketplace::information_links(&found[0]),
+            vec![
+                ("Website", "https://acme.example".to_owned()),
+                ("Terms of service", "https://acme.example/terms".to_owned()),
+            ]
+        );
     }
 
     #[test]

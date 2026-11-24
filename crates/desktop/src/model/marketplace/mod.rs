@@ -28,7 +28,8 @@ pub use install_review::review_lines;
 pub use item_images::{ImageKey, ImageSlots};
 pub use item_page::{
     CLI_REMOVAL_SENTENCE, PARTS, Part, absent_reason, advanced_rows, information,
-    offers_cli_removal, settings_rows, state_chip, uninstall_body, uninstall_body_for,
+    information_links, offers_cli_removal, settings_rows, state_chip, uninstall_body,
+    uninstall_body_for,
 };
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,

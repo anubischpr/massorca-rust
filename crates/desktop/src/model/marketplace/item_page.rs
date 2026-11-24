@@ -112,6 +112,21 @@ pub fn information(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
     rows
 }
 
+/// The links of the Information part: the website, privacy policy and terms the package names, each only when present.
+pub fn information_links(item: &MarketplaceItem) -> Vec<(&'static str, String)> {
+    let Some(extension) = item.extension.as_deref() else {
+        return Vec::new();
+    };
+    [
+        ("Website", extension.listing.website.clone()),
+        ("Privacy policy", extension.listing.privacy.clone()),
+        ("Terms of service", extension.listing.terms.clone()),
+    ]
+    .into_iter()
+    .filter_map(|(label, url)| url.map(|url| (label, url)))
+    .collect()
+}
+
 /// The rows of the Settings part. They exist only once the item is installed; an agent's default
 /// agent needs a setting the service does not have yet.
 pub fn settings_rows(item: &MarketplaceItem) -> Vec<(&'static str, &'static str)> {

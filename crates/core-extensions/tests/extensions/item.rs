@@ -3,6 +3,7 @@
 use massorca_core_extensions::codes;
 use massorca_core_extensions::item::ItemState;
 use massorca_core_extensions::source::Source;
+use serde_json::json;
 
 use crate::fakes::FakeHost;
 use crate::fixture::{agent_package, package_files, write_dir};
@@ -132,4 +133,21 @@ fn a_tampered_package_is_listed_with_its_problem_beside_the_others() {
         .asset("acme.kit", "media/logo.svg")
         .expect_err("files that cannot be trusted are never served");
     assert_eq!(error.code(), codes::TAMPERED);
+}
+
+#[test]
+fn an_item_lists_only_the_links_its_package_names() {
+    let s = setup(FakeHost::new().with_program("kit"));
+    let mut manifest = agent_package("acme", "kit", "kit");
+    manifest["listing"]["website"] = json!("https://acme.example");
+    manifest["listing"]["terms"] = json!("https://acme.example/terms");
+    let source = s.package_dir("kit", &manifest);
+    s.install(&source, false).expect("installs");
+    let value = serde_json::to_value(s.service.get("acme.kit").expect("item")).expect("serializes");
+    assert_eq!(value["listing"]["website"], "https://acme.example");
+    assert_eq!(value["listing"]["terms"], "https://acme.example/terms");
+    assert!(
+        value["listing"].get("privacy").is_none(),
+        "a link the package does not name is not sent"
+    );
 }

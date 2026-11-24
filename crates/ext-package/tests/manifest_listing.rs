@@ -131,6 +131,32 @@ fn the_developer_url_must_be_https() {
 }
 
 #[test]
+fn the_website_privacy_and_terms_are_https_links_the_listing_keeps() {
+    let value = listing_with(json!({
+        "website": "https://acme.example",
+        "privacy": "https://acme.example/privacy",
+        "terms": "https://acme.example/terms"
+    }));
+    let manifest = load(&bytes(&value)).expect("https links are valid");
+    let listing = manifest.listing.as_ref().expect("the listing");
+    assert_eq!(listing.website.as_deref(), Some("https://acme.example"));
+    assert_eq!(
+        listing.privacy.as_deref(),
+        Some("https://acme.example/privacy")
+    );
+    assert_eq!(listing.terms.as_deref(), Some("https://acme.example/terms"));
+    for field in ["website", "privacy", "terms"] {
+        let mut links = json!({});
+        links[field] = json!("http://acme.example");
+        assert!(has_problem(
+            &problems(&listing_with(links)),
+            &format!("/listing/{field}"),
+            "https URL"
+        ));
+    }
+}
+
+#[test]
 fn the_mention_has_no_at_sign_no_spaces_and_at_most_32_characters() {
     for mention in ["@GitHub", "Git Hub", ""] {
         let found = problems(&listing_with(json!({ "mention": mention })));

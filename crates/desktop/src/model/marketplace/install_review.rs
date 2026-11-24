@@ -147,6 +147,9 @@ mod tests {
                 mention: None,
                 banner: None,
                 connections: Vec::new(),
+                website: None,
+                privacy: None,
+                terms: None,
             },
             kinds: vec![KindView {
                 id: "claude".to_owned(),

@@ -7,7 +7,7 @@ use super::item_images;
 use crate::model::marketplace::{
     AccountActivity, AccountState, AccountView, ItemState, MarketplaceItem, MarketplaceItemId,
     PARTS, Part, ProblemAlert, ProblemTone, absent_reason, advanced_rows, connection_rows,
-    information, problem_alert, settings_rows, state_chip, uninstall_body,
+    information, information_links, problem_alert, settings_rows, state_chip, uninstall_body,
 };
 use crate::model::settings_sections::NOT_AVAILABLE;
 use crate::shell::Shell;
@@ -404,6 +404,9 @@ fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
                 ),
         );
     }
+    for (label, url) in information_links(item) {
+        rows = rows.child(link_row(label, url, cx));
+    }
     let body = div()
         .flex()
         .flex_col()
@@ -416,6 +419,37 @@ fn information_section(item: &MarketplaceItem, cx: &App) -> AnyElement {
         )
         .child(rows);
     part_section("marketplace-part-information", "Information", body, cx)
+}
+
+/// One Information row whose value is a link: pressing it opens the page in the browser.
+fn link_row(label: &'static str, url: String, cx: &App) -> AnyElement {
+    let theme = *cx.theme();
+    let p = &theme.palette;
+    let id = SharedString::from(format!(
+        "marketplace-link-{}",
+        label.to_lowercase().replace(' ', "-")
+    ));
+    let open = url.clone();
+    div()
+        .flex()
+        .items_start()
+        .gap(px(SPACE_4))
+        .child(
+            div()
+                .w(px(160.0))
+                .flex_none()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.tertiary)
+                .child(label),
+        )
+        .child(
+            div().flex_1().min_w_0().child(
+                Button::new(id, url)
+                    .variant(ButtonVariant::Ghost)
+                    .on_click(move |_, cx| cx.open_url(&open)),
+            ),
+        )
+        .into_any_element()
 }
 
 /// Part 7: the item's settings, or the reason there are none yet. The default agent is not

@@ -34,6 +34,9 @@ pub(super) fn catalogue_package() -> ExtensionItem {
             mention: None,
             banner: None,
             connections: Vec::new(),
+            website: None,
+            privacy: None,
+            terms: None,
         },
         permissions: Vec::new(),
         risk: Risk {
@@ -803,4 +806,24 @@ fn a_tampered_package_refuses_enable_and_can_still_be_uninstalled(cx: &mut TestA
         }
         _ => panic!("uninstall is still sent for a tampered package"),
     }
+}
+
+#[gpui::test]
+fn the_information_part_links_each_page_the_package_lists(cx: &mut TestAppContext) {
+    let mut package = catalogue_package();
+    package.listing.website = Some("https://acme.example".to_owned());
+    package.listing.terms = Some("https://acme.example/terms".to_owned());
+    let (_rig, cx, _) = open_listed(cx, Vec::new(), vec![package]);
+    assert!(
+        shown(cx, "button:marketplace-link-website"),
+        "the website is a link"
+    );
+    assert!(
+        shown(cx, "button:marketplace-link-terms-of-service"),
+        "the terms are a link"
+    );
+    assert!(
+        !shown(cx, "button:marketplace-link-privacy-policy"),
+        "a page the package does not list has no row"
+    );
 }

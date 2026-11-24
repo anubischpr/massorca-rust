@@ -84,6 +84,12 @@ pub struct ListingView {
     pub mention: Option<String>,
     pub banner: Option<BannerView>,
     pub connections: Vec<ConnectionView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -122,6 +128,9 @@ impl ListingView {
             mention: None,
             banner: None,
             connections: Vec::new(),
+            website: None,
+            privacy: None,
+            terms: None,
         };
         let listing = manifest.listing.as_ref().unwrap_or(&empty);
         Self {
@@ -162,6 +171,9 @@ impl ListingView {
                     multiple: connection.multiple,
                 })
                 .collect(),
+            website: listing.website.clone(),
+            privacy: listing.privacy.clone(),
+            terms: listing.terms.clone(),
         }
     }
 
