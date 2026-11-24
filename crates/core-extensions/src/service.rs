@@ -20,7 +20,7 @@ use crate::error::Error;
 use crate::hooks::Hooks;
 use crate::host::{CommandRunner, Exit, INSTALLER_TIMEOUT, ProgramResolver, current_os};
 use crate::layout::Layout;
-use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile};
+use crate::lockfile::{InstallerRun, LockCli, LockEntry, LockSource, Lockfile, sync_dir};
 use crate::review::{self, CliPlan, PlanState, Review};
 use crate::source::{self, Files, LoadedPackage, Source};
 
@@ -458,26 +458,39 @@ impl Extensions {
             STAGING_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let written = (|| {
+            let mut folders = BTreeSet::from([staging.clone()]);
             for (path, bytes) in files {
                 let target = path
                     .split('/')
                     .fold(staging.clone(), |target, segment| target.join(segment));
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(Error::io("cannot create", parent))?;
+                    folders.extend(
+                        parent
+                            .ancestors()
+                            .take_while(|folder| folder.starts_with(&staging))
+                            .map(Path::to_path_buf),
+                    );
                 }
                 // A name that collides with one already written (an alias) fails the install.
                 fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&target)
-                    .and_then(|mut file| file.write_all(bytes))
+                    .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
                     .map_err(Error::io("cannot write", &target))?;
+            }
+            // The lockfile is committed after this, so the files it names must be on disk before it, not after a crash.
+            for folder in &folders {
+                sync_dir(folder).map_err(Error::io("cannot sync", folder))?;
             }
             if dir.exists() {
                 // A leftover from an install that never reached the lockfile.
                 fs::remove_dir_all(dir).map_err(Error::io("cannot replace", dir))?;
             }
-            fs::rename(&staging, dir).map_err(Error::io("cannot move into place", dir))
+            fs::rename(&staging, dir).map_err(Error::io("cannot move into place", dir))?;
+            let root = self.layout.package_root(id);
+            sync_dir(&root).map_err(Error::io("cannot sync", &root))
         })();
         if written.is_err() {
             let _ = fs::remove_dir_all(&staging);

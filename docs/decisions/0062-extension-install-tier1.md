@@ -29,6 +29,10 @@ step here that executes anything. Code (tier 2, Wasmtime) is out of scope.
 - `lock.json` is written atomically (temporary file, flush, rename). One
   service owns a profile, and the service serialises every change with one
   lock.
+- Before that write, an install or update syncs every unpacked file and its
+  folders to disk, and the package folder after the rename. A crash after the
+  lockfile commit then never leaves it naming files that were lost. On Windows
+  only the files are synced: there is no folder handle to sync.
 
 ```json
 { "version": 1,
