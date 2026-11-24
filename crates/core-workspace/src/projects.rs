@@ -9,6 +9,7 @@ use massorca_protocol::methods::projects::{
 };
 
 use crate::error::DomainError;
+use crate::layout::WorkspaceLayout;
 use crate::names;
 use crate::paths;
 use crate::views;
@@ -85,7 +86,11 @@ impl Workspaces {
                         "the default workspaces root must be an absolute path",
                     ));
                 }
-                paths::path_text(&self.default_root.join(&name))?
+                let root = match self.layout {
+                    WorkspaceLayout::Nested => self.default_root.join(&name),
+                    WorkspaceLayout::Flat => self.default_root.clone(),
+                };
+                paths::path_text(&root)?
             }
         };
         let row = ProjectRow {

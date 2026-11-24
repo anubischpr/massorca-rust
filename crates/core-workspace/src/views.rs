@@ -44,6 +44,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         created_at_ms: row.created_at,
         locked: None,
         prunable: None,
+        base_refresh: None,
     }
 }
 

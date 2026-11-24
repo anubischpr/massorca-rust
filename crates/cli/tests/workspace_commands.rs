@@ -180,6 +180,65 @@ fn a_project_with_workspaces_cannot_be_removed_until_they_are_gone() {
     sandbox.json_ok("default", &["project", "rm", "repo"]);
 }
 
+fn path_text(path: &Path) -> String {
+    path.to_str().expect("utf-8 path").to_owned()
+}
+
+#[test]
+fn refresh_base_starts_the_workspace_from_the_remote_branch() {
+    let sandbox = Sandbox::new();
+    let seed = sandbox.home().join("seed");
+    git_repo(&seed);
+    let origin = sandbox.home().join("origin.git");
+    let (seed_text, origin_text) = (path_text(&seed), path_text(&origin));
+    git(
+        sandbox.home(),
+        &["clone", "-q", "--bare", &seed_text, &origin_text],
+    );
+    let repo = sandbox.home().join("repo");
+    let (repo_text, root_text) = (path_text(&repo), path_text(&sandbox.home().join("ws")));
+    git(sandbox.home(), &["clone", "-q", &origin_text, &repo_text]);
+    sandbox.json_ok(
+        "default",
+        &[
+            "project",
+            "add",
+            repo_text.as_str(),
+            "--workspaces-root",
+            root_text.as_str(),
+        ],
+    );
+    let local = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+
+    let other = sandbox.home().join("other");
+    git(
+        sandbox.home(),
+        &["clone", "-q", &origin_text, &path_text(&other)],
+    );
+    std::fs::write(other.join("next.txt"), "next\n").expect("write file");
+    git(&other, &["add", "next.txt"]);
+    git(&other, &["commit", "-q", "-m", "next"]);
+    git(&other, &["push", "-q", "origin", "HEAD"]);
+    let remote = git(&origin, &["rev-parse", "HEAD"]).trim().to_owned();
+
+    let plain = sandbox.json_ok("default", &["workspace", "create", "repo", "plain"]);
+    let plain_path = plain["path"].as_str().expect("the path is text");
+    assert_eq!(
+        git(Path::new(plain_path), &["rev-parse", "HEAD"]).trim(),
+        local
+    );
+
+    let fresh = sandbox.json_ok(
+        "default",
+        &["workspace", "create", "repo", "fresh", "--refresh-base"],
+    );
+    let fresh_path = fresh["path"].as_str().expect("the path is text");
+    assert_eq!(
+        git(Path::new(fresh_path), &["rev-parse", "HEAD"]).trim(),
+        remote
+    );
+}
+
 #[test]
 fn a_repeated_request_id_returns_the_first_workspace() {
     let sandbox = Sandbox::new();
