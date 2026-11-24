@@ -1,4 +1,4 @@
-//! `task.create`, `task.list`, `task.show`, `task.update`, `task.done`, `task.reopen` and `task.rm` (capability `teams/1`,
+//! `task.create`, `task.list`, `task.show`, `task.update`, `task.done`, `task.reopen`, `task.stop` and `task.rm` (capability `teams/1`,
 //! decision 0072). `task.start` is in `task_start`.
 
 use massorca_core_agents::Agents;
@@ -7,7 +7,8 @@ use massorca_core_store::{
 };
 use massorca_protocol::methods::events::TOPIC_TASK_CHANGED;
 use massorca_protocol::methods::tasks::{
-    self, Task, TaskCreateParams, TaskList, TaskListParams, TaskOrigin, TaskRef, TaskUpdateParams,
+    self, Task, TaskCreateParams, TaskList, TaskListParams, TaskOrigin, TaskRef, TaskStopParams,
+    TaskUpdateParams,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -69,6 +70,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
         )?,
         methods.register(
             Owner::Core,
+            tasks::STOP,
+            capabilities::TEAMS,
+            Permission::Workspace,
+            stop,
+        )?,
+        methods.register(
+            Owner::Core,
             tasks::REMOVE,
             capabilities::TEAMS,
             Permission::Workspace,
@@ -115,6 +123,15 @@ async fn done(ctx: RequestCtx, params: TaskRef) -> Result<Task, ErrorBody> {
 async fn reopen(ctx: RequestCtx, params: TaskRef) -> Result<Task, ErrorBody> {
     let task = blocking(&ctx, move |store, agents| {
         reopen_task(store, agents, &params.task)
+    })
+    .await?;
+    publish(&ctx, TOPIC_TASK_CHANGED, &task.id);
+    Ok(task)
+}
+
+async fn stop(ctx: RequestCtx, params: TaskStopParams) -> Result<Task, ErrorBody> {
+    let task = blocking(&ctx, move |store, agents| {
+        stop_task(store, agents, &params.task, params.force)
     })
     .await?;
     publish(&ctx, TOPIC_TASK_CHANGED, &task.id);
@@ -314,6 +331,29 @@ fn reopen_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, E
         &selectors::task(store, &row.id)?,
         &Session::Unstarted,
     ))
+}
+
+/// Stops the agent session a task runs in, as `agent.stop` does. The task keeps its session, so it shows Stopped and
+/// can be marked done or reopened.
+fn stop_task(
+    store: &Store,
+    agents: &Agents,
+    selector: &str,
+    force: bool,
+) -> Result<Task, ErrorBody> {
+    // Under the start gate, so a start in flight links its session before this reads it.
+    let _gate = start_gate();
+    let row = selectors::task(store, selector)?;
+    let session = task_state::load(agents, &row)?;
+    let Some(session_id) = row.session_id.as_deref().filter(|_| is_running(&session)) else {
+        return Err(ErrorBody::new(
+            codes::TASK_NOT_RUNNING,
+            format!("task {} is not running", row.id),
+        ));
+    };
+    agents.stop(session_id, force).map_err(ErrorBody::from)?;
+    let current = selectors::task(store, &row.id)?;
+    Ok(view_of(&current, &task_state::load(agents, &current)?))
 }
 
 fn remove_task(store: &Store, agents: &Agents, selector: &str) -> Result<Task, ErrorBody> {

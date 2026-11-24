@@ -29,6 +29,7 @@ fn project_row(team_id: &str, name: &str) -> TeamProjectRow {
         brief: String::new(),
         created_at: now_ms(),
         source_project_id: None,
+        code_source: None,
     }
 }
 
@@ -161,6 +162,7 @@ fn a_team_project_round_trips_with_and_without_a_source_project() {
     store.insert_project(&source).unwrap();
     let linked = TeamProjectRow {
         source_project_id: Some(source.id.clone()),
+        code_source: None,
         ..project_row(&team.id, "parser")
     };
     let plain = project_row(&team.id, "lexer");
@@ -190,6 +192,7 @@ fn a_source_project_must_be_a_registered_project() {
     store.insert_team(&team).unwrap();
     let row = TeamProjectRow {
         source_project_id: Some("missing".to_owned()),
+        code_source: None,
         ..project_row(&team.id, "parser")
     };
 
@@ -225,6 +228,7 @@ fn removing_the_source_project_clears_the_link_and_keeps_the_team_project() {
     store.insert_project(&source).unwrap();
     let row = TeamProjectRow {
         source_project_id: Some(source.id.clone()),
+        code_source: None,
         ..project_row(&team.id, "parser")
     };
     store.insert_team_project(&row).unwrap();

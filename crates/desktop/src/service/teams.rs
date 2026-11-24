@@ -11,11 +11,12 @@ use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::tasks::{Task, TaskRef};
 use massorca_protocol::methods::teams::{
-    Board, BoardParams, Bot, BotAddParams, Team, TeamCreateParams, TeamProject,
-    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef,
+    Board, BoardParams, Bot, BotAddParams, Team, TeamAccess, TeamCreateParams, TeamProject,
+    TeamProjectRemoveParams, TeamProjectUpdateParams, TeamRef, TeamUpdateParams,
 };
 use tokio::sync::{mpsc, oneshot};
 
+use super::bridge::{Command, ServiceHandle};
 use super::refusal::Refusal;
 use super::update::StoreUpdate;
 
@@ -148,6 +149,11 @@ pub(crate) enum TeamCommand {
         project: String,
         reply: oneshot::Sender<Result<TeamProject, Refusal>>,
     },
+    SetAccess {
+        team: String,
+        access: TeamAccess,
+        reply: oneshot::Sender<Result<Team, Refusal>>,
+    },
 }
 
 /// Runs one write on its own task. The answer goes first, then the teams are read again, so the pages follow
@@ -189,6 +195,7 @@ pub(super) fn spawn_call(
                         goal: None,
                         brief: Some(brief),
                         source_project: None,
+                        code_source: None,
                     })
                     .await
             });
@@ -204,6 +211,24 @@ pub(super) fn spawn_call(
                     .await
             });
         }
+        TeamCommand::SetAccess {
+            team,
+            access,
+            reply,
+        } => {
+            spawn_write(client, updates, sequence, reply, move |client| async move {
+                client
+                    .team_update(&TeamUpdateParams {
+                        team,
+                        name: None,
+                        purpose: None,
+                        character: None,
+                        access: Some(access),
+                        workspaces: None,
+                    })
+                    .await
+            });
+        }
         TeamCommand::AddBot { params, reply } => {
             spawn_write(client, updates, sequence, reply, move |client| async move {
                 client.team_bot_add(&params).await
@@ -215,7 +240,7 @@ pub(super) fn spawn_call(
 /// Answers a write with `refusal`, while there is no connection to ask.
 pub(super) fn refuse(command: TeamCommand, refusal: Refusal) {
     match command {
-        TeamCommand::CreateTeam { reply, .. } => {
+        TeamCommand::CreateTeam { reply, .. } | TeamCommand::SetAccess { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         TeamCommand::AddBot { reply, .. } => {
@@ -283,6 +308,20 @@ fn teams_refusal(error: &ClientError) -> Refusal {
             }
         }
         _ => Refusal::from(error),
+    }
+}
+
+impl ServiceHandle {
+    /// `team.update` with `access`. The team shows the new access when the read that follows the answer lands.
+    pub async fn set_team_access(&self, team: String, access: TeamAccess) -> Result<Team, Refusal> {
+        self.ask(|reply| {
+            Command::Team(TeamCommand::SetAccess {
+                team,
+                access,
+                reply,
+            })
+        })
+        .await
     }
 }
 

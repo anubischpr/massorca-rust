@@ -201,6 +201,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "task.list",
             "task.reopen",
             "task.rm",
+            "task.stop",
             "task.show",
             "task.update",
         ])

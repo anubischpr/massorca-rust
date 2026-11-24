@@ -14,7 +14,9 @@ use massorca_desktop::service::{
 use massorca_profile::Profile;
 use massorca_protocol::PeerInfo;
 use massorca_protocol::methods::tasks::{Column, TaskCreateParams};
-use massorca_protocol::methods::teams::{BotAddParams, TeamCreateParams, TeamProjectAddParams};
+use massorca_protocol::methods::teams::{
+    BotAddParams, TeamAccess, TeamCreateParams, TeamProjectAddParams, TeamRef,
+};
 use massorca_server::{RunningService, Service, ServiceConfig};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -557,6 +559,7 @@ async fn a_team_project_is_listed_with_its_brief_and_its_own_board() {
             goal: Some("Ship checkout".to_owned()),
             brief: Some("Checkout copy".to_owned()),
             source_project: None,
+            code_source: None,
         })
         .await
         .expect("the project is added");
@@ -628,6 +631,7 @@ async fn a_team_project_added_through_another_client_reaches_the_store_without_a
             goal: None,
             brief: None,
             source_project: None,
+            code_source: None,
         })
         .await
         .expect("the project is added");
@@ -700,6 +704,7 @@ async fn team_with_checkout(
             goal: None,
             brief: Some("Old brief".to_owned()),
             source_project: None,
+            code_source: None,
         })
         .await
         .expect("the project is added");
@@ -779,5 +784,64 @@ async fn a_project_deleted_through_the_bridge_leaves_the_read_and_a_second_delet
         matches!(&refusal, Refusal::Failed { message, .. } if message.contains("gone")),
         "{refusal:?}"
     );
+    stop_service(service).await;
+}
+
+#[tokio::test]
+async fn a_team_access_change_reaches_the_service_and_the_read_shows_it() {
+    let home = temp_home();
+    let service = start_service(home.path()).await;
+    let client = client_of(home.path()).await;
+    let team = client
+        .team_create(&TeamCreateParams {
+            name: "Desarrollo".to_owned(),
+            purpose: None,
+            character: None,
+            access: Some(TeamAccess::Full),
+            workspaces: None,
+        })
+        .await
+        .expect("the team is created");
+
+    let (_bridge, handle, mut updates) = bridge_for(home.path());
+    let mut state = StoreState::default();
+    until(
+        &mut updates,
+        &mut state,
+        "the team with its card",
+        |state| {
+            state
+                .teams
+                .as_deref()
+                .is_some_and(|records| !records.is_empty())
+        },
+    )
+    .await;
+
+    let changed = handle
+        .set_team_access(team.id.clone(), TeamAccess::Default)
+        .await
+        .expect("the owner may change the access");
+    assert_eq!(changed.access, TeamAccess::Default);
+    until(
+        &mut updates,
+        &mut state,
+        "the new access in the read",
+        |state| {
+            state.teams.as_deref().is_some_and(|records| {
+                records
+                    .iter()
+                    .any(|record| record.team.access == TeamAccess::Default)
+            })
+        },
+    )
+    .await;
+    let stored = client
+        .team_show(&TeamRef {
+            team: team.id.clone(),
+        })
+        .await
+        .expect("the team is read");
+    assert_eq!(stored.access, TeamAccess::Default);
     stop_service(service).await;
 }

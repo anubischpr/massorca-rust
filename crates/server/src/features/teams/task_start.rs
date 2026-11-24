@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use massorca_core_agents::{Agents, SecretGrant};
-use massorca_core_store::{BotRow, Store, TaskRow, TeamRow, new_id, now_ms};
+use massorca_core_store::{BotRow, Store, TaskRow, TeamProjectRow, TeamRow, new_id, now_ms};
 use massorca_core_workspace::{DomainError, Workspaces};
 use massorca_protocol::methods::agents::AgentStartParams;
 use massorca_protocol::methods::events::{
@@ -37,6 +37,9 @@ const TEAMS_FOLDER: &str = "bot-teams";
 const TEAMS_PROJECT_NAME: &str = "Bot teams";
 
 static START_GATE: Mutex<()> = Mutex::new(());
+
+/// Failed starts in a row after which a task is refused until it is reopened (AUTO-16; pv96 trips at three).
+const CIRCUIT_BREAK_FAILURES: u32 = 3;
 
 /// Serialises task starts with the calls that read whether a task runs and then write: removal, done, reopen, a bot
 /// change, and an agent resume, which can revive a task's session. One gate for every team: starts are short.
@@ -120,6 +123,15 @@ pub(super) fn start_task(
             ),
         ));
     }
+    // The circuit breaker (AUTO-16): after three failed starts in a row, only a reopen lets the task start again.
+    if store.task_start_failures(&row.id).map_err(store_error)? >= CIRCUIT_BREAK_FAILURES {
+        return Err(ErrorBody::new(
+            codes::TASK_CIRCUIT_BROKEN,
+            row.error.clone().unwrap_or_else(|| {
+                format!("Circuit broken: task {} failed to start too often", row.id)
+            }),
+        ));
+    }
     let team = selectors::team(store, &row.team_id)?;
     let bot = match row.bot_id.as_deref() {
         Some(bot) => selectors::bot(store, &team, bot)?,
@@ -160,7 +172,18 @@ pub(super) fn start_task(
         .map_err(store_error)?;
     changes.task = Some(row.id.clone());
     let request = request_id(&row.id, &attempt);
-    let session = match spawn(agents, &place, &team, &bot, &row, &request, grant) {
+    let project = match row.project_id.as_deref() {
+        Some(id) => store.get_team_project(id).map_err(store_error)?,
+        None => None,
+    };
+    let text = prompt(
+        &team,
+        &bot,
+        &row,
+        project.as_ref(),
+        place.branch().map(String::as_str),
+    );
+    let session = match spawn(agents, &place, &team, &bot, &row, text, &request, grant) {
         Ok(session) => session,
         Err(error) => {
             return Err(after_failed_start(
@@ -381,12 +404,14 @@ fn fold_accent(ch: char) -> char {
 }
 
 /// Starts the bot's agent. A failure here is a start that spawned nothing.
+#[allow(clippy::too_many_arguments)]
 fn spawn(
     agents: &Agents,
     place: &Place,
     team: &TeamRow,
     bot: &BotRow,
     task: &TaskRow,
+    prompt: String,
     request: &str,
     grant: SecretGrant,
 ) -> Result<String, ErrorBody> {
@@ -394,7 +419,7 @@ fn spawn(
         AgentStartParams {
             workspace: place.workspace.id.clone(),
             kind: bot.kind.clone(),
-            prompt: Some(prompt(team, bot, task, place.branch().map(String::as_str))),
+            prompt: Some(prompt),
             args: Vec::new(),
             env: BTreeMap::new(),
             read_only: false,
@@ -500,6 +525,16 @@ fn record_failure(
     error: ErrorBody,
     changes: &mut Changes,
 ) -> Result<ErrorBody, ErrorBody> {
+    // The failure that trips the breaker is recorded as such, with the reason it failed, as pv96 words it.
+    let failures = store.task_start_failures(&row.id).map_err(store_error)?;
+    let error = if failures + 1 >= CIRCUIT_BREAK_FAILURES {
+        ErrorBody::new(
+            codes::TASK_CIRCUIT_BROKEN,
+            format!("Circuit broken: {}", error.message),
+        )
+    } else {
+        error
+    };
     if store
         .set_task_start_error(&row.id, &error.code, &error.message, now_ms())
         .map_err(store_error)?
@@ -606,8 +641,15 @@ fn path_text(path: &Path) -> Result<String, ErrorBody> {
     })
 }
 
-/// The bot's first prompt: who it is, its team and job, then the task.
-pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow, branch: Option<&str>) -> String {
+/// The bot's first prompt: who it is, its team and job, the task, then the project's goal and brief when the task is in a
+/// project (as pv96 gives them), and the branch when it works in its own worktree.
+pub(crate) fn prompt(
+    team: &TeamRow,
+    bot: &BotRow,
+    task: &TaskRow,
+    project: Option<&TeamProjectRow>,
+    branch: Option<&str>,
+) -> String {
     let mut text = format!(
         "You are {}, a bot in the team {}.\nYour job: {}\n",
         bot.name, team.name, bot.job
@@ -618,6 +660,24 @@ pub(crate) fn prompt(team: &TeamRow, bot: &BotRow, task: &TaskRow, branch: Optio
     text.push_str(&format!("\nTask: {}\n", task.title));
     if !task.body.is_empty() {
         text.push_str(&format!("\n{}\n", task.body));
+    }
+    if let Some(project) = project {
+        let brief = project.brief.trim();
+        let read = if brief.is_empty() {
+            ""
+        } else {
+            " Read its brief before you start."
+        };
+        text.push_str(&format!(
+            "\nThis task is part of the project \"{}\".{read}\n",
+            project.name
+        ));
+        if !project.goal.trim().is_empty() {
+            text.push_str(&format!("Goal: {}\n", project.goal.trim()));
+        }
+        if !brief.is_empty() {
+            text.push_str(&format!("\nBrief:\n{brief}\n"));
+        }
     }
     if let Some(branch) = branch {
         text.push_str(&format!(
@@ -1015,12 +1075,58 @@ mod tests {
             created_at: 1,
         };
 
-        let own = prompt(&team, &bot, &task, Some("parse-a1b2c3"));
+        let own = prompt(&team, &bot, &task, None, Some("parse-a1b2c3"));
         assert!(own.contains("branch parse-a1b2c3"), "{own}");
         assert!(
             own.contains("uncommitted changes of the main checkout"),
             "{own}"
         );
-        assert!(!prompt(&team, &bot, &task, None).contains("worktree"));
+        assert!(!prompt(&team, &bot, &task, None, None).contains("worktree"));
+    }
+
+    #[test]
+    fn a_task_in_a_project_reads_the_projects_goal_and_brief() {
+        let store = Store::open_in_memory().expect("store");
+        let task = task_in(&store);
+        let team = store.get_team(&task.team_id).expect("read").expect("team");
+        let bot = BotRow {
+            id: new_id(),
+            team_id: team.id.clone(),
+            name: "mara".to_owned(),
+            job: "Writes the parser".to_owned(),
+            kind: "fake".to_owned(),
+            model: None,
+            effort: None,
+            lead: false,
+            created_at: 1,
+        };
+        let mut project = TeamProjectRow {
+            id: new_id(),
+            team_id: team.id.clone(),
+            name: "Parser".to_owned(),
+            goal: "Parse every header".to_owned(),
+            brief: "Keep the public API.".to_owned(),
+            created_at: 1,
+            source_project_id: None,
+            code_source: None,
+        };
+
+        let text = prompt(&team, &bot, &task, Some(&project), None);
+        assert!(
+            text.contains(
+                "This task is part of the project \"Parser\". Read its brief before you start.\nGoal: Parse every header\n\nBrief:\nKeep the public API.\n"
+            ),
+            "{text}"
+        );
+
+        // A project without a goal or brief only names itself.
+        project.goal = String::new();
+        project.brief = "  ".to_owned();
+        let bare = prompt(&team, &bot, &task, Some(&project), None);
+        assert!(
+            bare.ends_with("This task is part of the project \"Parser\".\n"),
+            "{bare}"
+        );
+        assert!(!prompt(&team, &bot, &task, None, None).contains("project \""));
     }
 }

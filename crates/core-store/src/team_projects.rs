@@ -14,10 +14,11 @@ pub struct TeamProjectRow {
     pub created_at: i64,
     /// The Workspaces project the code comes from; cleared when that project is removed.
     pub source_project_id: Option<String>,
+    /// Where the owner said the code is (`existing_repository` or `new_folder_with_git`); recorded only.
+    pub code_source: Option<String>,
 }
 
-const SELECT_TEAM_PROJECTS: &str =
-    "SELECT id, team_id, name, goal, brief, created_at, source_project_id FROM team_projects";
+const SELECT_TEAM_PROJECTS: &str = "SELECT id, team_id, name, goal, brief, created_at, source_project_id, code_source FROM team_projects";
 
 fn team_project_from_row(row: &Row<'_>) -> rusqlite::Result<TeamProjectRow> {
     Ok(TeamProjectRow {
@@ -28,6 +29,7 @@ fn team_project_from_row(row: &Row<'_>) -> rusqlite::Result<TeamProjectRow> {
         brief: row.get("brief")?,
         created_at: row.get("created_at")?,
         source_project_id: row.get("source_project_id")?,
+        code_source: row.get("code_source")?,
     })
 }
 
@@ -35,7 +37,7 @@ impl Store {
     /// Inserts a team project. A duplicate id, or a name taken in its team, is `StoreError::Conflict`.
     pub fn insert_team_project(&self, row: &TeamProjectRow) -> Result<(), StoreError> {
         self.lock().execute(
-            "INSERT INTO team_projects (id, team_id, name, goal, brief, created_at, source_project_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO team_projects (id, team_id, name, goal, brief, created_at, source_project_id, code_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 row.id,
                 row.team_id,
@@ -43,7 +45,8 @@ impl Store {
                 row.goal,
                 row.brief,
                 row.created_at,
-                row.source_project_id
+                row.source_project_id,
+                row.code_source
             ],
         )?;
         Ok(())
@@ -81,8 +84,15 @@ impl Store {
     /// Changes a project's name, goal, brief and source project. Returns whether a row changed.
     pub fn update_team_project(&self, row: &TeamProjectRow) -> Result<bool, StoreError> {
         let changed = self.lock().execute(
-            "UPDATE team_projects SET name = ?2, goal = ?3, brief = ?4, source_project_id = ?5 WHERE id = ?1",
-            params![row.id, row.name, row.goal, row.brief, row.source_project_id],
+            "UPDATE team_projects SET name = ?2, goal = ?3, brief = ?4, source_project_id = ?5, code_source = ?6 WHERE id = ?1",
+            params![
+                row.id,
+                row.name,
+                row.goal,
+                row.brief,
+                row.source_project_id,
+                row.code_source
+            ],
         )?;
         Ok(changed > 0)
     }

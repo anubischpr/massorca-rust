@@ -245,8 +245,12 @@ pub const BOT_BUSY: &str = "bot.busy";
 pub const TASK_NOT_FOUND: &str = "task.not_found";
 /// The task's agent session still runs; stop it first.
 pub const TASK_RUNNING: &str = "task.running";
+/// `task.stop` on a task whose agent session does not run.
+pub const TASK_NOT_RUNNING: &str = "task.not_running";
 /// `task.start` on a task that already has a session or an outcome; reopen it first.
 pub const TASK_STARTED: &str = "task.started";
+/// `task.start` on a task whose last three starts failed in a row; reopen it to try again (AUTO-16).
+pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 /// `task.start` on a task without a bot.
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
