@@ -48,6 +48,7 @@ use crate::model::region_cycle::Zone;
 use crate::model::regions::Region;
 use crate::model::settings::SettingsModel;
 use crate::model::shell_state::ShellModel;
+use crate::model::sidebar::SidebarFolds;
 use crate::model::teams::{TeamsSource, TeamsState, UnavailableTeams};
 use crate::service::{ServiceBridge, ServiceHandle};
 use crate::store::{ClientDataSource, ServiceStore};
@@ -90,6 +91,8 @@ mod service_tests;
 mod session_view_tests;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod sidebar_fold_tests;
 #[cfg(test)]
 mod source_control_tests;
 #[cfg(test)]
@@ -211,6 +214,8 @@ pub struct Shell {
     bring_back: Option<bring_back::BringBackConfirm>,
     /// The delegate form under the open session, if any (X-CH-06).
     delegate: Option<delegate::DelegateForm>,
+    /// The workspaces whose folded sessions the Sidebar shows unfolded (WS-33). Not saved.
+    sidebar_folds: SidebarFolds,
 }
 
 impl Shell {
@@ -440,6 +445,7 @@ impl Shell {
             terminal_notice: None,
             bring_back: None,
             delegate: None,
+            sidebar_folds: SidebarFolds::default(),
         }
     }
 
@@ -723,6 +729,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
+                        &self.sidebar_folds,
                         &self.search,
                         false,
                         self.rail.morph_generation(),
@@ -747,6 +754,7 @@ impl Render for Shell {
                 el.child(
                     sidebar::sidebar(
                         &self.model,
+                        &self.sidebar_folds,
                         &self.search,
                         true,
                         self.rail.morph_generation(),

@@ -6,7 +6,7 @@ use super::change;
 use super::rail::agent_kind;
 use crate::model::shell::{Agent, AgentState, HostReach};
 use crate::model::sidebar::{NavKind, NavRow, TreeRow};
-use gpui::{FocusHandle, SharedString, WeakEntity};
+use gpui::{AnyElement, FocusHandle, SharedString, WeakEntity, div, prelude::*};
 use massorca_ui::IconName;
 use massorca_ui::components::agent_status::AgentState as GlyphState;
 use massorca_ui::components::icon_button::IconButton;
@@ -106,8 +106,56 @@ pub(super) fn tree_row(
                 row
             }
         }
+        TreeRow::ShowMore {
+            workspace_id,
+            count,
+        } => {
+            let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
+            fold_row(id, format!("Show {count} more")).on_click(move |_, _, cx| {
+                let id = workspace_id.clone();
+                change(&shell, cx, move |shell| shell.sidebar_folds.unfold(&id));
+            })
+        }
+        TreeRow::ShowLess { workspace_id } => {
+            let (shell, workspace_id) = (shell.clone(), workspace_id.clone());
+            fold_row(id, "Show less".to_owned()).on_click(move |_, _, cx| {
+                let id = workspace_id.clone();
+                change(&shell, cx, move |shell| shell.sidebar_folds.fold(&id));
+            })
+        }
     };
     item.focus_handle(focus.clone()).tab_stop(true)
+}
+
+/// One tree row as an element. A fold row carries a debug selector, so tests can click it.
+pub(super) fn tree_item(
+    row: &TreeRow,
+    index: usize,
+    focus: &FocusHandle,
+    shell: &WeakEntity<Shell>,
+) -> AnyElement {
+    let item = tree_row(row, index, focus, shell);
+    match fold_selector(row) {
+        Some(selector) => div()
+            .debug_selector(move || selector)
+            .child(item)
+            .into_any_element(),
+        None => item.into_any_element(),
+    }
+}
+
+/// The debug selector of a fold row, named by its workspace.
+fn fold_selector(row: &TreeRow) -> Option<String> {
+    match row {
+        TreeRow::ShowMore { workspace_id, .. } => Some(format!("sidebar-show-more-{workspace_id}")),
+        TreeRow::ShowLess { workspace_id } => Some(format!("sidebar-show-less-{workspace_id}")),
+        _ => None,
+    }
+}
+
+/// A fold row at session level in tertiary text: a control under the sessions, not one of them.
+fn fold_row(id: SharedString, label: String) -> SidebarRow {
+    SidebarRow::new(id, label).level(SESSION_LEVEL).dimmed(true)
 }
 
 /// The row action that opens the bring-back confirm for a finished child. It shows on hover or focus.
