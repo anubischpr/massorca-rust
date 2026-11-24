@@ -63,6 +63,7 @@ jobs:
       ui: ${{ steps.groups.outputs.ui }}
       desktop_deps: ${{ steps.groups.outputs.desktop_deps }}
       release: ${{ steps.groups.outputs.release }}
+      mobile: ${{ steps.groups.outputs.mobile }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -71,27 +72,29 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; echo "release=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "core=true" >> "$GITHUB_OUTPUT"; echo "ui=true" >> "$GITHUB_OUTPUT"; echo "release=true" >> "$GITHUB_OUTPUT"; echo "mobile=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
           echo "$files"
-          all=false; core=false; ui=false; deps=false; scripts=false
+          all=false; core=false; ui=false; deps=false; scripts=false; mobile=false
           while IFS= read -r f; do
             case "$f" in
               Cargo.toml|Cargo.lock|rust-toolchain.toml|rustfmt.toml|.github/workflows/*) all=true ;;
+              mobile/*) mobile=true ;;
               scripts/*) scripts=true ;;
               crates/ui/*|crates/desktop/*) ui=true ;;
               crates/protocol/*|crates/client/*|crates/server/*|crates/core-*/*|crates/profile/*|crates/cli/*) core=true; deps=true ;;
               crates/*) core=true ;;
             esac
           done <<< "$files"
-          if [ "$all" = true ]; then core=true; ui=true; fi
+          if [ "$all" = true ]; then core=true; ui=true; mobile=true; fi
           release=false
           if [ "$core" = true ] || [ "$ui" = true ] || [ "$scripts" = true ]; then release=true; fi
           echo "core=$core" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
           echo "desktop_deps=$deps" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "mobile=$mobile" >> "$GITHUB_OUTPUT"
 
   fmt:
     runs-on: ubuntu-latest
@@ -350,3 +353,25 @@ jobs:
           name: massorca-desktop-bundle-${{ runner.os }}
           path: bundle
           if-no-files-found: error
+
+  # The phone app (decision 0080, task A7): TypeScript, lint, the generated tokens and Jest, with no native library.
+  mobile:
+    name: mobile (typecheck, lint, test)
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run tokens:check
+      - run: npm test
