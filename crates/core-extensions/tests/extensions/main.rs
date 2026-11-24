@@ -13,6 +13,7 @@ mod remove;
 mod reserved;
 mod review;
 mod service;
+mod skill_discovery;
 mod skill_files;
 mod source;
 mod sweep;
