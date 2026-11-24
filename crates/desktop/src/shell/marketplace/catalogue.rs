@@ -18,6 +18,7 @@ use gpui::{
 };
 use massorca_ui::components::agent_icon::AgentKind;
 use massorca_ui::components::badge::Badge;
+use massorca_ui::components::button::{Button, ButtonVariant};
 use massorca_ui::components::empty_state::EmptyState;
 use massorca_ui::components::extension_card::{ExtensionAction, ExtensionCard, ExtensionState};
 use massorca_ui::components::list_row::{ListRow, RowLeading};
@@ -219,6 +220,7 @@ pub(super) fn catalogue_view(
         .gap(px(SPACE_2))
         .child(div().w(px(SEARCH_WIDTH)).child(frame.search.clone()))
         .child(host_picker_row(frame, cx))
+        .child(add_extension(frame))
         .child(
             div()
                 .text_style(TYPE_BODY_SM)
@@ -255,6 +257,18 @@ pub(super) fn catalogue_view(
         .child(header)
         .child(toolbar)
         .child(body)
+        .into_any_element()
+}
+
+/// The Add extension control: a package in a folder on This computer, reviewed before it installs.
+fn add_extension(frame: &MarketplaceFrame) -> AnyElement {
+    let shell = frame.shell.clone();
+    Button::new("marketplace-add-extension", "Add extension")
+        .variant(ButtonVariant::Secondary)
+        .leading_icon(IconName::Plus)
+        .on_click(move |_, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.open_add_extension(cx));
+        })
         .into_any_element()
 }
 

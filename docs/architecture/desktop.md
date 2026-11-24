@@ -220,6 +220,14 @@ Linux only. No automated run opens a visible window.
   that asks for one starts the call; the image is decoded off the UI thread and kept per package, version and path
   (`model/marketplace/item_images.rs`, `shell/marketplace/item_images.rs`). A new version fetches again. A failed
   call or an image that does not decode leaves the icon, and it is not asked for again.
+- A card for an agent draws the agent's own mark, the one the sidebar and model picker draw for its kind
+  (`rail::agent_kind`, reused in `shell/marketplace/catalogue.rs`). A kind the desktop has no mark for keeps its logo or
+  the Bot icon.
+- Add extension (`shell/marketplace/add_folder.rs`) sits in the catalogue header and takes a full folder path on This
+  computer. Its review is the catalogue install's review (`InstallReview`, with no catalogue item): `extensions.inspect`
+  answers for `dir:<path>`, and nothing installs until Allow and install is pressed. The CLI reaches the same review with
+  `massorca extension install dir:<path>`; it prints the review and needs `--consent` or `--yes`. A git URL is listed as
+  not available yet, because the service's sources are `catalogue:`, `dir:` and `file:` only.
 - Update checks (`shell/marketplace/extension_updates.rs`): each installed folder or archive package is inspected once
   per read of the lists, never per draw. A review whose sha256 differs from the installed one lists the package on
   Updates with that review's version. Its Update button sends `extensions.update` with the review's consent, and the

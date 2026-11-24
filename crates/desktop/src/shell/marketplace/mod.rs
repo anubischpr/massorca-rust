@@ -2,6 +2,7 @@
 //! Installs and agent accounts go through the source trait, and the snapshot always follows it.
 
 mod accounts;
+mod add_folder;
 mod catalogue;
 mod dialogs;
 #[cfg(test)]
@@ -41,6 +42,7 @@ use massorca_ui::tokens::{SPACE_4, SPACE_6};
 
 use accounts::AccountWrite;
 pub(super) use accounts::AccountsUi;
+pub(super) use add_folder::AddFolderDialog;
 pub(super) use dialogs::dialog;
 
 /// The uninstall confirm on screen: the item, and the refusal to show in it, if any.
@@ -54,13 +56,14 @@ pub(super) struct UninstallConfirm {
     pub remove_cli: bool,
 }
 
-/// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
-/// is sent to install until the person presses Install, and a vendor installer also needs its own tick (decision
-/// 0062).
+/// The install review on screen for one package, from the catalogue or a folder. What the service reported is shown
+/// as it came; nothing is sent to install until the person presses Install, and a vendor installer also needs its own
+/// tick (decision 0062).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct InstallReview {
-    pub item: MarketplaceItemId,
-    /// The `catalogue:<id>` source the review and the install both name.
+    /// The catalogue item the review is for; None for a package read from a folder on This computer.
+    pub item: Option<MarketplaceItemId>,
+    /// The `catalogue:<id>` or `dir:<path>` source the review and the install both name.
     pub source: String,
     /// What `extensions.inspect` reported; `None` while it runs or after it was refused.
     pub review: Option<ExtensionReview>,

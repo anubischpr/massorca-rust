@@ -212,8 +212,10 @@ pub struct Shell {
     marketplace_error: Option<(Option<AccountId>, String)>,
     /// The uninstall confirm on screen, if any.
     marketplace_uninstall: Option<marketplace::UninstallConfirm>,
-    /// The install review of a catalogue package on screen, if any (decision 0062).
+    /// The install review on screen, for a catalogue package or a folder, if any (decision 0062).
     marketplace_review: Option<marketplace::InstallReview>,
+    /// The Add extension dialog on screen, if any.
+    marketplace_add: Option<marketplace::AddFolderDialog>,
     /// The last refused change to an installed package, with the item it concerns.
     marketplace_item_error: Option<(crate::model::marketplace::MarketplaceItemId, String)>,
     /// The update checks of the installed packages, and the review each checked package returned (decision 0062).
@@ -504,6 +506,7 @@ impl Shell {
             marketplace_error: None,
             marketplace_uninstall: None,
             marketplace_review: None,
+            marketplace_add: None,
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
