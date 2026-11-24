@@ -36,13 +36,21 @@ create takes `setupDecision` (`run`, `skip`, `inherit`) and a per-project `setup
     shell preference never decides it, the runner is never typed into a shell, and the `bash.exe` in System32 (the WSL
     launcher) is never used. A `#!` script with no Git Bash, or naming another interpreter, gets a `.cmd` that prints
     why in the terminal and exits 1, as the reference does.
-  - A `.cmd` runner path containing one of `& < > ( ) @ ^ | % ! "` is refused (setup `failed`): cmd re-reads those in a
-    `/c` line. A path with spaces is safe: cmd keeps two quotes around an existing file's name.
+  - A `.cmd` runner path containing one of `& < > ( ) @ ^ | % ! " , ; =` is refused (setup `failed`): cmd re-reads
+    those in a `/c` line, and `,`, `;` and `=` split an unquoted path into another program and its arguments. A path
+    with spaces is safe: cmd keeps two quotes around an existing file's name.
+  - A `.cmd` runner expands `%NAME%` before cmd reads `&` and the rest, so a branch `x&calc` would run `calc`. Before
+    the runner is written, every variable it exposes (workspace path, name and branch, root path, and the `ORCA_*`
+    and compatibility names that share them) is checked; a value holding `& | < > ^ % ! ( ) "` or a newline refuses
+    the setup with `failed` and a reason naming the variable, in the create result. The `.sh` runner is unaffected.
+  - Git Bash is a `bin\bash.exe` whose parent folder also has `cmd\git.exe` or `git-bash.exe`, the shape of a Git
+    for Windows install; any other `bash.exe` counts as no Git Bash.
   - Linux and macOS: a `.sh` (`#!/usr/bin/env bash`, `set -e`, the `#!` line's `set` flags, then the script) started
     by `bash` from `PATH`, else `/bin/bash`.
 - **Terminal.** A service terminal (0033, 0035) in the workspace, titled `Setup`, working directory the worktree,
-  listed by `terminal list` and attachable by every client. Its request id is `workspace.setup:<workspace id>`, so a
-  repeated create in the same service life returns the same terminal. It runs on the service's host, which is also
+  listed by `terminal list` and attachable by every client. The runner is written, and the terminal started, only by
+  a create that made the workspace. A create answered from its stored request id starts no setup, writes no runner
+  (the first one may still be running) and carries no `setup` field, whatever its `no_setup` says. It runs on the service's host, which is also
   the execution host on SSH; no client runs anything.
 - **Environment.** `MASSORCA_ROOT_PATH` (the project path), `MASSORCA_WORKSPACE_PATH`, `MASSORCA_WORKSPACE_NAME`,
   `MASSORCA_WORKSPACE_BRANCH` (when there is one), the reference's `ORCA_ROOT_PATH`, `ORCA_WORKTREE_PATH`,
@@ -58,5 +66,5 @@ create takes `setupDecision` (`run`, `skip`, `inherit`) and a per-project `setup
 ## Consequences
 
 - A repository's `orca.yaml` setup now runs on every worktree create by a `workspace` caller. This is row 14 of 0078.
-- A create replayed after a service restart can run setup a second time; scripts are expected to be repeatable.
+- A repeated create does not say what the first create's setup did; `terminal list` of the workspace shows it.
 - The minimal YAML reader is a deliberate subset; a full parser is a dependency change for later.

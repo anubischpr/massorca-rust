@@ -63,9 +63,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Workspace, ErrorBody> {
     let no_setup = params.no_setup;
     let domain = for_mutation(&ctx).await?;
-    let mut workspace = blocking(move || domain.create_workspace(params)).await?;
+    let created = blocking(move || domain.create_workspace_once(params)).await?;
+    let mut workspace = created.workspace;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
-    workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
+    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again.
+    if !created.repeated {
+        workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
+    }
     Ok(workspace)
 }
 

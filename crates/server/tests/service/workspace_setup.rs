@@ -220,3 +220,99 @@ async fn a_shebang_script_on_windows_runs_through_git_bash_with_posix_paths() {
     );
     stop(running).await;
 }
+
+fn params(project: &str, name: &str) -> WorkspaceCreateParams {
+    WorkspaceCreateParams {
+        project: project.to_owned(),
+        name: name.to_owned(),
+        branch: None,
+        base: None,
+        existing_branch: false,
+        refresh_base: false,
+        path: None,
+        request_id: None,
+        no_setup: false,
+    }
+}
+
+/// The runner a worktree named `name` of `repo` gets: its admin folder under the main repository's git directory.
+fn runner_of(repo: &Path, name: &str) -> std::path::PathBuf {
+    let file = if cfg!(windows) {
+        "setup-runner.cmd"
+    } else {
+        "setup-runner.sh"
+    };
+    repo.join(".git")
+        .join("worktrees")
+        .join(name)
+        .join("massorca")
+        .join(file)
+}
+
+#[tokio::test]
+async fn a_repeated_create_starts_no_setup_and_leaves_the_runner_alone() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, Some(env_script()));
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+    let first_params = WorkspaceCreateParams {
+        request_id: Some("create-once".to_owned()),
+        ..params(&project.id, "feature")
+    };
+
+    let first: Workspace = client
+        .call(workspaces::CREATE, &first_params)
+        .await
+        .expect("create");
+    let Some(WorkspaceSetup::Started { terminal }) = first.setup.clone() else {
+        panic!("setup did not start: {:?}", first.setup);
+    };
+    wait_for_exit(&client, &first.id, &terminal).await;
+    let runner = runner_of(&repo, "feature");
+    std::fs::write(&runner, "left by the first run").expect("mark the runner");
+
+    let repeated: Workspace = client
+        .call(workspaces::CREATE, &first_params)
+        .await
+        .expect("repeat");
+    assert_eq!(repeated.id, first.id);
+    assert_eq!(repeated.setup, None);
+    assert_eq!(
+        std::fs::read_to_string(&runner).expect("runner"),
+        "left by the first run"
+    );
+    assert_eq!(terminals_of(&client, &first.id).await.len(), 1);
+    stop(running).await;
+}
+
+/// cmd expands `%VAR%` before it reads `&`, so a branch like this would run a second command.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_cmd_runner_refuses_a_variable_cmd_would_reread() {
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    repo_with_setup(&repo, Some(env_script()));
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let project = add_project(&client, home.path(), &repo).await;
+
+    let created: Workspace = client
+        .call(
+            workspaces::CREATE,
+            &WorkspaceCreateParams {
+                branch: Some("x&y".to_owned()),
+                ..params(&project.id, "feature")
+            },
+        )
+        .await
+        .expect("create");
+    let Some(WorkspaceSetup::Failed { reason }) = created.setup.clone() else {
+        panic!("setup was not refused: {:?}", created.setup);
+    };
+    assert!(reason.contains("MASSORCA_WORKSPACE_BRANCH"), "{reason}");
+    assert!(terminals_of(&client, &created.id).await.is_empty());
+    assert!(!runner_of(&repo, "feature").exists());
+    stop(running).await;
+}

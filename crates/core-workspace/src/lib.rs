@@ -20,6 +20,7 @@ mod views;
 mod workspaces;
 mod worktree_state;
 
+pub use create::Created;
 pub use error::DomainError;
 pub use layout::WorkspaceLayout;
 pub use projects::RemovedProject;
