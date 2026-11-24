@@ -1,4 +1,5 @@
 //! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`).
+//! A create runs the new worktree's setup script in a service terminal (decision 0086).
 //! Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
 
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use massorca_core_workspace::RemovalWaivers;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
+use crate::features::workspace_setup;
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -59,9 +61,11 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
 }
 
 async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Workspace, ErrorBody> {
+    let no_setup = params.no_setup;
     let domain = for_mutation(&ctx).await?;
-    let workspace = blocking(move || domain.create_workspace(params)).await?;
+    let mut workspace = blocking(move || domain.create_workspace(params)).await?;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
+    workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
     Ok(workspace)
 }
 

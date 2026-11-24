@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::workspaces::{
     BaseRefresh, Workspace, WorkspaceCreateParams, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams,
+    WorkspaceRemoveParams, WorkspaceSetup,
 };
 
 use crate::args::{WorkspaceCommand, WorkspaceCreateArgs};
@@ -32,6 +32,7 @@ pub async fn execute(
                     "base not refreshed, started from the local copy: {reason}"
                 ));
             }
+            lines.extend(setup_lines(created.setup.as_ref()));
             output.success(&created, &lines);
         }
         WorkspaceCommand::List(args) => {
@@ -100,5 +101,22 @@ fn create_params(
         refresh_base: args.refresh_base,
         path,
         request_id: args.request_id,
+        no_setup: args.no_setup,
     })
+}
+
+/// What the create did with the setup script, and how to watch it run.
+fn setup_lines(setup: Option<&WorkspaceSetup>) -> Vec<String> {
+    match setup {
+        None => Vec::new(),
+        Some(WorkspaceSetup::Started { terminal }) => vec![
+            format!("setup running in terminal {terminal}"),
+            format!("watch it: massorca terminal attach {terminal}"),
+        ],
+        Some(WorkspaceSetup::Skipped) => vec!["setup skipped (--no-setup)".to_owned()],
+        Some(WorkspaceSetup::Failed { reason }) => vec![format!("setup not started: {reason}")],
+        Some(WorkspaceSetup::Unknown) => {
+            vec!["setup: an outcome this client does not know".to_owned()]
+        }
+    }
 }

@@ -315,6 +315,9 @@ pub struct WorkspaceCreateArgs {
     /// Client request id: repeating it returns the first workspace instead of creating another.
     #[arg(long, value_name = "ID")]
     pub request_id: Option<String>,
+    /// Do not run the setup script of the new worktree's `orca.yaml`.
+    #[arg(long)]
+    pub no_setup: bool,
 }
 
 #[derive(Debug, Args)]

@@ -792,6 +792,7 @@ async fn a_read_only_device_cannot_make_git_start_a_program_the_repository_names
                 refresh_base: false,
                 path: None,
                 request_id: None,
+                no_setup: false,
             },
         )
         .await

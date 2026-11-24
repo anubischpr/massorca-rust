@@ -471,6 +471,7 @@ impl Agents {
                 refresh_base: false,
                 path: None,
                 request_id: request_key.clone(),
+                no_setup: false,
             })
         };
         if let Some(name) = name {
@@ -1019,6 +1020,7 @@ then report"
                 refresh_base: false,
                 path: None,
                 request_id: None,
+                no_setup: false,
             })
             .unwrap();
         let parent = session_row(&lead.id, None);

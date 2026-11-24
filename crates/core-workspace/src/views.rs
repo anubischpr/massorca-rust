@@ -45,6 +45,7 @@ pub(crate) fn workspace(row: &WorkspaceRow) -> Workspace {
         locked: None,
         prunable: None,
         base_refresh: None,
+        setup: None,
     }
 }
 
