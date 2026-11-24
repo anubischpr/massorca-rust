@@ -54,6 +54,7 @@ fn sample_workspace() -> workspaces::Workspace {
         locked: None,
         prunable: None,
         base_refresh: None,
+        setup: None,
     }
 }
 
@@ -100,6 +101,7 @@ fn method_names_follow_the_contract() {
     assert_eq!(workspaces::CREATE, "workspace.create");
     assert_eq!(workspaces::LIST, "workspace.list");
     assert_eq!(workspaces::SHOW, "workspace.show");
+    assert_eq!(workspaces::CURRENT, "workspace.current");
     assert_eq!(workspaces::REMOVE, "workspace.remove");
     assert_eq!(events::SUBSCRIBE, "events.subscribe");
     assert_eq!(config::GET, "config.get");
@@ -345,6 +347,7 @@ fn workspace_create_params_omit_unset_options_but_always_write_existing_branch()
             refresh_base: false,
             path: None,
             request_id: None,
+            no_setup: false,
         },
         &json!({ "project": "app", "name": "feat-x", "existing_branch": false }),
     );
@@ -369,6 +372,7 @@ fn workspace_create_params_write_refresh_base_only_when_it_is_set() {
             refresh_base: true,
             path: None,
             request_id: None,
+            no_setup: false,
         },
         &json!({
             "project": "app",
@@ -710,4 +714,49 @@ fn unknown_workspace_kind_and_state_in_a_list_decode_as_unknown() {
         workspaces::WorkspaceState::Unknown
     );
     assert_eq!(list.workspaces[1], sample_workspace());
+}
+
+#[test]
+fn workspace_create_params_write_no_setup_only_when_it_is_set() {
+    let params: workspaces::WorkspaceCreateParams =
+        serde_json::from_value(json!({ "project": "app", "name": "feat-x" })).expect("decodes");
+    assert!(!params.no_setup);
+    let skipping = workspaces::WorkspaceCreateParams {
+        no_setup: true,
+        ..params
+    };
+    assert_eq!(
+        serde_json::to_value(&skipping).expect("encodes")["no_setup"],
+        json!(true)
+    );
+}
+
+#[test]
+fn a_workspace_setup_outcome_is_tagged_and_absent_when_unset() {
+    assert!(
+        serde_json::to_value(sample_workspace())
+            .expect("encodes")
+            .get("setup")
+            .is_none()
+    );
+    let started = workspaces::Workspace {
+        setup: Some(workspaces::WorkspaceSetup::Started {
+            terminal: "t-1".to_owned(),
+        }),
+        ..sample_workspace()
+    };
+    assert_eq!(
+        serde_json::to_value(&started).expect("encodes")["setup"],
+        json!({ "outcome": "started", "terminal": "t-1" })
+    );
+    assert_eq!(
+        serde_json::to_value(workspaces::WorkspaceSetup::Failed {
+            reason: "no shell".to_owned()
+        })
+        .expect("encodes"),
+        json!({ "outcome": "failed", "reason": "no shell" })
+    );
+    let newer: workspaces::WorkspaceSetup =
+        serde_json::from_value(json!({ "outcome": "queued" })).expect("decodes");
+    assert_eq!(newer, workspaces::WorkspaceSetup::Unknown);
 }

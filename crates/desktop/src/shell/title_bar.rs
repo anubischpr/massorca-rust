@@ -9,7 +9,7 @@ use crate::model::title_bar::{
     BackControl, RegionToggle, TitleBarModel, title_bar as title_bar_model,
 };
 use gpui::{
-    Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window,
+    App, Decorations, Div, IntoElement, MouseButton, MouseDownEvent, WeakEntity, Window,
     WindowControlArea, div, prelude::*, px, svg,
 };
 use massorca_ui::components::button::{Button, ButtonSize, ButtonVariant};
@@ -58,7 +58,7 @@ pub(super) fn title_bar(
                 .map(|toggle| region_toggle(*toggle, shell.clone())),
         );
     if show_controls && !cfg!(target_os = "macos") {
-        row = row.child(window_controls(maximized, theme));
+        row = row.child(window_controls(maximized, shell, theme));
     }
     row
 }
@@ -189,7 +189,7 @@ fn toggle_icon(region: Region) -> (&'static str, IconName) {
 }
 
 /// Minimise, maximise and close, drawn by the app with the native hit areas (D-SH-03).
-fn window_controls(maximized: bool, theme: &Theme) -> impl IntoElement {
+fn window_controls(maximized: bool, shell: &WeakEntity<Shell>, theme: &Theme) -> impl IntoElement {
     let (maximise_label, maximise_icon) = if maximized {
         ("Restore", IconName::Copy)
     } else {
@@ -207,7 +207,7 @@ fn window_controls(maximized: bool, theme: &Theme) -> impl IntoElement {
             WindowControlArea::Min,
             false,
             theme,
-            |window| window.minimize_window(),
+            |window, _| window.minimize_window(),
         ))
         .child(window_control(
             "window-maximise",
@@ -216,7 +216,7 @@ fn window_controls(maximized: bool, theme: &Theme) -> impl IntoElement {
             WindowControlArea::Max,
             false,
             theme,
-            |window| window.zoom_window(),
+            |window, _| window.zoom_window(),
         ))
         .child(window_control(
             "window-close",
@@ -225,7 +225,12 @@ fn window_controls(maximized: bool, theme: &Theme) -> impl IntoElement {
             WindowControlArea::Close,
             true,
             theme,
-            |window| window.remove_window(),
+            {
+                let shell = shell.clone();
+                move |window, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.request_close(window, cx));
+                }
+            },
         ))
 }
 
@@ -237,7 +242,7 @@ fn window_control(
     area: WindowControlArea,
     danger: bool,
     theme: &Theme,
-    activate: impl Fn(&mut Window) + 'static,
+    activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let (hover_fill, pressed_fill, hover_icon) = if danger {
         (
@@ -255,6 +260,7 @@ fn window_control(
     let control = div()
         .id(id)
         .group(id)
+        .debug_selector(move || id.to_owned())
         .flex()
         .flex_none()
         .items_center()
@@ -264,7 +270,7 @@ fn window_control(
         .window_control_area(area)
         .hover(move |style| style.bg(hover_fill))
         .active(move |style| style.bg(pressed_fill))
-        .on_click(move |_, window, _| activate(window))
+        .on_click(move |_, window, cx| activate(window, cx))
         .child(
             svg()
                 .path(icon.path())

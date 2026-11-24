@@ -1,6 +1,6 @@
-//! The secret vault as the bridge reads it (decision 0071). The status and the names of every scope are read
-//! together: after each connect, on each `secret.changed` event and after each write. A read answers only
-//! with names and times, so the store never holds a value.
+//! The secret vault as the bridge reads it (decision 0071). The status, the names of every scope and the pending
+//! requests are read together: after each connect, on each `secret.changed` or request event and after each write.
+//! A read answers only with names and times, so the store never holds a value.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::secrets::{
-    SecretEntry, SecretListParams, SecretRemove, SecretRemoved, SecretSet,
+    SecretDecline, SecretEntry, SecretLink, SecretListParams, SecretRemove, SecretRemoved,
+    SecretRequest, SecretRequestsParams, SecretSet,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -36,7 +37,7 @@ impl SecretsFreshness {
         &self,
         number: u64,
         updates: &mpsc::UnboundedSender<StoreUpdate>,
-        answers: [SecretsUpdate; 2],
+        answers: [SecretsUpdate; 3],
     ) {
         let mut delivered = self
             .delivered
@@ -53,8 +54,8 @@ impl SecretsFreshness {
     }
 }
 
-/// Reads the status and the names in the background and delivers them when they are the newest read. A failed
-/// read is delivered as its refusal, so the store shows what the service said or that it could not be reached.
+/// Reads the status, the names and the pending requests in the background and delivers them when they are the newest
+/// read. A failed read is delivered as its refusal, so the store shows what the service said or that it is unreachable.
 pub(super) fn refresh_in_background(
     client: &Client,
     updates: &mpsc::UnboundedSender<StoreUpdate>,
@@ -65,9 +66,10 @@ pub(super) fn refresh_in_background(
     let order = Arc::clone(order);
     let number = order.request();
     tokio::spawn(async move {
-        let (status, list) = tokio::join!(
+        let (status, list, requests) = tokio::join!(
             client.secret_status(),
-            client.secret_list(&SecretListParams { scope: None })
+            client.secret_list(&SecretListParams { scope: None }),
+            client.secret_requests(&SecretRequestsParams { all: false })
         );
         order.deliver(
             number,
@@ -76,6 +78,11 @@ pub(super) fn refresh_in_background(
                 SecretsUpdate::Status(status.map_err(|error| Refusal::from(&error))),
                 SecretsUpdate::List(
                     list.map(|list| list.secrets)
+                        .map_err(|error| Refusal::from(&error)),
+                ),
+                SecretsUpdate::Requests(
+                    requests
+                        .map(|requests| requests.requests)
                         .map_err(|error| Refusal::from(&error)),
                 ),
             ],
@@ -96,6 +103,16 @@ pub(crate) enum SecretCommand {
         params: SecretRemove,
         reply: oneshot::Sender<Result<SecretRemoved, Refusal>>,
     },
+    /// Links a name to the owned secret of another scope: how a request is answered without storing a value.
+    Link {
+        params: SecretLink,
+        reply: oneshot::Sender<Result<SecretEntry, Refusal>>,
+    },
+    /// Declines a pending request. No secret changes.
+    Decline {
+        params: SecretDecline,
+        reply: oneshot::Sender<Result<SecretRequest, Refusal>>,
+    },
 }
 
 impl ServiceHandle {
@@ -109,6 +126,18 @@ impl ServiceHandle {
     /// `secret.remove`: deletes an owned secret. The list follows the refetch that the answer triggers.
     pub async fn secret_remove(&self, params: SecretRemove) -> Result<SecretRemoved, Refusal> {
         self.ask(|reply| Command::Secret(SecretCommand::Remove { params, reply }))
+            .await
+    }
+
+    /// `secret.link`: links a name to the owned secret of another scope. The service answers a request for it too.
+    pub async fn secret_link(&self, params: SecretLink) -> Result<SecretEntry, Refusal> {
+        self.ask(|reply| Command::Secret(SecretCommand::Link { params, reply }))
+            .await
+    }
+
+    /// `secret.decline`: declines a pending request. The request list follows the refetch that the answer triggers.
+    pub async fn secret_decline(&self, params: SecretDecline) -> Result<SecretRequest, Refusal> {
+        self.ask(|reply| Command::Secret(SecretCommand::Decline { params, reply }))
             .await
     }
 }
@@ -130,6 +159,16 @@ pub(super) fn spawn_call(
         SecretCommand::Remove { params, reply } => {
             write(client, updates, order, reply, move |client| async move {
                 client.secret_remove(&params).await
+            })
+        }
+        SecretCommand::Link { params, reply } => {
+            write(client, updates, order, reply, move |client| async move {
+                client.secret_link(&params).await
+            })
+        }
+        SecretCommand::Decline { params, reply } => {
+            write(client, updates, order, reply, move |client| async move {
+                client.secret_decline(&params).await
             })
         }
     }
@@ -162,6 +201,12 @@ pub(super) fn refuse_while_down(command: SecretCommand, refusal: Refusal) {
             let _ = reply.send(Err(refusal));
         }
         SecretCommand::Remove { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        SecretCommand::Link { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        SecretCommand::Decline { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
     }

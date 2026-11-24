@@ -9,7 +9,7 @@ use massorca_client::Client;
 use massorca_protocol::methods::agents::{
     AccountState, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList,
-    AccountsRemoveParams, AccountsRemoved, ImportResult,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, ImportResult,
 };
 
 use crate::cwd_path;
@@ -33,6 +33,17 @@ pub enum AccountsCommand {
         /// The account's label, for example work.
         #[arg(long)]
         label: Option<String>,
+        /// Prints the account and its sign-in terminal, and returns without attaching.
+        #[arg(long)]
+        no_attach: bool,
+    },
+    /// Signs an existing account in again: runs the kind's login in a terminal with the account's own home, then attaches
+    /// to it unless `--no-attach`. The account is kept whatever the login ends with.
+    SignIn {
+        /// Agent kind, for example claude.
+        kind: String,
+        /// The account id, as `accounts list` prints it.
+        account: String,
         /// Prints the account and its sign-in terminal, and returns without attaching.
         #[arg(long)]
         no_attach: bool,
@@ -93,24 +104,22 @@ pub async fn execute(
             label,
             no_attach,
         } => {
-            if !no_attach {
-                if json {
-                    return Err(CliError::new(
-                        "usage.invalid_arguments",
-                        "sign-in attaches to a terminal, which has no --json form; pass --no-attach",
-                        crate::error::exit::USAGE,
-                    ));
-                }
-                // Checked before the sign-in starts, so a refused attach leaves no account behind.
-                terminal_attach::require_terminal()?;
-            }
+            check_attach(json, no_attach)?;
             let added = client
                 .agent_accounts_add(&AccountsAddParams { kind, label })
                 .await?;
-            output.success(&added, &added_lines(&added));
-            if !no_attach {
-                terminal_attach::attach(target, client, &added.terminal_id).await?;
-            }
+            report_sign_in(target, client, output, &added, no_attach).await?;
+        }
+        AccountsCommand::SignIn {
+            kind,
+            account,
+            no_attach,
+        } => {
+            check_attach(json, no_attach)?;
+            let added = client
+                .agent_accounts_sign_in(&AccountsSignInParams { kind, account })
+                .await?;
+            report_sign_in(target, client, output, &added, no_attach).await?;
         }
         AccountsCommand::Import { kind, from, label } => {
             let imported = client
@@ -148,6 +157,37 @@ pub async fn execute(
                 .await?;
             output.success(&checked, &summary_lines(&checked));
         }
+    }
+    Ok(())
+}
+
+/// The attach rule of a sign-in, shared by `add` and `sign-in`: it attaches to a terminal, which has no `--json` form, so
+/// `--json` needs `--no-attach`. Checked before the sign-in starts, so a refused attach leaves the account as it was.
+fn check_attach(json: bool, no_attach: bool) -> Result<(), CliError> {
+    if no_attach {
+        return Ok(());
+    }
+    if json {
+        return Err(CliError::new(
+            "usage.invalid_arguments",
+            "sign-in attaches to a terminal, which has no --json form; pass --no-attach",
+            crate::error::exit::USAGE,
+        ));
+    }
+    terminal_attach::require_terminal()
+}
+
+/// Prints a started sign-in, then attaches to its terminal unless `--no-attach`.
+async fn report_sign_in(
+    target: &Target,
+    client: &Client,
+    output: Output,
+    added: &AccountsAdded,
+    no_attach: bool,
+) -> Result<(), CliError> {
+    output.success(added, &added_lines(added));
+    if !no_attach {
+        terminal_attach::attach(target, client, &added.terminal_id).await?;
     }
     Ok(())
 }

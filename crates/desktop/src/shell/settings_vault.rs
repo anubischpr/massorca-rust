@@ -15,6 +15,7 @@ use massorca_ui::tokens::{
 use massorca_ui::{ActiveTheme, Icon, IconName, IconSize, TextStyled, Theme};
 
 use super::SettingsFrame;
+use crate::model::secret_requests::RequestRow;
 use crate::model::secret_vault::{
     ScopeGroup, SecretRow, VaultPage, VaultScopeFilter, filtered_groups, group_count_line,
 };
@@ -24,7 +25,9 @@ use crate::shell::Shell;
 /// The page: the header, the toolbar, the status line, then the cards of the scopes the filter keeps.
 pub(super) fn vault_page(frame: &SettingsFrame<'_>, cx: &mut App) -> Vec<AnyElement> {
     let theme = *cx.theme();
-    let mut page = vec![header(frame, &theme), toolbar(frame, &theme)];
+    let mut page = vec![header(frame, &theme)];
+    page.extend(requests_block(frame, &theme));
+    page.push(toolbar(frame, &theme));
     page.extend(status_line(frame, &theme));
     let VaultPage::Listed(listing) = &frame.vault else {
         return page;
@@ -53,6 +56,120 @@ pub(super) fn vault_page(frame: &SettingsFrame<'_>, cx: &mut App) -> Vec<AnyElem
     }
     page.extend(groups.iter().map(|group| scope_card(group, frame, &theme)));
     page
+}
+
+/// The requests waiting for an answer, a heading and one card each, above the toolbar. Empty when none wait.
+fn requests_block(frame: &SettingsFrame<'_>, theme: &Theme) -> Vec<AnyElement> {
+    if frame.requests.is_empty() {
+        return Vec::new();
+    }
+    let mut block = vec![
+        div()
+            .text_style(TYPE_BODY_STRONG)
+            .text_color(theme.palette.text.primary)
+            .child("Waiting for you")
+            .into_any_element(),
+    ];
+    block.extend(
+        frame
+            .requests
+            .iter()
+            .map(|row| request_card(row, frame, theme)),
+    );
+    block
+}
+
+/// One request: who asks for which name in which scope, and why, then the answers. Store a value opens Add with the name
+/// and scope set; each scope that owns the name can be linked to; Decline ends the request. No value is ever shown here.
+fn request_card(row: &RequestRow, frame: &SettingsFrame<'_>, theme: &Theme) -> AnyElement {
+    let p = &theme.palette;
+    let connected = frame.connection.is_connected();
+    let shell = frame.shell.clone();
+    let id = row.id.clone();
+    let mut answers = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(
+            Button::new(format!("secret-request-store-{}", row.id), "Store a value")
+                .variant(ButtonVariant::Primary)
+                .disabled(!connected || !row.can_store)
+                .on_click({
+                    let (shell, id) = (shell.clone(), id.clone());
+                    move |_, cx| {
+                        let _ = shell.update(cx, |shell, cx| shell.open_request_secret(&id, cx));
+                    }
+                }),
+        );
+    for (owner, title) in &row.links {
+        let (shell, id, owner) = (shell.clone(), id.clone(), owner.clone());
+        answers = answers.child(
+            Button::new(
+                format!("secret-request-link-{}-{owner}", row.id),
+                format!("Use the secret in {title}"),
+            )
+            .variant(ButtonVariant::Secondary)
+            .disabled(!connected)
+            .on_click(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.link_request(&id, &owner, cx));
+            }),
+        );
+    }
+    answers = answers.child(
+        Button::new(format!("secret-request-decline-{}", row.id), "Decline")
+            .variant(ButtonVariant::Ghost)
+            .disabled(!connected)
+            .on_click(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.decline_request(&id, cx));
+            }),
+    );
+    let notice = frame
+        .request_notice
+        .as_ref()
+        .filter(|(id, _)| *id == row.id)
+        .map(|(_, text)| text.clone());
+    let asked = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(SPACE_2))
+        .text_style(TYPE_BODY_SM)
+        .text_color(p.text.secondary)
+        .child(format!("{} needs", row.asker))
+        .child(
+            div()
+                .text_style(TYPE_MONO_SM)
+                .text_color(p.text.primary)
+                .child(row.name.clone()),
+        )
+        .child(format!("in {}", row.scope_title));
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_2))
+        .p(px(SPACE_3))
+        .bg(p.surface.raised)
+        .border_1()
+        .border_color(p.border.default)
+        .rounded(px(RADIUS_LG))
+        .child(asked)
+        .child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.text.secondary)
+                .child(row.reason.clone()),
+        )
+        .child(answers);
+    if let Some(text) = notice {
+        card = card.child(
+            div()
+                .text_style(TYPE_BODY_SM)
+                .text_color(p.status.danger_fg)
+                .child(text),
+        );
+    }
+    card.into_any_element()
 }
 
 /// The title, its note, and Add secret at the top right. Add is off until the service is connected.

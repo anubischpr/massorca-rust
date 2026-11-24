@@ -1,5 +1,6 @@
 //! The core settings the desktop's Settings page shows (decision 0070). Defaults marked assumed there are not in the design.
 
+use massorca_core_agents::{DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX, DELEGATION_DEPTH_MIN};
 use serde_json::{Value, json};
 
 use crate::owner::Owner;
@@ -36,8 +37,11 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
         ),
         (
             "agents.delegation_depth",
-            Range { min: 1, max: 5 },
-            json!(3),
+            Range {
+                min: DELEGATION_DEPTH_MIN,
+                max: DELEGATION_DEPTH_MAX,
+            },
+            json!(DELEGATION_DEPTH_DEFAULT),
             "How many levels deep agents may delegate.",
         ),
         (

@@ -27,6 +27,7 @@ use crate::model::app_theme::ThemeChoice;
 use crate::model::hosts::HostState;
 use crate::model::marketplace::AgentLink;
 use crate::model::navigation::{MarketplacePage, Page};
+use crate::model::secret_requests::RequestRow;
 use crate::model::secret_vault::VaultPage;
 use crate::model::settings::{
     FolderSetting, FolderStatus, FolderValue, LOADING, NOT_CONNECTED, SettingsModel, folder_reason,
@@ -69,6 +70,10 @@ pub(super) struct SettingsFrame<'a> {
     pub agents: Vec<AgentLink>,
     /// The secret vault as the store holds it: its key, and the names by scope (decision 0071).
     pub vault: VaultPage,
+    /// The requests waiting for an answer, each with the scopes that could be linked to it.
+    pub requests: Vec<RequestRow>,
+    /// The last refused answer to a request, by request id, with the words to show.
+    pub request_notice: Option<(String, String)>,
 }
 
 /// The Settings page: navigation, search and the rows of the chosen section.

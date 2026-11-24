@@ -1,5 +1,7 @@
-//! Per-profile layout and the service endpoint name (ADR 0004).
+//! Per-profile layout, the service endpoint name (ADR 0004) and the desktop's single-instance lock (PLAT-07).
 
+mod desktop_dir;
+mod desktop_instance;
 mod endpoint;
 mod error;
 mod private_dir;
@@ -28,12 +30,14 @@ mod windows_sddl;
 #[cfg(windows)]
 mod windows_trust;
 
+pub use desktop_dir::{open_desktop_dir, open_desktop_state_dir};
+pub use desktop_instance::{DesktopClaim, DesktopOwner, claim_desktop};
 pub use endpoint::local_socket_name;
 #[cfg(unix)]
 pub use endpoint::restrict_socket;
 pub use error::ProfileError;
 pub use private_dir::{LOCK_FILE, PrivateDir, TOMBSTONE_PREFIX, is_leftover, open_private_dir};
-pub use profile::{Profile, ensure_dir};
+pub use profile::{Profile, UI_STATE_FILE, ensure_dir};
 pub use root_access::{
     FolderPlan, MAX_LISTED_ENTRIES, RootAccess, RootAccessError, apply_secure, check_location,
     create_home, create_private_dir, create_root, plan_secure, secure_root,

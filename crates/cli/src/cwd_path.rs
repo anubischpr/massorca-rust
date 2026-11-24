@@ -50,6 +50,11 @@ impl PathRules {
         }
     }
 
+    /// Whether the paths go to a remote host, which cannot resolve this computer's current directory.
+    pub fn is_remote(self) -> bool {
+        self.remote
+    }
+
     pub fn selector(self, text: &str) -> Result<String, CliError> {
         if self.remote {
             Ok(text.to_owned())

@@ -27,4 +27,7 @@ pub use kind::KindDecl;
 pub use packages::{BuiltInPackages, KindPackages, PackageKind, PackageState, used_kinds};
 pub use provided_env::{EnvProvider, PROVIDER_TIMEOUT, ProvidedEnv, ProviderError, SecretGrant};
 pub use resolve::SearchEnv;
-pub use sessions::{AgentError, Agents, AgentsConfig, Change, Listener, MergeResult, RepoOps};
+pub use sessions::{
+    AgentError, Agents, AgentsConfig, Change, DELEGATION_DEPTH_DEFAULT, DELEGATION_DEPTH_MAX,
+    DELEGATION_DEPTH_MIN, DELEGATION_DEPTH_SETTING, Listener, MergeResult, RepoOps,
+};

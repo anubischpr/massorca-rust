@@ -10,13 +10,14 @@ use massorca_core_workspace::DomainError;
 use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
-    AccountsRemoveParams, AccountsRemoved, AgentBringBackParams, AgentDelegateParams,
-    AgentDelegated, AgentHookParams, AgentKinds, AgentListParams, AgentMarkSeenParams,
-    AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef, AgentQueueList,
-    AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList, AgentSessionRef,
-    AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree, AgentWatchEvent,
-    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
-    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentBringBackParams,
+    AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds, AgentListParams,
+    AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef,
+    AgentQueueList, AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList,
+    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
+    AgentWatchEvent, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::git::status::GitOperation;
 use massorca_protocol::methods::terminals::TerminalState;
@@ -230,6 +231,13 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             agents_cap,
             Permission::Workspace,
             accounts_add,
+        )?,
+        methods.register(
+            Owner::Core,
+            agents::ACCOUNTS_SIGN_IN,
+            agents_cap,
+            Permission::Workspace,
+            accounts_sign_in,
         )?,
         methods.register(
             Owner::Core,
@@ -696,6 +704,19 @@ async fn accounts_add(
 ) -> Result<AccountsAdded, ErrorBody> {
     let mut added = on_agents(&ctx, move |agents| {
         agents.accounts_add(&params.kind, params.label)
+    })
+    .await?;
+    added.account = account_for_caller(&ctx.principal, added.account);
+    Ok(added)
+}
+
+/// Signs an existing account in again (decision 0059). The same caller rules as the sign-in of a new account apply.
+async fn accounts_sign_in(
+    ctx: RequestCtx,
+    params: AccountsSignInParams,
+) -> Result<AccountsAdded, ErrorBody> {
+    let mut added = on_agents(&ctx, move |agents| {
+        agents.accounts_sign_in(&params.kind, &params.account)
     })
     .await?;
     added.account = account_for_caller(&ctx.principal, added.account);

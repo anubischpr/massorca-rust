@@ -49,9 +49,10 @@ machine.
 | `project show <PROJECT>` | Shows one project. `PROJECT` is its id, name or path. |
 | `project inspect <PATH>` | Shows what `project add` without `--folder` or `--git` would register: a git repository at its toplevel, or a plain folder, and the id of a project already registered there. Registers nothing. |
 | `project rm <PROJECT>` | Unregisters a project that has no workspaces. Its files stay. |
-| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--path DIR] [--request-id ID]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. |
+| `workspace create <PROJECT> <NAME> [--branch B] [--base REF] [--existing-branch] [--refresh-base] [--path DIR] [--request-id ID] [--no-setup]` | Creates a worktree on a new branch in a git project, or registers a folder in a folder project. Alias `ws`. When the new worktree's `orca.yaml` has `scripts.setup`, it runs in a service terminal titled `Setup` and the output prints `setup running in terminal <ID>` and `watch it: massorca terminal attach <ID>`; `--json` carries it as `setup`. `--no-setup` skips it (decision 0086). |
 | `workspace list [--project PROJECT]` | Lists every workspace, or those of one project. Worktrees git registers under a workspaces root with no workspace row are listed as `unregistered`; nothing is removed for them. |
-| `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path. |
+| `workspace show <WORKSPACE>` | Shows one workspace. `WORKSPACE` is its id, name or path.
+| `workspace current [--path DIR]` | Shows the workspace that contains the current directory, or `DIR`, the deepest workspace whose path is that directory or an ancestor of it (worktree or folder, from the service's records; a subdirectory counts). Outside every workspace it exits 1 with `workspace.not_found`. With `--host`, `--path` is required and sent as typed: the service's own absolute path. Prints the same fields as `workspace show`. |
 | `workspace rm <WORKSPACE> [--force] [--discard-ignored] [--forget-orphan]` | Removes a workspace. `--force` discards uncommitted and untracked changes; `--discard-ignored` deletes ignored files; `--forget-orphan` forgets a directory git does not recognise and keeps it. |
 | `terminal create <WORKSPACE> [--shell PROGRAM [--arg ARG]...] [--cwd DIR] [--cols N --rows N] [--env KEY=VALUE]... [--title TITLE]` | Starts the default shell, or `--shell` program, in a workspace. Prints the terminal. |
 | `terminal list [--workspace WORKSPACE]` | Lists live and exited terminals, or those of one workspace. |
@@ -62,6 +63,7 @@ machine.
 | `terminal resize <TERMINAL> --cols N --rows N` | Sets the terminal's size. |
 | `terminal kill <TERMINAL> [--force]` | Ends the terminal's processes. The terminal stays listed as exited until closed. |
 | `terminal close <TERMINAL>` | Ends the terminal's processes if needed and forgets the terminal. |
+| `terminal wait <TERMINAL> [--for exit] [--timeout SECS]` | Waits until the terminal's process exits, up to `SECS` (default 300), then prints its exit code. Exits 0 once it has exited, whatever the code. Exits 1 with `terminal.wait_timeout` or `terminal.gone` (the terminal was closed while waiting), and 4 with `terminal.unverifiable` when the service stops answering. `--for` takes only `exit`. |
 | `pair offer [--ttl <SECS>] [--standard]` | Makes a pairing offer for a new device of the service. It is valid 10 minutes by default (1 to 3600 seconds) and works once. Prints the offer alone on the first line. The new device gets full access, every scope: a paired device is its owner. Advanced: `--standard` makes a reduced device, with `read` and `workspace` only. `--admin` is still accepted and changes nothing. |
 | `pair accept <OFFER\|-> [--name <HOST>] [--device-name <NAME>]` | Pairs this computer with the server of an offer and stores it as a host. `-` reads the offer from stdin, which keeps it out of shell history. The host name defaults to the server's name in the offer; the device name to this computer's host name. |
 | `device list` | Lists the paired devices with their scopes, pairing and last-seen times, and state. Needs `device-admin`. |
@@ -82,7 +84,7 @@ machine.
 | `agent start <KIND> --workspace <WS> [--prompt TEXT] [--read-only] [--title TITLE] [--mode MODE] [-- ARGS...]` | Starts an agent in the workspace root, in a terminal of its own. `--mode` names one of the kind's permission modes (`agent kinds`) and passes its flag; without it no mode flag is passed and the agent starts in its vendor's own default (`mode: the CLI's default`). An unknown mode fails with `agent.mode_unknown`. Prints the session, with `mode: MODE`, followed by `(requested)` when it is not confirmed: arguments after `--`, a mode that may fall back, or a typed switch. |
 | `agent list [--workspace WS]` | Lists agent sessions, newest first: execution, activity and title. |
 | `agent status [SESSION] [--watch] [--until STATE] [--timeout SECS]` | Shows one session's execution and activity, or every session's. `--watch` prints every change; `--until` waits for `working`, `waiting`, `idle`, `done` or `exited`. |
-| `agent stop <SESSION> [--force]` | Ends the session's run. The session stays listed as exited (`killed`). |
+| `agent stop <SESSION> [--force]` | Ends the session's run, and the runs of the sessions delegated from it. The sessions stay listed as exited (`killed`). |
 | `agent prompt <SESSION> <TEXT> [--force]` | Types TEXT into the session's terminal and submits it, once the agent is `idle` or `done`. Prints the bytes handed to the terminal. `--force` types it while the agent works or waits. |
 | `agent queue add <SESSION> <TEXT>` | Queues TEXT behind the session's busy agent and prints the queued prompt (`waiting`, with its reason). A kind that reports no activity is refused with `agent.queue_unavailable`; past 100 queued prompts with `agent.queue_full`. |
 | `agent queue list <SESSION>` | Lists the session's queued prompts, head first, with their states and reasons. |
@@ -111,6 +113,7 @@ machine.
 | `extension remove <ID> [--delete-agent-homes] [--uninstall-cli] [--yes | --uninstall-consent FINGERPRINT]` | Removes the package and its data. `--delete-agent-homes` also deletes its agents' accounts. `--uninstall-cli` runs the vendor's uninstall command, only for a CLI this package installed, and only after confirmation: without `--yes` or the fingerprint it changes nothing and prints the command and its fingerprint (`extension.consent_required`). In an agent's run it is refused with `extension.needs_person`. |
 | `agent accounts list <KIND>` | Lists the kind's accounts: id, label, state, identity, whether active, and the projects that chose each. |
 | `agent accounts add <KIND> [--label L] [--no-attach]` | Signs a new account in: runs the kind's login in a service-owned terminal, prints the account and the terminal, then attaches to it unless `--no-attach`. Refused with `--json` unless `--no-attach`. Built-in sign-in is declared for `claude` only (`claude auth login`); a kind without a sign-in is refused with `agent.credentials_unsupported`, which says to sign in from the vendor's CLI, then import the login. |
+| `agent accounts sign-in <KIND> <ACCOUNT> [--no-attach]` | Signs an existing account in again: runs the kind's login in its own home, prints the account and the terminal, then attaches unless `--no-attach`. The account is kept whatever the login ends with (an expired one stays listed, as `expired`, and is not deleted or signed out). Refused with `--json` unless `--no-attach`. Refused with `agent.account_not_found` for an unknown account or one of another kind, and with `agent.busy` while the account is signing in or a live run uses it. |
 | `agent accounts import <KIND> --from <DIR> [--label L]` | Copies the kind's declared login files from `DIR` into a new account, then checks it. Prints `imported`, `failed` (with the reason) or `not_found`. Names and sizes only. |
 | `agent accounts activate <KIND> <ACCOUNT> [--project P]` | Makes the account the kind's active one, or the account project `P` uses for the kind. |
 | `agent accounts remove <KIND> <ACCOUNT>` | Deletes the account after its sign-out, if the kind declares one. Refused while a live run uses it. |
@@ -258,7 +261,8 @@ Agents run as programs in service-owned terminals (`docs/architecture/agents.md`
   parent are not carried over, and the result's `note` says so. A parent in a folder workspace
   fails with `agent.delegate_needs_git` unless `--read-only` is given. A `--read-only` child
   runs in the parent's workspace and does not hold its writing slot. A delegated session
-  cannot delegate: `agent.depth_exceeded`.
+  delegates only while its depth stays within `agents.delegation_depth` (default 1, so a child cannot
+  delegate); past it the call fails with `agent.depth_exceeded`, which names the limit and the setting.
 - `agent tree SESSION` prints the root of the session's tree (the session, or its parent)
   and the root's children, oldest first, with their execution and activity. `--json` prints
   `{ root, children }` with each session's result text.
@@ -426,5 +430,5 @@ In PowerShell, set the variable first: `$env:MASSORCA_DESKTOP_BACKGROUND = "1"`,
 ## Not yet available
 
 Extension commands arrive in later milestones. Deferred from ADR 0008 (branch prefixes,
-generated names, setup scripts, terminal and agent guards on removal, squash-merge detection) are
+generated names, terminal and agent guards on removal, squash-merge detection) are
 not available yet.

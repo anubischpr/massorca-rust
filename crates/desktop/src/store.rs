@@ -13,7 +13,9 @@ use crate::data::DataSource;
 use crate::model::service_view::{NOTICE_TICK, service_snapshot, teams_view};
 use crate::model::shell::ShellSnapshot;
 use crate::model::teams::TeamsState;
-use crate::service::{ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options};
+use crate::service::{
+    LinkCloser, ServiceBridge, ServiceHandle, StoreState, StoreUpdate, connect_options,
+};
 
 /// Where the store's data comes from.
 #[derive(Clone, Debug)]
@@ -41,6 +43,11 @@ impl ClientDataSource {
 
     pub fn handle(&self) -> ServiceHandle {
         self.bridge.handle()
+    }
+
+    /// The way to close the link when the app quits.
+    pub fn closer(&self) -> LinkCloser {
+        self.bridge.closer()
     }
 
     /// Splits off the bridge and its updates. The bridge must outlive the store.

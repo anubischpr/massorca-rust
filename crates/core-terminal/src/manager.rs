@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -69,6 +70,8 @@ pub struct ManagerConfig {
     pub massorca_profile: Option<String>,
     pub max_live: usize,
     pub max_exited: usize,
+    /// Calls of `wait_for_exit` in progress at once; each holds a thread of the caller's blocking pool.
+    pub max_waits: usize,
     /// How long a graceful kill waits before killing the tree (0031).
     pub kill_grace: Duration,
     /// The same wait during `shutdown`, shorter so it fits the service's 5 s shutdown budget (0033).
@@ -84,6 +87,7 @@ impl ManagerConfig {
             massorca_profile: None,
             max_live: 256,
             max_exited: 64,
+            max_waits: 64,
             kill_grace: Duration::from_secs(5),
             shutdown_grace: Duration::from_secs(2),
         }
@@ -196,6 +200,19 @@ pub struct TerminalMembers {
     pub pids: Option<Vec<u32>>,
 }
 
+/// What a wait for a terminal's exit found when it returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitWait {
+    /// The exit is recorded, now or before the wait began.
+    Exited(TerminalInfo),
+    /// The timeout passed first; the terminal is still live or unverifiable.
+    TimedOut(TerminalInfo),
+    /// `close` started on the terminal, so it is being forgotten.
+    Gone,
+    /// The `max_waits` waits already in progress leave no room, so this one did not start.
+    TooManyWaits,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TerminalError {
     #[error("no such terminal")]
@@ -243,6 +260,7 @@ struct Inner {
     registry: Mutex<Registry>,
     /// Serializes creates that carry a request id, so a retry racing the first finds it.
     request_gate: Mutex<()>,
+    waits: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -306,6 +324,7 @@ impl TerminalManager {
                 config,
                 registry: Mutex::new(Registry::default()),
                 request_gate: Mutex::new(()),
+                waits: AtomicUsize::new(0),
             }),
         }
     }
@@ -403,6 +422,7 @@ impl TerminalManager {
                 attachments: Vec::new(),
                 query_match: 0,
                 held: VecDeque::new(),
+                closing: false,
             }),
             changed: Condvar::new(),
             resize_gate: Mutex::new(()),
@@ -541,6 +561,7 @@ impl TerminalManager {
     /// Kills the terminal if it is live, then forgets it.
     pub fn close(&self, id: &str) -> Result<TerminalInfo> {
         let terminal = self.inner.find(id)?;
+        terminal.mark_closing();
         let info = terminal.kill(
             false,
             ExitReason::Killed,
@@ -550,6 +571,16 @@ impl TerminalManager {
         let forgotten = lock(&self.inner.registry).forget(id);
         drop(forgotten);
         Ok(info)
+    }
+
+    /// Waits up to `timeout` for the terminal's exit. Answers at once when the exit is recorded or the terminal is being
+    /// closed. Blocks the calling thread, so the caller bounds `timeout`.
+    pub fn wait_for_exit(&self, id: &str, timeout: Duration) -> Result<ExitWait> {
+        let terminal = self.inner.find(id)?;
+        let Some(_slot) = take_wait_slot(&self.inner.waits, self.inner.config.max_waits) else {
+            return Ok(ExitWait::TooManyWaits);
+        };
+        Ok(terminal.wait_for_exit_or_close(Instant::now() + timeout))
     }
 
     /// Starts following the terminal's output: from `since` when the ring still holds it,
@@ -769,6 +800,24 @@ fn close_off_thread(master: &Arc<PtyMaster>) {
     }
 }
 
+/// One wait in progress; dropping it frees its slot for the next wait.
+struct WaitSlot<'a>(&'a AtomicUsize);
+
+impl Drop for WaitSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A slot among `limit` waits, or `None` while they are all taken.
+fn take_wait_slot(waits: &AtomicUsize, limit: usize) -> Option<WaitSlot<'_>> {
+    if waits.fetch_add(1, Ordering::SeqCst) < limit {
+        return Some(WaitSlot(waits));
+    }
+    waits.fetch_sub(1, Ordering::SeqCst);
+    None
+}
+
 #[derive(Debug)]
 enum Status {
     Live,
@@ -792,6 +841,8 @@ struct Core {
     /// detached, so a stalled emulator cannot hold the shell past either. A query no attached
     /// emulator can answer is answered at once (0036).
     held: VecDeque<HeldQuery>,
+    /// Set by `close` before the kill, so a waiter reports the terminal gone rather than exited.
+    closing: bool,
 }
 
 /// A cursor query an attached client may still answer.
@@ -1005,6 +1056,34 @@ impl Terminal {
     fn reap(&self, child: &mut PtyChild) -> io::Result<ExitInfo> {
         self.tree
             .reap_shell(|| self.master.foreground_process_group(), || child.wait())
+    }
+
+    /// Set before `close` kills the terminal, so a waiter answers `Gone` rather than the kill's exit.
+    fn mark_closing(&self) {
+        lock(&self.core).closing = true;
+        self.changed.notify_all();
+    }
+
+    /// Blocks until the exit is recorded, `close` starts, or `deadline` passes, whichever comes first.
+    fn wait_for_exit_or_close(&self, deadline: Instant) -> ExitWait {
+        let mut core = lock(&self.core);
+        loop {
+            if matches!(core.status, Status::Exited(_)) {
+                return ExitWait::Exited(self.info_locked(&core));
+            }
+            if core.closing {
+                return ExitWait::Gone;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return ExitWait::TimedOut(self.info_locked(&core));
+            }
+            core = self
+                .changed
+                .wait_timeout(core, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     fn wait_for_exit(&self, timeout: Duration) -> TerminalInfo {

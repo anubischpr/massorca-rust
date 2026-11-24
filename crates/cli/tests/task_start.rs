@@ -518,6 +518,53 @@ fn a_task_on_a_linked_git_project_runs_in_its_own_worktree_and_names_its_branch(
     sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
 }
 
+/// The reference runs setup for a team task's worktree; MassOrca keeps it off until task starts decide it (decision 0086).
+#[test]
+fn a_task_worktree_does_not_run_the_projects_setup_script() {
+    let (sandbox, _root) = team_sandbox();
+    add_bot(&sandbox, "mara", "fake");
+    let repo = sandbox.home().join("setup-repo");
+    git_repo(&repo);
+    std::fs::write(
+        repo.join("orca.yaml"),
+        "scripts:
+  setup: echo ran > setup-out.txt
+",
+    )
+    .expect("write orca.yaml");
+    harness::git(&repo, &["add", "orca.yaml"]);
+    harness::git(&repo, &["commit", "-q", "-m", "setup"]);
+    link_source(&sandbox, &repo, false, "parser");
+    let task = create_task(
+        &sandbox,
+        "Set up",
+        &["--bot", "mara", "--project", "parser"],
+    );
+
+    let started = sandbox.json_ok("default", &["task", "start", task.as_str()]);
+    let workspace_id = started["workspace_id"].as_str().expect("its workspace");
+    let session = started["session_id"].as_str().expect("linked session");
+    let record = sandbox.json_ok("default", &["agent", "status", session]);
+    let terminals = sandbox.json_ok(
+        "default",
+        &["terminal", "list", "--workspace", workspace_id],
+    );
+    let ids: Vec<&str> = terminals["terminals"]
+        .as_array()
+        .expect("terminals")
+        .iter()
+        .filter_map(|terminal| terminal["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![record["terminal_id"].as_str().expect("agent terminal")]
+    );
+    let workspace = sandbox.json_ok("default", &["workspace", "show", workspace_id]);
+    let path = PathBuf::from(workspace["path"].as_str().expect("path"));
+    assert!(!path.join("setup-out.txt").exists());
+    sandbox.json_ok("default", &["agent", "stop", session, "--force"]);
+}
+
 #[test]
 fn a_task_on_a_linked_folder_runs_in_that_folder_and_has_no_branch() {
     let (sandbox, _root) = team_sandbox();
