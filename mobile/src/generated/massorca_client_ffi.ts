@@ -27,6 +27,7 @@ import {
   FfiConverterObject,
   FfiConverterObjectWithCallbacks,
   FfiConverterOptional,
+  FfiConverterUInt16,
   FfiConverterUInt32,
   FfiConverterUInt64,
   FfiConverterUInt8,
@@ -2144,6 +2145,341 @@ const FfiConverterTypeStorageError = (() => {
   return new FFIConverter();
 })();
 
+// Enum: TerminalEvent
+export enum TerminalEvent_Tags {
+  Output = 'Output',
+  Snapshot = 'Snapshot',
+  Resized = 'Resized',
+  Exited = 'Exited',
+  Link = 'Link',
+}
+/**
+ * One step of a terminal view. Output comes in order, each run at the byte offset it starts at.
+ */
+export const TerminalEvent = (() => {
+  type Output__interface = {
+    tag: TerminalEvent_Tags.Output;
+    inner: Readonly<{ offset: bigint; bytes: ArrayBuffer }>;
+  };
+  /**
+   * Output from `offset` on: everything that arrived since the last `next`, up to 64 KiB. Output past a lost gap
+   * starts a new run at its own offset.
+   */
+  class Output_ extends UniffiEnum implements Output__interface {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    readonly [uniffiTypeNameSymbol] = 'TerminalEvent';
+    readonly tag = TerminalEvent_Tags.Output;
+    readonly inner: Readonly<{ offset: bigint; bytes: ArrayBuffer }>;
+    constructor(inner: { offset: bigint; bytes: ArrayBuffer }) {
+      super('TerminalEvent', 'Output');
+
+      this.inner = Object.freeze(inner);
+    }
+    static new(inner: { offset: bigint; bytes: ArrayBuffer }): Output_ {
+      return new Output_(inner);
+    }
+
+    static instanceOf(obj: any): obj is Output_ {
+      return obj.tag === TerminalEvent_Tags.Output;
+    }
+  }
+
+  type Snapshot__interface = {
+    tag: TerminalEvent_Tags.Snapshot;
+    inner: Readonly<{
+      offset: bigint;
+      cols: number;
+      rows: number;
+      bytes: ArrayBuffer;
+    }>;
+  };
+  /**
+   * The screen as the host holds it, from `offset` on. It opens the view, and it replaces the missed output when the
+   * host no longer holds that output.
+   */
+  class Snapshot_ extends UniffiEnum implements Snapshot__interface {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    readonly [uniffiTypeNameSymbol] = 'TerminalEvent';
+    readonly tag = TerminalEvent_Tags.Snapshot;
+    readonly inner: Readonly<{
+      offset: bigint;
+      cols: number;
+      rows: number;
+      bytes: ArrayBuffer;
+    }>;
+    constructor(inner: {
+      offset: bigint;
+      cols: number;
+      rows: number;
+      bytes: ArrayBuffer;
+    }) {
+      super('TerminalEvent', 'Snapshot');
+
+      this.inner = Object.freeze(inner);
+    }
+    static new(inner: {
+      offset: bigint;
+      cols: number;
+      rows: number;
+      bytes: ArrayBuffer;
+    }): Snapshot_ {
+      return new Snapshot_(inner);
+    }
+
+    static instanceOf(obj: any): obj is Snapshot_ {
+      return obj.tag === TerminalEvent_Tags.Snapshot;
+    }
+  }
+
+  type Resized__interface = {
+    tag: TerminalEvent_Tags.Resized;
+    inner: Readonly<{ cols: number; rows: number }>;
+  };
+  /**
+   * The terminal was resized, here or from another attachment.
+   */
+  class Resized_ extends UniffiEnum implements Resized__interface {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    readonly [uniffiTypeNameSymbol] = 'TerminalEvent';
+    readonly tag = TerminalEvent_Tags.Resized;
+    readonly inner: Readonly<{ cols: number; rows: number }>;
+    constructor(inner: { cols: number; rows: number }) {
+      super('TerminalEvent', 'Resized');
+
+      this.inner = Object.freeze(inner);
+    }
+    static new(inner: { cols: number; rows: number }): Resized_ {
+      return new Resized_(inner);
+    }
+
+    static instanceOf(obj: any): obj is Resized_ {
+      return obj.tag === TerminalEvent_Tags.Resized;
+    }
+  }
+
+  type Exited__interface = {
+    tag: TerminalEvent_Tags.Exited;
+    inner: Readonly<{ reason: string; code?: bigint; signal?: string }>;
+  };
+  /**
+   * The process ended. The view ends after this event. `reason` is `exited`, `killed` or `service_stopped`.
+   */
+  class Exited_ extends UniffiEnum implements Exited__interface {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    readonly [uniffiTypeNameSymbol] = 'TerminalEvent';
+    readonly tag = TerminalEvent_Tags.Exited;
+    readonly inner: Readonly<{
+      reason: string;
+      code?: bigint;
+      signal?: string;
+    }>;
+    constructor(inner: { reason: string; code?: bigint; signal?: string }) {
+      super('TerminalEvent', 'Exited');
+
+      this.inner = Object.freeze(inner);
+    }
+    static new(inner: {
+      reason: string;
+      code?: bigint;
+      signal?: string;
+    }): Exited_ {
+      return new Exited_(inner);
+    }
+
+    static instanceOf(obj: any): obj is Exited_ {
+      return obj.tag === TerminalEvent_Tags.Exited;
+    }
+  }
+
+  type Link__interface = {
+    tag: TerminalEvent_Tags.Link;
+    inner: Readonly<{ link: LinkState }>;
+  };
+  /**
+   * Whether the view can be trusted right now. Loss of contact is never shown as the terminal ending.
+   */
+  class Link_ extends UniffiEnum implements Link__interface {
+    /**
+     * @private
+     * This field is private and should not be used, use `tag` instead.
+     */
+    readonly [uniffiTypeNameSymbol] = 'TerminalEvent';
+    readonly tag = TerminalEvent_Tags.Link;
+    readonly inner: Readonly<{ link: LinkState }>;
+    constructor(inner: { link: LinkState }) {
+      super('TerminalEvent', 'Link');
+
+      this.inner = Object.freeze(inner);
+    }
+    static new(inner: { link: LinkState }): Link_ {
+      return new Link_(inner);
+    }
+
+    static instanceOf(obj: any): obj is Link_ {
+      return obj.tag === TerminalEvent_Tags.Link;
+    }
+  }
+
+  function instanceOf(obj: any): obj is TerminalEvent {
+    return obj[uniffiTypeNameSymbol] === 'TerminalEvent';
+  }
+
+  return Object.freeze({
+    instanceOf,
+    Output: Output_,
+    Snapshot: Snapshot_,
+    Resized: Resized_,
+    Exited: Exited_,
+    Link: Link_,
+  });
+})();
+/**
+ * One step of a terminal view. Output comes in order, each run at the byte offset it starts at.
+ */
+export type TerminalEvent = InstanceType<
+  (typeof TerminalEvent)['Output' | 'Snapshot' | 'Resized' | 'Exited' | 'Link']
+>;
+
+// FfiConverter for enum TerminalEvent
+const FfiConverterTypeTerminalEvent = (() => {
+  type TypeName = TerminalEvent;
+  class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    readFromCursor(c: Cursor): TypeName {
+      switch (c.readI32()) {
+        case 1:
+          return new TerminalEvent.Output({
+            offset: FfiConverterUInt64.readFromCursor(c),
+            bytes: FfiConverterArrayBuffer.readFromCursor(c),
+          });
+        case 2:
+          return new TerminalEvent.Snapshot({
+            offset: FfiConverterUInt64.readFromCursor(c),
+            cols: FfiConverterUInt16.readFromCursor(c),
+            rows: FfiConverterUInt16.readFromCursor(c),
+            bytes: FfiConverterArrayBuffer.readFromCursor(c),
+          });
+        case 3:
+          return new TerminalEvent.Resized({
+            cols: FfiConverterUInt16.readFromCursor(c),
+            rows: FfiConverterUInt16.readFromCursor(c),
+          });
+        case 4:
+          return new TerminalEvent.Exited({
+            reason: FfiConverterString.readFromCursor(c),
+            code: FfiConverterOptionalInt64.readFromCursor(c),
+            signal: FfiConverterOptionalString.readFromCursor(c),
+          });
+        case 5:
+          return new TerminalEvent.Link({
+            link: FfiConverterTypeLinkState.readFromCursor(c),
+          });
+        default:
+          throw new UniffiInternalError.UnexpectedEnumCase();
+      }
+    }
+    writeIntoCursor(value: TypeName, c: Cursor): void {
+      switch (value.tag) {
+        case TerminalEvent_Tags.Output: {
+          c.writeI32(1);
+          const inner = value.inner;
+          FfiConverterUInt64.writeIntoCursor(inner.offset, c);
+          FfiConverterArrayBuffer.writeIntoCursor(inner.bytes, c);
+          return;
+        }
+        case TerminalEvent_Tags.Snapshot: {
+          c.writeI32(2);
+          const inner = value.inner;
+          FfiConverterUInt64.writeIntoCursor(inner.offset, c);
+          FfiConverterUInt16.writeIntoCursor(inner.cols, c);
+          FfiConverterUInt16.writeIntoCursor(inner.rows, c);
+          FfiConverterArrayBuffer.writeIntoCursor(inner.bytes, c);
+          return;
+        }
+        case TerminalEvent_Tags.Resized: {
+          c.writeI32(3);
+          const inner = value.inner;
+          FfiConverterUInt16.writeIntoCursor(inner.cols, c);
+          FfiConverterUInt16.writeIntoCursor(inner.rows, c);
+          return;
+        }
+        case TerminalEvent_Tags.Exited: {
+          c.writeI32(4);
+          const inner = value.inner;
+          FfiConverterString.writeIntoCursor(inner.reason, c);
+          FfiConverterOptionalInt64.writeIntoCursor(inner.code, c);
+          FfiConverterOptionalString.writeIntoCursor(inner.signal, c);
+          return;
+        }
+        case TerminalEvent_Tags.Link: {
+          c.writeI32(5);
+          const inner = value.inner;
+          FfiConverterTypeLinkState.writeIntoCursor(inner.link, c);
+          return;
+        }
+        default:
+          // Throwing from here means that TerminalEvent_Tags hasn't matched an ordinal.
+          throw new UniffiInternalError.UnexpectedEnumCase();
+      }
+    }
+    allocationSize(value: TypeName): number {
+      switch (value.tag) {
+        case TerminalEvent_Tags.Output: {
+          const inner = value.inner;
+          let size = 4;
+          size += FfiConverterUInt64.allocationSize(inner.offset);
+          size += FfiConverterArrayBuffer.allocationSize(inner.bytes);
+          return size;
+        }
+        case TerminalEvent_Tags.Snapshot: {
+          const inner = value.inner;
+          let size = 4;
+          size += FfiConverterUInt64.allocationSize(inner.offset);
+          size += FfiConverterUInt16.allocationSize(inner.cols);
+          size += FfiConverterUInt16.allocationSize(inner.rows);
+          size += FfiConverterArrayBuffer.allocationSize(inner.bytes);
+          return size;
+        }
+        case TerminalEvent_Tags.Resized: {
+          const inner = value.inner;
+          let size = 4;
+          size += FfiConverterUInt16.allocationSize(inner.cols);
+          size += FfiConverterUInt16.allocationSize(inner.rows);
+          return size;
+        }
+        case TerminalEvent_Tags.Exited: {
+          const inner = value.inner;
+          let size = 4;
+          size += FfiConverterString.allocationSize(inner.reason);
+          size += FfiConverterOptionalInt64.allocationSize(inner.code);
+          size += FfiConverterOptionalString.allocationSize(inner.signal);
+          return size;
+        }
+        case TerminalEvent_Tags.Link: {
+          const inner = value.inner;
+          let size = 4;
+          size += FfiConverterTypeLinkState.allocationSize(inner.link);
+          return size;
+        }
+        default:
+          throw new UniffiInternalError.UnexpectedEnumCase();
+      }
+    }
+  }
+  return new FFIConverter();
+})();
+
 /**
  * A live view of the agent sessions of a host. `close`, or dropping it, ends the connection.
  */
@@ -2511,9 +2847,305 @@ const FfiConverterTypeGitWatch = new FfiConverterObject(
 );
 
 /**
+ * A live view of one terminal. `close`, or dropping it, detaches; the terminal keeps running on the host.
+ */
+export interface TerminalViewLike {
+  /**
+   * Detaches; the terminal keeps running on the host. A `next` in progress returns `None`.
+   */
+  close(): void;
+  /**
+   * Types `bytes` into the terminal. Fails while the host is out of contact; the view reconnects by itself.
+   */
+  input(
+    bytes: ArrayBuffer,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<void>;
+  /**
+   * The next event, or `Ok(None)` once the view is over: closed, or the attach ended. An `Err` is final.
+   */
+  next(asyncOpts_?: {
+    signal: AbortSignal;
+  }): /*throws*/ Promise<TerminalEvent | undefined>;
+  /**
+   * Sets the terminal's size on the host. A reconnect asks for this size again.
+   */
+  resize(
+    cols: number,
+    rows: number,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<void>;
+}
+/**
+ * @deprecated Use `TerminalViewLike` instead.
+ */
+export type TerminalViewInterface = TerminalViewLike;
+
+/**
+ * A live view of one terminal. `close`, or dropping it, detaches; the terminal keeps running on the host.
+ */
+export class TerminalView
+  extends UniffiAbstractObject
+  implements TerminalViewLike
+{
+  readonly [uniffiTypeNameSymbol] = 'TerminalView';
+  readonly [destructorGuardSymbol]: UniffiGcObject;
+  readonly [pointerLiteralSymbol]: UniffiHandle;
+  // No primary constructor declared for this class.
+  private constructor(pointer: UniffiHandle) {
+    super();
+    this[pointerLiteralSymbol] = pointer;
+    this[destructorGuardSymbol] =
+      uniffiTypeTerminalViewObjectFactory.bless(pointer);
+  }
+
+  /**
+   * Detaches; the terminal keeps running on the host. A `next` in progress returns `None`.
+   */
+  close(): void {
+    uniffiCaller.rustCall(
+      /*caller:*/ callStatus => {
+        nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_close(
+          uniffiTypeTerminalViewObjectFactory.clonePointer(this),
+          callStatus,
+        );
+      },
+      /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+    );
+  }
+
+  /**
+   * Types `bytes` into the terminal. Fails while the host is out of contact; the view reconnects by itself.
+   */
+  async input(
+    bytes: ArrayBuffer,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<void> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_input(
+            uniffiTypeTerminalViewObjectFactory.clonePointer(this),
+            FfiConverterArrayBuffer.lower(
+              bytes,
+              nativeModule().rustbuffer_alloc,
+            ),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_void,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_void,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_void,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_void,
+        /*liftFunc:*/ _v => {},
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * The next event, or `Ok(None)` once the view is over: closed, or the attach ended. An `Err` is final.
+   */
+  async next(asyncOpts_?: {
+    signal: AbortSignal;
+  }): Promise<TerminalEvent | undefined> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_next(
+            uniffiTypeTerminalViewObjectFactory.clonePointer(this),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_rust_buffer,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_rust_buffer,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_rust_buffer,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_rust_buffer,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        // Borrowed view over foreign memory: the call site owns the free,
+        // as on the sync paths. Unconditional — a no-op where buffers are
+        // already JS-owned.
+        /*liftFunc:*/ __rb => {
+          try {
+            return FfiConverterOptionalTypeTerminalEvent.lift(__rb);
+          } finally {
+            nativeModule().rustbuffer_free(__rb);
+          }
+        },
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  /**
+   * Sets the terminal's size on the host. A reconnect asks for this size again.
+   */
+  async resize(
+    cols: number,
+    rows: number,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<void> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_resize(
+            uniffiTypeTerminalViewObjectFactory.clonePointer(this),
+            FfiConverterUInt16.lower(cols, nativeModule().rustbuffer_alloc),
+            FfiConverterUInt16.lower(rows, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_void,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_void,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_void,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_void,
+        /*liftFunc:*/ _v => {},
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
+  }
+
+  uniffiDestroy(): void {
+    const ptr = (this as any)[destructorGuardSymbol];
+    if (ptr !== undefined) {
+      const pointer = uniffiTypeTerminalViewObjectFactory.pointer(this);
+      uniffiTypeTerminalViewObjectFactory.freePointer(pointer);
+      uniffiTypeTerminalViewObjectFactory.unbless(ptr);
+      delete (this as any)[destructorGuardSymbol];
+    }
+  }
+
+  static instanceOf(obj_: any): obj_ is TerminalView {
+    return uniffiTypeTerminalViewObjectFactory.isConcreteType(obj_);
+  }
+}
+
+const uniffiTypeTerminalViewObjectFactory: UniffiObjectFactory<TerminalViewLike> =
+  (() => {
+    return {
+      create(pointer: UniffiHandle): TerminalViewLike {
+        const instance = Object.create(TerminalView.prototype);
+        instance[pointerLiteralSymbol] = pointer;
+        instance[destructorGuardSymbol] = this.bless(pointer);
+        instance[uniffiTypeNameSymbol] = 'TerminalView';
+        return instance;
+      },
+
+      bless(p: UniffiHandle): UniffiGcObject {
+        return uniffiCaller.rustCall(
+          /*caller:*/ status =>
+            nativeModule().ubrn_uniffi_internal_fn_method_terminalview_ffi__bless_pointer(
+              p,
+              status,
+            ),
+          /*liftString:*/ FfiConverterString.lift,
+        );
+      },
+
+      unbless(ptr_: UniffiGcObject) {
+        ptr_.markDestroyed();
+      },
+
+      pointer(obj_: TerminalViewLike): UniffiHandle {
+        if ((obj_ as any)[destructorGuardSymbol] === undefined) {
+          throw new UniffiInternalError.UnexpectedNullPointer();
+        }
+        return (obj_ as any)[pointerLiteralSymbol];
+      },
+
+      clonePointer(obj_: TerminalViewLike): UniffiHandle {
+        const pointer = this.pointer(obj_);
+        return uniffiCaller.rustCall(
+          /*caller:*/ callStatus =>
+            nativeModule().ubrn_uniffi_massorca_client_ffi_fn_clone_terminalview(
+              pointer,
+              callStatus,
+            ),
+          /*liftString:*/ FfiConverterString.lift,
+        );
+      },
+
+      freePointer(pointer: UniffiHandle): void {
+        uniffiCaller.rustCall(
+          /*caller:*/ callStatus =>
+            nativeModule().ubrn_uniffi_massorca_client_ffi_fn_free_terminalview(
+              pointer,
+              callStatus,
+            ),
+          /*liftString:*/ FfiConverterString.lift,
+        );
+      },
+
+      isConcreteType(obj_: any): obj_ is TerminalViewLike {
+        return (
+          obj_[destructorGuardSymbol] &&
+          obj_[uniffiTypeNameSymbol] === 'TerminalView'
+        );
+      },
+    };
+  })();
+const FfiConverterTypeTerminalView = new FfiConverterObject(
+  uniffiTypeTerminalViewObjectFactory,
+);
+
+/**
  * One connection to a paired host. Dropping it closes the connection.
  */
 export interface HostLike {
+  /**
+   * Attaches to `terminal`, showing its output from now on and the screen first. The host's first answer is read
+   * here, so a refusal fails this call. After that the view reconnects by itself and resumes after the output it read.
+   */
+  attachTerminal(
+    terminal: string,
+    cols: number,
+    rows: number,
+    asyncOpts_?: { signal: AbortSignal },
+  ): /*throws*/ Promise<TerminalViewLike>;
   /**
    * The branch and the changed files of `workspace` (its id, name or path), read now.
    */
@@ -2565,6 +3197,56 @@ export class Host extends UniffiAbstractObject implements HostLike {
     super();
     this[pointerLiteralSymbol] = pointer;
     this[destructorGuardSymbol] = uniffiTypeHostObjectFactory.bless(pointer);
+  }
+
+  /**
+   * Attaches to `terminal`, showing its output from now on and the screen first. The host's first answer is read
+   * here, so a refusal fails this call. After that the view reconnects by itself and resumes after the output it read.
+   */
+  async attachTerminal(
+    terminal: string,
+    cols: number,
+    rows: number,
+    asyncOpts_?: { signal: AbortSignal },
+  ): Promise<TerminalViewLike> /*throws*/ {
+    const __stack = uniffiIsDebug ? new Error().stack : undefined;
+    try {
+      return await uniffiRustCallAsync(
+        /*rustCaller:*/ uniffiCaller,
+        /*rustFutureFunc:*/ () => {
+          return nativeModule().ubrn_uniffi_massorca_client_ffi_fn_method_host_attach_terminal(
+            uniffiTypeHostObjectFactory.clonePointer(this),
+            FfiConverterString.lower(terminal, nativeModule().rustbuffer_alloc),
+            FfiConverterUInt16.lower(cols, nativeModule().rustbuffer_alloc),
+            FfiConverterUInt16.lower(rows, nativeModule().rustbuffer_alloc),
+          );
+        },
+        /*pollFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_poll_u64,
+        /*cancelFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_cancel_u64,
+        /*completeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_complete_u64,
+        /*freeFunc:*/ nativeModule()
+          .ubrn_ffi_massorca_client_ffi_rust_future_free_u64,
+        // Async returns always go through the JS-side converter: the
+        // completed future's value is deserialized here by the
+        // per-callable return-type converter.
+        /*liftFunc:*/ FfiConverterTypeTerminalView.lift.bind(
+          FfiConverterTypeTerminalView,
+        ),
+        /*liftString:*/ FfiConverterString.lift.bind(FfiConverterString),
+        /*asyncOpts:*/ asyncOpts_,
+        /*errorHandler:*/ FfiConverterTypeFfiError.lift.bind(
+          FfiConverterTypeFfiError,
+        ),
+      );
+    } catch (__error: any) {
+      if (uniffiIsDebug && __error instanceof Error) {
+        __error.stack = __stack;
+      }
+      throw __error;
+    }
   }
 
   /**
@@ -3670,6 +4352,9 @@ const FfiConverterSequenceTypeAgentSessionSummary = new FfiConverterArray(
 // FfiConverter for number | undefined
 const FfiConverterOptionalUInt32 = new FfiConverterOptional(FfiConverterUInt32);
 
+// FfiConverter for bigint | undefined
+const FfiConverterOptionalInt64 = new FfiConverterOptional(FfiConverterInt64);
+
 // FfiConverter for AgentEvent | undefined
 const FfiConverterOptionalTypeAgentEvent = new FfiConverterOptional(
   FfiConverterTypeAgentEvent,
@@ -3678,6 +4363,11 @@ const FfiConverterOptionalTypeAgentEvent = new FfiConverterOptional(
 // FfiConverter for GitEvent | undefined
 const FfiConverterOptionalTypeGitEvent = new FfiConverterOptional(
   FfiConverterTypeGitEvent,
+);
+
+// FfiConverter for TerminalEvent | undefined
+const FfiConverterOptionalTypeTerminalEvent = new FfiConverterOptional(
+  FfiConverterTypeTerminalEvent,
 );
 
 // FfiConverter for Array<WorkspaceSummary>
@@ -3755,6 +4445,14 @@ function uniffiEnsureInitialized() {
   ) {
     throw new UniffiInternalError.ApiChecksumMismatch(
       'uniffi_massorca_client_ffi_checksum_method_gitwatch_next',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_host_attach_terminal() !==
+    2562
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_host_attach_terminal',
     );
   }
   if (
@@ -3901,6 +4599,38 @@ function uniffiEnsureInitialized() {
       'uniffi_massorca_client_ffi_checksum_method_massorca_pair',
     );
   }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_close() !==
+    64311
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_terminalview_close',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_input() !==
+    50538
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_terminalview_input',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_next() !==
+    27971
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_terminalview_next',
+    );
+  }
+  if (
+    nativeModule().ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_resize() !==
+    9037
+  ) {
+    throw new UniffiInternalError.ApiChecksumMismatch(
+      'uniffi_massorca_client_ffi_checksum_method_terminalview_resize',
+    );
+  }
 
   uniffiCallbackInterfaceHostStore.register();
 }
@@ -3926,6 +4656,8 @@ export default Object.freeze({
     FfiConverterTypeOfferSummary,
     FfiConverterTypeProtocolInfo,
     FfiConverterTypeStorageError,
+    FfiConverterTypeTerminalEvent,
+    FfiConverterTypeTerminalView,
     FfiConverterTypeWhoAmI,
     FfiConverterTypeWorkspaceSummary,
   },

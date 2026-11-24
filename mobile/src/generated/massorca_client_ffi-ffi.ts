@@ -208,6 +208,14 @@ interface NativeModuleInterface {
     ptr: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): void;
+  ubrn_uniffi_massorca_client_ffi_fn_clone_terminalview(
+    ptr: bigint,
+    uniffi_out_err: UniffiRustCallStatus,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_free_terminalview(
+    ptr: bigint,
+    uniffi_out_err: UniffiRustCallStatus,
+  ): void;
   ubrn_uniffi_massorca_client_ffi_fn_init_callback_vtable_hoststore(
     vtable: UniffiVTableCallbackInterfaceMassorcaClientFfiHostStore,
   ): void;
@@ -228,6 +236,12 @@ interface NativeModuleInterface {
   ): void;
   ubrn_uniffi_massorca_client_ffi_fn_method_gitwatch_next(
     uniffiSelf: bigint,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_host_attach_terminal(
+    uniffiSelf: bigint,
+    terminal: Uint8Array,
+    cols: number,
+    rows: number,
   ): bigint;
   ubrn_uniffi_massorca_client_ffi_fn_method_host_git_status(
     uniffiSelf: bigint,
@@ -312,12 +326,29 @@ interface NativeModuleInterface {
     offer: Uint8Array,
     hostName: Uint8Array,
   ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_close(
+    uniffiSelf: bigint,
+    uniffi_out_err: UniffiRustCallStatus,
+  ): void;
+  ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_input(
+    uniffiSelf: bigint,
+    bytes: Uint8Array,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_next(
+    uniffiSelf: bigint,
+  ): bigint;
+  ubrn_uniffi_massorca_client_ffi_fn_method_terminalview_resize(
+    uniffiSelf: bigint,
+    cols: number,
+    rows: number,
+  ): bigint;
   ubrn_ffi_massorca_client_ffi_uniffi_contract_version(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_func_parse_offer(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_agentwatch_close(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_agentwatch_next(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_gitwatch_close(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_gitwatch_next(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_host_attach_terminal(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_git_status(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_name(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_host_protocol(): number;
@@ -336,11 +367,19 @@ interface NativeModuleInterface {
   ubrn_uniffi_massorca_client_ffi_checksum_method_massorca_forget(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_massorca_hosts(): number;
   ubrn_uniffi_massorca_client_ffi_checksum_method_massorca_pair(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_close(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_input(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_next(): number;
+  ubrn_uniffi_massorca_client_ffi_checksum_method_terminalview_resize(): number;
   ubrn_uniffi_internal_fn_method_agentwatch_ffi__bless_pointer(
     pointer: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): UniffiGcObject;
   ubrn_uniffi_internal_fn_method_gitwatch_ffi__bless_pointer(
+    pointer: bigint,
+    uniffi_out_err: UniffiRustCallStatus,
+  ): UniffiGcObject;
+  ubrn_uniffi_internal_fn_method_terminalview_ffi__bless_pointer(
     pointer: bigint,
     uniffi_out_err: UniffiRustCallStatus,
   ): UniffiGcObject;
