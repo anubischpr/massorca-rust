@@ -1,7 +1,8 @@
-//! `massorca project add|list|show|rm`: registering and unregistering projects through the service.
+//! `massorca project add|list|show|rm|set-base`: registering, unregistering and setting the base of projects through the service.
 
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectKind, ProjectRef, ProjectRemoveParams,
+    ProjectSetBaseParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceListParams;
 
@@ -65,6 +66,18 @@ pub async fn execute(
                 lines.push(workspace_text::forgotten_line(count));
             }
             output.success(&removed, &lines);
+        }
+        ProjectCommand::SetBase {
+            project,
+            base,
+            clear,
+        } => {
+            let project = paths.selector(&project)?;
+            let base = if clear { None } else { base };
+            let updated: Project = client
+                .call(projects::SET_BASE, &ProjectSetBaseParams { project, base })
+                .await?;
+            output.success(&updated, &[workspace_text::project_base_line(&updated)]);
         }
     }
     Ok(())

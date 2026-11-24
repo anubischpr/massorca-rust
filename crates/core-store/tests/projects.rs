@@ -74,6 +74,26 @@ fn list_projects_orders_by_name() {
 }
 
 #[test]
+fn a_project_base_is_stored_read_back_and_cleared() {
+    let store = store();
+    let row = project_row("alpha", "key-alpha");
+    store.insert_project(&row).unwrap();
+    assert_eq!(store.get_project(&row.id).unwrap().unwrap().base_ref, None);
+
+    assert!(
+        store
+            .set_project_base(&row.id, Some("origin/develop"))
+            .unwrap()
+    );
+    let found = store.find_project_by_name("alpha").unwrap().unwrap();
+    assert_eq!(found.base_ref.as_deref(), Some("origin/develop"));
+
+    assert!(store.set_project_base(&row.id, None).unwrap());
+    assert_eq!(store.get_project(&row.id).unwrap().unwrap().base_ref, None);
+    assert!(!store.set_project_base("missing", Some("main")).unwrap());
+}
+
+#[test]
 fn delete_project_reports_whether_a_row_was_removed() {
     let store = store();
     let row = project_row("alpha", "key-alpha");

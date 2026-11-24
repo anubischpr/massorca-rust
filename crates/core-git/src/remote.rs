@@ -59,6 +59,40 @@ impl Git {
         })
     }
 
+    /// Fetches the branch a remote-tracking base names (`refs/remotes/<remote>/<branch>`) and reports the ref it moved.
+    /// `None`, with no network run, when `base` is not one. Nothing is pruned.
+    pub fn fetch_tracking_base(
+        &self,
+        dir: &Path,
+        base: &str,
+        timeout: Duration,
+    ) -> Result<Option<GitFetched>, RemoteError> {
+        let Some((remote, branch)) = self.tracking_branch_of(dir, base)? else {
+            return Ok(None);
+        };
+        let before = self.remote_refs(dir)?;
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+        let args = [
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--",
+            remote.as_str(),
+            refspec.as_str(),
+        ];
+        let result = self
+            .network(dir, &args, timeout)
+            .and_then(|captured| captured.require_success());
+        if let Err(error) = &result {
+            tracing::warn!(%base, %error, "could not refresh the base from its remote");
+        }
+        result?;
+        let after = self.remote_refs(dir)?;
+        Ok(Some(GitFetched {
+            updated: changes(&before, &after),
+        }))
+    }
+
     /// Brings the current branch up to date with its upstream under `mode`; `ff_only` never merges.
     pub fn pull(
         &self,
@@ -244,6 +278,30 @@ impl Git {
         }
         let short = captured.text()?.trim().to_owned();
         Ok(remote.map(|remote| (remote, short)))
+    }
+
+    /// The remote and branch of a `refs/remotes/<remote>/<branch>` revision; remote names may hold `/`, so the
+    /// longest configured name that prefixes it wins.
+    fn tracking_branch_of(
+        &self,
+        dir: &Path,
+        revision: &str,
+    ) -> Result<Option<(String, String)>, GitError> {
+        let Some(tail) = revision.strip_prefix("refs/remotes/") else {
+            return Ok(None);
+        };
+        let captured = self.run(Some(dir), ["remote"])?;
+        captured.require_success()?;
+        let remote = captured
+            .text()?
+            .lines()
+            .filter(|name| {
+                tail.strip_prefix(*name)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .is_some_and(|branch| !branch.is_empty() && branch != "HEAD")
+            })
+            .max_by_key(|name| name.len());
+        Ok(remote.map(|name| (name.to_owned(), tail[name.len() + 1..].to_owned())))
     }
 
     fn known_remote(&self, dir: &Path, name: &str) -> Result<String, RemoteError> {
