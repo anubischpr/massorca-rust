@@ -11,6 +11,7 @@ mod new_project;
 mod project;
 mod routines;
 mod sidebar;
+mod team_bots;
 
 use crate::model::settings_sections::NOT_AVAILABLE;
 use gpui::{ElementId, IntoElement, ParentElement, SharedString, Styled, div, px};
