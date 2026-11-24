@@ -83,6 +83,7 @@ impl Workspaces {
             workspaces_root,
             added_at: now_ms(),
             base_ref: None,
+            icon: None,
         };
         self.store
             .insert_project(&row)

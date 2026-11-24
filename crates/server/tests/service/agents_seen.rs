@@ -32,6 +32,7 @@ fn seed(store: &Store) -> String {
         name: "app".to_owned(),
         workspaces_root: "/work/app-workspaces".to_owned(),
         base_ref: None,
+        icon: None,
         added_at: now_ms(),
     };
     store.insert_project(&project).expect("project");
