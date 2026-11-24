@@ -105,8 +105,9 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [PROMPT WORDS...]`. The flags
-/// count only before the first prompt word; every later word belongs to the prompt.
+/// The command line: `[--session-id <ID>] [--resume <ID>] [--mode <ID>] [--query=<TEXT>] [PROMPT WORDS...]`. The flags
+/// count only before the first prompt word; every later word belongs to the prompt. `--query=<TEXT>` is the startup
+/// query of a kind with the `startup-query` prompt mode (0054): the agent takes it as its prompt, as if it were typed.
 #[derive(Debug, Default)]
 struct Arguments {
     session_id: Option<String>,
@@ -115,21 +116,30 @@ struct Arguments {
     prompt: Option<String>,
 }
 
+/// The prefix of the startup query argument.
+const QUERY_PREFIX: &str = "--query=";
+
 impl Arguments {
     fn parse(mut args: impl Iterator<Item = String>) -> Self {
         let mut parsed = Self::default();
         let mut words = Vec::new();
+        let mut query = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--session-id" if words.is_empty() => parsed.session_id = args.next(),
                 "--resume" if words.is_empty() => parsed.resume = args.next(),
                 "--mode" if words.is_empty() => parsed.mode = args.next(),
+                text if words.is_empty() && text.starts_with(QUERY_PREFIX) => {
+                    query = Some(text[QUERY_PREFIX.len()..].to_owned());
+                }
                 _ => words.push(arg),
             }
         }
-        if !words.is_empty() {
-            parsed.prompt = Some(words.join(" "));
-        }
+        parsed.prompt = if words.is_empty() {
+            query
+        } else {
+            Some(words.join(" "))
+        };
         parsed
     }
 }

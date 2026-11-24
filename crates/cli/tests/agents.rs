@@ -245,3 +245,146 @@ fn a_service_restart_leaves_the_session_exited_by_the_service_stopping() {
     };
     assert!(line.contains(&expected), "{line}");
 }
+
+/// Starts a fake agent in `main`, waits for its answer, and stops its run; returns the session id and its terminal.
+fn started_and_stopped(sandbox: &Sandbox) -> (String, String) {
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            "main",
+            "--prompt",
+            "hello agent",
+        ],
+    );
+    let session = text(&started, "id").to_owned();
+    let terminal = text(&started, "terminal_id").to_owned();
+    wait_for_line(sandbox, &terminal, "fake-agent: done hello agent");
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+    (session, terminal)
+}
+
+#[test]
+fn a_released_run_frees_its_terminal_and_keeps_its_output_readable() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let started = sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "start",
+            "fake",
+            "--workspace",
+            "main",
+            "--prompt",
+            "hello agent",
+        ],
+    );
+    let session = text(&started, "id").to_owned();
+    let terminal = text(&started, "terminal_id").to_owned();
+    wait_for_line(&sandbox, &terminal, "fake-agent: done hello agent");
+
+    assert_eq!(
+        error_code(&sandbox, &["agent", "release", &session]),
+        "agent.busy",
+        "a live run is refused"
+    );
+    sandbox.json_ok("default", &["agent", "stop", &session, "--force"]);
+
+    let released = sandbox.json_ok("default", &["agent", "release", &session]);
+    assert_eq!(released["id"], session.as_str());
+    assert_eq!(released["released"], true);
+    assert_eq!(released["execution"]["state"], "exited");
+    assert_eq!(
+        error_code(&sandbox, &["terminal", "screen", &terminal]),
+        "terminal.not_found",
+        "the terminal is freed"
+    );
+    let again = sandbox.json_ok("default", &["agent", "release", &session]);
+    assert_eq!(again["released"], true, "a second release changes nothing");
+
+    let archive = sandbox.json_ok("default", &["agent", "archive", &session]);
+    assert_eq!(archive["session"], session.as_str());
+    assert_eq!(archive["released"], true);
+    assert_eq!(archive["truncated"], false);
+    assert!(
+        text(&archive, "text").contains("fake-agent: done hello agent"),
+        "{archive}"
+    );
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"][0]["released"], true);
+}
+
+#[test]
+fn an_archive_of_a_session_not_released_says_so() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let (session, _) = started_and_stopped(&sandbox);
+
+    let archive = sandbox.json_ok("default", &["agent", "archive", &session]);
+    assert_eq!(archive["released"], false);
+    assert!(archive.get("text").is_none_or(Value::is_null), "{archive}");
+}
+
+#[test]
+fn a_retained_session_is_listed_as_retained_survives_a_restart_and_clears_with_off() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let (session, _) = started_and_stopped(&sandbox);
+
+    let retained = sandbox.json_ok("default", &["agent", "retain", &session]);
+    assert_eq!(retained["retained"], true);
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_eq!(listed["sessions"][0]["retained"], true);
+    sandbox
+        .run("default", &["agent", "list"])
+        .success()
+        .stdout(contains("retained"));
+
+    sandbox.run("default", &["service", "restart"]).success();
+    let shown = sandbox.json_ok("default", &["agent", "status", &session]);
+    assert_eq!(shown["retained"], true, "retain is durable");
+
+    let off = sandbox.json_ok("default", &["agent", "retain", &session, "--off"]);
+    assert_ne!(off["retained"], true, "{off}");
+    let listed = sandbox.json_ok("default", &["agent", "list"]);
+    assert_ne!(listed["sessions"][0]["retained"], true, "{listed}");
+}
+
+#[test]
+fn an_explicit_release_of_a_retained_session_clears_the_retain_and_releases_it() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let (session, terminal) = started_and_stopped(&sandbox);
+    sandbox.json_ok("default", &["agent", "retain", &session]);
+
+    let released = sandbox.json_ok("default", &["agent", "release", &session]);
+    assert_ne!(released["retained"], true, "{released}");
+    assert_eq!(released["released"], true);
+    assert_eq!(
+        error_code(&sandbox, &["terminal", "screen", &terminal]),
+        "terminal.not_found"
+    );
+}
+
+#[test]
+fn forget_deletes_a_released_sessions_archive_too() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    folder_workspace(&sandbox);
+    let (session, _) = started_and_stopped(&sandbox);
+    sandbox.json_ok("default", &["agent", "release", &session]);
+
+    sandbox.json_ok("default", &["agent", "forget", &session]);
+    assert_eq!(
+        error_code(&sandbox, &["agent", "archive", &session]),
+        "agent.not_found"
+    );
+}

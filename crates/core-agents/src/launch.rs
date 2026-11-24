@@ -175,6 +175,14 @@ pub fn plan(input: &LaunchInput<'_>) -> Result<LaunchPlan, LaunchError> {
                         prompt_args.extend(decl.prompt.flag.clone());
                         prompt_args.push(text.to_owned());
                     }
+                    PromptMode::StartupQuery => {
+                        prompt_args.extend(
+                            decl.prompt
+                                .flag
+                                .as_ref()
+                                .map(|flag| format!("{flag}={text}")),
+                        );
+                    }
                     PromptMode::None => pending_prompt = Some(text.to_owned()),
                 }
             }
@@ -413,6 +421,19 @@ mod tests {
             ["--plain"],
             "no prompt, no separator"
         );
+    }
+
+    #[test]
+    fn startup_query_mode_hands_the_prompt_as_one_flag_token_after_the_caller_args() {
+        let mut fixture = Fixture::new(fake(json!({ "mode": "startup-query", "flag": "--query" })));
+        fixture.caller_args = vec!["--model".to_owned(), "x".to_owned()];
+        let plan = fixture.first(Some("-x then go"));
+        assert_eq!(plan.args, ["--plain", "--model", "x", "--query=-x then go"]);
+        assert_eq!(
+            plan.pending_prompt, None,
+            "the agent submits the query itself, so nothing is typed later"
+        );
+        assert_eq!(fixture.first(None).args, ["--plain", "--model", "x"]);
     }
 
     #[test]

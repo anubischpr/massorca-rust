@@ -3,13 +3,14 @@
 use massorca_protocol::methods::agents::{
     self, AccountSummary, AccountsActivateParams, AccountsAddParams, AccountsAdded,
     AccountsCheckParams, AccountsImportParams, AccountsImported, AccountsList, AccountsListParams,
-    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentBringBackParams,
-    AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds, AgentListParams,
-    AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams, AgentQueueItemRef,
-    AgentQueueList, AgentQueueParams, AgentResumeParams, AgentSession, AgentSessionList,
-    AgentSessionRef, AgentSetModeParams, AgentStartParams, AgentStopParams, AgentTree,
-    AgentWatchParams, BringBackResult, CredentialsImportParams, CredentialsImported,
-    CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt, QueuedPrompt,
+    AccountsRemoveParams, AccountsRemoved, AccountsSignInParams, AgentArchive,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentHookParams, AgentKinds,
+    AgentListParams, AgentMarkSeenParams, AgentModeSet, AgentPromptParams, AgentQueueEditParams,
+    AgentQueueItemRef, AgentQueueList, AgentQueueParams, AgentResumeParams, AgentRetainParams,
+    AgentSession, AgentSessionList, AgentSessionRef, AgentSetModeParams, AgentStartParams,
+    AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
+    CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::commands::{self, CommandTable};
 use massorca_protocol::methods::config::{self, ConfigKey, ConfigList, ConfigSet, ConfigValue};
@@ -294,6 +295,30 @@ impl Client {
     /// `agent.forget`: deletes the record of a session whose run has ended.
     pub async fn agent_forget(&self, session: &str) -> Result<AgentSession, ClientError> {
         self.call(agents::FORGET, &session_ref(session)).await
+    }
+
+    /// `agent.release`: archives an exited session's output, frees its terminal and keeps the record (capability
+    /// `agent-release/1`).
+    pub async fn agent_release(&self, session: &str) -> Result<AgentSession, ClientError> {
+        self.call(agents::RELEASE, &session_ref(session)).await
+    }
+
+    /// `agent.retain`: sets or clears a session's durable retain (capability `agent-release/1`).
+    pub async fn agent_retain(
+        &self,
+        session: &str,
+        retained: bool,
+    ) -> Result<AgentSession, ClientError> {
+        let params = AgentRetainParams {
+            session: session.to_owned(),
+            retained,
+        };
+        self.call(agents::RETAIN, &params).await
+    }
+
+    /// `agent.archive`: the archived output of a released session (capability `agent-release/1`).
+    pub async fn agent_archive(&self, session: &str) -> Result<AgentArchive, ClientError> {
+        self.call(agents::ARCHIVE, &session_ref(session)).await
     }
 
     /// `agent.prompt`: types a prompt into a session's terminal once it is ready; `force` types it at once.
