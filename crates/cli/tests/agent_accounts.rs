@@ -15,6 +15,9 @@ use harness::{
 use serde_json::{Value, json};
 
 const FAKE_TOKEN: &str = r#"{"fake":true,"refresh":"fake-secret-value"}"#;
+/// A fake token of a second login: another identity, so it is not refused as the first one again (ACC-03).
+const OTHER_TOKEN: &str =
+    r#"{"fake":true,"email":"other@example.com","refresh":"fake-secret-value"}"#;
 /// A token the fake agent's check reports as expired.
 const EXPIRED_TOKEN: &str = r#"{"fake":true,"expired":true}"#;
 
@@ -293,7 +296,7 @@ fn activate_per_project_changes_which_account_a_started_agent_uses() {
     let (_, notes_workspace) = project_with_main(&sandbox, "notes");
     let (docs, docs_workspace) = project_with_main(&sandbox, "docs");
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
-    let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
+    let second = source_with(&sandbox, "second", &[("token.json", OTHER_TOKEN)]);
     let first_id = import(&sandbox, &first, "first")["account"]["id"]
         .as_str()
         .expect("an account id")
@@ -881,7 +884,7 @@ fn a_removed_active_account_refuses_the_next_start_until_another_is_activated() 
     declare_fake(&sandbox);
     let (_, workspace) = project_with_main(&sandbox, "notes");
     let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
-    let second = source_with(&sandbox, "second", &[("token.json", FAKE_TOKEN)]);
+    let second = source_with(&sandbox, "second", &[("token.json", OTHER_TOKEN)]);
     let first_id = import(&sandbox, &first, "first")["account"]["id"]
         .as_str()
         .expect("an account id")
@@ -1448,7 +1451,7 @@ fn the_account_list_gives_each_accounts_origin() {
     eventually("the sign-in to keep the account", || {
         (account_labelled_or_none(&sandbox, "signed")?["state"] == "signed_in").then_some(())
     });
-    let source = source_with(&sandbox, "source", &[("token.json", FAKE_TOKEN)]);
+    let source = source_with(&sandbox, "source", &[("token.json", OTHER_TOKEN)]);
     import(&sandbox, &source, "imported");
 
     assert_eq!(account_labelled(&sandbox, "signed")["origin"], "sign_in");
@@ -1690,4 +1693,85 @@ fn a_re_sign_in_left_open_by_a_restart_leaves_the_account_as_it_was() {
     assert_eq!(kept["state"], "signed_in", "{kept}");
     assert_eq!(kept["active"], true, "{kept}");
     assert_eq!(accounts(&sandbox).len(), 1, "the account is kept");
+}
+
+/// A second import of a login already added (the same identity, compared without case) is refused: the first account
+/// stays, the second gets no account, and its copied files are deleted (ACC-03, as pv96 refuses a duplicate add).
+#[test]
+fn an_import_of_a_login_already_added_is_refused_and_keeps_the_first() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let first_id = import(&sandbox, &first, "first")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+    let again = source_with(
+        &sandbox,
+        "again",
+        &[("token.json", r#"{"email":"FAKE@example.com"}"#)],
+    );
+
+    let refused = import(&sandbox, &again, "again");
+
+    assert_eq!(refused["result"], "failed", "{refused}");
+    assert!(refused["account"].is_null(), "{refused}");
+    let reason = refused["reason"].as_str().expect("a reason");
+    assert!(reason.contains(&first_id), "{reason}");
+    let listed = accounts(&sandbox);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], first_id.as_str());
+    let homes = sandbox
+        .profile_dir("default")
+        .join("agents")
+        .join("accounts")
+        .join("fake");
+    let left: Vec<_> = fs::read_dir(&homes)
+        .expect("the kind's homes")
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(left, [std::ffi::OsString::from(&first_id)], "{left:?}");
+}
+
+/// A sign-in whose login turns out to be an account already added is discarded without the vendor sign-out, which
+/// would end the session the first account shares; the first account stays signed in (ACC-03).
+#[test]
+fn a_sign_in_of_a_login_already_added_is_discarded_without_signing_out() {
+    let sandbox = Sandbox::new();
+    declare_fake(&sandbox);
+    let marker = sandbox.home().join("logout-marker");
+    let _service = spawn_service_with(
+        &sandbox,
+        &[("FAKE_AGENT_LOGOUT_MARKER", path_text(&marker))],
+    );
+    let first = source_with(&sandbox, "first", &[("token.json", FAKE_TOKEN)]);
+    let first_id = import(&sandbox, &first, "first")["account"]["id"]
+        .as_str()
+        .expect("an account id")
+        .to_owned();
+
+    sandbox.json_ok(
+        "default",
+        &[
+            "agent",
+            "accounts",
+            "add",
+            "fake",
+            "--label",
+            "again",
+            "--no-attach",
+        ],
+    );
+    eventually("the duplicate sign-in to be discarded", || {
+        account_labelled_or_none(&sandbox, "again")
+            .is_none()
+            .then_some(())
+    });
+
+    let listed = accounts(&sandbox);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], first_id.as_str());
+    assert_eq!(listed[0]["state"], "signed_in");
+    assert!(!marker.exists(), "a duplicate login is not signed out");
 }

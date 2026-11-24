@@ -549,6 +549,14 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   an undecided account (its store mark is set) decides it the same way, as a sign-in's end does. An
   undecided account is not the kind's history until a decision keeps it (decision 0059). A row that
   is already gone is left alone, with no event.
+- **One account per login** (`Agents::duplicate_of`): a new account whose check reports an identity
+  another account of the kind already has (compared trimmed and without case, as pv96 compares a
+  duplicate add's email) is refused. An import fails with the reason naming the existing account,
+  and its copied files are deleted. A sign-in is deleted when its terminal ends, announced as
+  `conflict`, and never signed out: the vendor sign-out would end the session the existing account
+  shares. A sign-in again whose login turns out to be another account's is stored as `conflict`,
+  keeping its recorded identity. A kind's accounts in WSL are not told apart from the host's yet:
+  there is no WSL account scope.
 - **Sign-in again** (`sign_in.rs`, `Agents::accounts_sign_in`, `agent.accounts.sign_in`): signs an
   existing account in once more, in its own home, with the same login and environment as a new
   sign-in (both go through `create_login_terminal`). The account is kept whatever the login ends

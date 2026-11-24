@@ -19,8 +19,8 @@ use massorca_protocol::methods::agents::{
 };
 
 use crate::account_check::{
-    MAX_TEXT_CHARS, Verdict, account_strip_names, parse_state, run_program, settle, state_name,
-    unknown, verdict,
+    MAX_TEXT_CHARS, Verdict, account_strip_names, normalized_identity, parse_state, run_program,
+    settle, state_name, unknown, verdict,
 };
 use crate::credentials;
 use crate::kind::{KindDecl, valid_id};
@@ -225,7 +225,19 @@ impl Agents {
                     reason: Some("the check reports the login is not signed in".to_owned()),
                 });
             }
-            outcome => self.store_outcome(kind, &account, outcome, mark, None, refused),
+            outcome => {
+                if let Some(existing) =
+                    self.store_outcome(kind, &account, outcome, mark, None, refused)
+                {
+                    return Ok(AccountsImported {
+                        result: ImportResult::Failed,
+                        account: None,
+                        reason: Some(format!(
+                            "this login is already account {existing} of {kind}; activate that account instead"
+                        )),
+                    });
+                }
+            }
         }
         let row = self.account_of(kind, &account)?;
         let summary = self.summary(
@@ -562,7 +574,7 @@ impl Agents {
         mark: DecisionMark,
         sign_out: Option<(KindDecl, PathBuf)>,
         refused: AccountState,
-    ) {
+    ) -> Option<String> {
         match outcome {
             SignInOutcome::Discard => {
                 if let Some((decl, program)) = &sign_out {
@@ -573,10 +585,87 @@ impl Agents {
             SignInOutcome::Undecided => self.leave_undecided(kind, account),
             SignInOutcome::Unknown => self.keep_marked(kind, account, AccountState::Unknown, None),
             SignInOutcome::SignedIn { identity } => {
-                self.keep_marked(kind, account, AccountState::SignedIn, identity)
+                let duplicate = self.keep_signed_in(kind, account, identity);
+                drop(mark);
+                return duplicate;
             }
         }
         drop(mark);
+        None
+    }
+
+    /// The other account of `kind` already signed in as `identity`, if any (ACC-03). Identities are compared trimmed and
+    /// without case, as pv96 compares a duplicate add's email. A new account that matches is refused, never signed out.
+    pub(crate) fn duplicate_of(
+        &self,
+        kind: &str,
+        account: &str,
+        identity: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let wanted = normalized_identity(identity);
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+        Ok(self
+            .store()
+            .list_agent_accounts(kind)?
+            .into_iter()
+            .find(|row| {
+                row.id != account
+                    && row
+                        .identity
+                        .as_deref()
+                        .is_some_and(|known| normalized_identity(known) == wanted)
+            })
+            .map(|row| row.id))
+    }
+
+    /// Keeps a new account its check reports signed in, while the caller holds its mark, unless another account of the
+    /// kind already has its identity (ACC-03). The comparison and the write happen under one hold of the homes gate, so two
+    /// decisions of the same login cannot both keep it. A duplicate is deleted and announced as `conflict`, never signed
+    /// out (the vendor sign-out would end the session the existing account shares); its id is returned.
+    fn keep_signed_in(
+        &self,
+        kind: &str,
+        account: &str,
+        identity: Option<String>,
+    ) -> Option<String> {
+        let gate = credentials::lock_homes();
+        let duplicate = match identity.as_deref() {
+            Some(identity) => self
+                .duplicate_of(kind, account, identity)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        kind,
+                        code = error.code,
+                        "the accounts could not be compared"
+                    );
+                    None
+                }),
+            None => None,
+        };
+        if let Some(existing) = duplicate {
+            drop(gate);
+            tracing::warn!(
+                kind,
+                existing = %existing,
+                "a new account of a login that is already an account is discarded"
+            );
+            self.discard_marked(kind, account, AccountState::Conflict);
+            return Some(existing);
+        }
+        match self.keep_decided(kind, account, AccountState::SignedIn, identity.as_deref()) {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(error) => {
+                tracing::warn!(kind, code = %error, "a sign-in could not be recorded");
+                return None;
+            }
+        }
+        self.make_active_if_none(kind, account);
+        drop(gate);
+        self.notify_account(kind, account, AccountState::SignedIn);
+        None
     }
 
     /// Keeps an account whose mark the caller holds: its check's state and identity are stored, its sign-in mark is cleared

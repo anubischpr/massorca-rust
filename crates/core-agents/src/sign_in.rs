@@ -279,16 +279,31 @@ impl Agents {
             }
             Err(_) => unknown(),
         };
-        let recorded = {
+        // Under the gate, so the comparison and the write are one step. A login that turned out to be another account's is
+        // a conflict: the recorded identity stays (ACC-03).
+        let (recorded, state) = {
             let _gate = credentials::lock_homes();
-            self.store().set_agent_account_check(
+            let verdict = match verdict.identity.as_deref() {
+                Some(identity)
+                    if verdict.state == AccountState::SignedIn
+                        && matches!(self.duplicate_of(kind, account, identity), Ok(Some(_))) =>
+                {
+                    Verdict {
+                        state: AccountState::Conflict,
+                        identity: None,
+                    }
+                }
+                _ => verdict,
+            };
+            let recorded = self.store().set_agent_account_check(
                 account,
                 state_name(verdict.state),
                 verdict.identity.as_deref(),
-            )
+            );
+            (recorded, verdict.state)
         };
         match recorded {
-            Ok(true) => self.notify_account(kind, account, verdict.state),
+            Ok(true) => self.notify_account(kind, account, state),
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(kind, code = %error, "a sign-in again could not be recorded");

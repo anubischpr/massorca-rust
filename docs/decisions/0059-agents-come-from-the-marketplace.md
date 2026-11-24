@@ -367,3 +367,14 @@ Account commands (check, sign-in, sign-out) judge the account's home only: for t
 - **Open.** A run that starts on the account while its re-sign-in login runs is not refused by
   this amendment. Refusing run starts on such an account needs its own mark, since the in-memory
   pending mark also covers a new account's sign-in and a decision, which must not refuse runs.
+
+## Amendment 2026-11-24 (one account per login)
+
+A new account whose check reports an identity that another account of the same kind already has is
+refused, as pv96 refuses a duplicate add ("This Claude account is already added."). Identities are
+compared trimmed and without case. An import fails with a reason that names the existing account,
+and its copied files are deleted. A sign-in is deleted when its terminal ends, with the event state
+`conflict`, and the vendor sign-out does not run, because it would end the session the existing
+account shares. A sign-in again that turns out to be another account's login is stored as
+`conflict` and keeps its recorded identity. pv96 also separates host and WSL accounts; this service
+has no WSL account scope, so that part is not done.
