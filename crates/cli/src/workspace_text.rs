@@ -247,13 +247,23 @@ pub fn table(headers: &[&str], rows: Vec<Vec<String>>) -> Vec<String> {
     lines
 }
 
-/// One line for a worktree under a workspaces root that no workspace records. It is reported
-/// only: a create with the same name and branch adopts it.
+/// One line for a linked worktree that no workspace records, with git's lock and prune reasons. It is reported only:
+/// a create at its path on the same branch adopts it.
 pub fn unregistered_line(worktree: &UnregisteredWorktree) -> String {
-    format!(
-        "unregistered worktree {} (branch {}): not a workspace; a create with this name and branch adopts it",
-        worktree.path,
+    let mut parts = vec![format!(
+        "branch {}",
         worktree.branch.as_deref().unwrap_or("-")
+    )];
+    if let Some(reason) = &worktree.locked {
+        parts.push(reason_text("locked", reason));
+    }
+    if let Some(reason) = &worktree.prunable {
+        parts.push(reason_text("prunable", reason));
+    }
+    format!(
+        "unregistered worktree {} ({}): not a workspace; a create at this path on the same branch adopts it",
+        worktree.path,
+        parts.join(", ")
     )
 }
 

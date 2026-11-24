@@ -72,14 +72,14 @@ pub struct WorkspaceListParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceList {
     pub workspaces: Vec<Workspace>,
-    /// Worktrees git registers under a project's workspaces root that no workspace records.
+    /// Linked worktrees of a project that no workspace records, under its workspaces root or elsewhere.
     /// They are reported, never removed. Absent when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unregistered: Vec<UnregisteredWorktree>,
 }
 
-/// A worktree git registers under a project's workspaces root with no workspace row, usually
-/// left by a create that stopped after `worktree add`.
+/// A linked worktree of a project with no workspace row: usually left by a create that stopped
+/// after `worktree add`, or made outside Massorca.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnregisteredWorktree {
     pub project_id: String,
@@ -89,7 +89,8 @@ pub struct UnregisteredWorktree {
     /// Git's lock reason; `Some("")` when locked without one. Absent when unlocked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<String>,
-    /// Git's prunable reason. Absent when git does not prune it, and always on Git before 2.31.
+    /// Git's prunable reason. Absent when git does not prune it. Git before 2.31 never prints one,
+    /// so a folder that is gone is reported with git's wording for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prunable: Option<String>,
 }
