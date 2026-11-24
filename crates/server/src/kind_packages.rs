@@ -69,6 +69,14 @@ fn package_state(state: ItemState) -> PackageState {
 /// then adopts, once per profile, the ones whose kind the profile already used. A failure is logged and retried at the
 /// next start; a run of a kind that is not enabled is refused meanwhile, never started silently.
 pub(crate) fn prepare_builtin_agents(extensions: &Extensions, store: &Store, profile: &Profile) {
+    // Requests are not served yet, so no install is in flight whose unreferenced folder this could remove.
+    match extensions.sweep_leftovers() {
+        Ok(removed) if !removed.is_empty() => {
+            tracing::info!(paths = ?removed, "extension install leftovers removed");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "extension install leftovers were not swept"),
+    }
     match extensions.refresh_builtins() {
         Ok(refreshed) if !refreshed.is_empty() => {
             tracing::info!(packages = ?refreshed, "built-in agent packages refreshed");

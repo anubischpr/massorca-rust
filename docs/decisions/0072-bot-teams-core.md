@@ -237,11 +237,8 @@ The workspace domain lets one agent write in a workspace at a time
   team folder. Every other workspace keeps one writer and
   `agent.workspace_busy`. pv96 ran a team's bots in one shared folder in the
   same way.
-- **A busy bot:** a bot works on one task at a time. Another of its tasks still
-  running blocks a second start, and so does one whose session cannot be
-  verified. That start is refused with `bot.busy`. The task stays Open with the
-  reason in `error`, and nothing is queued. Starts are serialised, so two
-  starts for one bot cannot both find it free.
+- **A busy bot:** superseded by the 2026-11-23 amendment "a bot runs several
+  tasks at once" below. Hosts before it refused the start with `bot.busy`.
 - **A task on a team project that is a plain folder:** it runs in that
   folder, with several writers. The project's folder workspace at its own path
   is reused, or made when it has none, and is marked as shared.
@@ -311,9 +308,8 @@ The workspace domain lets one agent write in a workspace at a time
   stops that session at once, and records the error on the task if the task
   still exists. A session that is not linked never keeps running. A start that
   fails after the spawn point is treated the same way: the session is found by
-  its agent request id and stopped. When that stop fails, the attempt is kept.
-  The bot then stays busy while that run lives, and a retry names the same
-  run. A read that fails after a successful link is reported to the caller
+  its agent request id and stopped. When that stop fails, the attempt is kept,
+  so a retry names the same run. A read that fails after a successful link is reported to the caller
   and never stops the linked run.
 - **Known gap:** the agents domain stores the request id after the terminal
   spawns. A service crash between the two lets a retry start a second process.
@@ -454,3 +450,59 @@ massorca team routine run <team> <routine> --now
 Not in this change: one-time routines created from a Conference room (AUTO-13),
 the Calendar (AUTO-30), the desktop Routines page and the phone, which still show
 sample data, and moving routines onto the Automations engine (AUTO-01).
+
+## Amendment 2026-11-23: a bot runs several tasks at once
+
+A start no longer checks whether the task's bot is working on another task: a
+new task opens another agent session for the same bot, and both run at once.
+`bot.busy` is no longer sent.
+
+- **Why:** pv96, the behaviour reference, does the same. The refusal left a
+  task Open with an error for the owner to retry by hand, so an unattended team
+  stalled whenever two tasks named one bot. Each session already has its own
+  place: a task on a git project gets its own worktree, and the team folder and
+  a linked folder take several writers.
+- The start gate stays: a start, a stop, done, reopen, removal and a bot change
+  are still serialised, and one task still has at most one start attempt.
+- Follow-up messages to a task's existing session go through the agents
+  domain's prompt queue (decision 0084), which waits while the agent is
+  working. A task start is never queued.
+- Older clients still name `bot.busy` from an older host.
+
+## Amendment 2026-11-23: team access
+
+A team's access decides the permission mode its bots run in (decision 0083). It
+has two values, as in pv96, and there is no per-bot mode.
+
+- **`full`**: a task start names the first bypass mode (`bypass: true`) the
+  bot's kind declares that a start can apply: one with launch arguments, or a
+  live switch on a kind that reports idle. The agent then runs without asking
+  for permission. A kind with no such mode, such as one whose only bypass mode
+  is a live switch and that reports no status, runs in its vendor default
+  instead of failing the start. `massorca task start` says so on that start,
+  and the service log notes it for starts made elsewhere, such as routines.
+- **`default`**: no mode is passed, and the vendor CLI starts in its own
+  default, which may ask for permission.
+- **New teams are `full`**, as in pv96: an unattended bot that stops to ask is a
+  stuck task. Decision 0083 says a bypass mode is always named, so the create
+  path names it every time. `massorca team create` and `team update` to `full`
+  print "Full access: bots run without asking for permission", with the one
+  command that turns it off. `team create --access default` makes a team without
+  it.
+- **Only a host-admin caller sets `full`.** A caller below host-admin scope,
+  such as a standard paired device, makes `default` teams when it names no
+  access, and an explicit `full` on `team.create` or `team.update` is refused
+  with `permission.denied`. A full-access team's bots skip permission prompts,
+  and runs of routines a host-admin set up also hold vault secrets (decision
+  0071), so only a host-admin caller may combine the two.
+- **Existing teams become `default`** (migration step 24). They were made when
+  `full` changed nothing, so they must not gain bypass silently. `massorca team
+  update TEAM --access full` turns it on.
+- `team.create` without `access` still makes a `full` team, so an older client
+  that sends none gets the new default without the sentence. `default` is a new
+  wire value: an older client reads it as unknown.
+- Not in this change: the desktop New team dialog and the team card, which will
+  name the access and offer the change in a follow-up.
+
+Decision 0083 is unchanged: a mode is still passed only when someone chose it.
+Here the owner chooses it once for the team.
