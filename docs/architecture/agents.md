@@ -66,6 +66,12 @@ The service reuses its last read of the packages while the lockfile's bytes are 
 read hashes every installed package's files; any lockfile write reads them again, and a read that
 found an unusable package is not kept. Files changed without a lockfile write are seen at the next
 lockfile change or service start.
+
+**Removal guard.** The service registers the agents' remove guard on the extensions at start
+(decision 0062): disabling, removing, or updating a package to a version that drops one of its
+kinds is refused with `agent.busy` while a session of one of the package's kinds is live or
+resumable (an exited run with a recorded end and a known ref). The message and its data
+`{ package, kinds, sessions }` name those sessions; `agent.forget` frees one.
 The check runs right after the kind is found and before its declaration's problems and its
 program are checked, on `agent.start`, `agent.delegate` (and every other start through
 `Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.

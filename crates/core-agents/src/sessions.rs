@@ -6,7 +6,7 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -1235,6 +1235,48 @@ impl Agents {
         // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
         self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
+    }
+
+    /// Refuses removing, disabling or updating away package `package_id` while a session of one of its kinds is live
+    /// or resumable (an exited run with a recorded end and a known ref), with `agent.busy` naming those sessions. The
+    /// extensions remove guard calls it (decision 0062); `agent forget` frees a session.
+    pub fn refuse_removing_package(&self, package_id: &str) -> Result<(), AgentError> {
+        let kinds: BTreeSet<String> = self
+            .kind_packages()
+            .kinds()
+            .into_iter()
+            .filter(|kind| kind.package_id == package_id)
+            .map(|kind| kind.kind_id)
+            .collect();
+        if kinds.is_empty() {
+            return Ok(());
+        }
+        let mut sessions = Vec::new();
+        for row in self.store().list_agent_sessions(None)? {
+            if !kinds.contains(&row.kind) {
+                continue;
+            }
+            let resumable = row.exit.is_some() && row.agent_ref.is_some();
+            let id = row.id.clone();
+            let live = self.view(row)?.execution.state != TerminalState::Exited;
+            if live || resumable {
+                sessions.push(id);
+            }
+        }
+        if sessions.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<&str> = kinds.iter().map(String::as_str).collect();
+        let mut error = AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "package {package_id} provides agent kind {}, which sessions {} still use; stop and forget them first",
+                names.join(", "),
+                sessions.join(", ")
+            ),
+        );
+        error.data = Some(json!({ "package": package_id, "kinds": names, "sessions": sessions }));
+        Err(error)
     }
 
     /// Settles the starts the previous service recorded and never settled (docs/architecture/agents.md, "Crash-safe

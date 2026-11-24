@@ -261,6 +261,47 @@ mod tests {
         row
     }
 
+    /// A package whose kind has a resumable session (exited, with a recorded end and a known ref) refuses its removal
+    /// with `agent.busy` naming the session; a session that cannot resume and another package's session do not block it.
+    #[test]
+    fn a_package_whose_kind_has_a_resumable_session_refuses_its_removal() {
+        let mut other = fake_package(PackageState::Enabled, MISSING_PROGRAM);
+        other.kind_id = "other".to_owned();
+        other.package_id = "ext.other".to_owned();
+        let (agents, base, _profile) = service(vec![
+            fake_package(PackageState::Enabled, MISSING_PROGRAM),
+            other,
+        ]);
+        assert!(
+            agents.refuse_removing_package("ext.fake").is_ok(),
+            "no session uses it"
+        );
+
+        let mut no_ref = exited_session(&agents, &base, "fake");
+        no_ref.agent_ref = None;
+        agents.store().delete_agent_session(&no_ref.id).unwrap();
+        agents.store().insert_agent_session(&no_ref).unwrap();
+        exited_session(&agents, &base, "other");
+        assert!(
+            agents.refuse_removing_package("ext.fake").is_ok(),
+            "a session with no ref cannot resume"
+        );
+
+        let used = exited_session(&agents, &base, "fake");
+        let error = agents
+            .refuse_removing_package("ext.fake")
+            .expect_err("a resumable session uses the kind");
+        assert_eq!(error.code, codes::AGENT_BUSY, "{}", error.message);
+        assert!(error.message.contains(&used.id), "{}", error.message);
+        assert!(error.message.contains("fake"), "{}", error.message);
+        assert!(!error.message.contains(&no_ref.id), "{}", error.message);
+        assert_eq!(
+            error.data,
+            Some(json!({ "package": "ext.fake", "kinds": ["fake"], "sessions": [used.id] }))
+        );
+        assert!(agents.refuse_removing_package("ext.unknown").is_ok());
+    }
+
     fn account(kind: &str, origin: &str) -> AgentAccountRow {
         AgentAccountRow {
             id: new_id(),

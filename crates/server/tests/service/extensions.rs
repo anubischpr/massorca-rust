@@ -6,6 +6,10 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use massorca_core_extensions::HookError;
+use massorca_core_store::{
+    AgentSessionRow, ProjectKind, ProjectRow, RunExit, RunExitReason, RunMode, Store,
+    WorkspaceKind, WorkspaceRow, WorkspaceState, new_id, now_ms,
+};
 use massorca_protocol::codes;
 use massorca_protocol::methods::events::{self, ChangeEvent};
 use massorca_protocol::methods::extensions::{
@@ -15,7 +19,7 @@ use massorca_protocol::methods::extensions::{
 use serde_json::json;
 use tokio::time::timeout;
 
-use super::common::{connect, remote_code, start, stop, temp_home};
+use super::common::{connect, profile, remote_code, start, stop, temp_home};
 
 /// An agent package `acme.kit` with no CLI block, so installing it runs nothing.
 fn write_package(dir: &Path) {
@@ -250,6 +254,119 @@ async fn install_needs_the_accepted_review_and_publishes_events_after_each_chang
             .extensions
             .is_empty()
     );
+    stop(running).await;
+}
+
+/// An ended session of kind `kind` that can resume (a recorded end and a known ref), in a new folder workspace.
+fn resumable_session(store: &Store, kind: &str) -> String {
+    let project = ProjectRow {
+        id: new_id(),
+        kind: ProjectKind::Folder,
+        path: "/work/app".to_owned(),
+        path_key: "/work/app".to_owned(),
+        name: "app".to_owned(),
+        workspaces_root: "/work/app-workspaces".to_owned(),
+        added_at: now_ms(),
+        base_ref: None,
+    };
+    store.insert_project(&project).expect("project");
+    let workspace = WorkspaceRow {
+        id: new_id(),
+        project_id: project.id,
+        kind: WorkspaceKind::Folder,
+        name: "main".to_owned(),
+        path: "/work/app".to_owned(),
+        path_key: "/work/app".to_owned(),
+        branch: None,
+        base_ref: None,
+        created_branch: false,
+        state: WorkspaceState::Ready,
+        request_id: None,
+        created_at: now_ms(),
+    };
+    store.insert_workspace(&workspace).expect("workspace");
+    let session = AgentSessionRow {
+        id: new_id(),
+        kind: kind.to_owned(),
+        workspace_id: workspace.id,
+        parent_id: None,
+        title: None,
+        read_only: true,
+        agent_ref: Some("ref-1".to_owned()),
+        terminal_id: None,
+        request_id: None,
+        created_at: now_ms(),
+        exit: Some(RunExit {
+            code: Some(0),
+            signal: None,
+            reason: RunExitReason::Exited,
+            at: now_ms(),
+        }),
+        activity: None,
+        result: None,
+        brought_back_at: None,
+        holds_secrets: false,
+        mode: RunMode::default(),
+        pending_permission_mode: None,
+    };
+    store.insert_agent_session(&session).expect("session");
+    session.id
+}
+
+/// The service registers the agents' remove guard at start: a package whose kind a resumable session uses is neither
+/// disabled nor removed, with `agent.busy` naming the session, until the session is forgotten.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_package_whose_kind_a_session_uses_is_not_disabled_or_removed() {
+    let home = temp_home();
+    let package = temp_home();
+    write_package(package.path());
+    let source = format!("dir:{}", package.path().display());
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let review = client.extension_inspect(&source).await.expect("a review");
+    client
+        .extension_install(&ExtensionInstallParams {
+            source,
+            consent: Some(review.consent),
+            run_installer: false,
+            sha256: None,
+            agent_token: None,
+        })
+        .await
+        .expect("the install");
+    let store = Store::open(profile(home.path(), "default").store_path()).expect("the store");
+    let session = resumable_session(&store, "kit");
+
+    let disable = client
+        .extension_set_enabled(&ExtensionSetEnabledParams {
+            id: "acme.kit".to_owned(),
+            enabled: false,
+        })
+        .await
+        .expect_err("a used kind keeps its package enabled");
+    let remove = client
+        .extension_remove(&ExtensionRemoveParams {
+            id: "acme.kit".to_owned(),
+            ..ExtensionRemoveParams::default()
+        })
+        .await
+        .expect_err("a used kind keeps its package");
+    for refused in [&disable, &remove] {
+        assert_eq!(remote_code(refused), codes::AGENT_BUSY);
+        assert!(refused.to_string().contains(&session), "{refused}");
+    }
+
+    client
+        .agent_forget(&session)
+        .await
+        .expect("the session is forgotten");
+    client
+        .extension_remove(&ExtensionRemoveParams {
+            id: "acme.kit".to_owned(),
+            ..ExtensionRemoveParams::default()
+        })
+        .await
+        .expect("removed once no session uses the kind");
     stop(running).await;
 }
 
