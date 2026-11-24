@@ -1,8 +1,8 @@
-//! `massorca project add|list|show|rm|set-base`: registering, unregistering and setting the base of projects through the service.
+//! `massorca project add|list|show|inspect|rm|set-base`: registering, unregistering, inspecting and setting the base of projects through the service.
 
 use massorca_protocol::methods::projects::{
-    self, Project, ProjectAddParams, ProjectKind, ProjectRef, ProjectRemoveParams,
-    ProjectSetBaseParams,
+    self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectKind,
+    ProjectRef, ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::workspaces::WorkspaceListParams;
 
@@ -27,6 +27,9 @@ pub async fn execute(
         ProjectCommand::Add(args) => {
             let params = add_params(args, paths)?;
             let project = client.project_add(&params).await?;
+            if params.kind.is_none() && project.kind == ProjectKind::Folder {
+                output.progress(&workspace_text::plain_folder_warning(&project.path));
+            }
             output.success(&project, &[workspace_text::project_line(&project, "added")]);
         }
         ProjectCommand::List => {
@@ -42,6 +45,13 @@ pub async fn execute(
             let project = paths.selector(&project)?;
             let shown = client.project_show(&ProjectRef { project }).await?;
             output.success(&shown, &workspace_text::project_details(&shown));
+        }
+        ProjectCommand::Inspect { path } => {
+            let params = ProjectInspectParams {
+                path: paths.path(&path)?,
+            };
+            let inspection: ProjectInspection = client.call(projects::INSPECT, &params).await?;
+            output.success(&inspection, &workspace_text::inspection_lines(&inspection));
         }
         ProjectCommand::Rm {
             project,

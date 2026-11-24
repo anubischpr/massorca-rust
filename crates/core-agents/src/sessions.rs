@@ -1051,6 +1051,16 @@ impl Agents {
         })
     }
 
+    /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
+    /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
+    pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
+        let decl = self.declared_kind(id).ok()?;
+        decl.permission_modes
+            .iter()
+            .find(|mode| mode.bypass && modes::plan(&decl, mode).is_ok())
+            .map(|mode| mode.id.clone())
+    }
+
     /// The declaration of `id`: declared and valid, whether or not its program is installed now.
     fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());

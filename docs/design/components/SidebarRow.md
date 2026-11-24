@@ -23,7 +23,7 @@ Inventory IDs: D-WS-02 (workspace row and menu), D-HO-01 (host rows under a proj
 - Project (top level): the project icon 16 px (A41: folder glyph by default, or the colour and icon the user chose), name `body-strong`, owner or org `body-sm`.
 - Workspace (under its host row): `git-branch` icon 16 px for a worktree or `folder` for a plain folder, name `body`.
 - Session (under its workspace): AgentStatus glyph 12 px, gap `space.2`, agent icon 16 px (A84), gap `space.2`, title `body`. The agent name is not repeated in the title; it is the icon's tooltip and is in the accessible name (A17).
-- Child session: same parts, nested under its parent by indentation only, with no connector line (A83). The indent is one step of `size.icon.sm` plus `space.2` (24 px) beyond the parent, so the child's agent icon lines up with the first letter of the parent's title (A85). Deeper children add the same step.
+- Child session: same parts, nested under its parent by indentation only, with no connector line (A83). The indent is one step of `size.icon.sm` plus `space.2` (24 px) beyond the parent, so the child's agent icon lines up with the first letter of the parent's title (A85). Deeper children add the same step. Its secondary text names where it runs; a child in another worktree than its parent's has a 12 px `git-branch` icon before its branch (WS-35).
 - Navigation entry: icon 16 px, label `body`, optional count badge, chevron when it has children.
 - Team: team character 16 px (still at this size), name `body`, status hint at the trailing edge.
 - Child (Conference room `messages-square`, Board kanban icon, Files `folder`, Memory `brain`, Routines `calendar-clock`): one indent step (`space.3`, 12 px), icon 16 px, hint trailing.

@@ -11,15 +11,19 @@ use massorca_protocol::methods::workspaces::{self, Workspace};
 pub(crate) fn project(row: &ProjectRow) -> Project {
     Project {
         id: row.id.clone(),
-        kind: match row.kind {
-            ProjectKind::Git => projects::ProjectKind::Git,
-            ProjectKind::Folder => projects::ProjectKind::Folder,
-        },
+        kind: project_kind(row.kind),
         path: row.path.clone(),
         name: row.name.clone(),
         workspaces_root: row.workspaces_root.clone(),
         added_at_ms: row.added_at,
         base_ref: row.base_ref.clone(),
+    }
+}
+
+pub(crate) fn project_kind(kind: ProjectKind) -> projects::ProjectKind {
+    match kind {
+        ProjectKind::Git => projects::ProjectKind::Git,
+        ProjectKind::Folder => projects::ProjectKind::Folder,
     }
 }
 

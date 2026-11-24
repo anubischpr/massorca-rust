@@ -103,6 +103,16 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             selector("project"),
         ),
         command(
+            "project.inspect",
+            "Show what adding a path would register",
+            "project.inspect",
+            json!({
+                "type": "object",
+                "required": ["path"],
+                "properties": { "path": { "type": "string" } }
+            }),
+        ),
+        command(
             "project.rm",
             "Remove a project",
             "project.remove",
