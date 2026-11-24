@@ -48,6 +48,22 @@ export interface WorkspaceSummary {
   readonly missing: boolean;
 }
 
+/** A terminal of a workspace, as the list shows it. `state` is `live`, `unverifiable`, `exited` or `unknown`. */
+export interface TerminalSummary {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly state: string;
+  readonly title: string | undefined;
+  readonly cols: number;
+  readonly rows: number;
+  /** The program the terminal runs. */
+  readonly shell: string;
+  readonly cwd: string;
+  readonly createdAtMs: bigint;
+  /** Attaching needs host-admin scope, because the program got vault secrets. */
+  readonly holdsSecrets: boolean;
+}
+
 export interface GitFileStatus {
   readonly path: string;
   readonly originalPath: string | undefined;
@@ -145,6 +161,8 @@ export interface Host {
   whoami(): Promise<WhoAmI>;
   protocol(): ProtocolInfo;
   workspaces(project?: string): Promise<WorkspaceSummary[]>;
+  /** The terminals of every workspace, or only those of `workspace` (its id), live and exited. */
+  terminals(workspace?: string): Promise<TerminalSummary[]>;
   gitStatus(workspace: string): Promise<GitStatusSummary>;
   watchGit(workspace: string): Watch<GitEvent>;
   watchAgents(workspace?: string): Watch<AgentEvent>;
