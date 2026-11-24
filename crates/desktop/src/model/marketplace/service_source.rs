@@ -8,7 +8,9 @@ use massorca_protocol::methods::extensions::ExtensionItem;
 
 use super::service_accounts::ServiceAccounts;
 
-use super::extension_items::{ExtensionIds, extension_items};
+use super::extension_items::{
+    ExtensionIds, extension_items, provides_agent, state_of as package_state,
+};
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
     Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
@@ -38,9 +40,34 @@ impl ServiceMarketplace {
         let kind_ids: Vec<String> = self.kinds.iter().map(|kind| kind.id.clone()).collect();
         let extensions =
             extension_items(&self.installed, &self.catalogue, &kind_ids, &mut self.ids);
-        let items = base.items.into_iter().chain(extensions).collect();
+        let agents = base
+            .items
+            .into_iter()
+            .map(|agent| with_package(agent, &self.installed, &self.catalogue));
+        let items = agents.chain(extensions).collect();
         self.snapshot = MarketplaceSnapshot { items, ..base };
     }
+}
+
+/// Gives an agent item the package its kind names, the installed one before the catalogue's, so the item's install,
+/// switch and removal go to that package and its state is the package's. An agent kind with no package is unchanged.
+fn with_package(
+    mut agent: MarketplaceItem,
+    installed: &[ExtensionItem],
+    catalogue: &[ExtensionItem],
+) -> MarketplaceItem {
+    let Some(kind) = agent.agent_kind.as_deref() else {
+        return agent;
+    };
+    let package = installed
+        .iter()
+        .chain(catalogue)
+        .find(|entry| provides_agent(entry, kind));
+    if let Some(entry) = package {
+        agent.state = package_state(entry.state);
+        agent.extension = Some(Box::new(entry.clone()));
+    }
+    agent
 }
 
 /// The Marketplace snapshot for the agent kinds a service lists, in the order it lists them.

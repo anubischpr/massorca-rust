@@ -308,6 +308,12 @@ listing names.
   service; for a paired host the path is read on that host as typed.
 - The runner stops waiting for output two seconds after the child ends, then closes the log, so a process the
   installer left behind cannot keep writing to it.
+- The desktop Marketplace lists each built-in agent once, as its agent kind's item, and that item carries the
+  agent's package. Install, the Enabled switch and uninstall of the agent use the package calls, the same as any
+  other package. An agent kind with no package stays read-only.
+- The desktop uninstall confirm offers to remove the CLI a package installed, when its install record names one. The
+  tick sends `uninstall_cli`. The service then names the uninstall commands it needs accepted, and the desktop sends
+  their fingerprint with the same removal, as `massorca extension remove --yes` does. Unticked, the CLI stays as before.
 
 ### Security review
 
