@@ -8,7 +8,7 @@ use massorca_core_terminal::shell::{EnvSnapshot, resolve_program};
 use massorca_core_terminal::{CreateSpec, EnvValue, ShellChoice};
 use massorca_core_workspace::setup::read_setup_script;
 use massorca_core_workspace::setup_runner::{
-    Interpreters, RUNNER_DIR, RunnerHost, plan_runner, setup_env, write_runner,
+    Interpreters, RUNNER_DIR, RunnerHost, check_cmd_values, plan_runner, setup_env, write_runner,
 };
 use massorca_protocol::methods::terminals::{DEFAULT_COLS, DEFAULT_ROWS};
 use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, WorkspaceSetup};
@@ -54,12 +54,6 @@ pub(crate) async fn start(
             Ok(runner) => runner,
             Err(refusal) => return Some(failed(&workspace, refusal.to_string())),
         };
-        if let Err(error) = write_runner(&runner) {
-            return Some(failed(
-                &workspace,
-                format!("the setup runner could not be written: {error}"),
-            ));
-        }
         let vars = setup_env(
             &root,
             &workspace.path,
@@ -68,6 +62,15 @@ pub(crate) async fn start(
             &runner,
             host,
         );
+        if let Err(refusal) = check_cmd_values(&runner, &vars) {
+            return Some(failed(&workspace, refusal.to_string()));
+        }
+        if let Err(error) = write_runner(&runner) {
+            return Some(failed(
+                &workspace,
+                format!("the setup runner could not be written: {error}"),
+            ));
+        }
         let spec = CreateSpec {
             workspace_id: workspace.id.clone(),
             cwd: PathBuf::from(&workspace.path),
@@ -168,5 +171,39 @@ fn git_bash(env: &EnvSnapshot) -> Option<PathBuf> {
         .map(|dir| Path::new(dir).join("Git").join("bin").join("bash.exe"));
     beside_git
         .chain(installed)
-        .find(|path| path.is_file() && not_system(path))
+        .find(|path| is_git_for_windows_bash(path) && not_system(path))
+}
+
+/// `<root>/bin/bash.exe` of a Git for Windows install: `<root>` also has `cmd/git.exe` or `git-bash.exe`.
+fn is_git_for_windows_bash(bash: &Path) -> bool {
+    let Some(root) = bash.parent().and_then(Path::parent) else {
+        return false;
+    };
+    bash.is_file()
+        && (root.join("cmd").join("git.exe").is_file() || root.join("git-bash.exe").is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_bash_inside_a_git_for_windows_install_counts_as_git_bash() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let bash = root.path().join("bin").join("bash.exe");
+        std::fs::create_dir_all(bash.parent().expect("bin")).expect("bin");
+        std::fs::write(&bash, "").expect("bash");
+        assert!(!is_git_for_windows_bash(&bash));
+
+        std::fs::create_dir_all(root.path().join("cmd")).expect("cmd");
+        std::fs::write(root.path().join("cmd").join("git.exe"), "").expect("git");
+        assert!(is_git_for_windows_bash(&bash));
+
+        let other = tempfile::tempdir().expect("temp dir");
+        let other_bash = other.path().join("bin").join("bash.exe");
+        std::fs::create_dir_all(other_bash.parent().expect("bin")).expect("bin");
+        std::fs::write(&other_bash, "").expect("bash");
+        std::fs::write(other.path().join("git-bash.exe"), "").expect("git-bash");
+        assert!(is_git_for_windows_bash(&other_bash));
+    }
 }

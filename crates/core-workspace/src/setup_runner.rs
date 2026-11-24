@@ -8,8 +8,13 @@ pub const RUNNER_DIR: &str = "massorca";
 
 /// Interpreters a `#!` line may name for the POSIX runner on Windows.
 const POSIX_SHELLS: [&str; 6] = ["sh", "bash", "zsh", "dash", "ksh", "ash"];
+/// Characters a `%NAME%` value must not hold for a `.cmd` runner.
+const CMD_UNSAFE_VALUE_CHARS: [char; 11] = ['&', '|', '<', '>', '^', '%', '!', '(', ')', '"', '\n'];
 /// Characters cmd re-reads in a `/c` command line however the runner path is quoted.
-const CMD_UNSAFE_PATH_CHARS: [char; 10] = ['&', '<', '>', '(', ')', '@', '^', '|', '%', '!'];
+/// `,`, `;` and `=` separate arguments for cmd, so an unquoted path holding one names another program.
+const CMD_UNSAFE_PATH_CHARS: [char; 13] = [
+    '&', '<', '>', '(', ')', '@', '^', '|', '%', '!', ',', ';', '=',
+];
 
 /// The host the runner is written for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +64,8 @@ pub enum RunnerRefusal {
     NoCmd,
     NoBash,
     UnsafeCmdPath(PathBuf),
+    /// A variable whose value cmd would read as syntax once `%NAME%` expands it.
+    UnsafeValue(String),
 }
 
 impl fmt::Display for RunnerRefusal {
@@ -66,6 +73,14 @@ impl fmt::Display for RunnerRefusal {
         match self {
             Self::NoCmd => f.write_str("cmd.exe was not found"),
             Self::NoBash => f.write_str("bash was not found"),
+            Self::UnsafeValue(name) => write!(
+                f,
+                "the setup script was not run: {name} holds a character cmd would run as a command ({})",
+                CMD_UNSAFE_VALUE_CHARS
+                    .iter()
+                    .collect::<String>()
+                    .escape_debug()
+            ),
             Self::UnsafeCmdPath(path) => write!(
                 f,
                 "cmd.exe cannot run a runner whose path has one of {}: {}",
@@ -134,6 +149,24 @@ pub fn plan_runner(
         contents,
         program: cmd,
     })
+}
+
+/// Refuses a `.cmd` runner when a value it exposes would turn into cmd syntax: cmd expands `%NAME%` before it parses
+/// `&`, `|` and the rest, so a branch `x&calc` would run `calc`. A POSIX runner quotes its own expansions.
+pub fn check_cmd_values(
+    runner: &SetupRunner,
+    vars: &[(String, String)],
+) -> Result<(), RunnerRefusal> {
+    if runner.kind != RunnerKind::Cmd {
+        return Ok(());
+    }
+    match vars
+        .iter()
+        .find(|(_, value)| value.contains(CMD_UNSAFE_VALUE_CHARS))
+    {
+        Some((name, _)) => Err(RunnerRefusal::UnsafeValue(name.clone())),
+        None => Ok(()),
+    }
 }
 
 /// Writes the runner, replacing one an earlier create of the same worktree left.
@@ -485,5 +518,47 @@ mod tests {
                 .iter()
                 .any(|(key, _)| key == "MASSORCA_WORKSPACE_BRANCH")
         );
+    }
+
+    #[test]
+    fn a_cmd_runner_path_with_a_separator_cmd_splits_on_is_refused() {
+        for dir in [r"C:\a,b\massorca", r"C:\a;b\massorca", r"C:\a=b\massorca"] {
+            let dir = Path::new(dir);
+            assert_eq!(
+                plan_runner("echo", RunnerHost::Windows, dir, &tools()),
+                Err(RunnerRefusal::UnsafeCmdPath(dir.join("setup-runner.cmd")))
+            );
+        }
+    }
+
+    #[test]
+    fn a_cmd_runner_refuses_a_variable_value_cmd_would_reread() {
+        let dir = Path::new(r"C:\r\massorca");
+        let env = |runner: &SetupRunner, branch: &str| {
+            setup_env(
+                r"C:\repo",
+                r"C:\ws\f",
+                "f",
+                Some(branch),
+                runner,
+                RunnerHost::Windows,
+            )
+        };
+        let runner = plan_runner("x", RunnerHost::Windows, dir, &tools()).expect("plans");
+        assert_eq!(
+            check_cmd_values(&runner, &env(&runner, "x&calc")),
+            Err(RunnerRefusal::UnsafeValue(
+                "MASSORCA_WORKSPACE_BRANCH".to_owned()
+            ))
+        );
+        for value in [
+            "a|b", "a<b", "a>b", "a^b", "a%b", "a!b", "a(b", "a)b", "a\"b", "a\nb",
+        ] {
+            let vars = vec![("MASSORCA_ROOT_PATH".to_owned(), value.to_owned())];
+            assert!(check_cmd_values(&runner, &vars).is_err(), "{value:?}");
+        }
+        assert_eq!(check_cmd_values(&runner, &env(&runner, "feat/x")), Ok(()));
+        let posix = plan_runner("#!/bin/sh\nx", RunnerHost::Windows, dir, &tools()).expect("plans");
+        assert_eq!(check_cmd_values(&posix, &env(&posix, "x&calc")), Ok(()));
     }
 }
