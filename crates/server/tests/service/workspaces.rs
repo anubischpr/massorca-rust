@@ -59,6 +59,7 @@ fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
         refresh_base: false,
         path: None,
         request_id: None,
+        no_setup: false,
     }
 }
 
@@ -481,5 +482,58 @@ async fn removing_a_workspace_stops_its_terminals_first() {
         .find(|listed| listed.id == terminal.id)
         .expect("the stopped terminal stays listed as exited");
     assert_eq!(after.state, TerminalState::Exited);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn current_names_the_workspace_that_holds_a_directory_and_refuses_one_outside_all() {
+    use massorca_protocol::methods::workspaces::WorkspaceCurrentParams;
+
+    let home = temp_home();
+    let repo = home.path().join("repo");
+    git_repo(&repo);
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    assert!(
+        client
+            .welcome()
+            .capabilities
+            .iter()
+            .any(|name| name == massorca_protocol::capabilities::WORKSPACE_CURRENT),
+        "the service offers workspace-current/1"
+    );
+    let project = add_repo_project(&client, home.path(), &repo).await;
+    let created: Workspace = client
+        .call(workspaces::CREATE, &create_params(&project.name, "deep"))
+        .await
+        .expect("create");
+    let inside = Path::new(&created.path).join("src");
+    std::fs::create_dir_all(&inside).expect("create subdirectory");
+
+    let found: Workspace = client
+        .call(
+            workspaces::CURRENT,
+            &WorkspaceCurrentParams {
+                path: inside.to_str().expect("utf-8").to_owned(),
+            },
+        )
+        .await
+        .expect("the subdirectory is inside the worktree");
+    assert_eq!(found.id, created.id);
+
+    let outside = home.path().join("elsewhere");
+    std::fs::create_dir_all(&outside).expect("create directory");
+    let refused = client
+        .call::<_, Workspace>(
+            workspaces::CURRENT,
+            &WorkspaceCurrentParams {
+                path: outside.to_str().expect("utf-8").to_owned(),
+            },
+        )
+        .await;
+    assert_eq!(
+        remote_code(&refused.expect_err("outside")),
+        codes::WORKSPACE_NOT_FOUND
+    );
     stop(running).await;
 }

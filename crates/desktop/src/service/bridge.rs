@@ -13,9 +13,9 @@ use massorca_client::{Autostart, Client, ClientError, ConnectOptions, HostRecord
 use massorca_profile::Profile;
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentModeSet, AgentPromptParams,
-    AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams, BringBackResult,
-    PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentMarkSeenParams, AgentModeSet,
+    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
+    BringBackResult, PromptReceipt,
 };
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
@@ -25,8 +25,8 @@ use massorca_protocol::methods::events::{
     ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
     TOPIC_CONFIG_CHANGED, TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED,
     TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED,
-    TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED,
-    TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    TOPIC_SECRET_CHANGED, TOPIC_SECRET_REQUEST_CHANGED, TOPIC_SECRET_REQUESTED, TOPIC_TASK_CHANGED,
+    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -93,6 +93,11 @@ pub(crate) enum Command {
     SetConfig {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
+    /// `agent.mark_seen`, answered on its oneshot; the store follows the service's `agent.changed` event.
+    MarkSeen {
+        params: AgentMarkSeenParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     BringBack {
         params: AgentBringBackParams,
@@ -189,7 +194,6 @@ pub(crate) enum Command {
     NetworkStatus {
         reply: oneshot::Sender<Result<NetworkStatus, Refusal>>,
     },
-    Stop,
 }
 
 /// The service's side of a handle made for tests: the calls the UI sent, to answer by hand.
@@ -198,6 +202,9 @@ pub(crate) enum Command {
 pub(crate) struct Script {
     commands: mpsc::UnboundedReceiver<Command>,
     connection: watch::Sender<ConnectionState>,
+    /// A link that no runtime serves, so it never finishes on its own.
+    link: LinkCloser,
+    _finished: watch::Sender<bool>,
 }
 
 #[cfg(test)]
@@ -210,6 +217,16 @@ impl Script {
     /// Moves the link's state, as the bridge does when it connects or loses the service.
     pub(crate) fn set_connection(&self, state: ConnectionState) {
         self.connection.send_replace(state);
+    }
+
+    /// The link of this handle, which closing never finishes.
+    pub(crate) fn link(&self) -> LinkCloser {
+        self.link.clone()
+    }
+
+    /// Whether the link of this handle was asked to close.
+    pub(crate) fn closing_requested(&self) -> bool {
+        self.link.is_closing()
     }
 }
 
@@ -226,6 +243,7 @@ impl ServiceHandle {
     pub(crate) fn scripted() -> (Self, Script) {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (connection_tx, connection) = watch::channel(ConnectionState::Connecting);
+        let (finished_tx, finished) = watch::channel(false);
         (
             Self {
                 commands,
@@ -234,6 +252,8 @@ impl ServiceHandle {
             Script {
                 commands: command_rx,
                 connection: connection_tx,
+                link: LinkCloser::new(watch::channel(false).0, finished),
+                _finished: finished_tx,
             },
         )
     }
@@ -400,6 +420,7 @@ impl ServiceHandle {
 pub struct ServiceBridge {
     handle: ServiceHandle,
     updates: Option<mpsc::UnboundedReceiver<StoreUpdate>>,
+    closer: LinkCloser,
 }
 
 impl ServiceBridge {
@@ -411,6 +432,8 @@ impl ServiceBridge {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (updates_tx, updates) = mpsc::unbounded_channel();
         let (connection_tx, connection) = watch::channel(ConnectionState::Connecting);
+        let (closing, _) = watch::channel(false);
+        let (finished_tx, finished) = watch::channel(false);
         let link = Link {
             profile,
             options,
@@ -423,21 +446,33 @@ impl ServiceBridge {
             extension_reads: Arc::new(Sequence::default()),
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
+            closing: closing.subscribe(),
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
-            .spawn(move || runtime.block_on(link.supervise()))?;
+            .spawn(move || {
+                runtime.block_on(link.supervise());
+                // Dropping the runtime cancels the tasks and closes the connection; only then is the link finished.
+                drop(runtime);
+                finished_tx.send_replace(true);
+            })?;
         Ok(Self {
             handle: ServiceHandle {
                 commands,
                 connection,
             },
             updates: Some(updates),
+            closer: LinkCloser::new(closing, finished),
         })
     }
 
     pub fn handle(&self) -> ServiceHandle {
         self.handle.clone()
+    }
+
+    /// Closes the link, which quit does. Nothing is sent to the service, so it keeps running.
+    pub fn closer(&self) -> LinkCloser {
+        self.closer.clone()
     }
 
     /// The updates channel. It can be taken once; the UI's foreground task owns it.
@@ -448,7 +483,40 @@ impl ServiceBridge {
 
 impl Drop for ServiceBridge {
     fn drop(&mut self) {
-        let _ = self.handle.commands.send(Command::Stop);
+        self.closer.close();
+    }
+}
+
+/// Closes a bridge's link from outside the bridge, as quit does, and waits for the link to finish. Closing only tells
+/// the link to stop: no command reaches the service, which keeps running.
+#[derive(Clone, Debug)]
+pub struct LinkCloser {
+    closing: Arc<watch::Sender<bool>>,
+    finished: watch::Receiver<bool>,
+}
+
+impl LinkCloser {
+    fn new(closing: watch::Sender<bool>, finished: watch::Receiver<bool>) -> Self {
+        Self {
+            closing: Arc::new(closing),
+            finished,
+        }
+    }
+
+    /// Asks the link to stop. Asking again changes nothing.
+    pub fn close(&self) {
+        self.closing.send_replace(true);
+    }
+
+    /// Resolves once the link has stopped and its connection and tasks are gone. A link whose thread ended counts too.
+    pub async fn finished(&self) {
+        let mut finished = self.finished.clone();
+        let _ = finished.wait_for(|done| *done).await;
+    }
+
+    #[cfg(test)]
+    fn is_closing(&self) -> bool {
+        *self.closing.borrow()
     }
 }
 
@@ -482,6 +550,8 @@ struct Link {
     secrets_order: Arc<SecretsFreshness>,
     /// Orders the account reads, per kind, across the connections of this bridge.
     accounts_order: Arc<AccountsFreshness>,
+    /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
+    closing: watch::Receiver<bool>,
 }
 
 impl Link {
@@ -562,7 +632,7 @@ impl Link {
             tokio::select! {
                 result = &mut attempt => return Some(result),
                 command = self.commands.recv() => match command {
-                    None | Some(Command::Stop) => return None,
+                    None => return None,
                     Some(command) => {
                         if let Some(command) = self.host_call(command) {
                             decline_while_down(&mut self.watching, command);
@@ -570,6 +640,7 @@ impl Link {
                     }
                 },
                 () = self.updates.closed() => return None,
+                () = bridge_closed(&mut self.closing) => return None,
             }
         }
     }
@@ -582,7 +653,7 @@ impl Link {
             tokio::select! {
                 () = &mut timer => return true,
                 command = self.commands.recv() => match command {
-                    None | Some(Command::Stop) => return false,
+                    None => return false,
                     Some(Command::RetryNow) => {
                         backoff.reset();
                         return true;
@@ -594,6 +665,7 @@ impl Link {
                     }
                 },
                 () = self.updates.closed() => return false,
+                () = bridge_closed(&mut self.closing) => return false,
             }
         }
     }
@@ -618,6 +690,9 @@ impl Link {
         let queues = agent_queue::read_all(client, &sessions).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
         self.emit(StoreUpdate::AgentQueuesResync(queues));
+        self.emit(StoreUpdate::AgentSeenOffered(
+            client.has_capability(massorca_protocol::capabilities::AGENT_SEEN),
+        ));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -636,9 +711,14 @@ impl Link {
         Ok(events)
     }
 
-    /// Serves one connection: events in, commands out, until it is lost or the UI stops.
+    /// Serves one connection: events in, commands out, until it is lost or the UI stops. Every read gives way to a close
+    /// at once, so a quit never waits for the service to answer.
     async fn session(&mut self, client: &Client) -> SessionEnd {
-        let Ok(mut events) = self.subscribe_and_list(client).await else {
+        let mut closing = self.closing.clone();
+        let Some(listed) = until_closed(&mut closing, self.subscribe_and_list(client)).await else {
+            return SessionEnd::Stop;
+        };
+        let Ok(mut events) = listed else {
             return SessionEnd::Lost;
         };
         let writes = terminals::spawn_writes(client.clone());
@@ -650,7 +730,12 @@ impl Link {
         loop {
             let outcome = tokio::select! {
                 event = events.next_as::<ChangeEvent>() => match event {
-                    Some(Ok(event)) => self.on_event(client, event).await,
+                    Some(Ok(event)) => {
+                        match until_closed(&mut closing, self.on_event(client, event)).await {
+                            Some(outcome) => outcome,
+                            None => return SessionEnd::Stop,
+                        }
+                    }
                     Some(Err(ClientError::Remote(body))) if body.code == codes::STREAM_OVERFLOW => {
                         Outcome::Resync
                     }
@@ -660,7 +745,7 @@ impl Link {
                 },
                 command = self.commands.recv() => {
                     match command {
-                        None | Some(Command::Stop) => return SessionEnd::Stop,
+                        None => return SessionEnd::Stop,
                         Some(command) => match self.host_call(command) {
                             None => {}
                             Some(Command::Terminal(command)) => {
@@ -707,14 +792,18 @@ impl Link {
                     Outcome::Continue
                 }
                 () = self.updates.closed() => return SessionEnd::Stop,
+                () = bridge_closed(&mut closing) => return SessionEnd::Stop,
             };
             match outcome {
                 Outcome::Continue => {}
                 Outcome::Lost => return SessionEnd::Lost,
-                Outcome::Resync => match self.subscribe_and_list(client).await {
-                    Ok(fresh) => events = fresh,
-                    Err(_) => return SessionEnd::Lost,
-                },
+                Outcome::Resync => {
+                    match until_closed(&mut closing, self.subscribe_and_list(client)).await {
+                        Some(Ok(fresh)) => events = fresh,
+                        Some(Err(_)) => return SessionEnd::Lost,
+                        None => return SessionEnd::Stop,
+                    }
+                }
             }
         }
     }
@@ -724,8 +813,8 @@ impl Link {
     async fn on_event(&self, client: &Client, event: ChangeEvent) -> Outcome {
         let ChangeEvent { topic, id } = event;
         let refetched = match topic.as_str() {
-            TOPIC_SECRET_CHANGED => {
-                // The event names a scope and a name; the store takes the whole list again, names only.
+            TOPIC_SECRET_CHANGED | TOPIC_SECRET_REQUESTED | TOPIC_SECRET_REQUEST_CHANGED => {
+                // The event names a secret or a request; the store takes the vault again, names and requests only.
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }
@@ -802,6 +891,23 @@ impl Link {
             Err(ClientError::Remote(_) | ClientError::Protocol(_)) => Outcome::Resync,
             Err(_) => Outcome::Lost,
         }
+    }
+}
+
+/// Resolves once the bridge is closed or dropped, which ends each loop of the link. It returns nothing, so no borrow
+/// of `closing` outlives the `select!` branch.
+async fn bridge_closed(closing: &mut watch::Receiver<bool>) {
+    let _ = closing.wait_for(|closing| *closing).await;
+}
+
+/// Runs `work` unless the bridge closes first, which gives `None`.
+async fn until_closed<T>(
+    closing: &mut watch::Receiver<bool>,
+    work: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        value = work => Some(value),
+        () = bridge_closed(closing) => None,
     }
 }
 
@@ -941,6 +1047,7 @@ fn spawn_call(
         Command::AgentSetMode { params, reply } => {
             agents::spawn_set_mode(&client, params, reply, updates);
         }
+        Command::MarkSeen { params, reply } => agents::spawn_mark_seen(&client, params, reply),
         Command::BringBack { params, reply } => {
             agents::spawn_bring_back(&client, params, reply, updates);
         }
@@ -953,8 +1060,7 @@ fn spawn_call(
         | Command::Team(_)
         | Command::Secret(_)
         | Command::Account(_)
-        | Command::RetryNow
-        | Command::Stop => {}
+        | Command::RetryNow => {}
         other => git::spawn(&client, other, updates, freshness),
     }
 }
@@ -1015,6 +1121,9 @@ fn refuse_while_down(command: Command) {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::MarkSeen { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::AgentSetMode { reply, .. } => {

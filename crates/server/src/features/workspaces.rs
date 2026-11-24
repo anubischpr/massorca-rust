@@ -1,5 +1,6 @@
-//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`).
-//! Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! `workspace.create`, `workspace.list`, `workspace.show` and `workspace.remove` (capability `workspaces/1`), and
+//! `workspace.current` (capability `workspace-current/1`). Removal publishes `workspace.removing` between its two halves and `workspace.removed` after the row is gone.
+//! A create runs the new worktree's setup script in a service terminal (decision 0086).
 
 use std::sync::Arc;
 
@@ -8,8 +9,8 @@ use massorca_protocol::methods::events::{
 };
 use massorca_protocol::methods::terminals::TerminalState;
 use massorca_protocol::methods::workspaces::{
-    self, Workspace, WorkspaceCreateParams, WorkspaceList, WorkspaceListParams, WorkspaceRef,
-    WorkspaceRemoveParams, WorkspaceRemoved,
+    self, Workspace, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
+    WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
 };
 use massorca_protocol::{ErrorBody, capabilities, codes};
 
@@ -18,6 +19,7 @@ use massorca_core_workspace::RemovalWaivers;
 use crate::context::{Registries, RequestCtx};
 use crate::error::ServiceError;
 use crate::features::workspace_domain::{blocking, for_mutation, publish, shared};
+use crate::features::workspace_setup;
 use crate::owner::Owner;
 use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
@@ -55,22 +57,30 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             Permission::Workspace,
             remove,
         )?,
+        registries
+            .capabilities
+            .register(capabilities::WORKSPACE_CURRENT, Owner::Core)?,
+        registries.methods.register(
+            Owner::Core,
+            workspaces::CURRENT,
+            capabilities::WORKSPACE_CURRENT,
+            Permission::Read,
+            current,
+        )?,
     ])
 }
 
 async fn create(ctx: RequestCtx, params: WorkspaceCreateParams) -> Result<Workspace, ErrorBody> {
+    let no_setup = params.no_setup;
     let domain = for_mutation(&ctx).await?;
     // Why: a blank name asks for a generated one; the domain refuses a blank typed name.
-    let generated = params.name.trim().is_empty();
-    let workspace = blocking(move || {
-        if generated {
-            domain.create_workspace_with_generated_name(params)
-        } else {
-            domain.create_workspace(params)
-        }
-    })
-    .await?;
+    let created = blocking(move || domain.create_workspace_once(params)).await?;
+    let mut workspace = created.workspace;
     publish(&ctx, TOPIC_WORKSPACE_CREATED, &workspace.id);
+    // A repeated request id changed nothing, so it neither rewrites the runner nor starts setup again.
+    if !created.repeated {
+        workspace.setup = workspace_setup::start(&ctx, &workspace, no_setup).await;
+    }
     Ok(workspace)
 }
 
@@ -152,6 +162,11 @@ async fn stop_runs(ctx: &RequestCtx, id: &str) -> Result<(), ErrorBody> {
 async fn show(ctx: RequestCtx, params: WorkspaceRef) -> Result<Workspace, ErrorBody> {
     let domain = shared(&ctx);
     blocking(move || domain.show_workspace_with_git_state(&params.workspace)).await
+}
+
+async fn current(ctx: RequestCtx, params: WorkspaceCurrentParams) -> Result<Workspace, ErrorBody> {
+    let domain = shared(&ctx);
+    blocking(move || domain.current_workspace(&params.path)).await
 }
 
 async fn remove(

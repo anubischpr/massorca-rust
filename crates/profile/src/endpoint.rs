@@ -3,6 +3,8 @@
 use std::io;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 
 use interprocess::local_socket::Name;
 #[cfg(unix)]
@@ -35,7 +37,26 @@ pub fn local_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
 /// The name the service listens on and clients connect to. Rejects socket paths that do not fit `sun_path`.
 #[cfg(unix)]
 pub fn local_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
-    let path = profile.socket_path();
+    socket_file_name(profile.socket_path())
+}
+
+/// The name of the desktop's single-instance endpoint (PLAT-07).
+#[cfg(windows)]
+pub(crate) fn desktop_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
+    profile
+        .desktop_pipe_name()
+        .to_ns_name::<GenericNamespaced>()
+}
+
+/// The name of the desktop's single-instance endpoint (PLAT-07).
+#[cfg(unix)]
+pub(crate) fn desktop_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
+    socket_file_name(profile.desktop_socket_path())
+}
+
+/// A socket file's name, refused when its path does not fit `sun_path`.
+#[cfg(unix)]
+fn socket_file_name(path: PathBuf) -> io::Result<Name<'static>> {
     let len = path.as_os_str().as_bytes().len();
     if len >= MAX_SOCKET_PATH_BYTES {
         return Err(io::Error::new(
@@ -52,11 +73,14 @@ pub fn local_socket_name(profile: &Profile) -> io::Result<Name<'static>> {
 /// Restricts the socket file to its owner (0600), after the listener binds it. The directory is already private, so no other user can reach the file in that moment.
 #[cfg(unix)]
 pub fn restrict_socket(profile: &Profile) -> io::Result<()> {
+    restrict_socket_file(&profile.socket_path())
+}
+
+/// `restrict_socket` for a socket file `path` in the profile's private folder.
+#[cfg(unix)]
+pub(crate) fn restrict_socket_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(
-        profile.socket_path(),
-        std::fs::Permissions::from_mode(0o600),
-    )
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 #[cfg(test)]

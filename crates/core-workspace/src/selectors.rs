@@ -67,6 +67,30 @@ impl Workspaces {
             )
         })
     }
+
+    /// The workspace whose path holds `path`, an absolute path: the one with the longest path key that is `path`
+    /// itself or one of its ancestors. Components are compared, so `notes-old` is not inside `notes`.
+    pub(crate) fn containing_workspace(&self, path: &str) -> Result<WorkspaceRow, DomainError> {
+        if !Path::new(path).is_absolute() {
+            return Err(DomainError::new(
+                codes::REQUEST_INVALID_PARAMS,
+                format!("path {path:?} is relative; give an absolute path"),
+            ));
+        }
+        let key = paths::path_key(Path::new(path));
+        let key = Path::new(&key);
+        self.store
+            .list_workspaces(None)?
+            .into_iter()
+            .filter(|row| key.starts_with(&row.path_key))
+            .max_by_key(|row| row.path_key.len())
+            .ok_or_else(|| {
+                DomainError::new(
+                    codes::WORKSPACE_NOT_FOUND,
+                    format!("no workspace contains {path:?}"),
+                )
+            })
+    }
 }
 
 /// The path key of `selector`, only when it is an absolute path. A bare word is a name or an

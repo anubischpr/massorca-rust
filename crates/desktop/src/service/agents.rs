@@ -7,9 +7,9 @@ use std::future::Future;
 use massorca_client::{Client, ClientError};
 use massorca_protocol::codes;
 use massorca_protocol::methods::agents::{
-    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentModeSet,
-    AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams, AgentStartParams,
-    BringBackResult, PromptReceipt,
+    AgentBringBackParams, AgentDelegateParams, AgentDelegated, AgentKind, AgentMarkSeenParams,
+    AgentModeSet, AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams,
+    AgentStartParams, BringBackResult, PromptReceipt,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -52,6 +52,15 @@ impl ServiceHandle {
         params: AgentBringBackParams,
     ) -> Result<BringBackResult, Refusal> {
         self.ask(|reply| Command::BringBack { params, reply }).await
+    }
+
+    /// `agent.mark_seen`: marks the activity named by `params.at_ms` as seen. The store changes through the
+    /// service's `agent.changed` event, not from this answer.
+    pub async fn agent_mark_seen(
+        &self,
+        params: AgentMarkSeenParams,
+    ) -> Result<AgentSession, Refusal> {
+        self.ask(|reply| Command::MarkSeen { params, reply }).await
     }
 
     /// `agent.delegate`: starts a child of a session. The store lists the child after the refetch that follows,
@@ -169,6 +178,22 @@ pub(super) fn spawn_bring_back(
             .await
             .map_err(|error| Refusal::from(&error));
         refetch_tree(&client, &params.child, &updates).await;
+        let _ = reply.send(result);
+    });
+}
+
+/// Marks a session's activity seen on its own task. Nothing is refetched: the service announces the change.
+pub(super) fn spawn_mark_seen(
+    client: &Client,
+    params: AgentMarkSeenParams,
+    reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let result = client
+            .agent_mark_seen(&params.session, params.at_ms)
+            .await
+            .map_err(|error| Refusal::from(&error));
         let _ = reply.send(result);
     });
 }
