@@ -14,6 +14,7 @@ mod refs;
 mod remote;
 mod repository;
 mod status;
+mod submodule_diff;
 mod untrusted;
 mod worktree_failures;
 mod worktrees;

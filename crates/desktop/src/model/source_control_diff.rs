@@ -198,6 +198,7 @@ index 1111111..2222222 100644
             truncated: false,
             old_size: Some(2 * 1024 * 1024 + 1024 * 1024 / 10),
             new_size: None,
+            submodule: None,
         };
         assert_eq!(
             diff_status(&binary),

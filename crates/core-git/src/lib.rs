@@ -20,6 +20,7 @@ mod refs;
 mod remote;
 mod repository;
 mod status;
+mod submodule_pointer;
 mod untrusted;
 mod version;
 mod worktree;
