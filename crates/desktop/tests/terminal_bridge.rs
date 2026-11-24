@@ -180,6 +180,7 @@ fn workspace_params(project: &str) -> WorkspaceCreateParams {
         branch: None,
         base: None,
         existing_branch: false,
+        refresh_base: false,
         path: None,
         request_id: None,
     }

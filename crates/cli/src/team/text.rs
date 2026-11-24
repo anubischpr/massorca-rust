@@ -2,7 +2,7 @@
 
 use massorca_protocol::methods::teams::{
     Board, Bot, MemorySource, Routine, RoutineCadence, RoutineRun, RoutineWeekday, Team,
-    TeamCharacter, TeamMemoryLine, TeamProject,
+    TeamAccess, TeamCharacter, TeamMemoryLine, TeamProject,
 };
 
 /// `created team alpha (id)`, or the verb the command used.
@@ -30,9 +30,28 @@ pub fn team_details(team: &Team) -> Vec<String> {
         format!("name: {}", team.name),
         format!("purpose: {}", team.purpose),
         format!("character: {}", character_word(team.character)),
+        format!("access: {}", access_word(team.access)),
         format!("workspaces: {}", team.workspaces),
         format!("id: {}", team.id),
     ]
+}
+
+fn access_word(access: TeamAccess) -> &'static str {
+    match access {
+        TeamAccess::Full => "full",
+        TeamAccess::Default => "default",
+        TeamAccess::Unknown => "unknown",
+    }
+}
+
+/// The sentence a full-access team shows every time it is made or changed: its bots bypass permission prompts (0083).
+pub fn access_notice(team: &Team) -> Option<String> {
+    (team.access == TeamAccess::Full).then(|| {
+        format!(
+            "Full access: bots run without asking for permission. To have them ask, run: massorca team update {} --access default",
+            team.name
+        )
+    })
 }
 
 pub fn bot_line(bot: &Bot, verb: &str) -> String {

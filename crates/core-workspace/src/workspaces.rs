@@ -6,6 +6,7 @@ use massorca_core_store::Store;
 use massorca_protocol::methods::workspaces::Workspace;
 
 use crate::error::DomainError;
+use crate::layout::WorkspaceLayout;
 use crate::views;
 
 /// The projects and workspaces domain API. Share one value across threads behind an `Arc`.
@@ -14,6 +15,8 @@ pub struct Workspaces {
     pub(crate) store: Store,
     pub(crate) git: Git,
     pub(crate) default_root: PathBuf,
+    /// The layout a project added through this handle gets under the default root.
+    pub(crate) layout: WorkspaceLayout,
     /// Serialises every mutation, so a name, path or branch checked before git runs
     /// cannot be taken by another call before the row is inserted.
     mutations: Arc<Mutex<()>>,
@@ -26,6 +29,7 @@ impl Workspaces {
             store,
             git,
             default_root,
+            layout: WorkspaceLayout::default(),
             mutations: Arc::new(Mutex::new(())),
         }
     }
@@ -38,6 +42,19 @@ impl Workspaces {
             store: self.store.clone(),
             git: self.git.clone(),
             default_root,
+            layout: self.layout,
+            mutations: Arc::clone(&self.mutations),
+        }
+    }
+
+    /// A handle over the same store and git that gives projects added through it `layout`.
+    /// It shares the mutation lock, like `with_default_root`.
+    pub fn with_layout(&self, layout: WorkspaceLayout) -> Self {
+        Self {
+            store: self.store.clone(),
+            git: self.git.clone(),
+            default_root: self.default_root.clone(),
+            layout,
             mutations: Arc::clone(&self.mutations),
         }
     }

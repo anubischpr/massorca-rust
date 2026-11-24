@@ -70,12 +70,15 @@ pub enum TeamCharacter {
     Unknown,
 }
 
-/// Who may change a team. Only `full` exists so far.
+/// How a team's bots run (decision 0072, amendment "team access"; decision 0083).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TeamAccess {
+    /// Bots run in their kind's bypass mode, without asking for permission. A new team's access when none is given.
     #[default]
     Full,
+    /// Bots run in their kind's own default mode, which may ask for permission. Absent from older hosts.
+    Default,
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
