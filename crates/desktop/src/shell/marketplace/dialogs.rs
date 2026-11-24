@@ -3,7 +3,8 @@
 
 use super::{InstallReview, UninstallConfirm};
 use crate::model::marketplace::{
-    MarketplaceSnapshot, SignInFlow, SignInStep, review_lines, uninstall_body,
+    CLI_REMOVAL_SENTENCE, MarketplaceSnapshot, SignInFlow, SignInStep, offers_cli_removal,
+    review_lines, uninstall_body_for,
 };
 use crate::shell::Shell;
 use gpui::{
@@ -166,7 +167,7 @@ fn uninstall(
 ) -> Option<AnyElement> {
     let item = snapshot.item(confirm.item)?;
     let theme = *cx.theme();
-    let (ok, dismiss) = (weak.clone(), weak.clone());
+    let (ok, dismiss, tick) = (weak.clone(), weak.clone(), weak.clone());
     let mut dialog = Dialog::new("marketplace-uninstall", format!("Uninstall {}?", item.name))
         .variant(DialogVariant::Destructive)
         .open(true)
@@ -175,7 +176,7 @@ fn uninstall(
             div()
                 .text_style(TYPE_BODY_SM)
                 .text_color(theme.palette.text.secondary)
-                .child(uninstall_body(item)),
+                .child(uninstall_body_for(item, confirm.remove_cli)),
         )
         .action("Uninstall")
         .cancel_label("Cancel")
@@ -185,6 +186,32 @@ fn uninstall(
         .on_dismiss(move |_, cx| {
             let _ = dismiss.update(cx, |shell, cx| shell.cancel_marketplace_uninstall(cx));
         });
+    if offers_cli_removal(item) {
+        let tick_box = Checkbox::new("marketplace-uninstall-cli-box", confirm.remove_cli)
+            .label("Also remove the CLI it installed")
+            .on_change(move |checked, _, cx| {
+                let _ = tick.update(cx, |shell, cx| {
+                    shell.set_marketplace_uninstall_cli(checked, cx)
+                });
+            });
+        dialog = dialog.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .child(
+                    div()
+                        .debug_selector(|| "marketplace-uninstall-cli".to_owned())
+                        .child(tick_box),
+                )
+                .child(
+                    div()
+                        .text_style(TYPE_BODY_SM)
+                        .text_color(theme.palette.text.secondary)
+                        .child(CLI_REMOVAL_SENTENCE),
+                ),
+        );
+    }
     if let Some(error) = &confirm.error {
         dialog = dialog.error(error.clone());
     }

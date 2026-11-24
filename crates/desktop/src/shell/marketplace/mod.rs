@@ -40,6 +40,8 @@ pub(super) struct UninstallConfirm {
     pub error: Option<String>,
     /// The removal is with the service; the confirm waits for its answer.
     pub sending: bool,
+    /// The person's tick for removing the CLI the package installed too; only offered when the package installed one.
+    pub remove_cli: bool,
 }
 
 /// The install review on screen for one catalogue package. What the service reported is shown as it came; nothing
@@ -269,7 +271,16 @@ impl Shell {
             item,
             error: None,
             sending: false,
+            remove_cli: false,
         });
+        cx.notify();
+    }
+
+    /// The CLI tick of the uninstall confirm. Nothing is sent until the confirm's own action.
+    pub(super) fn set_marketplace_uninstall_cli(&mut self, remove: bool, cx: &mut Context<Self>) {
+        if let Some(confirm) = self.marketplace_uninstall.as_mut() {
+            confirm.remove_cli = remove;
+        }
         cx.notify();
     }
 
@@ -287,7 +298,7 @@ impl Shell {
             return;
         }
         if let Some(package) = self.package_of(confirm.item) {
-            self.remove_package(confirm.item, package, cx);
+            self.remove_package(confirm.item, package, confirm.remove_cli, cx);
             return;
         }
         match self.change_marketplace(cx, |source| source.uninstall(confirm.item)) {

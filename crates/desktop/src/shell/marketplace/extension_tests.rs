@@ -459,6 +459,104 @@ fn a_refused_removal_keeps_the_confirm_open_with_the_reason(cx: &mut TestAppCont
     assert_eq!(confirm.error.as_deref(), Some("A session uses this agent"));
 }
 
+/// An installed package whose install record says it installed its CLI.
+fn installed_with_cli() -> ExtensionItem {
+    let mut item = installed_package(true);
+    if let Some(info) = item.installed.as_mut() {
+        info.cli = vec![massorca_protocol::methods::extensions::CliRecord {
+            agent: "notes".to_owned(),
+            binary: "notes".to_owned(),
+            detected_before_install: false,
+            installer: None,
+            installed_by_package: true,
+        }];
+    }
+    item
+}
+
+#[gpui::test]
+fn a_removal_that_takes_the_cli_sends_uninstall_cli_once_the_box_is_ticked(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx, _) = open_listed(cx, vec![installed_with_cli()], vec![installed_with_cli()]);
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "marketplace-uninstall-cli");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert_eq!(params.id, "acme.notes");
+            assert!(params.uninstall_cli, "the ticked CLI removal is asked for");
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+}
+
+#[gpui::test]
+fn an_unticked_cli_removal_keeps_the_cli_as_today(cx: &mut TestAppContext) {
+    let (mut rig, cx, _) = open_listed(cx, vec![installed_with_cli()], vec![installed_with_cli()]);
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { params, reply })) => {
+            assert!(
+                !params.uninstall_cli,
+                "the CLI stays unless the box is ticked"
+            );
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: Vec::new(),
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+}
+
+#[gpui::test]
+fn a_cli_that_was_not_removed_is_said_under_the_item(cx: &mut TestAppContext) {
+    let (mut rig, cx, id) = open_listed(cx, vec![installed_with_cli()], vec![installed_with_cli()]);
+    click(cx, "button:marketplace-uninstall");
+    click(cx, "marketplace-uninstall-cli");
+    click(cx, "dialog-action");
+    match rig.script.next() {
+        Some(Command::Extension(ExtensionCommand::Remove { reply, .. })) => {
+            let _ = reply.send(Ok(ExtensionRemoved {
+                id: "acme.notes".to_owned(),
+                version: "1.0.0".to_owned(),
+                failures: Vec::new(),
+                cli: vec![massorca_protocol::methods::extensions::CliRemoval {
+                    agent: "notes".to_owned(),
+                    binary: "notes".to_owned(),
+                    action: massorca_protocol::methods::extensions::CliRemovalAction::Failed {
+                        command: vec!["npm".to_owned(), "uninstall".to_owned()],
+                        message: "the uninstall exited with code 1".to_owned(),
+                    },
+                }],
+            }));
+        }
+        _ => panic!("the confirm sends the removal to the service"),
+    }
+    cx.run_until_parked();
+    let shown = rig
+        .shell
+        .read_with(cx, |shell, _| shell.marketplace_item_error.clone());
+    assert_eq!(
+        shown,
+        Some((
+            id,
+            "Removed, but not every step finished. The CLI was not removed: the uninstall exited with code 1"
+                .to_owned()
+        ))
+    );
+}
+
 /// A built-in agent's package as the catalogue lists it: it names the agent kind it provides.
 fn agent_package(kind: &str, state: ExtensionState) -> ExtensionItem {
     let mut item = catalogue_package();

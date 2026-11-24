@@ -25,7 +25,8 @@ pub use extension_items::risk_word;
 pub use extension_refusals::extension_refusal_text;
 pub use install_review::review_lines;
 pub use item_page::{
-    Part, advanced_rows, information, parts, settings_rows, state_chip, uninstall_body,
+    CLI_REMOVAL_SENTENCE, Part, advanced_rows, information, offers_cli_removal, parts,
+    settings_rows, state_chip, uninstall_body, uninstall_body_for,
 };
 pub use package_problem::{
     PackageAction, ProblemAlert, ProblemTone, package_refusal, problem_alert,

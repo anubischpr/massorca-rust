@@ -617,4 +617,61 @@ mod tests {
             Some(ExtensionState::Disabled)
         );
     }
+
+    #[test]
+    fn the_uninstall_offers_the_cli_only_when_the_package_installed_it() {
+        use massorca_protocol::methods::extensions::{
+            CliRecord, InstalledInfo, SourceKind, SourceRef,
+        };
+
+        use crate::model::marketplace::{
+            CLI_REMOVAL_SENTENCE, offers_cli_removal, uninstall_body_for,
+        };
+
+        let record = |installed_by_package: bool| CliRecord {
+            agent: "claude".to_owned(),
+            binary: "claude".to_owned(),
+            detected_before_install: false,
+            installer: None,
+            installed_by_package,
+        };
+        let installed = |cli: Vec<CliRecord>| {
+            let mut entry = package("acme.notes", "extensions", ExtensionState::Enabled);
+            entry.uninstall.cli_binaries = vec!["claude".to_owned()];
+            entry.installed = Some(InstalledInfo {
+                version: "1.0.0".to_owned(),
+                source: SourceRef {
+                    kind: SourceKind::Catalogue,
+                    reference: "acme.notes".to_owned(),
+                },
+                sha256: "abc123".to_owned(),
+                installed_at_ms: 0,
+                cli,
+            });
+            entry
+        };
+
+        let plain = items(&[], &[installed(Vec::new())], &[]);
+        assert!(!offers_cli_removal(&plain[0]));
+        let kept = items(&[], &[installed(vec![record(false)])], &[]);
+        assert!(
+            !offers_cli_removal(&kept[0]),
+            "a CLI the package found stays out"
+        );
+        let offered = items(&[], &[installed(vec![record(true)])], &[]);
+        assert!(offers_cli_removal(&offered[0]));
+
+        assert!(
+            uninstall_body_for(&offered[0], false).contains("The claude CLI it installed stays"),
+            "unticked, the body says the CLI stays"
+        );
+        assert!(
+            !uninstall_body_for(&offered[0], true).contains("stays on this computer"),
+            "ticked, the body no longer says the CLI stays"
+        );
+        assert_eq!(
+            CLI_REMOVAL_SENTENCE,
+            "This removes the CLI from this computer, so it stops working outside MassOrca too."
+        );
+    }
 }
