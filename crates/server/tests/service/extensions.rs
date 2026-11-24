@@ -2,7 +2,6 @@
 //! other features register.
 
 use std::path::Path;
-use std::time::Duration;
 
 use base64::Engine as _;
 use massorca_core_extensions::HookError;
@@ -42,7 +41,7 @@ fn write_package(dir: &Path) {
 
 async fn next_event(subscription: &mut massorca_client::Subscription) -> ChangeEvent {
     timeout(
-        Duration::from_secs(5),
+        super::common::REPLY_WAIT,
         subscription.next_as::<ChangeEvent>(),
     )
     .await

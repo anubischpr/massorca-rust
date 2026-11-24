@@ -185,6 +185,8 @@ struct Seen {
     events: Vec<TerminalEvent>,
     /// The output bytes read so far, in order.
     output: Vec<u8>,
+    /// Cursor answers the link refused while it was down; written once it is back.
+    unanswered: usize,
 }
 
 impl Seen {
@@ -194,18 +196,26 @@ impl Seen {
             .expect("the view reports no error")
             .expect("the view is open");
         if let TerminalEvent::Output { bytes, .. } = &event {
-            for _ in 0..count(bytes, CURSOR_QUERY) {
-                // A query that comes after the process ended has no one left to answer it.
-                match within(test, view.input(CURSOR_ANSWER.to_vec())) {
-                    Ok(()) => {}
-                    Err(FfiError::Remote { code, .. }) if code == "terminal.exited" => {}
-                    Err(error) => panic!("the answer is written: {error:?}"),
-                }
-            }
+            self.unanswered += count(bytes, CURSOR_QUERY);
             self.output.extend_from_slice(bytes);
         }
+        self.answer_cursor_queries(test, view);
         self.events.push(event.clone());
         event
+    }
+
+    /// Answers the cursor queries read so far; a refused answer waits for the link to return.
+    fn answer_cursor_queries(&mut self, test: &Runtime, view: &TerminalView) {
+        while self.unanswered > 0 {
+            match within(test, view.input(CURSOR_ANSWER.to_vec())) {
+                Ok(()) => {}
+                // A query that comes after the process ended has no one left to answer it.
+                Err(FfiError::Remote { code, .. }) if code == "terminal.exited" => {}
+                Err(FfiError::Unreachable { .. }) => return,
+                Err(error) => panic!("the answer is written: {error:?}"),
+            }
+            self.unanswered -= 1;
+        }
     }
 
     /// Reads until an event satisfies `done`, and returns that event.
