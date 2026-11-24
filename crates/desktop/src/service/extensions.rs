@@ -5,8 +5,11 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use massorca_client::{Client, ClientError};
+use massorca_client::{Client, ClientError, Hosts};
+use massorca_profile::Profile;
+use massorca_protocol::capabilities;
 use massorca_protocol::codes;
+use massorca_protocol::methods::agents::{AgentKind, AgentKinds};
 use massorca_protocol::methods::extensions::{
     ExtensionAsset, ExtensionAssetParams, ExtensionEnabled, ExtensionInstallParams,
     ExtensionInstalled, ExtensionItem, ExtensionList, ExtensionRemoveParams, ExtensionRemoved,
@@ -27,6 +30,187 @@ pub struct ExtensionsRead {
     pub installed: Result<Vec<ExtensionItem>, Refusal>,
     /// Every built-in catalogue entry with its state, installed or not.
     pub catalogue: Result<Vec<ExtensionItem>, Refusal>,
+}
+
+/// A paired host's agent kinds and extension lists, read together on the host's own connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostLists {
+    /// The agent kinds the host declares, as `agent.kinds` lists them.
+    pub kinds: Vec<AgentKind>,
+    /// The packages the host has installed, in install order.
+    pub installed: Vec<ExtensionItem>,
+    /// Every built-in catalogue entry the host lists.
+    pub catalogue: Vec<ExtensionItem>,
+}
+
+/// What a paired host's Marketplace reads answered: its lists, or why it cannot show them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostListing {
+    Lists(HostLists),
+    /// The host's MassOrca predates the Marketplace: it lacks `extensions/1` or does not know one of its methods.
+    UpdateNeeded,
+    /// The host could not be read; the refusal says why.
+    Refused(Refusal),
+}
+
+/// The answer to a read of a paired host, tagged with the host it was asked of and the request it answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostMarketplaceRead {
+    pub host: String,
+    pub request: u64,
+    pub listing: HostListing,
+}
+
+/// Whether a host's welcome offers the `extensions/1` capability the Marketplace calls need.
+fn has_extensions(offered: &[String]) -> bool {
+    offered
+        .iter()
+        .any(|name| name.as_str() == capabilities::EXTENSIONS)
+}
+
+/// A host's answer to its reads: its lists, that it predates the Marketplace, or why it refused.
+fn listing_of(lists: Result<HostLists, ClientError>) -> HostListing {
+    match lists {
+        Ok(lists) => HostListing::Lists(lists),
+        Err(error) if predates(&error) => HostListing::UpdateNeeded,
+        Err(error) => HostListing::Refused(Refusal::from(&error)),
+    }
+}
+
+/// Whether a host answered that it has no such method: a MassOrca that predates the Marketplace calls.
+fn predates(error: &ClientError) -> bool {
+    matches!(error, ClientError::Remote(body) if body.code == codes::METHOD_NOT_FOUND)
+}
+
+fn lists_of(
+    kinds: Result<AgentKinds, ClientError>,
+    installed: Result<ExtensionList, ClientError>,
+    catalogue: Result<ExtensionList, ClientError>,
+) -> Result<HostLists, ClientError> {
+    Ok(HostLists {
+        kinds: kinds?.kinds,
+        installed: installed?.extensions,
+        catalogue: catalogue?.extensions,
+    })
+}
+
+/// A paired host's answer to the Marketplace reads, taken on the host's own connection.
+async fn host_listing(client: &Client) -> HostListing {
+    if !has_extensions(&client.welcome().capabilities) {
+        return HostListing::UpdateNeeded;
+    }
+    let (kinds, installed, catalogue) = tokio::join!(
+        client.agent_kinds(),
+        client.extension_list(),
+        client.extension_catalogue()
+    );
+    listing_of(lists_of(kinds, installed, catalogue))
+}
+
+/// Connects to a paired host on its own connection: a call to one host needs no connection to this computer's service.
+async fn connect_host(profile: &Profile, host: &str) -> Result<Client, ClientError> {
+    Client::connect_host(&Hosts::of(profile), host, &super::hosts::peer()).await
+}
+
+/// What a host that cannot be connected to says about it: one that speaks another protocol version needs an update.
+fn connect_listing(error: &ClientError) -> HostListing {
+    let refusal = Refusal::from(error);
+    if refusal.code() == Some(codes::PROTOCOL_UNSUPPORTED_VERSION) {
+        HostListing::UpdateNeeded
+    } else {
+        HostListing::Refused(refusal)
+    }
+}
+
+/// Reads a paired host's lists on its own connection; the answer is a store update tagged with `request`.
+pub(super) fn spawn_host_read(
+    profile: Profile,
+    host: String,
+    request: u64,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
+    tokio::spawn(async move {
+        let listing = match connect_host(&profile, &host).await {
+            Ok(client) => host_listing(&client).await,
+            Err(error) => connect_listing(&error),
+        };
+        let _ = updates.send(StoreUpdate::HostMarketplace(HostMarketplaceRead {
+            host,
+            request,
+            listing,
+        }));
+    });
+}
+
+/// Runs one Marketplace call on a paired host on its own task. A write answers its caller, then the host's lists are read
+/// again; a read that changes nothing sends no store update.
+pub(super) fn spawn_host_call(
+    profile: Profile,
+    host: String,
+    request: u64,
+    command: ExtensionCommand,
+    updates: mpsc::UnboundedSender<StoreUpdate>,
+) {
+    let changes = !matches!(
+        command,
+        ExtensionCommand::Inspect { .. } | ExtensionCommand::Asset { .. }
+    );
+    tokio::spawn(async move {
+        let listing = match connect_host(&profile, &host).await {
+            Ok(client) => {
+                answer_host_call(&client, command).await;
+                if !changes {
+                    return;
+                }
+                host_listing(&client).await
+            }
+            Err(error) => {
+                refuse_while_down(command, Refusal::from(&error));
+                if !changes {
+                    return;
+                }
+                connect_listing(&error)
+            }
+        };
+        let _ = updates.send(StoreUpdate::HostMarketplace(HostMarketplaceRead {
+            host,
+            request,
+            listing,
+        }));
+    });
+}
+
+/// Answers a Marketplace call on a connected paired host, as the local calls are answered.
+async fn answer_host_call(client: &Client, command: ExtensionCommand) {
+    match command {
+        ExtensionCommand::Inspect { source, reply } => {
+            let result = client.extension_inspect(&source).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::Asset { params, reply } => {
+            let result = client.extension_asset(&params).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::Install { params, reply } => {
+            let result = client.extension_install(&params).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::SetEnabled { params, reply } => {
+            let result = client.extension_set_enabled(&params).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::Update { params, reply } => {
+            let result = client.extension_update(&params).await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+        ExtensionCommand::Remove { params, reply } => {
+            let result = remove_with_uninstall_consent(params, |params| async move {
+                client.extension_remove(&params).await
+            })
+            .await;
+            let _ = reply.send(result.map_err(|error| Refusal::from(&error)));
+        }
+    }
 }
 
 /// A Marketplace call the UI makes. Each answers on its oneshot; the store changes through the reads that follow.
@@ -135,6 +319,87 @@ impl ServiceHandle {
     ) -> Result<ExtensionAsset, Refusal> {
         self.ask(|reply| Command::Extension(ExtensionCommand::Asset { params, reply }))
             .await
+    }
+
+    /// Reads a paired host's agent kinds and extension lists; the answer arrives as a store update tagged with `request`.
+    pub fn read_host_marketplace(&self, host: String, request: u64) {
+        self.send(Command::HostRead { host, request });
+    }
+
+    /// `extensions.inspect` on a paired host. Nothing changes there, so no list is read again.
+    pub async fn inspect_host_extension(
+        &self,
+        host: String,
+        source: String,
+    ) -> Result<ExtensionReview, Refusal> {
+        self.ask_host(host, 0, |reply| ExtensionCommand::Inspect { source, reply })
+            .await
+    }
+
+    /// `extensions.asset` on a paired host. Nothing changes there.
+    pub async fn host_extension_asset(
+        &self,
+        host: String,
+        params: ExtensionAssetParams,
+    ) -> Result<ExtensionAsset, Refusal> {
+        self.ask_host(host, 0, |reply| ExtensionCommand::Asset { params, reply })
+            .await
+    }
+
+    /// `extensions.install` on a paired host; the host's lists are read again under `request`.
+    pub async fn install_host_extension(
+        &self,
+        host: String,
+        request: u64,
+        params: ExtensionInstallParams,
+    ) -> Result<ExtensionInstalled, Refusal> {
+        self.ask_host(host, request, |reply| ExtensionCommand::Install {
+            params,
+            reply,
+        })
+        .await
+    }
+
+    /// `extensions.set_enabled` on a paired host; the host's lists are read again under `request`.
+    pub async fn set_host_extension_enabled(
+        &self,
+        host: String,
+        request: u64,
+        params: ExtensionSetEnabledParams,
+    ) -> Result<ExtensionEnabled, Refusal> {
+        self.ask_host(host, request, |reply| ExtensionCommand::SetEnabled {
+            params,
+            reply,
+        })
+        .await
+    }
+
+    /// `extensions.remove` on a paired host; the host's lists are read again under `request`.
+    pub async fn remove_host_extension(
+        &self,
+        host: String,
+        request: u64,
+        params: ExtensionRemoveParams,
+    ) -> Result<ExtensionRemoved, Refusal> {
+        self.ask_host(host, request, |reply| ExtensionCommand::Remove {
+            params,
+            reply,
+        })
+        .await
+    }
+
+    async fn ask_host<T>(
+        &self,
+        host: String,
+        request: u64,
+        command: impl FnOnce(oneshot::Sender<Result<T, Refusal>>) -> ExtensionCommand,
+    ) -> Result<T, Refusal> {
+        self.ask(|reply| Command::HostExtension {
+            host,
+            request,
+            command: command(reply),
+        })
+        .await
     }
 }
 
@@ -294,7 +559,10 @@ mod tests {
     use massorca_protocol::codes;
     use massorca_protocol::methods::extensions::{ExtensionRemoveParams, ExtensionRemoved};
 
-    use super::{remove_with_uninstall_consent, uninstall_fingerprint};
+    use super::{
+        HostListing, HostLists, Refusal, connect_listing, has_extensions, listing_of,
+        remove_with_uninstall_consent, uninstall_fingerprint,
+    };
 
     /// The refusal the service gives when a removal needs its uninstall commands accepted first.
     fn consent_refusal(fingerprint: &str) -> ClientError {
@@ -377,5 +645,51 @@ mod tests {
         .await;
         assert_eq!(calls.into_inner(), 1);
         assert!(matches!(result, Err(ClientError::Remote(body)) if body.code == "extension.busy"));
+    }
+
+    fn no_lists() -> HostLists {
+        HostLists {
+            kinds: Vec::new(),
+            installed: Vec::new(),
+            catalogue: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_host_must_offer_the_extensions_capability_to_be_read() {
+        assert!(has_extensions(&[
+            "service/1".to_owned(),
+            "extensions/1".to_owned()
+        ]));
+        assert!(!has_extensions(&["service/1".to_owned()]));
+    }
+
+    #[test]
+    fn a_host_that_does_not_know_a_marketplace_method_needs_an_update() {
+        let missing =
+            ClientError::Remote(ErrorBody::new(codes::METHOD_NOT_FOUND, "no such method"));
+        assert_eq!(listing_of(Err(missing)), HostListing::UpdateNeeded);
+    }
+
+    #[test]
+    fn any_other_refusal_of_a_host_is_shown_as_its_refusal() {
+        let refused =
+            ClientError::Remote(ErrorBody::new("auth.revoked", "This device is not paired."));
+        let expected = Refusal::from(&refused);
+        assert_eq!(listing_of(Err(refused)), HostListing::Refused(expected));
+    }
+
+    #[test]
+    fn a_host_that_speaks_another_protocol_version_needs_an_update() {
+        let other = ClientError::Remote(ErrorBody::new(
+            codes::PROTOCOL_UNSUPPORTED_VERSION,
+            "no common protocol version",
+        ));
+        assert_eq!(connect_listing(&other), HostListing::UpdateNeeded);
+    }
+
+    #[test]
+    fn a_host_that_answers_its_lists_gives_them() {
+        assert_eq!(listing_of(Ok(no_lists())), HostListing::Lists(no_lists()));
     }
 }

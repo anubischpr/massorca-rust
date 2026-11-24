@@ -100,6 +100,10 @@ impl Shell {
     /// The Update button: sends `extensions.update` with the consent of the review the check kept. A refusal opens the
     /// item page, where its sentence is shown; a change that worked arrives as a new read and is checked again.
     pub(super) fn update_package(&mut self, item: MarketplaceItemId, cx: &mut Context<Self>) {
+        // Update checks run on This computer only, so a paired host's package is not updated from here yet.
+        if self.paired_host_of(item).is_some() {
+            return;
+        }
         let Some(package) = self.package_of(item) else {
             return;
         };

@@ -14,13 +14,16 @@ use super::extension_items::{
 };
 use super::source::{MarketplaceSource, SourceError};
 use super::types::{
-    Host, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId, MarketplaceSnapshot,
+    Host, HostId, HostState, ItemKind, ItemState, MarketplaceItem, MarketplaceItemId,
+    MarketplaceSnapshot,
 };
 use crate::service::Refusal;
 
 /// The Marketplace a connected service makes up. It is empty until a connect reads its lists.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ServiceMarketplace {
+    /// The host the lists belong to: This computer, or a paired host.
+    host: HostTarget,
     snapshot: MarketplaceSnapshot,
     kinds: Vec<AgentKind>,
     installed: Vec<ExtensionItem>,
@@ -35,21 +38,37 @@ pub struct ServiceMarketplace {
 impl ServiceMarketplace {
     /// Builds the snapshot from the lists it holds: the agent items first, then the extension items.
     fn rebuild(&mut self) {
-        let base = agent_snapshot(&self.kinds);
+        let base = agent_snapshot_on(&self.host, &self.kinds);
         let kind_ids: Vec<String> = self.kinds.iter().map(|kind| kind.id.clone()).collect();
+        let host = self.host.id();
         let extensions = extension_items(
             &self.installed,
             &self.catalogue,
             &kind_ids,
             &mut self.ids,
             &self.reviews,
-        );
+        )
+        .into_iter()
+        .map(|item| MarketplaceItem {
+            host: host.clone(),
+            ..item
+        });
         let agents = base
             .items
             .into_iter()
             .map(|agent| with_package(agent, &self.installed, &self.catalogue, &self.reviews));
         let items = agents.chain(extensions).collect();
         self.snapshot = MarketplaceSnapshot { items, ..base };
+    }
+}
+
+impl ServiceMarketplace {
+    /// The Marketplace of a paired host: its items are the host's, shown under the host's name.
+    pub fn of_paired_host(name: &str) -> Self {
+        Self {
+            host: HostTarget::Paired(name.to_owned()),
+            ..Self::default()
+        }
     }
 }
 
@@ -75,17 +94,23 @@ fn with_package(
     agent
 }
 
-/// The Marketplace snapshot for the agent kinds a service lists, in the order it lists them.
+/// The Marketplace snapshot for the agent kinds This computer's service lists, in the order it lists them.
 pub fn agent_snapshot(kinds: &[AgentKind]) -> MarketplaceSnapshot {
+    agent_snapshot_on(&HostTarget::Local, kinds)
+}
+
+/// The Marketplace snapshot for the agent kinds one host lists, in the order it lists them.
+fn agent_snapshot_on(host: &HostTarget, kinds: &[AgentKind]) -> MarketplaceSnapshot {
+    let id = host.id();
     MarketplaceSnapshot {
         items: kinds
             .iter()
             .enumerate()
-            .map(|(index, kind)| agent_item(index, kind))
+            .map(|(index, kind)| agent_item(index, kind, id.clone()))
             .collect(),
         hosts: vec![Host {
-            id: HostTarget::Local.id(),
-            name: "MassOrca service".to_owned(),
+            id,
+            name: host_name(host),
             state: HostState::Connected,
         }],
         accounts: Vec::new(),
@@ -94,9 +119,17 @@ pub fn agent_snapshot(kinds: &[AgentKind]) -> MarketplaceSnapshot {
     }
 }
 
+/// The name a host's items are shown under: This computer's service, or the paired host's name.
+fn host_name(host: &HostTarget) -> String {
+    match host {
+        HostTarget::Local => "MassOrca service".to_owned(),
+        HostTarget::Paired(name) => name.clone(),
+    }
+}
+
 /// One agent kind as a Marketplace item. Its install state is the package's; `detected` only says the
 /// program was found on this computer, which is information rather than an install.
-fn agent_item(index: usize, kind: &AgentKind) -> MarketplaceItem {
+fn agent_item(index: usize, kind: &AgentKind, host: HostId) -> MarketplaceItem {
     // The service's own kinds have owner `core`; a profile's file reports `user`.
     let publisher = match kind.owner.as_str() {
         "core" => "MassOrca",
@@ -116,7 +149,7 @@ fn agent_item(index: usize, kind: &AgentKind) -> MarketplaceItem {
         ),
         adds: vec!["Agent in the model picker".to_owned()],
         state: state_of(kind),
-        host: HostTarget::Local.id(),
+        host,
         developer: publisher.to_owned(),
         category: "Agent".to_owned(),
         permissions: None,
@@ -370,5 +403,22 @@ mod tests {
         assert!(source.set_enabled(MarketplaceItemId(1), false).is_err());
         assert!(source.uninstall(MarketplaceItemId(1)).is_err());
         assert!(source.add_account("claude").is_err());
+    }
+
+    #[test]
+    fn a_paired_host_shows_its_items_under_its_own_key_and_name() {
+        let mut source = ServiceMarketplace::of_paired_host("vps");
+        source.follow_agent_kinds(&service_kinds());
+        let snapshot = source.snapshot();
+        let key = HostTarget::Paired("vps".to_owned()).id();
+        assert_eq!(
+            snapshot.hosts,
+            [Host {
+                id: key.clone(),
+                name: "vps".to_owned(),
+                state: HostState::Connected,
+            }]
+        );
+        assert!(snapshot.items.iter().all(|item| item.host == key));
     }
 }

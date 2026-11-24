@@ -209,6 +209,8 @@ pub struct Shell {
     marketplace_updates: marketplace::UpdateChecks,
     /// What the Connection part knows beyond the service's account lists.
     marketplace_accounts: marketplace::AccountsUi,
+    /// The numbers of the requests the Marketplace sends to paired hosts.
+    marketplace_requests: marketplace::HostRequests,
     /// The terminal views of the Work panel, by terminal id; a view exists while its pane does.
     terminal_views: BTreeMap<String, work_panel::TerminalView>,
     /// The terminal whose closing waits for the stop question.
@@ -465,6 +467,7 @@ impl Shell {
             marketplace_item_error: None,
             marketplace_updates: marketplace::UpdateChecks::default(),
             marketplace_accounts: marketplace::AccountsUi::default(),
+            marketplace_requests: marketplace::HostRequests::default(),
             terminal_views: BTreeMap::new(),
             stop_prompt: None,
             terminal_notice: None,

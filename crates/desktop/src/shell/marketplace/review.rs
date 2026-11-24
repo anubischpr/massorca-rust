@@ -52,8 +52,12 @@ impl Shell {
             error: None,
         });
         cx.notify();
+        let host = self.paired_host_of(item);
         cx.spawn(async move |this, cx| {
-            let result = service.inspect_extension(source).await;
+            let result = match host {
+                Some(name) => service.inspect_host_extension(name, source).await,
+                None => service.inspect_extension(source).await,
+            };
             let _ = this.update(cx, |shell, cx| shell.finish_inspect(item, result, cx));
         })
         .detach();
@@ -94,6 +98,11 @@ impl Shell {
         let Some(service) = self.service.clone() else {
             return;
         };
+        let Some(item) = self.marketplace_review.as_ref().map(|dialog| dialog.item) else {
+            return;
+        };
+        let host = self.paired_host_of(item);
+        let request = self.marketplace_requests.request();
         let Some(dialog) = self.marketplace_review.as_mut() else {
             return;
         };
@@ -110,12 +119,14 @@ impl Shell {
             sha256: None,
             agent_token: None,
         };
-        let item = dialog.item;
         dialog.sending = true;
         dialog.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = service.install_extension(params).await;
+            let result = match host {
+                Some(name) => service.install_host_extension(name, request, params).await,
+                None => service.install_extension(params).await,
+            };
             let _ = this.update(cx, |shell, cx| shell.finish_install(item, result, cx));
         })
         .detach();

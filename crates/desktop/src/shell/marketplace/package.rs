@@ -59,13 +59,21 @@ impl Shell {
         };
         self.marketplace_item_error = None;
         cx.notify();
+        let host = self.paired_host_of(item);
+        let request = self.marketplace_requests.request();
         cx.spawn(async move |this, cx| {
-            let result = service
-                .set_extension_enabled(ExtensionSetEnabledParams {
-                    id: package,
-                    enabled,
-                })
-                .await;
+            let params = ExtensionSetEnabledParams {
+                id: package,
+                enabled,
+            };
+            let result = match host {
+                Some(name) => {
+                    service
+                        .set_host_extension_enabled(name, request, params)
+                        .await
+                }
+                None => service.set_extension_enabled(params).await,
+            };
             let _ = this.update(cx, |shell, cx| {
                 shell.finish_package_change(item, result.map(|_| ()), cx);
             });
@@ -90,16 +98,20 @@ impl Shell {
             confirm.error = None;
         }
         cx.notify();
+        let host = self.paired_host_of(item);
+        let request = self.marketplace_requests.request();
         cx.spawn(async move |this, cx| {
-            let result = service
-                .remove_extension(ExtensionRemoveParams {
-                    id: package,
-                    delete_agent_homes: false,
-                    uninstall_cli,
-                    agent_token: None,
-                    uninstall_consent: None,
-                })
-                .await;
+            let params = ExtensionRemoveParams {
+                id: package,
+                delete_agent_homes: false,
+                uninstall_cli,
+                agent_token: None,
+                uninstall_consent: None,
+            };
+            let result = match host {
+                Some(name) => service.remove_host_extension(name, request, params).await,
+                None => service.remove_extension(params).await,
+            };
             let _ = this.update(cx, |shell, cx| {
                 shell.finish_package_removal(item, result, uninstall_cli, cx)
             });
