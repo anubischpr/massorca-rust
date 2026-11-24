@@ -30,7 +30,7 @@ is `docs/inventory/agents.md` (AG-xx) and `agent-status.md` (STAT-xx).
   kinds/*.json            declared kinds (owner `user`)
   homes/<kind>/           0056 credential home; moved to accounts/ on first access (0059)
   accounts/<kind>/<id>/   credential home per account (0059)
-  runs/<session>/         generated hook settings for a run (0053)
+  runs/<session>/         generated hook settings for a run (0053); `starting` while a start is unsettled
 ```
 
 ## Kind packages (decision 0059)
@@ -57,6 +57,21 @@ version.
 
 **Gating.** A kind whose package is not `enabled` is refused with `agent.kind_not_enabled`, data
 `{ kind, package, state }`, and a message that says to install or enable it in the Marketplace.
+A package whose state cannot be read (state `unknown`, as when the extensions lockfile cannot be
+read) is refused with the same code, and its message names that read failure instead, since
+installing or enabling cannot fix it. A package whose files change under the read because it is
+being updated is read again from the new lockfile; one whose lockfile keeps changing is listed with
+the problem that it is being updated (`extension.busy`), not that its files were tampered with.
+The service reuses its last read of the packages while the lockfile's bytes are unchanged, since a
+read hashes every installed package's files; any lockfile write reads them again, and a read that
+found an unusable package is not kept. Files changed without a lockfile write are seen at the next
+lockfile change or service start.
+
+**Removal guard.** The service registers the agents' remove guard on the extensions at start
+(decision 0062): disabling, removing, or updating a package to a version that drops one of its
+kinds is refused with `agent.busy` while a session of one of the package's kinds is live or
+resumable (an exited run with a recorded end and a known ref). The message and its data
+`{ package, kinds, sessions }` name those sessions; `agent.forget` frees one.
 The check runs right after the kind is found and before its declaration's problems and its
 program are checked, on `agent.start`, `agent.delegate` (and every other start through
 `Agents::start`), `agent.resume`, and `agent.accounts.add`, `import` and `activate`.
@@ -304,6 +319,26 @@ session's ref is not known yet (a Codex session learns its ref at a turn's end),
 no recorded end (no terminal and no exit; decision 0058); `agent.not_installed`
 when no program of the kind resolves; `agent.workspace_busy` when another session writes in the
 workspace.
+
+### Crash-safe start
+
+A start or resume is recorded before its program starts and settled after: the service writes an
+empty `starting` file in the run's directory, starts the terminal, records the run in the session
+row (a new row for `agent.start`, the new terminal for `agent.resume`), and only then removes the
+file. A service that dies in between leaves the file. Its program does not outlive it (0051: a job
+object per terminal on Windows, the session on Unix).
+
+The next service start settles every marked directory before it serves. With no session row, the
+start never reached its row: the directory, which may hold the run's hook token and launch files, is
+deleted, so a retry with the same `request_id` starts afresh instead of finding a session with no
+run. With a row, the start or resume was recorded and only the mark is removed; the row is marked
+stale like any other run of the previous service.
+
+The CLI tests reach both points through `MASSORCA_TEST_CRASH_AT` (`agent-start-spawned`,
+`agent-resume-spawned`), which makes the service exit there at once, as a crash would. The crash
+points exist only with core-agents' `test-hooks` feature, which only the CLI's dev-dependencies
+enable, so a release build carries neither the points nor the variable;
+`crates/core-agents/tests/test_hooks_gate.rs` fails when any normal or build dependency enables it.
 
 ## Prompt queue (decision 0084)
 

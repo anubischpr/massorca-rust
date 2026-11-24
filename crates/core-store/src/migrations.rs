@@ -435,6 +435,14 @@ ALTER TABLE projects ADD COLUMN base_ref TEXT;
 "#,
         foreign_keys_off: false,
     },
+    // Team access (decision 0072, amendment "team access"): `full` now runs bots in a bypass mode. Teams made when it
+    // changed nothing keep running without one, so they become `default`; only a later change turns bypass on.
+    Migration {
+        sql: r#"
+UPDATE teams SET access = 'default' WHERE access = 'full';
+"#,
+        foreign_keys_off: false,
+    },
 ];
 
 /// Applies every step newer than the database's `user_version`. A newer database is refused before anything is written;

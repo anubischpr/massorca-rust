@@ -6,7 +6,7 @@
 //! Every status change (a start, a hook report, an exit, a forget) is applied under one lock, written to the session
 //! row, and handed to the change listener in that same order.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -489,6 +489,9 @@ impl Agents {
         })?;
 
         let run_dir = paths::run_dir(self.profile_dir(), &session_id);
+        // The start is recorded before its program starts and settled once the row exists, so a crash in between leaves
+        // a mark the next service start finds (docs/architecture/agents.md, "Crash-safe start").
+        mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         // The run is registered before its program starts, and the status lock is held until its row exists, so the
         // run's first hook report waits for both instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -518,6 +521,7 @@ impl Agents {
                 live.remove(&session_id);
                 remove_dir(&run_dir);
             })?;
+        crash_point("agent-start-spawned");
 
         let row = AgentSessionRow {
             id: session_id.clone(),
@@ -546,6 +550,7 @@ impl Agents {
             remove_dir(&run_dir);
             return Err(error.into());
         }
+        clear_starting(&run_dir);
         let mut session = self.view_with(&mut live, row)?;
         self.notify(Change::Updated(Box::new(session.clone())));
         session.secrets_withheld = withheld(grant);
@@ -655,6 +660,8 @@ impl Agents {
             caller_env: &no_env,
         })?;
         let run_dir = paths::run_dir(self.profile_dir(), &row.id);
+        // As in `start`: recorded before the program starts, settled once the row names the new terminal.
+        mark_starting(&run_dir).inspect_err(|_| remove_dir(&run_dir))?;
         // As in `start`: the run is registered under the status lock before its program starts, and the lock is held until
         // the row names the new terminal, so the run's first report waits instead of being refused.
         let mut live = lock(&self.inner.status);
@@ -683,6 +690,7 @@ impl Agents {
                 live.remove(&row.id);
                 remove_dir(&run_dir);
             })?;
+        crash_point("agent-resume-spawned");
         let restarted = self.store().restart_agent_session(
             &row.id,
             &terminal_id,
@@ -702,6 +710,7 @@ impl Agents {
                 format!("no agent session {}", row.id),
             ));
         }
+        clear_starting(&run_dir);
         let fresh = self.reload(&row.id)?;
         let mut session = self.view_with(&mut live, fresh)?;
         self.notify(Change::Updated(Box::new(session.clone())));
@@ -1042,6 +1051,16 @@ impl Agents {
         })
     }
 
+    /// The first bypass mode (decision 0083) that kind `id` declares and a new run of it can apply: one with launch
+    /// arguments, or a live switch on a kind that reports idle. `None` when it declares none, or none a start can apply.
+    pub fn startable_bypass_mode(&self, id: &str) -> Option<String> {
+        let decl = self.declared_kind(id).ok()?;
+        decl.permission_modes
+            .iter()
+            .find(|mode| mode.bypass && modes::plan(&decl, mode).is_ok())
+            .map(|mode| mode.id.clone())
+    }
+
     /// The declaration of `id`: declared and valid, whether or not its program is installed now.
     fn declared_kind(&self, id: &str) -> Result<KindDecl, AgentError> {
         let catalog = Catalog::load(self.kind_packages(), self.profile_dir());
@@ -1209,6 +1228,7 @@ impl Agents {
     /// (0051). Called once at service start, before any run exists. Returns how many sessions changed.
     /// A run that was `working` or `waiting` then is `done` with outcome `interrupted` (0052).
     pub fn mark_stale_on_startup(&self) -> Result<u64, AgentError> {
+        self.settle_interrupted_starts()?;
         let at = now_ms();
         for row in self.store().list_agent_sessions(None)? {
             if row.exit.is_none()
@@ -1225,6 +1245,78 @@ impl Agents {
         // A restart pauses every waiting queued prompt, and fails the one being sent (decision 0084, D5).
         self.store().restart_queued_prompts(at)?;
         Ok(self.store().mark_agent_runs_service_stopped(at)?)
+    }
+
+    /// Refuses removing, disabling or updating away package `package_id` while a session of one of its kinds is live
+    /// or resumable (an exited run with a recorded end and a known ref), with `agent.busy` naming those sessions. The
+    /// extensions remove guard calls it (decision 0062); `agent forget` frees a session.
+    pub fn refuse_removing_package(&self, package_id: &str) -> Result<(), AgentError> {
+        let kinds: BTreeSet<String> = self
+            .kind_packages()
+            .kinds()
+            .into_iter()
+            .filter(|kind| kind.package_id == package_id)
+            .map(|kind| kind.kind_id)
+            .collect();
+        if kinds.is_empty() {
+            return Ok(());
+        }
+        let mut sessions = Vec::new();
+        for row in self.store().list_agent_sessions(None)? {
+            if !kinds.contains(&row.kind) {
+                continue;
+            }
+            let resumable = row.exit.is_some() && row.agent_ref.is_some();
+            let id = row.id.clone();
+            let live = self.view(row)?.execution.state != TerminalState::Exited;
+            if live || resumable {
+                sessions.push(id);
+            }
+        }
+        if sessions.is_empty() {
+            return Ok(());
+        }
+        let names: Vec<&str> = kinds.iter().map(String::as_str).collect();
+        let mut error = AgentError::new(
+            codes::AGENT_BUSY,
+            format!(
+                "package {package_id} provides agent kind {}, which sessions {} still use; stop and forget them first",
+                names.join(", "),
+                sessions.join(", ")
+            ),
+        );
+        error.data = Some(json!({ "package": package_id, "kinds": names, "sessions": sessions }));
+        Err(error)
+    }
+
+    /// Settles the starts the previous service recorded and never settled (docs/architecture/agents.md, "Crash-safe
+    /// start"). A marked run directory with no session row is a start that died before its row existed: its program
+    /// ended with that service (0051), so the directory, which may hold the run's hook token and launch files, is
+    /// deleted and a retry of the same request starts afresh. A marked directory whose row exists is a start or resume
+    /// that died after it was recorded; the row is marked stale like any other, so only the mark is removed.
+    fn settle_interrupted_starts(&self) -> Result<(), AgentError> {
+        let runs = paths::agents_dir(self.profile_dir()).join("runs");
+        let entries = match std::fs::read_dir(&runs) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.join(STARTING_MARK).is_file() {
+                continue;
+            }
+            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if self.store().get_agent_session(&id)?.is_some() {
+                clear_starting(&dir);
+            } else {
+                tracing::warn!(session = %id, "a start the previous service did not finish is cleaned up");
+                remove_dir(&dir);
+            }
+        }
+        Ok(())
     }
 
     /// The declaration and program a start uses: declared, enabled (decision 0059), valid and installed. A delegated
@@ -1564,6 +1656,37 @@ fn remove_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The file in a run's directory that records a start or resume in progress: written before its program starts,
+/// removed once the session's row records the run (docs/architecture/agents.md, "Crash-safe start").
+const STARTING_MARK: &str = "starting";
+
+fn mark_starting(run_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(run_dir)?;
+    std::fs::write(run_dir.join(STARTING_MARK), b"")
+}
+
+fn clear_starting(run_dir: &Path) {
+    let _ = std::fs::remove_file(run_dir.join(STARTING_MARK));
+}
+
+/// Test-only: names a point where the service exits at once, as a crash there would. Compiled in only with the
+/// `test-hooks` feature, which only test builds enable.
+#[cfg(feature = "test-hooks")]
+const CRASH_AT_ENV: &str = "MASSORCA_TEST_CRASH_AT";
+
+/// Exits the process when [`CRASH_AT_ENV`] names `point`, with no cleanup, as a crash would. Without the `test-hooks`
+/// feature it does nothing and reads no variable.
+#[cfg(feature = "test-hooks")]
+fn crash_point(point: &str) {
+    if std::env::var_os(CRASH_AT_ENV).is_some_and(|value| value == point) {
+        tracing::error!(point, "exiting at a test crash point");
+        std::process::exit(70);
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn crash_point(_point: &str) {}
+
 fn running(state: TerminalState) -> Execution {
     Execution { state, exit: None }
 }
@@ -1608,7 +1731,8 @@ fn exited(exit: &RunExit) -> Execution {
     }
 }
 
-/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state.
+/// Refuses an entry whose package is not enabled (decision 0059), naming the kind, its package and the package's state;
+/// a state that cannot be read is reported with the read failure.
 fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
     if entry.enabled() {
         return Ok(());
@@ -1618,13 +1742,20 @@ fn require_enabled(entry: &crate::CatalogEntry) -> Result<(), AgentError> {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     let package = entry.package.id.clone().unwrap_or_default();
-    let mut error = AgentError::new(
-        codes::AGENT_KIND_NOT_ENABLED,
+    // A state that cannot be read (an unreadable lockfile) is that failure, which installing or enabling cannot fix.
+    let message = if state == "unknown" && !entry.problems.is_empty() {
+        format!(
+            "agent kind {} comes from package {package}, whose state cannot be read: {}",
+            entry.id,
+            entry.problems.join("; ")
+        )
+    } else {
         format!(
             "agent kind {} comes from package {package}, which is {state}; install or enable it in the Marketplace",
             entry.id
-        ),
-    );
+        )
+    };
+    let mut error = AgentError::new(codes::AGENT_KIND_NOT_ENABLED, message);
     error.data = Some(json!({ "kind": entry.id, "package": package, "state": state }));
     Err(error)
 }

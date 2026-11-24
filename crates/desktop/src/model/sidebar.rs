@@ -59,6 +59,8 @@ pub enum TreeRow {
         selected: bool,
         /// Where a child session runs, shown after its title.
         place: Option<String>,
+        /// The child runs in another worktree than its parent's, whose row stays listed too (WS-35).
+        own_worktree: bool,
         /// Whether the row offers to bring this child back.
         can_bring_back: bool,
     },
@@ -151,6 +153,7 @@ fn push_session(rows: &mut Vec<TreeRow>, session: &SessionRow, depth: usize, act
         depth,
         selected: active == Some(session.id.as_str()),
         place: session.place.clone(),
+        own_worktree: session.own_worktree,
         can_bring_back: session.can_bring_back,
     });
     for child in &session.children {

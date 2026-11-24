@@ -22,10 +22,11 @@ use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCreateParams, PairingCreated,
 };
 use massorca_protocol::methods::events::{
-    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_EXTENSION_DISABLED,
-    TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED, TOPIC_EXTENSION_REMOVED,
-    TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED, TOPIC_TASK_CHANGED,
-    TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED, TOPIC_WORKSPACE_REMOVING,
+    ChangeEvent, TOPIC_ACCOUNTS_CHANGED, TOPIC_AGENT_CHANGED, TOPIC_AGENT_QUEUE_CHANGED,
+    TOPIC_EXTENSION_DISABLED, TOPIC_EXTENSION_ENABLED, TOPIC_EXTENSION_INSTALLED,
+    TOPIC_EXTENSION_REMOVED, TOPIC_PROJECT_ADDED, TOPIC_PROJECT_REMOVED, TOPIC_SECRET_CHANGED,
+    TOPIC_TASK_CHANGED, TOPIC_TEAM_CHANGED, TOPIC_WORKSPACE_CREATED, TOPIC_WORKSPACE_REMOVED,
+    TOPIC_WORKSPACE_REMOVING,
 };
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
@@ -41,6 +42,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 
 use super::accounts::{self, AccountCommand, AccountsFreshness};
+use super::agent_queue::{self, QueueCommand};
 use super::agents;
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
@@ -125,6 +127,8 @@ pub(crate) enum Command {
         params: AgentSetModeParams,
         reply: oneshot::Sender<Result<AgentModeSet, Refusal>>,
     },
+    /// A prompt queue call (decision 0084), answered on its oneshot.
+    AgentQueue(QueueCommand),
     GitDiffFile {
         params: GitDiffFileParams,
         reply: oneshot::Sender<Result<GitDiffFile, Refusal>>,
@@ -611,7 +615,9 @@ impl Link {
         let terminals = terminals::list_terminals(client).await?;
         self.emit(StoreUpdate::TerminalsResync(terminals));
         let sessions = agents::list_sessions(client).await?;
+        let queues = agent_queue::read_all(client, &sessions).await?;
         self.emit(StoreUpdate::AgentsResync(sessions));
+        self.emit(StoreUpdate::AgentQueuesResync(queues));
         // The protocol has no event for a change in the kinds, so they are read again on each connect.
         let kinds = agents::list_kinds(client).await?;
         for kind in &kinds {
@@ -766,6 +772,7 @@ impl Link {
                         StoreUpdate::AgentGone(id.clone())
                     })
                 }),
+            TOPIC_AGENT_QUEUE_CHANGED => agent_queue::read_one(client, &id).await,
             _ => return Outcome::Continue,
         };
         match refetched {
@@ -916,6 +923,7 @@ fn spawn_call(
         Command::Delegate { params, reply } => {
             agents::spawn_delegate(&client, params, reply, updates);
         }
+        Command::AgentQueue(command) => agent_queue::spawn_call(&client, command),
         // Routed by the session, which owns the terminal writes and store updates.
         Command::Terminal(_)
         | Command::Team(_)
@@ -994,6 +1002,7 @@ fn refuse_while_down(command: Command) {
         Command::Terminal(command) => terminals::refuse_while_down(command),
         Command::Secret(command) => secrets::refuse_while_down(command, refusal),
         Command::Account(command) => accounts::refuse_while_down(command, refusal),
+        Command::AgentQueue(command) => agent_queue::refuse_while_down(command, refusal),
         other => git::refuse(other, refusal),
     }
 }

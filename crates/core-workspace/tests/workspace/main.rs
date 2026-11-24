@@ -8,6 +8,7 @@ mod create_worktree;
 mod errors;
 mod fixture;
 mod generated_names;
+mod inspect;
 mod interrupted_create;
 mod layout;
 mod names;
