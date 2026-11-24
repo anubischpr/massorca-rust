@@ -1,45 +1,22 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import { getBinding } from './src/binding';
+import { BindingProvider } from './src/binding/binding-context';
+import type { MassOrcaBinding } from './src/binding/types';
+import { AppNavigator } from './src/navigation/app-navigator';
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+export interface AppProps {
+  /** Tests pass a FakeMassOrca; the app uses the native binding behind the seam in src/binding. */
+  readonly binding?: MassOrcaBinding;
+}
 
+export default function App({ binding }: AppProps) {
+  const resolved = binding ?? getBinding();
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
+      <BindingProvider binding={resolved}>
+        <AppNavigator />
+      </BindingProvider>
     </SafeAreaProvider>
   );
 }
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
-
-export default App;
