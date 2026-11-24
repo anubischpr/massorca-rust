@@ -1,7 +1,7 @@
 //! The one error that crosses the binding (decision 0080): a flat case per thing the app does differently, each with a
 //! sentence it may show as is.
 
-use massorca_client::ClientError;
+use massorca_client::{ClientError, IdentityMismatch, TrustedFrom};
 use massorca_protocol::codes;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
@@ -9,9 +9,14 @@ pub enum FfiError {
     /// The host does not answer now; a retry can help.
     #[error("{message}")]
     Unreachable { message: String },
-    /// The host presents another server key than the one paired with. Never retried; pairing again is the fix.
+    /// The host presents another server key than the one paired with (REM-04). Never retried; pairing again is the fix.
+    /// `expected` is the trusted key, `actual` the presented one when its certificate could be read.
     #[error("{message}")]
-    IdentityMismatch { message: String },
+    IdentityMismatch {
+        message: String,
+        expected: String,
+        actual: Option<String>,
+    },
     /// The host no longer accepts this phone: it was revoked or forgotten there.
     #[error("{message}")]
     NotPaired { message: String },
@@ -75,9 +80,7 @@ impl FfiError {
             ClientError::HostUnreachable(_)
             | ClientError::Unavailable(_)
             | ClientError::Disconnected => unreachable(host),
-            error @ ClientError::ServerIdentityMismatch => Self::IdentityMismatch {
-                message: sentence(&error.to_string()),
-            },
+            ClientError::ServerIdentityMismatch(mismatch) => identity_mismatch(*mismatch),
             ClientError::Remote(body) => from_body(body.code, body.message, None, host),
             ClientError::Handshake { error, supported } => from_body(
                 error.code,
@@ -104,6 +107,30 @@ impl FfiError {
                 )),
             },
         }
+    }
+}
+
+/// The phone's own fix: it forgets the host and scans a new code; the CLI's commands do not apply here.
+fn identity_mismatch(mismatch: IdentityMismatch) -> FfiError {
+    let host = &mismatch.host;
+    let actual = mismatch
+        .actual
+        .as_deref()
+        .unwrap_or("a certificate that could not be read");
+    let message = match mismatch.trusted_from {
+        TrustedFrom::Pairing => format!(
+            "{host} presented a different server key than the one paired with (paired {}, now {actual}). If that              server was reinstalled or its key replaced, forget {host} on this phone and pair again with a new code.              Otherwise do not connect: something may be between this phone and the server.",
+            mismatch.expected
+        ),
+        TrustedFrom::Offer => format!(
+            "The server presented a different key than the pairing code names (code {}, server {actual}). Nothing              was paired. Make a new code on that server and scan it.",
+            mismatch.expected
+        ),
+    };
+    FfiError::IdentityMismatch {
+        message,
+        expected: mismatch.expected,
+        actual: mismatch.actual,
     }
 }
 
@@ -190,9 +217,27 @@ mod tests {
 
     #[test]
     fn a_changed_server_key_is_an_identity_mismatch_and_never_retried() {
-        let mapped = of(ClientError::ServerIdentityMismatch);
+        let changed = massorca_client::IdentityMismatch {
+            host: "VPS".into(),
+            trusted_from: massorca_client::TrustedFrom::Pairing,
+            expected: "sha256:old".into(),
+            actual: Some("sha256:new".into()),
+        };
+        let mapped = of(ClientError::ServerIdentityMismatch(Box::new(changed)));
         assert_eq!(mapped.code(), "identity_mismatch");
         assert!(!mapped.is_transient());
+        let FfiError::IdentityMismatch {
+            message,
+            expected,
+            actual,
+        } = mapped
+        else {
+            panic!("an identity mismatch");
+        };
+        assert_eq!(expected, "sha256:old");
+        assert_eq!(actual.as_deref(), Some("sha256:new"));
+        assert!(message.contains("forget VPS on this phone"), "{message}");
+        assert!(!message.contains("massorca host remove"), "{message}");
     }
 
     #[test]
